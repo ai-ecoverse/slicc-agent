@@ -31,6 +31,32 @@ await agent.prompt('What is in /home?');
 - `hostAgent(agent)` serves the agent with pi's protocol: a pi-server with one session, `agent`, whose Chord services are `slicc.agent.control` (send with `whenBusy` `steer`, `followUp` or `reject`, wait, withdraw, abort, compact) and `slicc.agent.transcript` (the conversation's durable view as replicated state). `serveConnections(self, host)` hands it every `MessagePort` the page sends.
 - `startAgent({ worker })` takes the Web Lock `slicc-agent`, so one tab at a time owns the agent worker, and waits while another tab holds it. `connect()` returns an `AgentConnection` (`control`, `transcript`, `prompt()`), `restart()` replaces the worker (durable resumes from SQLite), and `release()` stops it and lets the next tab take over.
 
+### Bash and files on slicc-kernel
+
+The page owns the one kernel (plan decision D3), and the agent worker attaches to it as a second client ([slicc-kernel#66](https://github.com/ai-ecoverse/slicc-kernel/issues/66)), so a terminal's `ps` and `kill` reach whatever the agent started.
+
+```js
+const owner = await startAgent({ worker, kernel: { connect: () => kernel.connect() } });
+```
+
+```js
+import { attachKernel } from '@ai-ecoverse/slicc-kernel';
+import { CodingTools } from '@earendil-works/pi-durable/tools';
+import { kernelEnvironment, kernelPort } from '@ai-ecoverse/slicc-agent';
+
+const client = await attachKernel(await kernelPort(self));
+registry.install(CodingTools);
+const agent = await openAgent({ models, model, storage, registry, env: kernelEnvironment(client) });
+```
+
+`SliccKernelEnv` implements pi durable's `ExecutionEnv` on the kernel client and passes pi's environment conformance suite:
+- string commands run as `bash -c`, each in its own process group; timeouts and aborts kill the group;
+- output past the spill limits goes to `/tmp/slicc-agent-output-*.log`;
+- files and directories go through the kernel's OPFS view and metadata sidecar;
+- `watch()` polls until the kernel offers file watching.
+
+A conversation without a `cwd` works in `/home`.
+
 ### In slicc-spectrum
 
 `@ai-ecoverse/slicc-agent/spectrum` turns an `AgentConnection` into slicc-spectrum's `AgentPort`, so `<slicc-app>` shows the real agent:

@@ -43,7 +43,7 @@ test('resumes the conversation after a worker restart', async (t) => {
   const kinds = await page.evaluate(async () => {
     const first = await owner.connect();
     await first.prompt('First?');
-    owner.restart();
+    await owner.restart();
     const second = await owner.connect();
     for (let i = 0; i < 100 && !(second.transcript.value?.entries ?? []).length; i++)
       await new Promise((r) => setTimeout(r, 20));
