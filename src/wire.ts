@@ -104,7 +104,7 @@ export class PortListener implements ServerListener {
     if (!accept) throw new Error('agent host is not listening');
     const connection = new PortConnection(endpoint, () => this.#connections.delete(connection));
     this.#connections.add(connection);
-    const handler: ByteConnectionHandler = withUnrefTimers(() => accept(connection));
+    const handler: ByteConnectionHandler = accept(connection);
     endpoint.addEventListener('message', ({ data }) => {
       if (data instanceof Uint8Array) handler.onData(data);
       else if ((data as { close?: boolean } | null)?.close) {

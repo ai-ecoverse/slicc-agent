@@ -94,7 +94,15 @@ app.model = { ...createKernelModel({ kernel, root }), ...createAgentModel(agent,
 
 The adapter keeps the replicated transcript and maps it on every update. User, assistant and compaction entries become messages; tool results fill in the tool calls they answer; the generation in flight shows as a streaming message; retries and running compactions show as system messages. `busy()` and `queue()` read durable's live and inbox documents. A plain send queues a follow-up, and a steer send steers, as slicc-spectrum's composer asks today. There is one cone so far; scoops, the freezer, licks and questions come later. slicc-spectrum is a peer dependency (≥ 1.7.0) used for types only.
 
-pi-server 1.0.4 calls `unref()` on a `setTimeout` handle when it accepts a connection, which browsers don't have. `PortListener` wraps that one call so its timers get a no-op `unref`.
+## Patched dependencies
+
+Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.json) lists each one with its `kind`, `package`, `patchedVersion`, `reason`, `removeWhen` and `verify` command, and an optional `marker` (a file in the package and a string it must contain):
+
+- `monkeypatch`: code that runs in users' browsers is patched at runtime. `applyPatches()` in [`src/patches.ts`](src/patches.ts) applies them once before pi is used (`hostAgent` calls it). Each one checks that the code it replaces still looks as expected and throws, naming its manifest entry, if not. Today there is one: pi-server's `Server.accept` calls `unref()` on its handshake timer, which browsers don't have, so the patch gives numeric timer ids a no-op `unref`.
+- `patch-package`: repository-only fixes go in `patches/<package>+<version>.patch`, applied by a `postinstall` that runs [patch-package](https://github.com/ds300/patch-package). There are none yet.
+- `environment`: something the host must provide. pi-server imports `randomUUID` from `node:crypto`; slicc-bios serves a stub backed by `globalThis.crypto`, and the integration bundles alias it to `test/integration/shims/node-crypto.js`.
+
+`npm run lint:patches` (part of `npm run lint`) fails when an installed version differs from `patchedVersion`, a marker is gone, a monkeypatch isn't named in `src/patches.ts`, a patch file and its entry don't match, or `renovate.json` doesn't route the package to the `patched dependencies` group with automerge off. That group covers every `@earendil-works/*` package, so a pi bump is always a reviewed PR: rerun each entry's `verify`, then move `patchedVersion` forward or drop the entry.
 
 ## Develop
 

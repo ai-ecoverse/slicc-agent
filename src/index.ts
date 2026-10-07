@@ -25,6 +25,7 @@ export {
   type OwnerOptions,
   startAgent,
 } from './owner.ts';
+export { applyPatches, patchServerAccept } from './patches.ts';
 export { SliccPrompt } from './prompt.ts';
 export {
   AGENT_SESSION,
