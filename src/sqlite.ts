@@ -164,7 +164,7 @@ export const AGENT_DIRECTORY = '/.slicc/agent';
 
 export async function openMemorySqliteStorage(): Promise<Storage> {
   const sqlite3 = await init();
-  return SqliteStorage.open(new WasmSqliteDatabase(new sqlite3.oo1.DB(':memory:', 'ct')));
+  return SqliteStorage.open(new WasmSqliteDatabase(new sqlite3.oo1.DB(':memory:', 'c')));
 }
 
 export async function openOpfsSqliteStorage(options: OpfsSqliteOptions = {}): Promise<Storage> {
