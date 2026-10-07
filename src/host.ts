@@ -15,6 +15,7 @@ import {
 } from '@earendil-works/pi-server';
 import type { Agent } from './agent.ts';
 import { createAgentControl } from './control.ts';
+import { PortListener } from './listener.ts';
 import {
   AGENT_SESSION,
   AgentControl,
@@ -22,7 +23,7 @@ import {
   AgentSettings,
   AgentTranscript,
 } from './services.ts';
-import { type PortEndpoint, PortListener } from './wire.ts';
+import type { PortEndpoint } from './wire.ts';
 
 export interface AgentHost {
   readonly serverId: string;
