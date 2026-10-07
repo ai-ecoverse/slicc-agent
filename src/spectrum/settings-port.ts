@@ -83,9 +83,9 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
     );
   }
 
-  async connect(id: string, secret?: string): Promise<void> {
+  async connect(id: string, secret?: string, options: { region?: string } = {}): Promise<void> {
     if (!secret) throw new Error(`${id} needs an API key`);
-    await this.#settings.connect(id, secret, BACKGROUND_CONTEXT);
+    await this.#settings.connect(id, secret, options.region ?? null, BACKGROUND_CONTEXT);
   }
 
   disconnect(id: string): void {

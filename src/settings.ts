@@ -36,7 +36,12 @@ export interface SettingsState {
 
 export interface AgentSettings {
   readonly state: ReplicatedState<SettingsState>;
-  connect(providerId: string, secret: string, context: Context): Promise<void>;
+  connect(
+    providerId: string,
+    secret: string,
+    region: string | null,
+    context: Context
+  ): Promise<void>;
   disconnect(providerId: string, context: Context): Promise<void>;
 }
 
@@ -102,8 +107,12 @@ export async function createAgentSettings(
   };
   return {
     state,
-    async connect(providerId, secret, context) {
-      await credentials.modify(providerId, async () => ({ type: 'api_key', key: secret }));
+    async connect(providerId, secret, region, context) {
+      await credentials.modify(providerId, async () => ({
+        type: 'api_key',
+        key: secret,
+        ...(region ? { env: { AWS_REGION: region } } : {}),
+      }));
       await refresh(context);
     },
     async disconnect(providerId, context) {
