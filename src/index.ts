@@ -47,9 +47,11 @@ export {
   createAgentSettings,
   createSliccModels,
   DEFAULT_MODEL,
+  DEFAULT_REGIONS,
   type ModelChoice,
   type SettingsState,
   sliccProviders,
+  withDefaultRegions,
 } from './settings.ts';
 export {
   AGENT_DIRECTORY,

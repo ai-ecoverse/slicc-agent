@@ -10,6 +10,7 @@ import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-be
 
 export const BEDROCK = 'amazon-bedrock';
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
+export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
 
 export interface ModelChoice {
   id: string;
@@ -53,11 +54,27 @@ export function sliccProviders(): Provider[] {
   return [amazonBedrockProvider() as Provider];
 }
 
+export function withDefaultRegions(credentials: CredentialStore): CredentialStore {
+  return {
+    async read(providerId, options) {
+      const credential = await credentials.read(providerId, options);
+      const region = DEFAULT_REGIONS[providerId];
+      if (credential?.type !== 'api_key' || !region || credential.env?.AWS_REGION) {
+        return credential;
+      }
+      return { ...credential, env: { ...credential.env, AWS_REGION: region } };
+    },
+    list: (options) => credentials.list(options),
+    modify: (providerId, fn, options) => credentials.modify(providerId, fn, options),
+    delete: (providerId, options) => credentials.delete(providerId, options),
+  };
+}
+
 export function createSliccModels(
   credentials: CredentialStore,
   providers = sliccProviders()
 ): MutableModels {
-  const models = createModels({ credentials });
+  const models = createModels({ credentials: withDefaultRegions(credentials) });
   for (const provider of providers) models.setProvider(provider);
   return models;
 }
