@@ -16,8 +16,13 @@ import {
 import type { Agent } from './agent.ts';
 import { createAgentControl } from './control.ts';
 import { PortListener } from './listener.ts';
-import { AGENT_SESSION, AgentControl, AgentSessions, AgentTranscript } from './services.ts';
-import { AgentSettings } from './settings.ts';
+import {
+  AGENT_SESSION,
+  AgentControl,
+  AgentSessions,
+  AgentSettings,
+  AgentTranscript,
+} from './services.ts';
 import type { PortEndpoint } from './wire.ts';
 
 export interface AgentHost {

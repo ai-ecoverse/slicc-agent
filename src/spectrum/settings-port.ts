@@ -6,7 +6,7 @@ import type {
   SettingsPort,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { AgentSettings, SettingsState } from '../settings.ts';
+import type { AgentSettings, SettingsState } from '../services.ts';
 import type { AgentAdapter } from './agent-port.ts';
 import { Emitter } from './emitter.ts';
 
