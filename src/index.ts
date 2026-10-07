@@ -13,6 +13,7 @@ export {
   AGENT_SESSION,
   AgentControl,
   AgentSessions,
+  type AgentSettingsChange,
   AgentTranscript,
   type OperationError,
   type PromptResult,
