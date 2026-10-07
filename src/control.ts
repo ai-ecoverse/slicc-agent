@@ -64,5 +64,14 @@ export function createAgentControl(harness: Harness, conversation: Conversation)
     abort: (context) => conversation.abort(context),
     compact: (instructions, context) =>
       accepted(() => conversation.compact(instructions ?? undefined, context)),
+    reset: (handoff, context) => conversation.reset(handoff ?? undefined, context),
+    configure: (change, context) =>
+      conversation.configure(
+        {
+          ...(change.model ? { model: change.model } : {}),
+          ...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),
+        },
+        context
+      ),
   };
 }

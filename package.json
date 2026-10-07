@@ -25,6 +25,10 @@
     ".": {
       "types": "./dist/types/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./spectrum": {
+      "types": "./dist/types/spectrum/index.d.ts",
+      "default": "./dist/spectrum/index.js"
     }
   },
   "files": [
@@ -47,6 +51,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/slicc-shared-web": "1.5.0",
+    "@ai-ecoverse/slicc-spectrum": "1.7.0",
     "@biomejs/biome": "2.5.15",
     "@types/node": "24.19.1",
     "esbuild": "0.28.2",
@@ -64,5 +69,8 @@
     "@earendil-works/pi-protocol": "1.0.4",
     "@earendil-works/pi-server": "1.0.4",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2"
+  },
+  "peerDependencies": {
+    "@ai-ecoverse/slicc-spectrum": "^1.7.0"
   }
 }

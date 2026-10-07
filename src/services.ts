@@ -31,6 +31,13 @@ export interface AgentControl {
   ): Promise<{ outcome: 'withdrawn' | 'already_placed' | 'not_found' }>;
   abort(context: Context): Promise<void>;
   compact(instructions: string | null, context: Context): Promise<SendResponse>;
+  reset(handoff: string | null, context: Context): Promise<void>;
+  configure(change: AgentSettingsChange, context: Context): Promise<void>;
+}
+
+export interface AgentSettingsChange {
+  model: { provider: string; modelId: string } | null;
+  thinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
 }
 
 export const AgentControl = defineService<AgentControl>('slicc.agent.control');
