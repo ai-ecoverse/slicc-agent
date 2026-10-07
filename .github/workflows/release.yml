@@ -38,6 +38,8 @@ jobs:
 
       - run: npm run lint
 
+      - run: npx playwright-core install-deps chromium
+
       - run: npm test
 
       - run: npx semantic-release
