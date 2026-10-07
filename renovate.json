@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>ai-ecoverse/slicc-shared-web"]
+  "extends": ["github>ai-ecoverse/slicc-shared-web"],
+  "packageRules": [
+    {
+      "groupName": "patched dependencies",
+      "matchPackageNames": ["@earendil-works/**"],
+      "automerge": false,
+      "labels": ["patched-dependency"]
+    }
+  ]
 }
