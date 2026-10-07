@@ -93,7 +93,7 @@ app.model = { ...createKernelModel({ kernel, root }), ...createAgentModel(agent,
 
 `createAgentModel()` returns the `agent` and `settings` ports. Settings keeps the UI preferences in `storage`; model and thinking belong to the conversation, and accounts and models come from the worker.
 
-The adapter keeps the replicated transcript and maps it on every update. User, assistant and compaction entries become messages; tool results fill in the tool calls they answer; the generation in flight shows as a streaming message; retries and running compactions show as system messages. `busy()` and `queue()` read durable's live and inbox documents. A plain send queues a follow-up, and a steer send steers, as slicc-spectrum's composer asks today. There is one cone so far; scoops, the freezer, licks and questions come later. slicc-spectrum is a peer dependency (≥ 1.7.0) used for types only.
+The adapter keeps the replicated transcript and maps it on every update. User, assistant and compaction entries become messages; tool results fill in the tool calls they answer; the generation in flight shows as a streaming message; retries and running compactions show as system messages. `busy()` and `queue()` read durable's live and inbox documents. A plain send queues a follow-up, and a steer send steers, as slicc-spectrum's composer asks today. There is one cone so far; scoops, the freezer, licks and questions come later. slicc-spectrum is an optional peer dependency (≥ 1.7.0), used for types only, so package managers don't install it next to the agent.
 
 ## Patched dependencies
 

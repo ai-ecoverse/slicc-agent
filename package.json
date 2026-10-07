@@ -85,5 +85,10 @@
   },
   "peerDependencies": {
     "@ai-ecoverse/slicc-spectrum": "^1.7.0"
+  },
+  "peerDependenciesMeta": {
+    "@ai-ecoverse/slicc-spectrum": {
+      "optional": true
+    }
   }
 }
