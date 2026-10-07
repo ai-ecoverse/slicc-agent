@@ -7,3 +7,10 @@ export {
   type MessageEndpoint,
   serveAgent,
 } from './port.ts';
+export {
+  AGENT_DIRECTORY,
+  type OpfsSqliteOptions,
+  openMemorySqliteStorage,
+  openOpfsSqliteStorage,
+  WasmSqliteDatabase,
+} from './sqlite.ts';
