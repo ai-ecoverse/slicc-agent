@@ -1,7 +1,7 @@
 {
   "name": "@ai-ecoverse/slicc-agent",
   "version": "0.0.0",
-  "description": "SLICC's agent core: session storage in wasm SQLite, remoting, compaction, and pi extensions",
+  "description": "SLICC's agent core on pi durable: an agent worker, session storage, remoting and pi extensions",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -22,16 +22,25 @@
     "provenance": true
   },
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "files": [
-    "src"
+    "dist"
   ],
   "scripts": {
     "prepare": "lefthook install",
+    "build": "node build.mjs && tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "start": "npm run build && node test/integration/chrome.mjs",
+    "pretest": "npm run build && node test/integration/build.mjs && playwright-core install --no-shell chromium",
+    "test": "node --test --test-global-setup=node_modules/@ai-ecoverse/slicc-shared-web/harness/global.mjs 'test/integration/*.test.mjs'",
+    "test:unit": "NODE_NO_WARNINGS=1 mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'",
+    "typecheck": "tsc",
     "lint": "slicc-lint",
     "format": "biome check --write .",
-    "test": "true",
     "trust": "npx fledgling sync -y --skip-publish",
     "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",
     "release": "semantic-release"
@@ -39,7 +48,17 @@
   "devDependencies": {
     "@ai-ecoverse/slicc-shared-web": "1.5.0",
     "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.1",
+    "esbuild": "0.28.2",
     "lefthook": "2.1.16",
-    "semantic-release": "25.0.9"
+    "monocart-coverage-reports": "2.13.0",
+    "playwright-core": "1.63.0",
+    "semantic-release": "25.0.9",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.4",
+    "@earendil-works/pi-ai": "1.0.4",
+    "@earendil-works/pi-durable": "1.0.4"
   }
 }
