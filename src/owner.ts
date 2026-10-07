@@ -24,7 +24,13 @@ export interface OwnerOptions {
 export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
   const release = await holdLock(options.locks ?? navigator.locks, AGENT_LOCK);
   const channel = options.channel ?? (() => new MessageChannel());
-  let worker = options.worker();
+  let worker: AgentWorker;
+  try {
+    worker = options.worker();
+  } catch (error) {
+    release();
+    throw error;
+  }
   return {
     connect() {
       const { port1, port2 } = channel();
