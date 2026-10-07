@@ -2,6 +2,14 @@ export { type Agent, type AgentOptions, answerText, openAgent } from './agent.ts
 export { type AgentConnection, connectAgent } from './client.ts';
 export { createAgentControl } from './control.ts';
 export { type AgentHost, hostAgent } from './host.ts';
+export type {
+  KernelClient,
+  KernelFs,
+  KernelProcess,
+  KernelStat,
+  SpawnOptions,
+} from './kernel/client.ts';
+export { HOME, type KernelEnvOptions, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 export {
   AGENT_LOCK,
   type AgentOwner,
@@ -29,4 +37,4 @@ export {
   WasmSqliteDatabase,
 } from './sqlite.ts';
 export { PortChannel, type PortEndpoint, PortListener, withUnrefTimers } from './wire.ts';
-export { serveConnections, type WorkerScope } from './worker.ts';
+export { kernelPort, serveConnections, type WorkerScope } from './worker.ts';

@@ -15,3 +15,12 @@ export function serveConnections(scope: WorkerScope, host: Promise<AgentHost>): 
     );
   });
 }
+
+export function kernelPort(scope: WorkerScope): Promise<MessagePort> {
+  return new Promise((resolve) => {
+    scope.addEventListener('message', ({ data }) => {
+      const port = (data as { kernel?: MessagePort } | null)?.kernel;
+      if (port) resolve(port);
+    });
+  });
+}

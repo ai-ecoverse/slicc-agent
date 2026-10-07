@@ -20,6 +20,7 @@ export interface AgentOptions {
   storage?: Storage;
   registry?: Registry;
   settings?: HarnessOptions['settings'];
+  env?: HarnessOptions['env'];
   context?: Context;
 }
 
@@ -61,6 +62,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
       models: options.models,
       registry: options.registry ?? createRegistry(),
       ...(options.settings ? { settings: options.settings } : {}),
+      ...(options.env ? { env: options.env } : {}),
     },
     context
   );

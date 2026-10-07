@@ -11,12 +11,17 @@ export interface AgentWorker {
 
 export interface AgentOwner {
   connect(): Promise<AgentConnection>;
-  restart(): void;
-  release(): void;
+  restart(): Promise<void>;
+  release(): Promise<void>;
+}
+
+export interface KernelSource {
+  connect(): Promise<Transferable>;
 }
 
 export interface OwnerOptions {
   worker: () => AgentWorker;
+  kernel?: KernelSource;
   locks?: LockManager;
   channel?: () => { port1: PortEndpoint; port2: Transferable };
 }
@@ -24,25 +29,35 @@ export interface OwnerOptions {
 export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
   const release = await holdLock(options.locks ?? navigator.locks, AGENT_LOCK);
   const channel = options.channel ?? (() => new MessageChannel());
-  let worker: AgentWorker;
+  const spawn = async () => {
+    const created = options.worker();
+    if (options.kernel) {
+      const port = await options.kernel.connect();
+      created.postMessage({ kernel: port }, [port]);
+    }
+    return created;
+  };
+  let worker: Promise<AgentWorker> = spawn();
   try {
-    worker = options.worker();
+    await worker;
   } catch (error) {
     release();
     throw error;
   }
   return {
-    connect() {
+    async connect() {
+      const ready = await worker;
       const { port1, port2 } = channel();
-      worker.postMessage({ connect: port2 }, [port2]);
+      ready.postMessage({ connect: port2 }, [port2]);
       return connectAgent(port1);
     },
-    restart() {
-      worker.terminate();
-      worker = options.worker();
+    async restart() {
+      (await worker).terminate();
+      worker = spawn();
+      await worker;
     },
-    release() {
-      worker.terminate();
+    async release() {
+      (await worker).terminate();
       release();
     },
   };
