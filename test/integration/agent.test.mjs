@@ -22,3 +22,19 @@ test('stays cross-origin isolated', async (t) => {
   await page.goto('/');
   assert.equal(await page.evaluate(() => crossOriginIsolated), true);
 });
+
+test('rejects a prompt when the worker fails to load', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const message = await page.evaluate(async () => {
+    const { connectAgent } = await import('/dist/port.js');
+    const worker = new Worker('/dist-test/missing-worker.js', { type: 'module' });
+    return connectAgent(worker)
+      .prompt('Anyone?')
+      .then(
+        () => 'answered',
+        (error) => error.message
+      );
+  });
+  assert.match(message, /^agent failed/);
+});

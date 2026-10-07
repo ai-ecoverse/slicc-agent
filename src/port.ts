@@ -10,6 +10,7 @@ export type AgentReply = { id: number; text: string } | { id: number; error: str
 export interface MessageEndpoint {
   postMessage(message: unknown): void;
   addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
+  addEventListener(type: 'error' | 'messageerror', listener: (event: Event) => void): void;
   start?(): void;
 }
 
@@ -40,9 +41,20 @@ export interface AgentClient {
   prompt(text: string): Promise<string>;
 }
 
+function failure(event: Event): Error {
+  const message = (event as ErrorEvent).message;
+  return new Error(message ? `agent failed: ${message}` : `agent failed: ${event.type}`);
+}
+
 export function connectAgent(endpoint: MessageEndpoint): AgentClient {
   const pending = new Map<number, { resolve(text: string): void; reject(error: Error): void }>();
+  let broken: Error | undefined;
   let next = 0;
+  const fail = (event: Event) => {
+    broken = failure(event);
+    for (const call of pending.values()) call.reject(broken);
+    pending.clear();
+  };
   endpoint.addEventListener('message', ({ data }) => {
     const reply = data as AgentReply;
     const call = pending.get(reply.id);
@@ -51,9 +63,12 @@ export function connectAgent(endpoint: MessageEndpoint): AgentClient {
     if ('error' in reply) call.reject(new Error(reply.error));
     else call.resolve(reply.text);
   });
+  endpoint.addEventListener('error', fail);
+  endpoint.addEventListener('messageerror', fail);
   endpoint.start?.();
   return {
     prompt(text) {
+      if (broken) return Promise.reject(broken);
       const id = ++next;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
