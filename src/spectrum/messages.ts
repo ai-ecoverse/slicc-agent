@@ -62,16 +62,16 @@ export function textOf(content: ModelMessage['content']): string {
 const paths = (args: Json | undefined): string[] =>
   typeof args?.path === 'string' ? [args.path] : [];
 
-function title(name: string, args: Json | undefined): string {
+function title(args: Json | undefined): string {
   const subject = args?.command ?? args?.path;
-  return typeof subject === 'string' ? `${name} ${subject}` : name;
+  return typeof subject === 'string' ? subject : '';
 }
 
 function toolCall(block: Block): ToolCall {
   return {
     id: block.id ?? '',
     name: block.name ?? 'tool',
-    title: title(block.name ?? 'tool', block.arguments),
+    title: title(block.arguments),
     input: JSON.stringify(block.arguments ?? {}),
     output: '',
     status: 'running',
