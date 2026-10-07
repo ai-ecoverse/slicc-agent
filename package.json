@@ -59,7 +59,10 @@
   "dependencies": {
     "@earendil-works/chord": "1.0.4",
     "@earendil-works/pi-ai": "1.0.4",
+    "@earendil-works/pi-client": "1.0.4",
     "@earendil-works/pi-durable": "1.0.4",
+    "@earendil-works/pi-protocol": "1.0.4",
+    "@earendil-works/pi-server": "1.0.4",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2"
   }
 }
