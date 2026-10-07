@@ -30,7 +30,10 @@
       "types": "./dist/types/spectrum/index.d.ts",
       "default": "./dist/spectrum/index.js"
     },
-    "./agent-worker": "./dist/agent-worker.js"
+    "./agent-worker": {
+      "types": "./dist/types/agent-worker.d.ts",
+      "default": "./dist/agent-worker.js"
+    }
   },
   "files": [
     "dist"

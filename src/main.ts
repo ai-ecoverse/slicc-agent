@@ -5,8 +5,9 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { openAgent } from './agent.ts';
 import { EncryptedCredentialStore } from './credentials.ts';
 import { type AgentHost, hostAgent } from './host.ts';
+import type { KernelClient } from './kernel/client.ts';
 import { kernelEnvironment } from './kernel/env.ts';
-import { transportFetch } from './net.ts';
+import { type Transport, transportFetch } from './net.ts';
 import { SliccPrompt } from './prompt.ts';
 import {
   createAgentSettings,
@@ -22,10 +23,12 @@ export interface AgentWorkerScope extends WorkerScope {
   location: { origin: string };
 }
 
+export type KernelAttach = (port: MessagePort) => Promise<KernelClient & { transport: Transport }>;
+
 export interface AgentWorkerOptions {
   model?: ModelRef;
   providers?: Provider[];
-  attach?: typeof attachKernel;
+  attach?: KernelAttach;
   credentials?: () => Promise<CredentialStore>;
   storage?: () => Promise<Storage>;
 }
@@ -35,7 +38,8 @@ async function start(
   port: Promise<MessagePort>,
   options: AgentWorkerOptions
 ): Promise<AgentHost> {
-  const client = await (options.attach ?? attachKernel)(await port);
+  const attach: KernelAttach = options.attach ?? attachKernel;
+  const client = await attach(await port);
   scope.fetch = transportFetch(client.transport, scope.location.origin, scope.fetch.bind(scope));
   const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
   const providers = options.providers ?? sliccProviders();

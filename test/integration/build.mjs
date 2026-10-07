@@ -29,4 +29,20 @@ await build({
   ],
   logLevel: 'warning',
 });
+await build({
+  entryPoints: ['test/integration/page/bedrock-worker.js'],
+  outdir: 'dist-test',
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2024',
+  sourcemap: 'linked',
+  logLevel: 'warning',
+  alias: {
+    'node:crypto': './test/integration/shims/node-crypto.js',
+    '@smithy/node-http-handler': './test/integration/shims/node-only.js',
+    'http-proxy-agent': './test/integration/shims/node-only.js',
+    'https-proxy-agent': './test/integration/shims/node-only.js',
+  },
+});
 await copyFile('node_modules/@sqlite.org/sqlite-wasm/dist/sqlite3.wasm', 'dist-test/sqlite3.wasm');

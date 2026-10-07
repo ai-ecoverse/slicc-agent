@@ -11,7 +11,12 @@ export type {
   SpawnOptions,
 } from './kernel/client.ts';
 export { HOME, type KernelEnvOptions, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
-export { type AgentWorkerOptions, type AgentWorkerScope, runAgentWorker } from './main.ts';
+export {
+  type AgentWorkerOptions,
+  type AgentWorkerScope,
+  type KernelAttach,
+  runAgentWorker,
+} from './main.ts';
 export { type Transport, type TransportResponse, transportFetch } from './net.ts';
 export {
   AGENT_LOCK,
