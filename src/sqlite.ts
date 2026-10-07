@@ -6,6 +6,7 @@ import {
   type SqliteValue,
 } from '@earendil-works/pi-durable/storage/sqlite';
 import init, { type Database, type PreparedStatement } from '@sqlite.org/sqlite-wasm';
+import { holdLock, type PoolAccess, settlePool, vfsName } from './opfs-pool.ts';
 
 type Row = Record<string, unknown>;
 
@@ -93,9 +94,11 @@ class WasmSqliteTransaction extends WasmSqliteExecutor {
 
 export class WasmSqliteDatabase extends WasmSqliteExecutor implements SqliteDatabase {
   readonly #queue = new SerialQueue();
+  readonly #closed: () => void;
 
-  constructor(db: Database) {
+  constructor(db: Database, closed: () => void = () => {}) {
     super(db, new Statements(db));
+    this.#closed = closed;
   }
 
   override exec(sql: string): Promise<void> {
@@ -133,8 +136,12 @@ export class WasmSqliteDatabase extends WasmSqliteExecutor implements SqliteData
 
   close(): Promise<void> {
     return this.#queue.run(() => {
-      this.statements.finalize();
-      this.db.close();
+      try {
+        this.statements.finalize();
+        this.db.close();
+      } finally {
+        this.#closed();
+      }
     });
   }
 
@@ -147,7 +154,7 @@ export class WasmSqliteDatabase extends WasmSqliteExecutor implements SqliteData
   }
 }
 
-export interface OpfsSqliteOptions {
+export interface OpfsSqliteOptions extends PoolAccess {
   directory?: string;
   file?: string;
   load?: typeof init;
@@ -161,12 +168,20 @@ export async function openMemorySqliteStorage(): Promise<Storage> {
 }
 
 export async function openOpfsSqliteStorage(options: OpfsSqliteOptions = {}): Promise<Storage> {
-  const sqlite3 = await (options.load ?? init)();
-  const pool = await sqlite3.installOpfsSAHPoolVfs({
-    name: 'slicc-agent',
-    directory: options.directory ?? AGENT_DIRECTORY,
-  });
-  const db = new pool.OpfsSAHPoolDb(options.file ?? '/agent.sqlite');
-  db.exec('PRAGMA journal_mode = TRUNCATE');
-  return SqliteStorage.open(new WasmSqliteDatabase(db));
+  const directory = options.directory ?? AGENT_DIRECTORY;
+  const release = await holdLock(
+    options.locks ?? navigator.locks,
+    `slicc-agent-sqlite:${directory}`
+  );
+  try {
+    await settlePool(directory, options);
+    const sqlite3 = await (options.load ?? init)();
+    const pool = await sqlite3.installOpfsSAHPoolVfs({ name: vfsName(directory), directory });
+    const db = new pool.OpfsSAHPoolDb(options.file ?? '/agent.sqlite');
+    db.exec('PRAGMA journal_mode = TRUNCATE');
+    return await SqliteStorage.open(new WasmSqliteDatabase(db, release));
+  } catch (error) {
+    release();
+    throw error;
+  }
 }

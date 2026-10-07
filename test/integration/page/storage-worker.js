@@ -8,20 +8,26 @@ const faux = fauxProvider();
 const models = createModels();
 models.setProvider(faux.provider);
 faux.setResponses(params.getAll('answer').map((answer) => fauxAssistantMessage(answer)));
+const model = { provider: 'faux', modelId: 'faux-1' };
 
-async function run() {
-  const storage = await openOpfsSqliteStorage({ directory: params.get('directory') });
-  const agent = await openAgent({
-    models,
-    model: { provider: 'faux', modelId: 'faux-1' },
-    storage,
-  });
-  const prompt = params.get('prompt');
+async function session(directory, prompt) {
+  const storage = await openOpfsSqliteStorage({ directory });
+  const agent = await openAgent({ models, model, storage });
   const answer = prompt ? await agent.prompt(prompt) : null;
   const page = await agent.root.entries({}, 50, undefined, BACKGROUND_CONTEXT);
   const kinds = [...page.items].reverse().map((entry) => entry.kind);
+  if (params.has('hold')) {
+    self.postMessage({ holding: true });
+    return new Promise(() => {});
+  }
   await agent.close();
   return { answer, kinds };
+}
+
+async function run() {
+  const first = await session(params.get('directory'), params.get('prompt'));
+  if (!params.has('second')) return first;
+  return { first, second: await session(params.get('second'), null) };
 }
 
 run().then(

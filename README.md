@@ -16,7 +16,7 @@ await agent.prompt('What is in /home?');
 ```
 
 - `openAgent({ models, model, storage?, registry?, settings? })` opens a durable Harness (in memory unless `storage` is given) and its root conversation. `prompt(text)` submits an input and resolves with the answer's text.
-- `openOpfsSqliteStorage({ directory?, file? })` keeps the session in wasm SQLite ([`@sqlite.org/sqlite-wasm`](https://www.npmjs.com/package/@sqlite.org/sqlite-wasm)) in an `opfs-sahpool` pool, by default `/.slicc/agent/` in OPFS. It needs a dedicated worker, and only one worker can hold the pool at a time. `openMemorySqliteStorage()` keeps the same database in memory. Pass either as `storage`.
+- `openOpfsSqliteStorage({ directory?, file? })` keeps the session in wasm SQLite ([`@sqlite.org/sqlite-wasm`](https://www.npmjs.com/package/@sqlite.org/sqlite-wasm)) in an `opfs-sahpool` pool, by default `/.slicc/agent/` in OPFS. It needs a dedicated worker. Only one worker holds a pool at a time: the opener takes a Web Lock per directory and waits until every file of the pool can be opened before sqlite-wasm installs it, because a failed install deletes the pool's directory. `openMemorySqliteStorage()` keeps the same database in memory. Pass either as `storage`.
 - `serveAgent(endpoint, agent)` answers prompts that arrive on a worker or `MessagePort`; `connectAgent(endpoint)` is the page side.
 
 ## Develop
