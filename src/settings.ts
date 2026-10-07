@@ -1,52 +1,12 @@
-import {
-  type Context,
-  defineService,
-  type ReplicatedState,
-  replicatedState,
-} from '@earendil-works/chord';
+import { type Context, replicatedState } from '@earendil-works/chord';
 import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
 import { createModels, type MutableModels } from '@earendil-works/pi-ai/models';
 import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
+import type { AccountState, AgentSettings, ModelChoice, SettingsState } from './services.ts';
 
 export const BEDROCK = 'amazon-bedrock';
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
 export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
-
-export interface ModelChoice {
-  id: string;
-  label: string;
-  provider: string;
-  kind: 'chat' | 'classifier';
-  reasoning: boolean;
-  contextWindow: number;
-}
-
-export interface AccountState {
-  id: string;
-  provider: string;
-  identity: string;
-  status: 'connected' | 'disconnected';
-  auth: 'api-key';
-  needs: 'cors-free-transport' | null;
-}
-
-export interface SettingsState {
-  models: ModelChoice[];
-  accounts: AccountState[];
-}
-
-export interface AgentSettings {
-  readonly state: ReplicatedState<SettingsState>;
-  connect(
-    providerId: string,
-    secret: string,
-    region: string | null,
-    context: Context
-  ): Promise<void>;
-  disconnect(providerId: string, context: Context): Promise<void>;
-}
-
-export const AgentSettings = defineService<AgentSettings>('slicc.agent.settings');
 
 const corsFree = new Set([BEDROCK]);
 

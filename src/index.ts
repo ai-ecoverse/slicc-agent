@@ -27,27 +27,27 @@ export {
 } from './owner.ts';
 export { SliccPrompt } from './prompt.ts';
 export {
+  type AccountState,
   AGENT_SESSION,
   AgentControl,
   AgentSessions,
+  AgentSettings,
   type AgentSettingsChange,
   AgentTranscript,
+  type ModelChoice,
   type OperationError,
   type PromptResult,
   type SendMode,
   type SendRequest,
   type SendResponse,
+  type SettingsState,
 } from './services.ts';
 export {
-  type AccountState,
-  AgentSettings,
   BEDROCK,
   createAgentSettings,
   createSliccModels,
   DEFAULT_MODEL,
   DEFAULT_REGIONS,
-  type ModelChoice,
-  type SettingsState,
   sliccProviders,
   withDefaultRegions,
 } from './settings.ts';

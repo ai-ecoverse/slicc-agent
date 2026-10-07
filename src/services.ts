@@ -56,3 +56,39 @@ export interface AgentSessions {
 export const AgentSessions = defineService<AgentSessions>('slicc.agent.sessions');
 
 export const AGENT_SESSION = 'agent';
+
+export interface ModelChoice {
+  id: string;
+  label: string;
+  provider: string;
+  kind: 'chat' | 'classifier';
+  reasoning: boolean;
+  contextWindow: number;
+}
+
+export interface AccountState {
+  id: string;
+  provider: string;
+  identity: string;
+  status: 'connected' | 'disconnected';
+  auth: 'api-key';
+  needs: 'cors-free-transport' | null;
+}
+
+export interface SettingsState {
+  models: ModelChoice[];
+  accounts: AccountState[];
+}
+
+export interface AgentSettings {
+  readonly state: ReplicatedState<SettingsState>;
+  connect(
+    providerId: string,
+    secret: string,
+    region: string | null,
+    context: Context
+  ): Promise<void>;
+  disconnect(providerId: string, context: Context): Promise<void>;
+}
+
+export const AgentSettings = defineService<AgentSettings>('slicc.agent.settings');

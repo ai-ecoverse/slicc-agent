@@ -10,10 +10,10 @@ import {
   AGENT_SESSION,
   AgentControl,
   AgentSessions,
+  AgentSettings,
   AgentTranscript,
   type SendMode,
 } from './services.ts';
-import { AgentSettings } from './settings.ts';
 import { PortChannel, type PortEndpoint } from './wire.ts';
 
 export interface AgentConnection {
