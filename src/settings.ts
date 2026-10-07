@@ -54,11 +54,27 @@ export function sliccProviders(): Provider[] {
   return [amazonBedrockProvider() as Provider];
 }
 
+export function withDefaultRegions(credentials: CredentialStore): CredentialStore {
+  return {
+    async read(providerId, options) {
+      const credential = await credentials.read(providerId, options);
+      const region = DEFAULT_REGIONS[providerId];
+      if (credential?.type !== 'api_key' || !region || credential.env?.AWS_REGION) {
+        return credential;
+      }
+      return { ...credential, env: { ...credential.env, AWS_REGION: region } };
+    },
+    list: (options) => credentials.list(options),
+    modify: (providerId, fn, options) => credentials.modify(providerId, fn, options),
+    delete: (providerId, options) => credentials.delete(providerId, options),
+  };
+}
+
 export function createSliccModels(
   credentials: CredentialStore,
   providers = sliccProviders()
 ): MutableModels {
-  const models = createModels({ credentials });
+  const models = createModels({ credentials: withDefaultRegions(credentials) });
   for (const provider of providers) models.setProvider(provider);
   return models;
 }
@@ -108,8 +124,7 @@ export async function createAgentSettings(
   };
   return {
     state,
-    async connect(providerId, secret, given, context) {
-      const region = given ?? DEFAULT_REGIONS[providerId];
+    async connect(providerId, secret, region, context) {
       await credentials.modify(providerId, async () => ({
         type: 'api_key',
         key: secret,
