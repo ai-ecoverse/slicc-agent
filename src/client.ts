@@ -13,12 +13,14 @@ import {
   AgentTranscript,
   type SendMode,
 } from './services.ts';
+import { AgentSettings } from './settings.ts';
 import { PortChannel, type PortEndpoint } from './wire.ts';
 
 export interface AgentConnection {
   readonly serverId: string;
   readonly control: AgentControl;
   readonly transcript: ReplicatedState<ConversationView>;
+  readonly settings: AgentSettings;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
 }
@@ -49,17 +51,19 @@ export async function connectAgent(
   await server.use(AgentSessions).attach(AGENT_SESSION, context);
   await ready;
   const session = createRemoteServiceBinding({
-    services: [AgentControl, AgentTranscript],
+    services: [AgentControl, AgentTranscript, AgentSettings],
     transport: createClientServiceTransport(client, () => client.attachment),
     bound: true,
   });
   const control = session.use(AgentControl);
   const transcript = session.use(AgentTranscript).state;
+  const settings = session.use(AgentSettings);
   await session.ready(context);
   return {
     serverId,
     control,
     transcript,
+    settings,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
       if (!sent.accepted) throw new Error(`${sent.error.code}: ${sent.error.message}`);

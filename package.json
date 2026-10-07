@@ -29,6 +29,10 @@
     "./spectrum": {
       "types": "./dist/types/spectrum/index.d.ts",
       "default": "./dist/spectrum/index.js"
+    },
+    "./agent-worker": {
+      "types": "./dist/types/agent-worker.d.ts",
+      "default": "./dist/agent-worker.js"
     }
   },
   "files": [
@@ -50,7 +54,6 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.9.0",
     "@ai-ecoverse/slicc-shared-web": "1.5.0",
     "@ai-ecoverse/slicc-spectrum": "1.7.0",
     "@ai-ecoverse/wasm-bash": "5.3.0-7",
@@ -58,6 +61,7 @@
     "@biomejs/biome": "2.5.15",
     "@types/node": "24.19.1",
     "esbuild": "0.28.2",
+    "fake-indexeddb": "6.2.5",
     "lefthook": "2.1.16",
     "monocart-coverage-reports": "2.13.0",
     "playwright-core": "1.63.0",
@@ -65,6 +69,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
+    "@ai-ecoverse/slicc-kernel": "1.9.0",
     "@earendil-works/chord": "1.0.4",
     "@earendil-works/pi-ai": "1.0.4",
     "@earendil-works/pi-client": "1.0.4",

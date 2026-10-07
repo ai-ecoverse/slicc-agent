@@ -6,7 +6,9 @@ const relativeTs = /((?:from|import)\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\.ts\2/g;
 
 async function sources(dir) {
   const names = await readdir(dir, { recursive: true });
-  return names.filter((name) => name.endsWith('.ts')).map((name) => join(dir, name));
+  return names
+    .filter((name) => name.endsWith('.ts') && !name.endsWith('.d.ts'))
+    .map((name) => join(dir, name));
 }
 
 async function rewrite(file) {

@@ -2,6 +2,7 @@ import {
   type Context,
   createRemoteServiceEndpoint,
   RemoteServiceProvider,
+  replicatedState,
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import {
@@ -15,6 +16,7 @@ import {
 import type { Agent } from './agent.ts';
 import { createAgentControl } from './control.ts';
 import { AGENT_SESSION, AgentControl, AgentSessions, AgentTranscript } from './services.ts';
+import { AgentSettings } from './settings.ts';
 import { type PortEndpoint, PortListener } from './wire.ts';
 
 export interface AgentHost {
@@ -60,9 +62,17 @@ function serverServices(): RoutedServerServiceHost {
   };
 }
 
+const noSettings: AgentSettings = {
+  state: replicatedState({ models: [], accounts: [] }),
+  connect: async () => {
+    throw new Error('this agent has no accounts');
+  },
+  disconnect: async () => {},
+};
+
 export async function hostAgent(
   agent: Agent,
-  options: { serverId?: string; context?: Context } = {}
+  options: { serverId?: string; context?: Context; settings?: AgentSettings } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const serverId = options.serverId ?? crypto.randomUUID();
@@ -70,9 +80,11 @@ export async function hostAgent(
   const provider = new RemoteServiceProvider([
     { service: AgentControl, mode: 'singleton' },
     { service: AgentTranscript, mode: 'singleton' },
+    { service: AgentSettings, mode: 'singleton' },
   ]);
   provider.provide(AgentControl, createAgentControl(agent.harness, agent.root));
   provider.provide(AgentTranscript, { state });
+  provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
     serverServices: serverServices(),
     async resolveSession(sessionId) {
