@@ -45,6 +45,7 @@ export {
   createAgentSettings,
   createSliccModels,
   DEFAULT_MODEL,
+  DEFAULT_REGIONS,
   type ModelChoice,
   type SettingsState,
   sliccProviders,

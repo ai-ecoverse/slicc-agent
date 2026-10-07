@@ -10,6 +10,7 @@ import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-be
 
 export const BEDROCK = 'amazon-bedrock';
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
+export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
 
 export interface ModelChoice {
   id: string;
@@ -107,7 +108,8 @@ export async function createAgentSettings(
   };
   return {
     state,
-    async connect(providerId, secret, region, context) {
+    async connect(providerId, secret, given, context) {
+      const region = given ?? DEFAULT_REGIONS[providerId];
       await credentials.modify(providerId, async () => ({
         type: 'api_key',
         key: secret,
