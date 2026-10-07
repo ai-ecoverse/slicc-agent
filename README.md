@@ -6,18 +6,32 @@ The package ships unbundled ESM: `dist/` holds one file per source file and impo
 
 ## Use
 
+In the agent's dedicated worker:
+
 ```js
-import { connectAgent, openAgent, serveAgent } from '@ai-ecoverse/slicc-agent';
+import { hostAgent, openAgent, openOpfsSqliteStorage, serveConnections } from '@ai-ecoverse/slicc-agent';
 
-serveAgent(self, openAgent({ models, model: { provider: 'amazon-bedrock', modelId } }));
+const storage = await openOpfsSqliteStorage();
+serveConnections(self, openAgent({ models, model, storage }).then((agent) => hostAgent(agent)));
+```
 
-const agent = connectAgent(new Worker(workerUrl, { type: 'module' }));
+In the page:
+
+```js
+import { startAgent } from '@ai-ecoverse/slicc-agent';
+
+const owner = await startAgent({ worker: () => new Worker(workerUrl, { type: 'module' }) });
+const agent = await owner.connect();
+agent.transcript.subscribe((view) => render(view));
 await agent.prompt('What is in /home?');
 ```
 
-- `openAgent({ models, model, storage?, registry?, settings? })` opens a durable Harness (in memory unless `storage` is given) and its root conversation. `prompt(text)` submits an input and resolves with the answer's text.
-- `openOpfsSqliteStorage({ directory?, file? })` keeps the session in wasm SQLite ([`@sqlite.org/sqlite-wasm`](https://www.npmjs.com/package/@sqlite.org/sqlite-wasm)) in an `opfs-sahpool` pool, by default `/.slicc/agent/` in OPFS. It needs a dedicated worker. Only one worker holds a pool at a time: the opener takes a Web Lock per directory and waits until every file of the pool can be opened before sqlite-wasm installs it, because a failed install deletes the pool's directory. `openMemorySqliteStorage()` keeps the same database in memory. Pass either as `storage`.
-- `serveAgent(endpoint, agent)` answers prompts that arrive on a worker or `MessagePort`; `connectAgent(endpoint)` is the page side.
+- `openAgent({ models, model, storage?, registry?, settings? })` opens a durable Harness (in memory unless `storage` is given) and its root conversation, and resumes work a previous worker left unfinished.
+- `openOpfsSqliteStorage({ directory?, file? })` keeps the session in wasm SQLite ([`@sqlite.org/sqlite-wasm`](https://www.npmjs.com/package/@sqlite.org/sqlite-wasm)) in an `opfs-sahpool` pool, by default `/.slicc/agent/` in OPFS. It needs a dedicated worker. Only one worker holds a pool at a time: the opener takes a Web Lock per directory and waits until every file of the pool can be opened before sqlite-wasm installs it, because a failed install deletes the pool's directory. `openMemorySqliteStorage()` keeps the same database in memory.
+- `hostAgent(agent)` serves the agent with pi's protocol: a pi-server with one session, `agent`, whose Chord services are `slicc.agent.control` (send with `whenBusy` `steer`, `followUp` or `reject`, wait, withdraw, abort, compact) and `slicc.agent.transcript` (the conversation's durable view as replicated state). `serveConnections(self, host)` hands it every `MessagePort` the page sends.
+- `startAgent({ worker })` takes the Web Lock `slicc-agent`, so one tab at a time owns the agent worker, and waits while another tab holds it. `connect()` returns an `AgentConnection` (`control`, `transcript`, `prompt()`), `restart()` replaces the worker (durable resumes from SQLite), and `release()` stops it and lets the next tab take over.
+
+pi-server 1.0.4 calls `unref()` on a `setTimeout` handle when it accepts a connection, which browsers don't have. `PortListener` wraps that one call so its timers get a no-op `unref`.
 
 ## Develop
 
