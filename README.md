@@ -57,6 +57,28 @@ const agent = await openAgent({ models, model, storage, registry, env: kernelEnv
 
 A conversation without a `cwd` works in `/home`.
 
+### The worker seven starts
+
+`@ai-ecoverse/slicc-agent/agent-worker` is a complete agent worker. It waits for the page kernel's port, then:
+- attaches to the kernel and routes its cross-origin `fetch` through the kernel's transport when that transport isn't bound by CORS (slicc-node, slicc-swift or slicc-extension);
+- opens the encrypted credential store, the AWS Bedrock provider and the session in OPFS SQLite;
+- installs durable's coding tools and SLICC's system prompt, and serves the agent.
+
+```js
+const owner = await startAgent({
+  worker: () => new Worker(new URL('@ai-ecoverse/slicc-agent/agent-worker', import.meta.url), { type: 'module' }),
+  kernel: { connect: () => kernel.connect() },
+});
+```
+
+`runAgentWorker(self, options)` is the same with its parts replaceable (model, providers, kernel attach, credentials, storage).
+
+**Providers.** The first provider is AWS Bedrock with a Bedrock API key as the bearer token; the default model is `us.anthropic.claude-sonnet-5-5`. Bedrock sends no CORS headers, so it needs a CORS-free transport, and its account says so (`needs: 'cors-free-transport'`).
+
+**Credentials.** They live in the IndexedDB database `slicc-agent-credentials`, sealed with AES-GCM under a non-extractable key that never leaves WebCrypto. They never enter the session database or the transcript, and followers never see them.
+
+**Settings.** The `slicc.agent.settings` service shows the models and accounts and takes `connect(providerId, apiKey)` and `disconnect(providerId)`.
+
 ### In slicc-spectrum
 
 `@ai-ecoverse/slicc-agent/spectrum` turns an `AgentConnection` into slicc-spectrum's `AgentPort`, so `<slicc-app>` shows the real agent:
@@ -65,8 +87,10 @@ A conversation without a `cwd` works in `/home`.
 import { createAgentModel } from '@ai-ecoverse/slicc-agent/spectrum';
 
 const agent = await owner.connect();
-app.model = { ...createKernelModel({ kernel, root }), ...createAgentModel(agent) };
+app.model = { ...createKernelModel({ kernel, root }), ...createAgentModel(agent, { storage: localStorage }) };
 ```
+
+`createAgentModel()` returns the `agent` and `settings` ports. Settings keeps the UI preferences in `storage`; model and thinking belong to the conversation, and accounts and models come from the worker.
 
 The adapter keeps the replicated transcript and maps it on every update. User, assistant and compaction entries become messages; tool results fill in the tool calls they answer; the generation in flight shows as a streaming message; retries and running compactions show as system messages. `busy()` and `queue()` read durable's live and inbox documents. A plain send queues a follow-up, and a steer send steers, as slicc-spectrum's composer asks today. There is one cone so far; scoops, the freezer, licks and questions come later. slicc-spectrum is a peer dependency (≥ 1.7.0) used for types only.
 
