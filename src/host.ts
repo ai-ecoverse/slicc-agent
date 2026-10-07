@@ -15,10 +15,10 @@ import {
 } from '@earendil-works/pi-server';
 import type { Agent } from './agent.ts';
 import { createAgentControl } from './control.ts';
-import { applyPatches } from './patches.ts';
+import { PortListener } from './listener.ts';
 import { AGENT_SESSION, AgentControl, AgentSessions, AgentTranscript } from './services.ts';
 import { AgentSettings } from './settings.ts';
-import { type PortEndpoint, PortListener } from './wire.ts';
+import type { PortEndpoint } from './wire.ts';
 
 export interface AgentHost {
   readonly serverId: string;
@@ -75,7 +75,6 @@ export async function hostAgent(
   agent: Agent,
   options: { serverId?: string; context?: Context; settings?: AgentSettings } = {}
 ): Promise<AgentHost> {
-  applyPatches();
   const context = options.context ?? BACKGROUND_CONTEXT;
   const serverId = options.serverId ?? crypto.randomUUID();
   const state = await agent.root.viewState(context);

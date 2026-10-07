@@ -11,6 +11,7 @@ export type {
   SpawnOptions,
 } from './kernel/client.ts';
 export { HOME, type KernelEnvOptions, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
+export { PortListener } from './listener.ts';
 export {
   type AgentWorkerOptions,
   type AgentWorkerScope,
@@ -57,5 +58,5 @@ export {
   openOpfsSqliteStorage,
   WasmSqliteDatabase,
 } from './sqlite.ts';
-export { PortChannel, type PortEndpoint, PortListener, withUnrefTimers } from './wire.ts';
+export { PortChannel, type PortEndpoint, withUnrefTimers } from './wire.ts';
 export { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
