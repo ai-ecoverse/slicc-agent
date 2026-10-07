@@ -29,15 +29,20 @@ export interface OwnerOptions {
 export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
   const release = await holdLock(options.locks ?? navigator.locks, AGENT_LOCK);
   const channel = options.channel ?? (() => new MessageChannel());
-  const spawn = async () => {
+  const spawn = async (): Promise<AgentWorker> => {
     const created = options.worker();
-    if (options.kernel) {
-      const port = await options.kernel.connect();
-      created.postMessage({ kernel: port }, [port]);
+    try {
+      if (options.kernel) {
+        const port = await options.kernel.connect();
+        created.postMessage({ kernel: port }, [port]);
+      }
+    } catch (error) {
+      created.terminate();
+      throw error;
     }
     return created;
   };
-  let worker: Promise<AgentWorker> = spawn();
+  let worker: Promise<AgentWorker | undefined> = Promise.resolve().then(spawn);
   try {
     await worker;
   } catch (error) {
@@ -47,18 +52,28 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
   return {
     async connect() {
       const ready = await worker;
+      if (!ready) throw new Error('the agent was released');
       const { port1, port2 } = channel();
       ready.postMessage({ connect: port2 }, [port2]);
       return connectAgent(port1);
     },
-    async restart() {
-      (await worker).terminate();
-      worker = spawn();
-      await worker;
+    restart() {
+      worker = worker
+        .catch(() => undefined)
+        .then((old) => {
+          old?.terminate();
+          return spawn();
+        });
+      return worker.then(() => undefined);
     },
     async release() {
-      (await worker).terminate();
-      release();
+      const previous = worker;
+      worker = Promise.resolve(undefined);
+      try {
+        (await previous.catch(() => undefined))?.terminate();
+      } finally {
+        release();
+      }
     },
   };
 }

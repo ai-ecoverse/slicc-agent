@@ -86,6 +86,7 @@ function guard(process: KernelProcess, options: ShellExecOptions | undefined, co
       : setTimeout(() => stop('timeout'), options.timeout * 1000);
   const onAbort = () => stop('aborted');
   context.abortSignal?.addEventListener('abort', onAbort, { once: true });
+  if (context.abortSignal?.aborted) onAbort();
   return {
     get ending() {
       return ending;
