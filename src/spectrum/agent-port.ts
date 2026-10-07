@@ -67,10 +67,16 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     const before = this.#messages;
     this.#messages = toMessages(view);
     this.emit('agents', this.list());
-    const last = this.#messages.at(-1);
-    if (last && before.length === this.#messages.length)
-      this.emit('message', { agentId: CONE, message: last });
-    else this.emit('messages', CONE);
+    if (before.length !== this.#messages.length) {
+      this.emit('messages', CONE);
+      return;
+    }
+    const changed = this.#messages.filter(
+      (message, index) => JSON.stringify(message) !== JSON.stringify(before[index])
+    );
+    if (changed.length === 1)
+      this.emit('message', { agentId: CONE, message: changed[0] as Message });
+    else if (changed.length > 1) this.emit('messages', CONE);
   }
 
   ready(): Promise<void> {
