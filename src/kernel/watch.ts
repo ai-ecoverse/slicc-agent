@@ -64,6 +64,7 @@ export function differences(before: Snapshot, after: Snapshot): string[] {
 
 export interface PollOptions {
   intervalMs?: number;
+  mode?: 'native' | 'polling';
 }
 
 export async function pollWatch(
@@ -91,6 +92,79 @@ export async function pollWatch(
       open = false;
       clearInterval(timer);
       await running;
+    },
+  };
+}
+
+function hidden(base: string, path: string, target: WatchTarget): boolean {
+  if (!target.exclude || path === base) return false;
+  const below = path.slice(base === '/' ? 1 : base.length + 1);
+  return below.split('/').some((name) => excluded(name, target));
+}
+
+function inside(base: string, path: string): boolean {
+  return path === base || path.startsWith(base === '/' ? '/' : `${base}/`);
+}
+
+const FALLBACK = new Set(['ENOSYS', 'ENOENT', 'ENOTDIR']);
+
+type Watched = WatchTarget & { real: string };
+
+export function mapChange(targets: readonly Watched[], path: string): string[] {
+  const out: string[] = [];
+  for (const target of targets) {
+    if (inside(target.path, path)) {
+      if (!hidden(target.path, path, target)) out.push(path);
+    } else if (inside(path, target.path)) out.push(target.path);
+    else if (target.real !== target.path && inside(target.real, path))
+      out.push(`${target.path}${path.slice(target.real.length)}`);
+  }
+  return out;
+}
+
+export async function nativeWatch(
+  fs: KernelFs,
+  cwd: string,
+  targets: readonly WatchTarget[],
+  onChange: (change: WatchChange) => void
+): Promise<FileWatcher | undefined> {
+  const watch = fs.watch?.bind(fs);
+  if (!watch) return undefined;
+  const resolved: Watched[] = [];
+  for (const target of targets) {
+    const path = resolve(cwd, target.path);
+    resolved.push({ ...target, path, real: await fs.realpath(path).catch(() => path) });
+  }
+  let open = true;
+  const handles: { close(): unknown }[] = [];
+  const closeAll = async () => {
+    for (const handle of handles.splice(0)) await handle.close();
+  };
+  const report = (change: { paths: string[] } | { overflow: true }) => {
+    if (!open) return;
+    if (!('paths' in change)) {
+      onChange({ overflow: true });
+      return;
+    }
+    const paths = [...new Set(change.paths.flatMap((path) => mapChange(resolved, path)))];
+    if (paths.length) onChange({ paths });
+  };
+  try {
+    for (const target of resolved) {
+      const recursive = { recursive: target.recursive === true };
+      handles.push(await watch([target.path], recursive, report));
+      if (target.real !== target.path) handles.push(await watch([target.real], recursive, report));
+    }
+  } catch (error) {
+    await closeAll();
+    if (FALLBACK.has((error as { code?: string }).code ?? '')) return undefined;
+    throw error;
+  }
+  return {
+    mode: 'native',
+    async close(_context: Context) {
+      open = false;
+      await closeAll();
     },
   };
 }

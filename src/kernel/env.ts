@@ -21,7 +21,7 @@ import type { KernelClient } from './client.ts';
 import { execute } from './exec.ts';
 import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from './files.ts';
 import { dirname, normalize, resolve } from './paths.ts';
-import { type PollOptions, pollWatch } from './watch.ts';
+import { nativeWatch, type PollOptions, pollWatch } from './watch.ts';
 
 export interface KernelEnvOptions {
   cwd: string;
@@ -201,7 +201,10 @@ export class SliccKernelEnv implements ExecutionEnv {
     context: Context
   ): FileResult<FileWatcher> {
     return attempt(context, this.cwd, async () => {
-      const watcher = await pollWatch(this.#fs, this.cwd, targets, onChange, this.#poll);
+      const watcher =
+        (this.#poll.mode !== 'polling'
+          ? await nativeWatch(this.#fs, this.cwd, targets, onChange)
+          : undefined) ?? (await pollWatch(this.#fs, this.cwd, targets, onChange, this.#poll));
       this.#watchers.add(watcher);
       return {
         mode: watcher.mode,

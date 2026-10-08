@@ -19,6 +19,11 @@ export interface KernelFs {
   rename(from: string, to: string): Promise<void>;
   realpath(path: string): Promise<string>;
   exists(path: string): Promise<boolean>;
+  watch?(
+    paths: readonly string[],
+    options: { recursive: boolean },
+    onChange: (change: { paths: string[] } | { overflow: true }) => void
+  ): Promise<{ close(): unknown }>;
 }
 
 export interface KernelProcess {
