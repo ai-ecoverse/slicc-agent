@@ -123,13 +123,16 @@ export function coneOf(state: Readonly<AgentsState>, conversation: number): stri
 
 export function findScoop(
   state: Readonly<AgentsState>,
-  handle: string
+  handle: string,
+  cone: string | null
 ): [string, ScoopRecord] | undefined {
   const id = handle.startsWith('scoop:') ? handle : scoopId(handle);
+  const reachable = (record: ScoopRecord | undefined): record is ScoopRecord =>
+    !!record && live(record) && (cone === null || record.cone === cone);
   const record = state.scoops[id];
-  if (record && live(record)) return [id, record];
+  if (reachable(record)) return [id, record];
   return Object.entries(state.scoops).find(
-    ([, candidate]) => live(candidate) && candidate.name === handle
+    ([, candidate]) => reachable(candidate) && candidate.name === handle
   );
 }
 

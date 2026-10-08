@@ -181,8 +181,8 @@ export async function role(deps: Deps, parsed: Flags) {
   return { roles, role: found };
 }
 
-function handle(deps: Deps, name: string | undefined) {
-  return name ? findScoop(deps.agents.state(), name) : undefined;
+function handle(deps: Deps, who: Caller, name: string | undefined) {
+  return name ? findScoop(deps.agents.state(), name, who.fromAgent ? who.cone : null) : undefined;
 }
 
 const ASYNC_VALUES = [
@@ -280,10 +280,10 @@ async function list(deps: Deps, request: Request, who: Caller, context: Context)
 async function status(
   deps: Deps,
   request: Request,
-  _who: Caller,
+  who: Caller,
   context: Context
 ): Promise<Answer> {
-  const found = handle(deps, request.argv[1]);
+  const found = handle(deps, who, request.argv[1]);
   if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
   const [, record] = found;
   const busy = await deps.scoops.busy(record.conversation, context);
@@ -322,7 +322,7 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
     return deps.scoops.note(who.scoop, text, context);
   }
   if (who.scoop) return fail('a scoop can only send to its parent');
-  const found = handle(deps, request.argv[1]);
+  const found = handle(deps, who, request.argv[1]);
   if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
   const followUp = parsed.switches.has('--follow-up');
   return deps.scoops.feed(
@@ -344,11 +344,11 @@ async function latest(deps: Deps, folder: string, context: Context): Promise<str
   return read.ok ? read.value.trimEnd() : '(no answer yet)';
 }
 
-function waitTargets(deps: Deps, rest: readonly string[]): string[] | Answer {
+function waitTargets(deps: Deps, who: Caller, rest: readonly string[]): string[] | Answer {
   if (!rest.length) return fail('wait needs at least one handle', 2);
-  const missing = rest.filter((name) => !handle(deps, name));
+  const missing = rest.filter((name) => !handle(deps, who, name));
   if (missing.length) return fail(`there is no scoop ${missing.join(', ')}`);
-  return rest.map((name) => (handle(deps, name) as [string, unknown])[0]);
+  return rest.map((name) => (handle(deps, who, name) as [string, unknown])[0]);
 }
 
 async function block(
@@ -385,7 +385,7 @@ async function wait(deps: Deps, request: Request, who: Caller, context: Context)
   const seconds = Number(last(parsed, '--timeout') ?? DEFAULT_WAIT_S);
   if (!Number.isInteger(seconds) || seconds <= 0)
     return fail('--timeout must be a positive whole number of seconds', 2);
-  const ids = waitTargets(deps, parsed.rest);
+  const ids = waitTargets(deps, who, parsed.rest);
   if (isAnswer(ids)) return ids;
   if (!parsed.switches.has('--notify')) return block(deps, ids, seconds, context);
   if (!who.fromAgent || who.scoop)
@@ -396,7 +396,7 @@ async function wait(deps: Deps, request: Request, who: Caller, context: Context)
 
 async function stop(deps: Deps, request: Request, who: Caller, context: Context): Promise<Answer> {
   if (who.scoop) return fail('a scoop cannot stop scoops');
-  const found = handle(deps, request.argv[1]);
+  const found = handle(deps, who, request.argv[1]);
   if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
   return deps.scoops.stop(found[0], who.fromAgent, context);
 }
@@ -408,7 +408,7 @@ async function rename(
   context: Context
 ): Promise<Answer> {
   if (who.scoop) return fail('a scoop cannot rename scoops');
-  const found = handle(deps, request.argv[1]);
+  const found = handle(deps, who, request.argv[1]);
   if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
   return deps.scoops.rename(found[0], request.argv.slice(2).join(' '), context);
 }

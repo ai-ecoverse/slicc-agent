@@ -50,6 +50,11 @@ export interface AgentControl {
   createCone(name: string, context: Context): Promise<Created>;
   createScoop(parentId: string, name: string, context: Context): Promise<Created>;
   drop(agentId: string, context: Context): Promise<Created>;
+  unqueue(
+    agentId: string | null,
+    submissionId: string,
+    context: Context
+  ): Promise<{ outcome: 'withdrawn' | 'already_placed' | 'not_found' }>;
 }
 
 export type Created = { id: string; error: null } | { id: null; error: string };
@@ -84,6 +89,7 @@ export type Rewound =
 export interface AgentSettingsChange {
   model: { provider: string; modelId: string } | null;
   thinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  agentId?: string | null;
 }
 
 export const AgentControl = defineService<AgentControl>('slicc.agent.control');

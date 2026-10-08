@@ -28,7 +28,7 @@ export function scoopFacts(record: Pick<ScoopRecord, 'name' | 'folder' | 'role'>
     `You are the scoop "${record.name}"${record.role ? ` (role: ${record.role})` : ''}, a helper agent working for a cone. Messages come from the cone or from the user at a terminal; your final answer goes back to whoever asked, so end every task with a complete answer.`,
     `Work in ${workspace(record.folder)}. Your read, write and edit tools only reach ${SCOOPS_ROOT}/${record.folder} and /tmp, and read ${HOME}.`,
     'Your bash is not confined: it sees the whole file system and every process. Stay in your folder anyway, and change nothing outside it unless the request says so.',
-    'You cannot start scoops of your own.',
+    'You may run `agent` synchronously for a bounded side task (calls nest at most three deep), but you cannot start asynchronous scoops (`agent --async`, `subagent spawn`).',
   ].join('\n');
 }
 

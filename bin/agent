@@ -36,7 +36,8 @@ cancel() {
 }
 if [ $sync = 1 ]; then trap cancel TERM INT HUP; fi
 
-limit=200
+limit=0
+if [ "${1:-}" = wait ]; then limit=350; fi
 after=""
 previous=""
 for arg in "$@"; do
@@ -44,7 +45,6 @@ for arg in "$@"; do
   if [ "$previous" = "--background-after" ]; then after="${arg//[!0-9]/}"; fi
   previous="$arg"
 done
-if [ $sync = 1 ]; then limit=0; fi
 
 count=0
 seen=0

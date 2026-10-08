@@ -31,6 +31,12 @@ export interface HostScoops {
 
 type WithAgents = { agents?: Agents };
 
+export function readable(out: string): string {
+  const text = out.replace(/^(?:sub)?agent: /, '').trim();
+  const sentence = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
 function created(run: () => Promise<string>): Promise<Created> {
   return run().then(
     (id) => ({ id, error: null }),
@@ -104,6 +110,15 @@ export function createAgentControl(
     const found = await agents.conversation(agentId, context);
     if (!found) throw new Error(`There is no agent ${agentId}.`);
     return found;
+  };
+  const withdraw = async (conversation: Conversation, id: string, context: Context) => {
+    const parsed = submissionId(id);
+    if (parsed === undefined) return { outcome: 'not_found' as const };
+    const result = await harness.abortSubmission(parsed, context, conversation.id);
+    if (result === 'aborted') return { outcome: 'withdrawn' as const };
+    return {
+      outcome: result === 'not_found' ? ('not_found' as const) : ('already_placed' as const),
+    };
   };
   let lock: Promise<unknown> = Promise.resolve();
   const serial = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -181,12 +196,9 @@ export function createAgentControl(
       const entry = await harness.commit((tx) => tx.entry(AssistantEntry, answer), context);
       return { status: 'done', text: answerText(entry?.model?.[0]?.content), reason: null };
     },
-    async withdraw(id, context) {
-      const parsed = submissionId(id);
-      if (parsed === undefined) return { outcome: 'not_found' };
-      const result = await harness.abortSubmission(parsed, context, current().id);
-      if (result === 'aborted') return { outcome: 'withdrawn' };
-      return { outcome: result === 'not_found' ? 'not_found' : 'already_placed' };
+    withdraw: (id, context) => withdraw(current(), id, context),
+    async unqueue(agentId, id, context) {
+      return withdraw(await conversationFor(agentId, context), id, context);
     },
     abort: (context) => current().abort(context),
     compact: (instructions, context) =>
@@ -256,7 +268,7 @@ export function createAgentControl(
           { cone: parentId, name, prompts: [], fromAgent: false, limits: roles.limits },
           context
         );
-        if (answer.code !== 0) throw new Error(answer.out.replace(/^subagent: /, '').trim());
+        if (answer.code !== 0) throw new Error(readable(answer.out));
         return `scoop:${answer.out.trim()}`;
       });
     },
@@ -264,12 +276,12 @@ export function createAgentControl(
       return created(async () => {
         if (!scoops) throw new Error('This agent has no scoops.');
         const answer = await scoops.scoops.stop(agentId, false, context);
-        if (answer.code !== 0) throw new Error(answer.out.replace(/^subagent: /, '').trim());
+        if (answer.code !== 0) throw new Error(readable(answer.out));
         return agentId;
       });
     },
-    configure: (change, context) =>
-      current().configure(
+    configure: async (change, context) =>
+      (await conversationFor(change.agentId, context)).configure(
         {
           ...(change.model ? { model: change.model } : {}),
           ...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),

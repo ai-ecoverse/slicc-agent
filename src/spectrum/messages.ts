@@ -270,6 +270,7 @@ function lickMessage(
     ...(lick.body ? { body: lick.body } : {}),
     ...(lick.count > 1 ? { count: lick.count } : {}),
     ...(state ? { state } : {}),
+    ...(lick.severity ? { severity: lick.severity } : {}),
   };
 }
 

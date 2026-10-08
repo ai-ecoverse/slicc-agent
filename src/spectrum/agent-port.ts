@@ -49,6 +49,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   readonly #ready: Promise<void>;
   readonly #messages = new Map<string, Message[]>();
   #active: string | null = null;
+  #creating = new Map<string, Promise<string | null>>();
 
   constructor(connection: AgentConnection) {
     super();
@@ -127,11 +128,17 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
 
   active(): string {
     const known = this.#summary();
+    if (this.#active && this.#creating.has(this.#active)) return this.#active;
     if (this.#active && known.some((summary) => summary.id === this.#active)) return this.#active;
     return this.#connection.agents?.value?.active ?? CONE;
   }
 
   select(id: string): void {
+    if (this.#creating.has(id)) {
+      this.#active = id;
+      this.emit('active', id);
+      return;
+    }
     const found = this.#summary().find((summary) => summary.id === id);
     if (!found) return;
     this.#active = id;
@@ -146,12 +153,14 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
 
   async send(agentId: string, input: string | Outgoing): Promise<void> {
     const outgoing = typeof input === 'string' ? { text: input } : input;
+    const target = this.#creating.has(agentId) ? await this.#creating.get(agentId) : agentId;
+    if (target === null) throw new Error('The scoop could not be created.');
     const sent = await this.#connection.control.send(
       {
         text: outgoing.text,
         whenBusy: outgoing.mode === 'queue' ? 'followUp' : 'steer',
         requestId: crypto.randomUUID(),
-        agentId: agentId || null,
+        agentId: target || null,
       },
       BACKGROUND_CONTEXT
     );
@@ -175,8 +184,8 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     return queued(this.#view(agentId));
   }
 
-  unqueue(_agentId: string, messageId: string): void {
-    void this.#connection.control.withdraw(messageId.replace(/^q/, ''), BACKGROUND_CONTEXT);
+  unqueue(agentId: string, messageId: string): void {
+    void this.#connection.control.unqueue(agentId, messageId.replace(/^q/, ''), BACKGROUND_CONTEXT);
   }
 
   suggestion(): string | null {
@@ -202,21 +211,27 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     void this.#connection.control.reset(null, BACKGROUND_CONTEXT);
   }
 
-  #configure(change: Partial<AgentSettingsChange>): void {
+  #configure(agentId: string, change: Partial<AgentSettingsChange>): void {
     void this.#connection.control.configure(
-      { model: change.model ?? null, thinkingLevel: change.thinkingLevel ?? null },
+      {
+        model: change.model ?? null,
+        thinkingLevel: change.thinkingLevel ?? null,
+        agentId,
+      },
       BACKGROUND_CONTEXT
     );
   }
 
-  setModel(_agentId: string, model: string): void {
+  setModel(agentId: string, model: string): void {
     const at = model.indexOf('/');
     if (at <= 0) return;
-    this.#configure({ model: { provider: model.slice(0, at), modelId: model.slice(at + 1) } });
+    this.#configure(agentId, {
+      model: { provider: model.slice(0, at), modelId: model.slice(at + 1) },
+    });
   }
 
-  setThinking(_agentId: string, level: Thinking): void {
-    this.#configure({ thinkingLevel: level });
+  setThinking(agentId: string, level: Thinking): void {
+    this.#configure(agentId, { thinkingLevel: level });
   }
 
   async older(): Promise<readonly Message[]> {
@@ -228,9 +243,20 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   createScoop(parentId: string, name: string): Agent {
-    void this.#connection.control.createScoop(parentId, name, BACKGROUND_CONTEXT);
+    const provisional = `scoop:creating-${crypto.randomUUID()}`;
+    const created = this.#connection.control.createScoop(parentId, name, BACKGROUND_CONTEXT).then(
+      (result) => result.id,
+      () => null
+    );
+    this.#creating.set(provisional, created);
+    void created.then((id) => {
+      if (this.#active !== provisional) return;
+      this.#active = id ?? parentId;
+      this.emit('active', this.#active);
+      this.emit('messages', this.#active);
+    });
     return {
-      id: `scoop:${name}`,
+      id: provisional,
       name,
       kind: 'scoop',
       parentId,
