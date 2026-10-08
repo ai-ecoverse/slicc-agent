@@ -23,7 +23,7 @@ const defaults: Settings = {
 
 type Local = Omit<Settings, 'model' | 'thinking'>;
 
-export type Login = (providerId: string, signIn: SignIn) => Promise<string>;
+export type Login = (providerId: string, signIn: () => Promise<SignIn | null>) => Promise<string>;
 
 export class SettingsAdapter extends Emitter<SettingsEvents> implements SettingsPort {
   readonly #settings: AgentSettings;
@@ -91,8 +91,9 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   async connect(id: string, secret?: string, options: { region?: string } = {}): Promise<void> {
     const account = this.#state().accounts.find((candidate) => candidate.id === id);
     const login = account?.auth === 'oauth' ? this.#login : null;
-    const options_ = login ? await this.#settings.signIn(id, BACKGROUND_CONTEXT) : null;
-    const key = secret ?? (login && options_ ? await login(id, options_) : undefined);
+    const key =
+      secret ??
+      (login ? await login(id, () => this.#settings.signIn(id, BACKGROUND_CONTEXT)) : undefined);
     if (!key)
       throw new Error(`${id} needs ${account?.auth === 'oauth' ? 'a sign-in' : 'an API key'}`);
     await this.#settings.connect(id, key, options.region ?? null, BACKGROUND_CONTEXT);
