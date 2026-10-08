@@ -261,16 +261,11 @@ function user(
 
 export function origins(entries: readonly EntryRecord[]): Map<number, string> {
   const out = new Map<number, string>();
-  const pending: From[] = [];
-  for (const entry of entries) {
-    if (entry.kind === FROM_KIND) pending.push(entry.data as From);
-    if (entry.kind !== 'pi.user' || !pending.length) continue;
-    const text = textOf((entry.model?.[0] as ModelMessage | undefined)?.content);
-    const at = pending.findIndex((item) => item.text === text);
-    if (at < 0) continue;
-    out.set(entry.id, (pending[at] as From).from);
-    pending.splice(at, 1);
-  }
+  for (const entry of entries)
+    if (entry.kind === FROM_KIND) {
+      const note = entry.data as From;
+      out.set(note.entry, note.from);
+    }
   return out;
 }
 

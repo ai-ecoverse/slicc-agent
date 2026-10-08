@@ -6,8 +6,10 @@ import {
   defineTask,
   type Extension,
   type PromptInput,
+  type Submission,
   section,
   type ToolRegistration,
+  type Tx,
   wrapTool,
 } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
@@ -60,6 +62,42 @@ export function reportLick(
     ...(report.failed && report.failed !== 'aborted' ? { severity: 'warn' as const } : {}),
   };
 }
+
+type Noting = {
+  commit: (
+    write: (
+      tx: Tx
+    ) => Promise<{ status: 'running'; checkpoint: { phase: 'deliver'; noted: true } }>,
+    context: Context
+  ) => Promise<unknown>;
+};
+
+export async function noteWhenPlaced(
+  runtime: Noting,
+  submission: Pick<Submission, 'status'>,
+  conversation: ConversationId,
+  note: { from: string | undefined; noted: boolean | undefined },
+  context: Context
+): Promise<void> {
+  const { from } = note;
+  while (from && !note.noted && !context.abortSignal?.aborted) {
+    const record = await submission.status(context);
+    if (record.status !== 'queued') {
+      if (!('entry' in record) || record.entry === undefined) return;
+      const entry = record.entry;
+      await runtime
+        .commit(async (tx) => {
+          await tx.appendEntry(conversation, { kind: FROM_KIND, data: { from, entry } });
+          return { status: 'running', checkpoint: { phase: 'deliver', noted: true } };
+        }, context)
+        .catch(() => undefined);
+      return;
+    }
+    await new Promise((done) => setTimeout(done, NOTE_POLL_MS));
+  }
+}
+
+export const NOTE_POLL_MS = 100;
 
 export function waitTask(lookup: Lookup) {
   type WaitInput = { scoops: string[]; cone: string; deadline: number };
@@ -183,14 +221,6 @@ export function scoopTasks(lookup: Lookup) {
         }
         const requestId = task.input.request ? `subagent:${task.input.request}` : `feed:${task.id}`;
         const from = (await runtime.snapshot(ScoopWorkDoc, context))?.feeds[String(task.id)]?.from;
-        if (from && !task.state.checkpoint.noted)
-          await runtime.commit(async (tx) => {
-            await tx.appendEntry(record?.conversation as ConversationId, {
-              kind: FROM_KIND,
-              data: { from, text: task.input.prompt },
-            });
-            return { status: 'running', checkpoint: { phase: 'deliver', noted: true } };
-          }, context);
         const submission = await handle.submit(
           {
             type: 'input',
@@ -200,7 +230,15 @@ export function scoopTasks(lookup: Lookup) {
           },
           context
         );
+        const noting = noteWhenPlaced(
+          runtime,
+          submission,
+          record?.conversation as ConversationId,
+          { from, noted: task.state.checkpoint.noted },
+          context
+        );
         const settled = await submission.wait(context);
+        await noting;
         await runtime.commit(async (tx) => {
           if (settled.status !== 'done' || settled.type !== 'input')
             return {
