@@ -38,7 +38,7 @@ export {
   startAgent,
 } from './owner.ts';
 export { applyPatches, patchServerAccept } from './patches.ts';
-export { SliccPrompt } from './prompt.ts';
+export { SliccPrompt, sliccPrompt } from './prompt.ts';
 export {
   type AccountState,
   AGENT_SESSION,
@@ -73,5 +73,6 @@ export {
   openOpfsSqliteStorage,
   WasmSqliteDatabase,
 } from './sqlite.ts';
+export { type SystemFacts, systemSection } from './system.ts';
 export { PortChannel, type PortEndpoint, withUnrefTimers } from './wire.ts';
 export { kernelPort, serveConnections, type WorkerScope } from './worker.ts';

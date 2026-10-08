@@ -1,0 +1,62 @@
+import type { KernelClient } from './kernel/client.ts';
+import type { Transport } from './net.ts';
+
+export interface SystemFacts {
+  version: string;
+  commands: string[];
+  transport: string;
+}
+
+const LIST_PATH = 'IFS=:; for d in $PATH; do [ -d "$d" ] && ls -1 "$d"; done';
+const RUNTIMES = ['node', 'python3'];
+
+export async function commandsOnPath(client: KernelClient): Promise<string[]> {
+  const decoder = new TextDecoder();
+  let out = '';
+  try {
+    const process = await client.spawn(['bash', '-c', LIST_PATH], {
+      onStdout: (bytes) => {
+        out += decoder.decode(bytes, { stream: true });
+      },
+    });
+    await process.exited;
+  } catch {
+    return [];
+  }
+  const names = out.split('\n').map((name) => name.trim());
+  return [...new Set(names.filter(Boolean))].sort();
+}
+
+export function transportName(transport: Transport | undefined): string {
+  const traits = transport?.traits;
+  if (traits?.crossOrigin === 'cors') {
+    return "the page's own fetch, so only servers that allow CORS answer";
+  }
+  if (traits?.manualRedirects) return 'a local proxy (slicc-node) that fetches without CORS';
+  return 'a relay that fetches without CORS';
+}
+
+export async function agentVersion(
+  fetcher: (url: URL) => Promise<Response>,
+  url = new URL('../package.json', import.meta.url)
+): Promise<string> {
+  try {
+    const response = await fetcher(url);
+    const manifest = response.ok ? ((await response.json()) as { version?: string }) : {};
+    return manifest.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+export function systemSection(facts: SystemFacts): string {
+  const missing = RUNTIMES.filter((name) => !facts.commands.includes(name));
+  return [
+    `You are SLICC's agent in seven: slicc-agent ${facts.version}, installed in /opt/agent. Your bash runs on the page's shared slicc-kernel, a WebAssembly sandbox in the user's browser, not on a server or the user's machine.`,
+    "Files: / is the browser's private file system (OPFS). Work in /home and /tmp. /os and /opt are the system; change them only when asked.",
+    `Commands on PATH: ${facts.commands.join(' ') || 'none found'}.`,
+    'Install command-line tools with `pnpm add -g <package>`. There is no ipk.',
+    `Network: requests go through ${facts.transport}. localhost and 127.0.0.1 are this sandbox's own loopback, not the user's computer.`,
+    `Not here yet: ${[...missing, 'a browser or CDP tool', 'GitHub credentials'].join(', ')}.`,
+  ].join('\n');
+}

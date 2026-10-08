@@ -6,7 +6,7 @@ export interface TransportResponse {
 }
 
 export interface Transport {
-  traits?: { crossOrigin?: 'cors' | 'any' };
+  traits?: { crossOrigin?: 'cors' | 'any'; manualRedirects?: boolean };
   fetch(request: {
     url: string;
     method: string;
