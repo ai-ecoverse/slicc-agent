@@ -34,6 +34,26 @@ export interface AgentControl {
   reset(handoff: string | null, context: Context): Promise<void>;
   configure(change: AgentSettingsChange, context: Context): Promise<void>;
   rewind(messageId: string | null, context: Context): Promise<Rewound>;
+  resolveLick(
+    lickId: string,
+    state: 'confirmed' | 'dismissed',
+    context: Context
+  ): Promise<LickResolved>;
+  webhook(
+    name: string,
+    delivery: WebhookRequest,
+    context: Context
+  ): Promise<{ delivered: boolean }>;
+}
+
+export type LickResolved =
+  | { done: true; text: string; error: null }
+  | { done: false; text: null; error: string };
+
+export interface WebhookRequest {
+  id: string | null;
+  headers: Record<string, string>;
+  body: string;
 }
 
 export type Rewound =

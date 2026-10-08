@@ -13,6 +13,7 @@ import type {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
+import { entryLick } from '../licks/state.ts';
 import type { AgentSettingsChange } from '../services.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
@@ -154,7 +155,12 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
 
   answer(): void {}
 
-  resolveLick(): void {}
+  resolveLick(_agentId: string, messageId: string, state: 'confirmed' | 'dismissed'): void {
+    const message = this.#messages.find((candidate) => candidate.id === messageId);
+    const entry = this.#view()?.entries.find((candidate) => `e${candidate.id}` === messageId);
+    const lick = message?.role === 'lick' && entry ? entryLick(entry) : undefined;
+    if (lick) void this.#connection.control.resolveLick(lick.id, state, BACKGROUND_CONTEXT);
+  }
 
   compact(): void {
     void this.#connection.control.compact(null, BACKGROUND_CONTEXT);

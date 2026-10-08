@@ -12,7 +12,14 @@ import {
 import { answerText } from './agent.ts';
 import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
+import type { LickSources, Licks } from './licks/index.ts';
+import { LICK_STATE_KIND } from './licks/state.ts';
 import type { AgentControl, OperationError, SendResponse } from './services.ts';
+
+export interface HostLicks {
+  licks: Licks;
+  sources: LickSources;
+}
 
 export function submissionId(value: string): SubmissionId | undefined {
   const id = Number(value);
@@ -68,7 +75,8 @@ function busy(view: ConversationView): boolean {
 export function createAgentControl(
   harness: Harness,
   target: Conversation | Cones,
-  deliveries?: Deliveries
+  deliveries?: Deliveries,
+  licks?: HostLicks
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -155,6 +163,50 @@ export function createAgentControl(
     compact: (instructions, context) =>
       accepted(() => current().compact(instructions ?? undefined, context)),
     reset: (handoff, context) => current().reset(handoff ?? undefined, context),
+    resolveLick(lickId, state, context) {
+      return serial(async () => {
+        if (!licks) return { done: false, text: null, error: 'this agent has no licks' };
+        const conversation = current();
+        const action = state === 'confirmed' ? 'confirm' : 'dismiss';
+        try {
+          const text = await licks.licks.decide(conversation, lickId, action, undefined, context);
+          await conversation.submit(
+            {
+              type: 'write',
+              entry: {
+                kind: LICK_STATE_KIND,
+                data: { lick: lickId, state, by: 'user' },
+                model: [
+                  {
+                    role: 'user',
+                    content: `The user ${state} lick ${lickId}: ${text}`,
+                    timestamp: Date.now(),
+                  },
+                ],
+              },
+            },
+            context
+          );
+          return { done: true, text, error: null };
+        } catch (error) {
+          return { done: false, text: null, error: (error as Error).message };
+        }
+      });
+    },
+    async webhook(name, delivery, context) {
+      const delivered = licks
+        ? await licks.sources.webhook(
+            name,
+            {
+              ...(delivery.id ? { id: delivery.id } : {}),
+              headers: delivery.headers,
+              body: delivery.body,
+            },
+            context
+          )
+        : false;
+      return { delivered };
+    },
     configure: (change, context) =>
       current().configure(
         {

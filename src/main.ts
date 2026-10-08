@@ -1,4 +1,5 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
 import { createRegistry, type ModelRef, type Storage } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
@@ -6,7 +7,8 @@ import { openAgent } from './agent.ts';
 import { EncryptedCredentialStore } from './credentials.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import type { KernelClient } from './kernel/client.ts';
-import { kernelEnvironment } from './kernel/env.ts';
+import { HOME, kernelEnvironment } from './kernel/env.ts';
+import { setupLicks } from './licks/index.ts';
 import { type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import {
@@ -16,7 +18,7 @@ import {
   sliccProviders,
 } from './settings.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
-import { agentVersion, commandsOnPath, transportName } from './system.ts';
+import { agentVersion, commandsOnPath, kernelBoot, transportName } from './system.ts';
 import { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
 
 export interface AgentWorkerScope extends WorkerScope {
@@ -54,14 +56,25 @@ async function start(
   const registry = createRegistry();
   registry.install(CodingTools);
   registry.install(sliccPrompt(facts));
+  const licks = setupLicks(registry);
+  const environment = kernelEnvironment(client);
   const agent = await openAgent({
     models,
     model: options.model ?? DEFAULT_MODEL,
     storage: await (options.storage ?? (() => openOpfsSqliteStorage()))(),
     registry,
-    env: kernelEnvironment(client),
+    env: environment,
   });
-  return hostAgent(agent, { settings: await createAgentSettings(models, credentials, providers) });
+  const sources = licks.attach(agent, { env: environment({ cwd: HOME }), home: HOME });
+  await sources.start(BACKGROUND_CONTEXT);
+  await sources.boot(
+    { version: facts.version, boot: await kernelBoot(client) },
+    BACKGROUND_CONTEXT
+  );
+  return hostAgent(agent, {
+    settings: await createAgentSettings(models, credentials, providers),
+    licks: { licks: licks.licks, sources },
+  });
 }
 
 export function runAgentWorker(
