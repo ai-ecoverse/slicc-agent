@@ -105,7 +105,8 @@ const statuses: Record<string, AssistantStatus> = { error: 'error', aborted: 'st
 const credentials =
   /security token|unrecognizedclient|not authori[sz]ed|unauthori[sz]ed|forbidden|\b40[13]\b|api key|credential|bearer/i;
 const models = /model/i;
-const unavailable = /access|invalid|not found|identifier|unsupported|not available/i;
+const unavailable =
+  /access|invalid|not found|identifier|unsupported|not supported|isn['’]t supported|not available|isn['’]t available/i;
 
 export function errorAction(message: string): ErrorAction {
   if (credentials.test(message)) return 'settings';
