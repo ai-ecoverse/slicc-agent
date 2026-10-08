@@ -91,32 +91,37 @@ export async function createAgentSettings(
   models: MutableModels,
   credentials: CredentialStore,
   providers = sliccProviders(),
-  {
-    usage = (token) => adobeUsage(token),
-    every = BUDGET_EVERY,
-  }: { usage?: UsageReader; every?: number } = {}
+  options: { usage?: UsageReader; every?: number } = {}
 ): Promise<AgentSettings> {
+  const endpoint = providers.find((provider) => provider.id === ADOBE)?.baseUrl ?? ADOBE_PROXY;
+  const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint }));
   const snapshot = async (): Promise<SettingsState> => ({
     models: choices(models, providers),
     accounts: await accounts(credentials, providers),
     budget: await budget(credentials, usage),
   });
   const state = replicatedState<SettingsState>(await snapshot());
-  const refresh = async (context: Context) => {
-    state.replace(context, await snapshot());
+  let latest = Promise.resolve();
+  const refresh = (context: Context) => {
+    const next = latest.then(async () => state.replace(context, await snapshot()));
+    latest = next.catch(() => undefined);
+    return next;
   };
   const signedIn = providers
     .filter((provider) => signIn.has(provider.id))
     .map((provider) => provider.id);
-  if (signedIn.length) {
-    void models
-      .refresh({ providers: signedIn })
-      .then(() => refresh(BACKGROUND_CONTEXT))
-      .catch(() => undefined);
-    const timer: unknown = setInterval(
-      () => void refresh(BACKGROUND_CONTEXT).catch(() => undefined),
-      every
+  const discover = (ids: string[]) =>
+    models.refresh({ providers: ids }).then(
+      () => undefined,
+      () => undefined
     );
+  if (signedIn.length) {
+    const cycle = () =>
+      void discover(signedIn)
+        .then(() => refresh(BACKGROUND_CONTEXT))
+        .catch(() => undefined);
+    cycle();
+    const timer: unknown = setInterval(cycle, options.every ?? BUDGET_EVERY);
     (timer as { unref?: () => void }).unref?.();
   }
   return {
@@ -127,14 +132,12 @@ export async function createAgentSettings(
         key: secret,
         ...(region ? { env: { AWS_REGION: region } } : {}),
       }));
-      if (signIn.has(providerId)) {
-        await models.refresh({ providers: [providerId] }).catch(() => undefined);
-      }
+      if (signIn.has(providerId)) await discover([providerId]);
       await refresh(context);
     },
     async signIn(providerId) {
       if (providerId !== ADOBE) return null;
-      const { clientId, scopes, imsEnvironment } = await adobeConfig(ADOBE_PROXY, (input, init) =>
+      const { clientId, scopes, imsEnvironment } = await adobeConfig(endpoint, (input, init) =>
         globalThis.fetch(input, init)
       );
       return { clientId, scopes, imsEnvironment: imsEnvironment || 'prod' };
