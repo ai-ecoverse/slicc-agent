@@ -33,7 +33,7 @@ export function transportName(transport: Transport | undefined): string {
     return "the page's own fetch, so only servers that allow CORS answer";
   }
   if (traits?.manualRedirects) return 'a local proxy (slicc-node) that fetches without CORS';
-  return 'the slicc extension, which fetches without CORS';
+  return 'a relay that fetches without CORS';
 }
 
 export async function agentVersion(

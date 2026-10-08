@@ -70,7 +70,7 @@ The system prompt has a `system` section generated at startup from the running w
 - the filesystem layout, with `/os` and `/opt` as the system;
 - the commands on `PATH`, listed by a kernel bash;
 - installing tools with `pnpm add -g`, and that there is no ipk;
-- the active transport, from its traits: the page's fetch, a local proxy or the extension;
+- the active transport, from its traits: the page's fetch, a local proxy, or another relay that fetches without CORS (traits can't tell which);
 - that `localhost` is the sandbox's own loopback;
 - what isn't there yet: node or python3 when not on `PATH`, a browser or CDP tool, and GitHub credentials.
 
