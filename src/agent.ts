@@ -13,7 +13,8 @@ import {
   type Registry,
   type Storage,
 } from '@earendil-works/pi-durable';
-import { activeCone, type Cones, pointCone } from './cone.ts';
+import { type Agents, openAgents } from './agents.ts';
+import type { Cones } from './cone.ts';
 
 export interface AgentOptions {
   models: Models;
@@ -28,6 +29,7 @@ export interface AgentOptions {
 export interface Agent extends Cones {
   readonly harness: Harness;
   readonly root: Conversation;
+  readonly agents: Agents;
   onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
   prompt(text: string): Promise<string>;
   close(): Promise<void>;
@@ -69,23 +71,16 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     context
   );
   const root = await harness.root(context, { agent: { model: options.model } });
-  let cone = await activeCone(harness, root, context);
-  const listeners = new Set<(conversation: Conversation) => void | Promise<void>>();
+  const agents = await openAgents(harness, root, context);
   harness.resume();
   return {
     harness,
     root,
-    cone: () => cone,
-    async switchCone(conversation, switching) {
-      await pointCone(harness, conversation, switching);
-      cone = conversation;
-      await Promise.all([...listeners].map((listener) => listener(conversation)));
-    },
-    onCone(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    prompt: (text) => prompt(cone, text, context),
+    agents,
+    cone: () => agents.cone(),
+    switchCone: (conversation, switching) => agents.switchCone(conversation, switching),
+    onCone: (listener) => agents.onCone(listener),
+    prompt: (text) => prompt(agents.cone(), text, context),
     close: () => harness.close(context),
   };
 }

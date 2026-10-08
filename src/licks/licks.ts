@@ -77,11 +77,12 @@ export interface Licks {
   ): Promise<string>;
   handle(channel: LickChannel, handler: LickHandler): void;
   pending(context: Context): Promise<number>;
+  forget(target: LickTarget, channel: LickChannel, source: string, context: Context): Promise<void>;
 }
 
 export interface LicksHost {
   harness: Harness;
-  resolve(target: LickTarget, context: Context): Promise<Conversation>;
+  resolve(target: LickTarget, channel: LickChannel, context: Context): Promise<Conversation>;
 }
 
 export const MAX_ITEMS = 50;
@@ -201,7 +202,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     if (!queue?.pending) return;
     const lick = render(queue.pending);
     const target = key.split('|')[0] as LickTarget;
-    const conversation = await resolve(target, context);
+    const conversation = await resolve(target, queue.pending.lick.channel, context);
     const submission = await conversation.submit(
       {
         type: 'input',
@@ -273,6 +274,17 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     },
     handle(channel, handler) {
       handlers.set(channel, handler);
+    },
+    forget(target, channel, source, context) {
+      return serial(async () => {
+        const { harness } = await host;
+        const key = `${target}|${channel}|${source}`;
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(LicksOutbox);
+          const queue = doc.queues[key];
+          if (queue?.pending) queue.pending = null;
+        }, context);
+      });
     },
     async pending(context) {
       const { harness } = await host;

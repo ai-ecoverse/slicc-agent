@@ -1,0 +1,76 @@
+#!/bin/bash
+dir=/var/lib/slicc/agent/requests
+as=$(basename "$0")
+if [ "$as" != "subagent" ]; then as=agent; fi
+mkdir -p "$dir/in" "$dir/out" 2>/dev/null
+
+submit() {
+  local id="$1"
+  shift
+  local tmp="$dir/in/.tmp-$id"
+  {
+    printf '%s\0' "slicc-agent/1" "$as" "${SLICC_AGENT:-}" "$PWD" "$$" "$#"
+    if [ $# -gt 0 ]; then printf '%s\0' "$@"; fi
+    if [ "$stdin" = 1 ]; then cat; fi
+  } > "$tmp" && mv "$tmp" "$dir/in/$id"
+}
+
+stdin=0
+for arg in "$@"; do
+  if [ "$arg" = "-" ]; then stdin=1; fi
+done
+
+id="$(date +%s%N)-$$-$RANDOM"
+submit "$id" "$@" || exit 1
+stdin=0
+
+sync=0
+case "${1:-}" in
+  ''|list|status|rename|send|wait|stop|help|--help|-h|spawn) ;;
+  *) case " $* " in *" --async "*) ;; *) [ "$as" = agent ] && sync=1 ;; esac ;;
+esac
+
+cancel() {
+  submit "$(date +%s%N)-$$-$RANDOM" __cancel "$id"
+  exit 130
+}
+if [ $sync = 1 ]; then trap cancel TERM INT HUP; fi
+
+limit=200
+after=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--timeout" ]; then limit=$(( (${arg//[!0-9]/} + 5) * 10 )); fi
+  if [ "$previous" = "--background-after" ]; then after="${arg//[!0-9]/}"; fi
+  previous="$arg"
+done
+if [ $sync = 1 ]; then limit=0; fi
+
+count=0
+seen=0
+while [ ! -f "$dir/out/$id.code" ]; do
+  sleep 0.1
+  count=$((count + 1))
+  if [ $seen = 0 ] && [ -f "$dir/out/$id.ack" ]; then seen=1; fi
+  if [ $seen = 0 ] && [ $count -ge 200 ]; then
+    rm -f "$dir/in/$id"
+    echo "$as: the SLICC agent isn't running: $as needs it" >&2
+    exit 1
+  fi
+  if [ $limit -gt 0 ] && [ $count -ge $limit ]; then
+    echo "$as: no answer from the SLICC agent" >&2
+    exit 1
+  fi
+  if [ -n "$after" ] && [ $count -ge $((after * 10)) ]; then
+    submit "$(date +%s%N)-$$-$RANDOM" __detach "$id"
+    after=""
+  fi
+done
+code=$(cat "$dir/out/$id.code")
+if [ "$code" = 0 ]; then
+  cat "$dir/out/$id.out"
+else
+  cat "$dir/out/$id.out" >&2
+fi
+rm -f "$dir/out/$id.out" "$dir/out/$id.code" "$dir/out/$id.ack"
+exit "$code"

@@ -3,15 +3,18 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
 import { createRegistry, type ModelRef, type Storage } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
-import { openAgent } from './agent.ts';
+import { type Agent, openAgent } from './agent.ts';
 import { EncryptedCredentialStore } from './credentials.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { createActivity } from './kernel/activity.ts';
 import type { KernelClient } from './kernel/client.ts';
-import { HOME, kernelEnvironment } from './kernel/env.ts';
+import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
+import { processGroups } from './kernel/groups.ts';
 import { setupLicks } from './licks/index.ts';
 import { type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
+import { identity } from './scoops/identity.ts';
+import { type Assets, setupScoops } from './scoops/index.ts';
 import {
   createAgentSettings,
   createSliccModels,
@@ -35,6 +38,7 @@ export interface AgentWorkerOptions {
   attach?: KernelAttach;
   credentials?: () => Promise<CredentialStore>;
   storage?: () => Promise<Storage>;
+  assets?: Assets;
 }
 
 async function start(
@@ -58,29 +62,55 @@ async function start(
   registry.install(CodingTools);
   registry.install(sliccPrompt(facts));
   const licks = setupLicks(registry);
+  const scoops = setupScoops(registry, licks.licks, CodingTools.tools);
   const activity = createActivity();
-  const environment = kernelEnvironment(client, { activity });
+  const groups = processGroups(client);
+  const model = options.model ?? DEFAULT_MODEL;
+  let opened: Agent | undefined;
+  const environment = kernelEnvironment(client, {
+    activity,
+    groups,
+    identify: identity(() => opened?.agents, model),
+  });
   const agent = await openAgent({
     models,
-    model: options.model ?? DEFAULT_MODEL,
+    model,
     storage: await (options.storage ?? (() => openOpfsSqliteStorage()))(),
     registry,
     env: environment,
   });
-  const sources = licks.attach(agent, {
-    env: kernelEnvironment(client)({ cwd: HOME }),
-    home: HOME,
-    activity,
-  });
+  opened = agent;
+  const home = new SliccKernelEnv(client, { cwd: HOME });
+  const sources = licks.attach(agent, { env: home, home: HOME, activity });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
     { version: facts.version, boot: await kernelBoot(client) },
     BACKGROUND_CONTEXT
   );
+  const runtime = await scoops.attach(
+    {
+      harness: agent.harness,
+      agents: agent.agents,
+      groups,
+      env: home,
+      home: HOME,
+      alive: alive(client),
+      ...(options.assets ? { assets: options.assets } : {}),
+    },
+    BACKGROUND_CONTEXT
+  );
   return hostAgent(agent, {
     settings: await createAgentSettings(models, credentials, providers),
     licks: { licks: licks.licks, sources },
+    scoops: { scoops: scoops.scoops, runtime },
   });
+}
+
+export function alive(client: KernelClient) {
+  return async (pid: number): Promise<boolean> => {
+    if (!client.ps) return true;
+    return (await client.ps()).some((process) => process.pid === pid);
+  };
 }
 
 export function runAgentWorker(

@@ -1,16 +1,33 @@
 import type { Context } from '@earendil-works/chord';
 import type { Conversation, ConversationId, Harness, Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { type Agents, live } from '../agents.ts';
 import type { Activity } from '../kernel/activity.ts';
 import { cronTask, licksExtension } from './extension.ts';
-import type { LickTarget } from './lick.ts';
+import type { LickChannel, LickTarget } from './lick.ts';
 import { createLicks, type Licks, type LicksHost } from './licks.ts';
 import { createLickSources, type LickSources } from './sources.ts';
 
 export interface LicksAgent {
   harness: Harness;
   root: Conversation;
+  agents: Agents;
   cone(): Conversation;
+}
+
+const UNTRUSTED = new Set<LickChannel>(['webhook']);
+
+export function lickResolver(agent: LicksAgent) {
+  return async (target: LickTarget, channel: LickChannel, context: Context) => {
+    const cone = agent.cone();
+    if (target === 'cone') return cone;
+    if (target.startsWith('cone:'))
+      return (await agent.agents.conversation(target.slice('cone:'.length), context)) ?? cone;
+    if (UNTRUSTED.has(channel)) return cone;
+    const scoop = agent.agents.state().scoops[target];
+    if (!scoop || !live(scoop)) return cone;
+    return (await agent.agents.conversation(target, context)) ?? cone;
+  };
 }
 
 export interface LicksSetup {
@@ -44,7 +61,7 @@ export function setupLicks(registry: Registry): LicksSetup {
     licks,
     attach(agent, options) {
       const { harness, root } = agent;
-      bind({ harness, resolve: async (_target: LickTarget) => agent.cone() });
+      bind({ harness, resolve: lickResolver(agent) });
       return createLickSources({
         ...options,
         harness,

@@ -14,7 +14,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
 import { entryLick } from '../licks/state.ts';
-import type { AgentSettingsChange } from '../services.ts';
+import type { AgentSettingsChange, AgentSummary } from '../services.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
 
@@ -47,41 +47,60 @@ function status(view: ConversationView | undefined, messages: readonly Message[]
 export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   readonly #connection: AgentConnection;
   readonly #ready: Promise<void>;
-  #messages: Message[] = [];
+  readonly #messages = new Map<string, Message[]>();
+  #active: string | null = null;
 
   constructor(connection: AgentConnection) {
     super();
     this.#connection = connection;
     this.#ready = new Promise((resolve) => {
-      connection.transcript.subscribe((view) => {
-        this.#update(view);
+      connection.transcript.subscribe(() => {
+        this.#refresh();
         resolve();
       });
-      connection.deliveries.subscribe(() => {
-        const view = this.#view();
-        if (view) this.#update(view);
-      });
+      connection.deliveries.subscribe(() => this.#refresh());
+      connection.views?.subscribe(() => this.#refresh());
+      connection.agents?.subscribe(() => this.#refresh());
     });
   }
 
-  #view(): ConversationView | undefined {
-    return this.#connection.transcript.value;
+  #summary(): readonly AgentSummary[] {
+    const agents = this.#connection.agents?.value?.agents;
+    return agents?.length
+      ? agents
+      : [{ id: CONE, name: 'sliccy', kind: 'cone', parentId: null, role: null }];
   }
 
-  #update(view: ConversationView): void {
-    const before = this.#messages;
-    this.#messages = toMessages(view, this.#connection.deliveries.value);
+  #view(agentId: string = this.active()): ConversationView | undefined {
+    const views = this.#connection.views?.value;
+    const view = views?.[agentId];
+    if (view) return view;
+    const cone = this.#connection.agents?.value?.active ?? CONE;
+    return agentId === cone ? this.#connection.transcript.value : undefined;
+  }
+
+  #refresh(): void {
     this.emit('agents', this.list());
-    if (before.length !== this.#messages.length) {
-      this.emit('messages', CONE);
+    for (const summary of this.#summary()) this.#update(summary.id);
+    for (const id of [...this.#messages.keys()])
+      if (!this.#summary().some((summary) => summary.id === id)) this.#messages.delete(id);
+  }
+
+  #update(agentId: string): void {
+    const view = this.#view(agentId);
+    if (!view) return;
+    const before = this.#messages.get(agentId) ?? [];
+    const after = toMessages(view, this.#connection.deliveries.value);
+    this.#messages.set(agentId, after);
+    if (before.length !== after.length) {
+      this.emit('messages', agentId);
       return;
     }
-    const changed = this.#messages.filter(
+    const changed = after.filter(
       (message, index) => JSON.stringify(message) !== JSON.stringify(before[index])
     );
-    if (changed.length === 1)
-      this.emit('message', { agentId: CONE, message: changed[0] as Message });
-    else if (changed.length > 1) this.emit('messages', CONE);
+    if (changed.length === 1) this.emit('message', { agentId, message: changed[0] as Message });
+    else if (changed.length > 1) this.emit('messages', agentId);
   }
 
   ready(): Promise<void> {
@@ -89,39 +108,50 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   list(): readonly Agent[] {
-    const doc = this.#view()?.docs['pi.agent'] as AgentDoc | undefined;
-    return [
-      {
-        id: CONE,
-        name: 'sliccy',
-        kind: 'cone',
-        parentId: null,
-        status: status(this.#view(), this.#messages),
+    return this.#summary().map((summary) => {
+      const view = this.#view(summary.id);
+      const doc = view?.docs['pi.agent'] as AgentDoc | undefined;
+      return {
+        id: summary.id,
+        name: summary.role ? `${summary.name} · ${summary.role}` : summary.name,
+        kind: summary.kind,
+        parentId: summary.parentId,
+        status: status(view, this.#messages.get(summary.id) ?? []),
         model: doc?.model ? `${doc.model.provider}/${doc.model.modelId}` : '',
         contextFill: 0,
         unread: 0,
         thinking: thinking[doc?.thinkingLevel ?? 'off'] ?? 'off',
-      },
-    ];
+      };
+    });
   }
 
   active(): string {
-    return CONE;
+    const known = this.#summary();
+    if (this.#active && known.some((summary) => summary.id === this.#active)) return this.#active;
+    return this.#connection.agents?.value?.active ?? CONE;
   }
 
-  select(): void {}
-
-  messages(): readonly Message[] {
-    return this.#messages;
+  select(id: string): void {
+    const found = this.#summary().find((summary) => summary.id === id);
+    if (!found) return;
+    this.#active = id;
+    if (found.kind === 'cone') void this.#connection.control.selectCone(id, BACKGROUND_CONTEXT);
+    this.emit('active', id);
+    this.emit('messages', id);
   }
 
-  async send(_agentId: string, input: string | Outgoing): Promise<void> {
+  messages(agentId: string = this.active()): readonly Message[] {
+    return this.#messages.get(agentId) ?? [];
+  }
+
+  async send(agentId: string, input: string | Outgoing): Promise<void> {
     const outgoing = typeof input === 'string' ? { text: input } : input;
     const sent = await this.#connection.control.send(
       {
         text: outgoing.text,
         whenBusy: outgoing.mode === 'queue' ? 'followUp' : 'steer',
         requestId: crypto.randomUUID(),
+        agentId: agentId || null,
       },
       BACKGROUND_CONTEXT
     );
@@ -133,16 +163,16 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     return rewound.done ? { text: rewound.text } : null;
   }
 
-  stop(): void {
-    void this.#connection.control.abort(BACKGROUND_CONTEXT);
+  stop(agentId: string = this.active()): void {
+    void this.#connection.control.stopAgent(agentId, BACKGROUND_CONTEXT);
   }
 
-  busy(): boolean {
-    return isBusy(this.#view());
+  busy(agentId: string = this.active()): boolean {
+    return isBusy(this.#view(agentId));
   }
 
-  queue(): readonly UserMessage[] {
-    return queued(this.#view());
+  queue(agentId: string = this.active()): readonly UserMessage[] {
+    return queued(this.#view(agentId));
   }
 
   unqueue(_agentId: string, messageId: string): void {
@@ -155,9 +185,11 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
 
   answer(): void {}
 
-  resolveLick(_agentId: string, messageId: string, state: 'confirmed' | 'dismissed'): void {
-    const message = this.#messages.find((candidate) => candidate.id === messageId);
-    const entry = this.#view()?.entries.find((candidate) => `e${candidate.id}` === messageId);
+  resolveLick(agentId: string, messageId: string, state: 'confirmed' | 'dismissed'): void {
+    const message = this.messages(agentId).find((candidate) => candidate.id === messageId);
+    const entry = this.#view(agentId)?.entries.find(
+      (candidate) => `e${candidate.id}` === messageId
+    );
     const lick = message?.role === 'lick' && entry ? entryLick(entry) : undefined;
     if (lick) void this.#connection.control.resolveLick(lick.id, state, BACKGROUND_CONTEXT);
   }
@@ -195,8 +227,40 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     return [];
   }
 
-  createScoop(): Agent {
-    throw new Error('Scoops come with a later slicc-agent');
+  createScoop(parentId: string, name: string): Agent {
+    void this.#connection.control.createScoop(parentId, name, BACKGROUND_CONTEXT);
+    return {
+      id: `scoop:${name}`,
+      name,
+      kind: 'scoop',
+      parentId,
+      status: 'idle',
+      model: '',
+      contextFill: 0,
+      unread: 0,
+    };
+  }
+
+  async drop(agentId: string): Promise<void> {
+    const parent = this.#summary().find((summary) => summary.id === agentId)?.parentId ?? CONE;
+    const dropped = await this.#connection.control.drop(agentId, BACKGROUND_CONTEXT);
+    if (dropped.error !== null) throw new Error(dropped.error);
+    if (this.#active === agentId) this.select(parent);
+  }
+
+  async createCone(name: string): Promise<Agent> {
+    const created = await this.#connection.control.createCone(name, BACKGROUND_CONTEXT);
+    if (created.error !== null) throw new Error(created.error);
+    return {
+      id: created.id,
+      name: name.trim(),
+      kind: 'cone',
+      parentId: null,
+      status: 'idle',
+      model: '',
+      contextFill: 0,
+      unread: 0,
+    };
   }
 
   frozen(): readonly FrozenCone[] {

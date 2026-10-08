@@ -15,7 +15,7 @@ import {
   SessionNotFoundError,
 } from '@earendil-works/pi-server';
 import type { Agent } from './agent.ts';
-import { createAgentControl, type HostLicks } from './control.ts';
+import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
 import { PortListener } from './listener.ts';
 import {
@@ -25,6 +25,7 @@ import {
   AgentSettings,
   AgentTranscript,
 } from './services.ts';
+import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
 
 export interface AgentHost {
@@ -109,12 +110,14 @@ export async function hostAgent(
     context?: Context;
     settings?: AgentSettings;
     licks?: HostLicks;
+    scoops?: HostScoops;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const serverId = options.serverId ?? crypto.randomUUID();
   const transcript = await follow(agent, context);
   const { state } = transcript;
+  const mounted = await agentViews(agent, context);
   const provider = new RemoteServiceProvider([
     { service: AgentControl, mode: 'singleton' },
     { service: AgentTranscript, mode: 'singleton' },
@@ -123,9 +126,14 @@ export async function hostAgent(
   const deliveries = trackDeliveries(agent.harness, state, context);
   provider.provide(
     AgentControl,
-    createAgentControl(agent.harness, agent, deliveries, options.licks)
+    createAgentControl(agent.harness, agent, deliveries, options.licks, options.scoops)
   );
-  provider.provide(AgentTranscript, { state, deliveries: deliveries.state });
+  provider.provide(AgentTranscript, {
+    state,
+    deliveries: deliveries.state,
+    agents: mounted.agents,
+    views: mounted.views,
+  });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
     serverServices: serverServices(),
@@ -147,6 +155,8 @@ export async function hostAgent(
       provider.dispose();
       deliveries.dispose();
       transcript.dispose();
+      mounted.dispose();
+      await options.scoops?.runtime.close(context);
       await options.licks?.sources.close(context);
       await agent.close();
     },

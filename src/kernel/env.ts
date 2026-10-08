@@ -17,9 +17,10 @@ import {
   type WatchTarget,
 } from '@earendil-works/pi-durable/env';
 import type { Activity } from './activity.ts';
-import type { KernelClient } from './client.ts';
+import type { KernelClient, KernelProcess } from './client.ts';
 import { execute } from './exec.ts';
 import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from './files.ts';
+import type { ProcessGroups } from './groups.ts';
 import { dirname, normalize, resolve } from './paths.ts';
 import { nativeWatch, type PollOptions, pollWatch, RESCAN_MS } from './watch.ts';
 
@@ -28,6 +29,22 @@ export interface KernelEnvOptions {
   id?: string;
   watch?: PollOptions;
   activity?: Activity;
+  groups?: ProcessGroups;
+  owner?: number;
+  exports?: Readonly<Record<string, string>>;
+}
+
+export function quote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function prefixed(
+  command: string,
+  exports: Readonly<Record<string, string>> | undefined
+): string {
+  const names = Object.keys(exports ?? {}).filter((name) => /^[A-Z_][A-Z0-9_]*$/.test(name));
+  if (!names.length) return command;
+  return `export ${names.map((name) => `${name}=${quote((exports as Record<string, string>)[name] as string)}`).join(' ')}; ${command}`;
 }
 
 type FileResult<T> = Promise<Result<T, FileError>>;
@@ -39,6 +56,9 @@ export class SliccKernelEnv implements ExecutionEnv {
   readonly #watchers = new Set<FileWatcher>();
   readonly #poll: PollOptions;
   readonly #activity: Activity | undefined;
+  readonly #groups: ProcessGroups | undefined;
+  readonly #owner: number | undefined;
+  readonly #exports: Readonly<Record<string, string>> | undefined;
 
   constructor(client: KernelClient, options: KernelEnvOptions) {
     this.#client = client;
@@ -46,6 +66,9 @@ export class SliccKernelEnv implements ExecutionEnv {
     this.id = options.id ?? 'slicc-kernel';
     this.#poll = options.watch ?? {};
     this.#activity = options.activity;
+    this.#groups = options.groups;
+    this.#owner = options.owner;
+    this.#exports = options.exports;
   }
 
   #path(path: string): string {
@@ -300,7 +323,14 @@ export class SliccKernelEnv implements ExecutionEnv {
     context: Context
   ): Promise<Result<ShellExecResult, ExecutionError>> {
     const ended = this.#activity?.began();
-    return execute(this.#client, this.cwd, command, options, context).finally(ended);
+    const groups = this.#groups;
+    const owner = this.#owner;
+    const spawned =
+      groups && owner !== undefined
+        ? (process: KernelProcess) => groups.track(owner, process)
+        : undefined;
+    const line = typeof command === 'string' ? prefixed(command, this.#exports) : command;
+    return execute(this.#client, this.cwd, line, options, context, spawned).finally(ended);
   }
 
   async cleanup(context: Context): Promise<void> {
@@ -311,9 +341,24 @@ export class SliccKernelEnv implements ExecutionEnv {
 
 export const HOME = '/home';
 
+export type EnvTargetLike = { cwd?: string; conversationId?: number; read?: unknown };
+
 export function kernelEnvironment(
   client: KernelClient,
-  options: Omit<KernelEnvOptions, 'cwd'> = {}
-): (target: { cwd?: string }) => SliccKernelEnv {
-  return (target) => new SliccKernelEnv(client, { ...options, cwd: target.cwd ?? HOME });
+  options: Omit<KernelEnvOptions, 'cwd'> & {
+    identify?: (target: EnvTargetLike, context: Context) => Promise<Record<string, string>>;
+  } = {}
+): (target: EnvTargetLike, context?: Context) => SliccKernelEnv | Promise<SliccKernelEnv> {
+  const { identify, ...rest } = options;
+  const make = (target: EnvTargetLike, exports?: Record<string, string>) =>
+    new SliccKernelEnv(client, {
+      ...rest,
+      cwd: target.cwd ?? HOME,
+      ...(target.conversationId === undefined ? {} : { owner: target.conversationId }),
+      ...(exports ? { exports } : {}),
+    });
+  return (target, context) =>
+    identify && context
+      ? identify(target, context).then((exports) => make(target, exports))
+      : make(target);
 }

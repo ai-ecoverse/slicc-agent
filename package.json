@@ -40,7 +40,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin",
+    "packages/vfs-root"
   ],
   "scripts": {
     "prepare": "lefthook install",

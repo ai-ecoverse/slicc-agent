@@ -24,7 +24,7 @@ export type LickAction = 'confirm' | 'dismiss';
 
 export type LickSeverity = 'warn' | 'error';
 
-export type LickTarget = 'cone' | `scoop:${string}`;
+export type LickTarget = 'cone' | `cone:${string}` | `scoop:${string}`;
 
 export type Lick = {
   id: string;
