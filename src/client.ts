@@ -12,6 +12,7 @@ import {
   AgentSessions,
   AgentSettings,
   AgentTranscript,
+  type Delivered,
   type SendMode,
 } from './services.ts';
 import { PortChannel, type PortEndpoint } from './wire.ts';
@@ -20,6 +21,7 @@ export interface AgentConnection {
   readonly serverId: string;
   readonly control: AgentControl;
   readonly transcript: ReplicatedState<ConversationView>;
+  readonly deliveries: ReplicatedState<Record<string, Delivered>>;
   readonly settings: AgentSettings;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
@@ -56,13 +58,14 @@ export async function connectAgent(
     bound: true,
   });
   const control = session.use(AgentControl);
-  const transcript = session.use(AgentTranscript).state;
+  const { state: transcript, deliveries } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   await session.ready(context);
   return {
     serverId,
     control,
     transcript,
+    deliveries,
     settings,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);

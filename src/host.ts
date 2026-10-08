@@ -15,6 +15,7 @@ import {
 } from '@earendil-works/pi-server';
 import type { Agent } from './agent.ts';
 import { createAgentControl } from './control.ts';
+import { trackDeliveries } from './deliveries.ts';
 import { PortListener } from './listener.ts';
 import {
   AGENT_SESSION,
@@ -88,8 +89,9 @@ export async function hostAgent(
     { service: AgentTranscript, mode: 'singleton' },
     { service: AgentSettings, mode: 'singleton' },
   ]);
-  provider.provide(AgentControl, createAgentControl(agent.harness, agent.root));
-  provider.provide(AgentTranscript, { state });
+  const deliveries = trackDeliveries(agent.harness, state, context);
+  provider.provide(AgentControl, createAgentControl(agent.harness, agent.root, deliveries));
+  provider.provide(AgentTranscript, { state, deliveries: deliveries.state });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
     serverServices: serverServices(),
@@ -109,6 +111,7 @@ export async function hostAgent(
     async close() {
       await server.close();
       provider.dispose();
+      deliveries.dispose();
       state.dispose();
       await agent.close();
     },

@@ -56,6 +56,10 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
         this.#update(view);
         resolve();
       });
+      connection.deliveries.subscribe(() => {
+        const view = this.#view();
+        if (view) this.#update(view);
+      });
     });
   }
 
@@ -65,7 +69,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
 
   #update(view: ConversationView): void {
     const before = this.#messages;
-    this.#messages = toMessages(view);
+    this.#messages = toMessages(view, this.#connection.deliveries.value);
     this.emit('agents', this.list());
     if (before.length !== this.#messages.length) {
       this.emit('messages', CONE);
@@ -115,7 +119,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     const sent = await this.#connection.control.send(
       {
         text: outgoing.text,
-        whenBusy: outgoing.mode === 'steer' ? 'steer' : 'followUp',
+        whenBusy: outgoing.mode === 'queue' ? 'followUp' : 'steer',
         requestId: crypto.randomUUID(),
       },
       BACKGROUND_CONTEXT

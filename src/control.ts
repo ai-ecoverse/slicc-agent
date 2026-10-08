@@ -7,6 +7,7 @@ import {
   type SubmissionId,
 } from '@earendil-works/pi-durable';
 import { answerText } from './agent.ts';
+import type { Deliveries } from './deliveries.ts';
 import type { AgentControl, OperationError, SendResponse } from './services.ts';
 
 export function submissionId(value: string): SubmissionId | undefined {
@@ -29,10 +30,15 @@ async function accepted(operation: () => Promise<{ id: number } | number>): Prom
   }
 }
 
-export function createAgentControl(harness: Harness, conversation: Conversation): AgentControl {
+export function createAgentControl(
+  harness: Harness,
+  conversation: Conversation,
+  deliveries?: Deliveries
+): AgentControl {
   return {
-    send: (request, context) =>
-      accepted(() =>
+    async send(request, context) {
+      const delivered = deliveries?.classify(request.whenBusy);
+      const response = await accepted(() =>
         conversation.submit(
           {
             type: 'input',
@@ -42,7 +48,11 @@ export function createAgentControl(harness: Harness, conversation: Conversation)
           },
           context
         )
-      ),
+      );
+      const id = response.submissionId === null ? undefined : submissionId(response.submissionId);
+      if (deliveries && delivered && id !== undefined) deliveries.expect(id, delivered);
+      return response;
+    },
     async wait(id, context) {
       const parsed = submissionId(id);
       const submission =

@@ -42,8 +42,11 @@ export interface AgentSettingsChange {
 
 export const AgentControl = defineService<AgentControl>('slicc.agent.control');
 
+export type Delivered = 'run' | 'steer' | 'follow-up';
+
 export interface AgentTranscript {
   readonly state: ReplicatedState<ConversationView>;
+  readonly deliveries: ReplicatedState<Record<string, Delivered>>;
 }
 
 export const AgentTranscript = defineService<AgentTranscript>('slicc.agent.transcript');
