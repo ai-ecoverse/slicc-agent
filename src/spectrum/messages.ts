@@ -41,6 +41,7 @@ interface ModelMessage {
   };
   toolCallId?: string;
   isError?: boolean;
+  details?: { patch?: unknown };
 }
 
 interface Slot {
@@ -69,12 +70,78 @@ function title(args: Json | undefined): string {
   return typeof subject === 'string' ? subject : '';
 }
 
+interface Replacement {
+  oldText?: string;
+  newText?: string;
+}
+
+const GAP = '…';
+
+function seconds(value: unknown): string | undefined {
+  return typeof value === 'number' ? `timeout ${value}s` : undefined;
+}
+
+function lines(args: Json): string | undefined {
+  const { offset, limit } = args as { offset?: number; limit?: number };
+  if (typeof offset === 'number' && typeof limit === 'number')
+    return `lines ${offset}–${offset + limit - 1}`;
+  if (typeof offset === 'number') return `from line ${offset}`;
+  return typeof limit === 'number' ? `first ${limit} lines` : undefined;
+}
+
+function edits(args: Json): ToolCall['diff'] {
+  const list = Array.isArray(args.edits) ? (args.edits as Replacement[]) : [];
+  if (list.length === 0) return undefined;
+  return {
+    before: list.map((edit) => edit.oldText ?? '').join(`\n${GAP}\n`),
+    after: list.map((edit) => edit.newText ?? '').join(`\n${GAP}\n`),
+  };
+}
+
+export function fromPatch(patch: string): ToolCall['diff'] {
+  const before: string[] = [];
+  const after: string[] = [];
+  let hunks = 0;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('@@')) {
+      if (hunks++ > 0) {
+        before.push(GAP);
+        after.push(GAP);
+      }
+      continue;
+    }
+    if (hunks === 0 || line === '' || line.startsWith('\\')) continue;
+    const text = line.slice(1);
+    if (line.startsWith('-')) before.push(text);
+    else if (line.startsWith('+')) after.push(text);
+    else {
+      before.push(text);
+      after.push(text);
+    }
+  }
+  return hunks ? { before: before.join('\n'), after: after.join('\n') } : undefined;
+}
+
+function shape(name: string, args: Json): Pick<ToolCall, 'input' | 'meta' | 'diff'> {
+  const path = typeof args.path === 'string' ? args.path : '';
+  const meta = name === 'bash' ? seconds(args.timeout) : name === 'read' ? lines(args) : undefined;
+  const base = meta ? { meta } : {};
+  if (name === 'bash' && typeof args.command === 'string') return { input: args.command, ...base };
+  if (name === 'read' || name === 'write') return { input: path, ...base };
+  if (name === 'edit') {
+    const diff = edits(args);
+    return { input: path, ...(diff ? { diff } : {}) };
+  }
+  return { input: JSON.stringify(args, null, 2) };
+}
+
 function toolCall(block: Block): ToolCall {
+  const args = block.arguments ?? {};
   return {
     id: block.id ?? '',
     name: block.name ?? 'tool',
     title: title(block.arguments),
-    input: JSON.stringify(block.arguments ?? {}),
+    ...shape(block.name ?? 'tool', args),
     output: '',
     status: 'running',
     paths: paths(block.arguments),
@@ -209,6 +276,10 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
   if (!call) return;
   call.output = textOf(result.content);
   call.status = result.isError ? 'error' : 'done';
+  const patch = result.details?.patch;
+  const diff = typeof patch === 'string' ? fromPatch(patch) : undefined;
+  if (diff) call.diff = diff;
+  else if (result.isError) delete call.diff;
 }
 
 const rewound = (id: string): SystemMessage => ({
