@@ -37,7 +37,6 @@ export function createAgentControl(
 ): AgentControl {
   return {
     async send(request, context) {
-      const delivered = deliveries?.classify(request.whenBusy);
       const response = await accepted(() =>
         conversation.submit(
           {
@@ -50,7 +49,7 @@ export function createAgentControl(
         )
       );
       const id = response.submissionId === null ? undefined : submissionId(response.submissionId);
-      if (deliveries && delivered && id !== undefined) deliveries.expect(id, delivered);
+      if (id !== undefined) deliveries?.expect(id, request.whenBusy);
       return response;
     },
     async wait(id, context) {
