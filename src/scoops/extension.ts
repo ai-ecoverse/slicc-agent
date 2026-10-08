@@ -16,6 +16,7 @@ import { HOME } from '../kernel/env.ts';
 import { normalize, resolve } from '../kernel/paths.ts';
 import type { LickEvent } from '../licks/licks.ts';
 import type { Role } from '../roles/roles.ts';
+import { FROM_KIND } from './from.ts';
 import { type Feed, SCOOPS_ROOT, type ScoopsHost, ScoopWorkDoc, workspace } from './service.ts';
 
 export const PREVIEW = 1000;
@@ -152,7 +153,7 @@ export function scoopTasks(lookup: Lookup) {
     request?: string;
   };
   type ReporterState =
-    | { phase: 'deliver' }
+    | { phase: 'deliver'; noted?: boolean }
     | { phase: 'report'; text: string; failed: string | null };
 
   const reporter = defineTask<ReporterInput, ReporterState, ReportResult>({
@@ -181,6 +182,15 @@ export function scoopTasks(lookup: Lookup) {
           return;
         }
         const requestId = task.input.request ? `subagent:${task.input.request}` : `feed:${task.id}`;
+        const from = (await runtime.snapshot(ScoopWorkDoc, context))?.feeds[String(task.id)]?.from;
+        if (from && !task.state.checkpoint.noted)
+          await runtime.commit(async (tx) => {
+            await tx.appendEntry(record?.conversation as ConversationId, {
+              kind: FROM_KIND,
+              data: { from, text: task.input.prompt },
+            });
+            return { status: 'running', checkpoint: { phase: 'deliver', noted: true } };
+          }, context);
         const submission = await handle.submit(
           {
             type: 'input',
