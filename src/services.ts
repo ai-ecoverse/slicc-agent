@@ -33,7 +33,12 @@ export interface AgentControl {
   compact(instructions: string | null, context: Context): Promise<SendResponse>;
   reset(handoff: string | null, context: Context): Promise<void>;
   configure(change: AgentSettingsChange, context: Context): Promise<void>;
+  rewind(messageId: string | null, context: Context): Promise<Rewound>;
 }
+
+export type Rewound =
+  | { done: true; text: string; reason: null }
+  | { done: false; text: null; reason: 'busy' | 'no-turn' };
 
 export interface AgentSettingsChange {
   model: { provider: string; modelId: string } | null;

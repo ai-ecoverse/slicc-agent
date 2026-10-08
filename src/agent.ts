@@ -13,6 +13,7 @@ import {
   type Registry,
   type Storage,
 } from '@earendil-works/pi-durable';
+import { activeCone, type Cones, pointCone } from './cone.ts';
 
 export interface AgentOptions {
   models: Models;
@@ -24,9 +25,10 @@ export interface AgentOptions {
   context?: Context;
 }
 
-export interface Agent {
+export interface Agent extends Cones {
   readonly harness: Harness;
   readonly root: Conversation;
+  onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
   prompt(text: string): Promise<string>;
   close(): Promise<void>;
 }
@@ -67,11 +69,23 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     context
   );
   const root = await harness.root(context, { agent: { model: options.model } });
+  let cone = await activeCone(harness, root, context);
+  const listeners = new Set<(conversation: Conversation) => void | Promise<void>>();
   harness.resume();
   return {
     harness,
     root,
-    prompt: (text) => prompt(root, text, context),
+    cone: () => cone,
+    async switchCone(conversation, switching) {
+      await pointCone(harness, conversation, switching);
+      cone = conversation;
+      await Promise.all([...listeners].map((listener) => listener(conversation)));
+    },
+    onCone(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    prompt: (text) => prompt(cone, text, context),
     close: () => harness.close(context),
   };
 }
