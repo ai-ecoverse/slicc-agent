@@ -52,8 +52,8 @@ interface Turn {
 function lastTurn(view: ConversationView, messageId: string | null): Turn | null {
   const { entries } = view;
   const target = entries.findIndex((entry) => `e${entry.id}` === messageId);
-  const before = target < 0 ? entries.length : target;
-  const turn = entries.slice(0, before).findLastIndex((entry) => entry.kind === 'pi.user');
+  if (target < 0) return null;
+  const turn = entries.slice(0, target).findLastIndex((entry) => entry.kind === 'pi.user');
   if (turn < 0) return null;
   const user = entries[turn] as EntryRecord;
   return { text: answerText(user.model?.[0]?.content), at: entries[turn - 1]?.id ?? null };
@@ -72,50 +72,67 @@ export function createAgentControl(
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
+  let lock: Promise<unknown> = Promise.resolve();
+  const serial = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = lock.then(operation, operation);
+    lock = run.catch(() => undefined);
+    return run;
+  };
   return {
-    async rewind(messageId, context) {
-      const conversation = current();
-      const attached = await conversation.viewState(context);
-      const view = attached.value;
-      attached.dispose();
-      if (busy(view)) return { done: false, text: null, reason: 'busy' };
-      const turn = lastTurn(view, messageId);
-      if (!turn) return { done: false, text: null, reason: 'no-turn' };
-      const agent = view.docs['pi.agent'] as AgentChange | undefined;
-      const ownership = { kind: 'ownerless' } as const;
-      const fork =
-        turn.at === null
-          ? await harness.createConversation(
-              {
-                ownership,
-                agent: { model: agent?.model ?? null, thinkingLevel: agent?.thinkingLevel ?? null },
-              },
-              context
-            )
-          : await conversation.fork(turn.at, { ownership }, context);
-      await fork.submit(
-        { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1 } } },
-        context
-      );
-      await cone.switchCone(fork, context);
-      return { done: true, text: turn.text, reason: null };
+    send(request, context) {
+      return serial(async () => {
+        const response = await accepted(() =>
+          current().submit(
+            {
+              type: 'input',
+              content: request.text,
+              whenBusy: request.whenBusy,
+              ...(request.requestId ? { requestId: request.requestId } : {}),
+            },
+            context
+          )
+        );
+        const id = response.submissionId === null ? undefined : submissionId(response.submissionId);
+        if (id !== undefined) deliveries?.expect(id, request.whenBusy);
+        return response;
+      });
     },
-    async send(request, context) {
-      const response = await accepted(() =>
-        current().submit(
-          {
-            type: 'input',
-            content: request.text,
-            whenBusy: request.whenBusy,
-            ...(request.requestId ? { requestId: request.requestId } : {}),
-          },
+    rewind(messageId, context) {
+      return serial(async () => {
+        const conversation = current();
+        const attached = await conversation.viewState(context);
+        const view = attached.value;
+        attached.dispose();
+        const pending = (await harness.inspect(context)).submissions.some(
+          (submission) => submission.conversationId === conversation.id
+        );
+        if (pending || busy(view)) return { done: false, text: null, reason: 'busy' };
+        const turn = lastTurn(view, messageId);
+        if (!turn) return { done: false, text: null, reason: 'no-turn' };
+        const agent = view.docs['pi.agent'] as AgentChange | undefined;
+        const ownership = { kind: 'ownerless' } as const;
+        const fork =
+          turn.at === null
+            ? await harness.createConversation(
+                {
+                  ownership,
+                  agent: {
+                    model: agent?.model ?? null,
+                    thinkingLevel: agent?.thinkingLevel ?? null,
+                  },
+                },
+                context
+              )
+            : await conversation.fork(turn.at, { ownership }, context);
+        await fork.submit(
+          { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1 } } },
           context
-        )
-      );
-      const id = response.submissionId === null ? undefined : submissionId(response.submissionId);
-      if (id !== undefined) deliveries?.expect(id, request.whenBusy);
-      return response;
+        );
+        await cone.switchCone(fork, context);
+        return { done: true, text: turn.text, reason: null };
+      });
     },
+
     async wait(id, context) {
       const parsed = submissionId(id);
       const submission =
