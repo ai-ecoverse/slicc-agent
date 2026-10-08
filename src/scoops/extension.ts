@@ -17,12 +17,10 @@ import { AgentsDoc, live, type ScoopRecord } from '../agents.ts';
 import { HOME } from '../kernel/env.ts';
 import { normalize, resolve } from '../kernel/paths.ts';
 import type { LickEvent } from '../licks/licks.ts';
-import type { Role } from '../roles/roles.ts';
 import { FROM_KIND } from './from.ts';
 import { type Feed, SCOOPS_ROOT, type ScoopsHost, ScoopWorkDoc, workspace } from './service.ts';
 
 export const PREVIEW = 1000;
-const ADVERTISED = 16;
 
 type Lookup = () => Promise<ScoopsHost>;
 
@@ -317,35 +315,10 @@ async function whose(input: PromptInput, context: Context) {
   const scoop = Object.values(state?.scoops ?? {}).find(
     (record) => record.conversation === input.conversationId
   );
-  const cone = Object.values(state?.cones ?? {}).some(
-    (record) => record.conversation === input.conversationId
-  );
-  return { scoop, cone };
+  return { scoop };
 }
 
-export function rolesSection(roles: readonly Role[]): string {
-  const shown = roles.slice(0, ADVERTISED);
-  return [
-    'Roles for `subagent spawn --agent <role>`:',
-    ...shown.map(
-      (role) =>
-        `- ${role.name}${role.aliases.length ? ` (also ${role.aliases.join(', ')})` : ''}: ${role.description}`
-    ),
-    ...(roles.length > shown.length
-      ? [`… and ${roles.length - shown.length} more; \`subagent list --agents\` shows them all.`]
-      : []),
-  ].join('\n');
-}
-
-export interface ScoopSections {
-  roles(): readonly Role[];
-  skill(): string;
-}
-
-export function scoopsExtension(
-  tasks: ReturnType<typeof scoopTasks>,
-  sections: ScoopSections
-): Extension {
+export function scoopsExtension(tasks: ReturnType<typeof scoopTasks>): Extension {
   return defineExtension({
     name: 'slicc-scoops',
     tasks: [tasks.anchor, tasks.reporter, tasks.wait],
@@ -353,11 +326,6 @@ export function scoopsExtension(
       section('scoop', async (input, context) => {
         const { scoop } = await whose(input, context);
         return scoop ? scoopFacts(scoop) : undefined;
-      }),
-      section('subagent', async (input, context) => {
-        const { cone } = await whose(input, context);
-        if (!cone) return undefined;
-        return [sections.skill(), rolesSection(sections.roles())].filter(Boolean).join('\n\n');
       }),
     ],
   });

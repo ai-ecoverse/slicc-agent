@@ -92,8 +92,7 @@ export function setupScoops(
   const tasks = scoopTasks(lookup);
   const scoops = createScoops(host, () => tasks);
   let cached: Roles = { roles: [], warnings: [], limits: { ...DEFAULT_LIMITS } };
-  let skill = '';
-  registry.install(scoopsExtension(tasks, { roles: () => cached.roles, skill: () => skill }));
+  registry.install(scoopsExtension(tasks));
   registry.install(guardExtension(lookup, fileTools));
   return {
     scoops,
@@ -127,9 +126,6 @@ export function setupScoops(
         );
         return cached;
       };
-      skill = (await assets('packages/vfs-root/skills/agent/SKILL.md').catch(() => ''))
-        .replace(/^---[\s\S]*?---\n/, '')
-        .trim();
       await roles(context).catch(() => cached);
       const script = await assets('bin/agent').catch(() => undefined);
       if (script)

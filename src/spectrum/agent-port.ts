@@ -239,7 +239,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   commands(): readonly SlashCommand[] {
-    return [];
+    return (this.#connection.commands?.value ?? []).map((command) => ({ ...command }));
   }
 
   createScoop(parentId: string, name: string): Agent {
