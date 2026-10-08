@@ -270,6 +270,7 @@ function lickMessage(
     ...(lick.body ? { body: lick.body } : {}),
     ...(lick.count > 1 ? { count: lick.count } : {}),
     ...(state ? { state } : {}),
+    ...(lick.severity ? { severity: lick.severity } : {}),
   };
 }
 
@@ -311,14 +312,26 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
   else if (result.isError) delete call.diff;
 }
 
-const rewound = (id: string): SystemMessage => ({
-  id,
-  role: 'system',
-  kind: 'notice',
-  title: 'Rewound 1 turn',
-  text: 'Its prompt is back in the composer.',
-  createdAt: 0,
-});
+function rewound(id: string, entry: EntryRecord): SystemMessage {
+  const data = (entry.data ?? {}) as { stopped?: string[]; restored?: string[] };
+  const notes = [
+    'Its prompt is back in the composer.',
+    ...(data.stopped?.length
+      ? [`Stopped ${data.stopped.map((name) => `scoop ${name}`).join(', ')}.`]
+      : []),
+    ...(data.restored?.length
+      ? [`Restored ${data.restored.map((name) => `scoop ${name}`).join(', ')}.`]
+      : []),
+  ];
+  return {
+    id,
+    role: 'system',
+    kind: 'notice',
+    title: 'Rewound 1 turn',
+    text: notes.join(' '),
+    createdAt: 0,
+  };
+}
 
 function entryMessage(
   entry: EntryRecord,
@@ -329,7 +342,7 @@ function entryMessage(
 ): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
-  if (entry.kind === 'slicc.rewound') out.push(rewound(id));
+  if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   else if (entry.kind === 'pi.user' && model)
     out.push(lickMessage(id, entry, decisions) ?? user(id, model, delivered));
   else if (entry.kind === 'pi.assistant' && model) {

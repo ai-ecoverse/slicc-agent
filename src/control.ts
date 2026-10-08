@@ -1,3 +1,4 @@
+import type { Context } from '@earendil-works/chord';
 import {
   type AgentChange,
   AssistantEntry,
@@ -10,15 +11,37 @@ import {
   type SubmissionId,
 } from '@earendil-works/pi-durable';
 import { answerText } from './agent.ts';
+import type { Agents } from './agents.ts';
 import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
 import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
-import type { AgentControl, OperationError, SendResponse } from './services.ts';
+import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
+import type { AgentControl, Created, OperationError, SendResponse } from './services.ts';
 
 export interface HostLicks {
   licks: Licks;
   sources: LickSources;
+}
+
+export interface HostScoops {
+  scoops: Scoops;
+  runtime: ScoopsRuntime;
+}
+
+type WithAgents = { agents?: Agents };
+
+export function readable(out: string): string {
+  const text = out.replace(/^(?:sub)?agent: /, '').trim();
+  const sentence = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
+function created(run: () => Promise<string>): Promise<Created> {
+  return run().then(
+    (id) => ({ id, error: null }),
+    (error: Error) => ({ id: null, error: error.message })
+  );
 }
 
 export function submissionId(value: string): SubmissionId | undefined {
@@ -76,10 +99,27 @@ export function createAgentControl(
   harness: Harness,
   target: Conversation | Cones,
   deliveries?: Deliveries,
-  licks?: HostLicks
+  licks?: HostLicks,
+  scoops?: HostScoops
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
+  const agents = (target as WithAgents).agents;
+  const conversationFor = async (agentId: string | null | undefined, context: Context) => {
+    if (!agentId || !agents) return current();
+    const found = await agents.conversation(agentId, context);
+    if (!found) throw new Error(`There is no agent ${agentId}.`);
+    return found;
+  };
+  const withdraw = async (conversation: Conversation, id: string, context: Context) => {
+    const parsed = submissionId(id);
+    if (parsed === undefined) return { outcome: 'not_found' as const };
+    const result = await harness.abortSubmission(parsed, context, conversation.id);
+    if (result === 'aborted') return { outcome: 'withdrawn' as const };
+    return {
+      outcome: result === 'not_found' ? ('not_found' as const) : ('already_placed' as const),
+    };
+  };
   let lock: Promise<unknown> = Promise.resolve();
   const serial = <T>(operation: () => Promise<T>): Promise<T> => {
     const run = lock.then(operation, operation);
@@ -89,8 +129,8 @@ export function createAgentControl(
   return {
     send(request, context) {
       return serial(async () => {
-        const response = await accepted(() =>
-          current().submit(
+        const response = await accepted(async () =>
+          (await conversationFor(request.agentId, context)).submit(
             {
               type: 'input',
               content: request.text,
@@ -132,8 +172,12 @@ export function createAgentControl(
                 context
               )
             : await conversation.fork(turn.at, { ownership }, context);
+        const changed =
+          scoops && agents
+            ? await scoops.scoops.rewound(agents.activeCone(), fork, context)
+            : { stopped: [], restored: [] };
         await fork.submit(
-          { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1 } } },
+          { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1, ...changed } } },
           context
         );
         await cone.switchCone(fork, context);
@@ -152,12 +196,9 @@ export function createAgentControl(
       const entry = await harness.commit((tx) => tx.entry(AssistantEntry, answer), context);
       return { status: 'done', text: answerText(entry?.model?.[0]?.content), reason: null };
     },
-    async withdraw(id, context) {
-      const parsed = submissionId(id);
-      if (parsed === undefined) return { outcome: 'not_found' };
-      const result = await harness.abortSubmission(parsed, context, current().id);
-      if (result === 'aborted') return { outcome: 'withdrawn' };
-      return { outcome: result === 'not_found' ? 'not_found' : 'already_placed' };
+    withdraw: (id, context) => withdraw(current(), id, context),
+    async unqueue(agentId, id, context) {
+      return withdraw(await conversationFor(agentId, context), id, context);
     },
     abort: (context) => current().abort(context),
     compact: (instructions, context) =>
@@ -207,8 +248,40 @@ export function createAgentControl(
         : false;
       return { delivered };
     },
-    configure: (change, context) =>
-      current().configure(
+    async stopAgent(agentId, context) {
+      await (await conversationFor(agentId, context)).abort(context);
+    },
+    async selectCone(agentId, context) {
+      await agents?.selectCone(agentId, context);
+    },
+    createCone(name, context) {
+      return created(async () => {
+        if (!agents) throw new Error('This agent has a single cone.');
+        return agents.createCone(name, context);
+      });
+    },
+    createScoop(parentId, name, context) {
+      return created(async () => {
+        if (!scoops) throw new Error('This agent has no scoops.');
+        const roles = await scoops.runtime.roles(context);
+        const answer = await scoops.scoops.spawn(
+          { cone: parentId, name, prompts: [], fromAgent: false, limits: roles.limits },
+          context
+        );
+        if (answer.code !== 0) throw new Error(readable(answer.out));
+        return `scoop:${answer.out.trim()}`;
+      });
+    },
+    drop(agentId, context) {
+      return created(async () => {
+        if (!scoops) throw new Error('This agent has no scoops.');
+        const answer = await scoops.scoops.stop(agentId, false, context);
+        if (answer.code !== 0) throw new Error(readable(answer.out));
+        return agentId;
+      });
+    },
+    configure: async (change, context) =>
+      (await conversationFor(change.agentId, context)).configure(
         {
           ...(change.model ? { model: change.model } : {}),
           ...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),

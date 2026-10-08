@@ -11,6 +11,7 @@ import {
   AgentControl,
   AgentSessions,
   AgentSettings,
+  type AgentsSummary,
   AgentTranscript,
   type Delivered,
   type SendMode,
@@ -22,6 +23,8 @@ export interface AgentConnection {
   readonly control: AgentControl;
   readonly transcript: ReplicatedState<ConversationView>;
   readonly deliveries: ReplicatedState<Record<string, Delivered>>;
+  readonly agents?: ReplicatedState<AgentsSummary>;
+  readonly views?: ReplicatedState<Record<string, ConversationView>>;
   readonly settings: AgentSettings;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
@@ -58,7 +61,7 @@ export async function connectAgent(
     bound: true,
   });
   const control = session.use(AgentControl);
-  const { state: transcript, deliveries } = session.use(AgentTranscript);
+  const { state: transcript, deliveries, agents, views } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   await session.ready(context);
   return {
@@ -66,6 +69,8 @@ export async function connectAgent(
     control,
     transcript,
     deliveries,
+    agents,
+    views,
     settings,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);

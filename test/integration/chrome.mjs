@@ -6,6 +6,8 @@ const options = {
   roots: [
     ['/dist-test/', 'dist-test/'],
     ['/dist/', 'dist/'],
+    ['/bin/', 'bin/'],
+    ['/packages/', 'packages/'],
     ['/node_modules/@ai-ecoverse/', 'node_modules/@ai-ecoverse/'],
     ['/', 'test/integration/page/'],
   ],

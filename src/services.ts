@@ -7,6 +7,7 @@ export interface SendRequest {
   text: string;
   whenBusy: SendMode;
   requestId: string | null;
+  agentId?: string | null;
 }
 
 export interface OperationError {
@@ -44,6 +45,31 @@ export interface AgentControl {
     delivery: WebhookRequest,
     context: Context
   ): Promise<{ delivered: boolean }>;
+  stopAgent(agentId: string, context: Context): Promise<void>;
+  selectCone(agentId: string, context: Context): Promise<void>;
+  createCone(name: string, context: Context): Promise<Created>;
+  createScoop(parentId: string, name: string, context: Context): Promise<Created>;
+  drop(agentId: string, context: Context): Promise<Created>;
+  unqueue(
+    agentId: string | null,
+    submissionId: string,
+    context: Context
+  ): Promise<{ outcome: 'withdrawn' | 'already_placed' | 'not_found' }>;
+}
+
+export type Created = { id: string; error: null } | { id: null; error: string };
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  kind: 'cone' | 'scoop';
+  parentId: string | null;
+  role: string | null;
+}
+
+export interface AgentsSummary {
+  active: string;
+  agents: AgentSummary[];
 }
 
 export type LickResolved =
@@ -63,6 +89,7 @@ export type Rewound =
 export interface AgentSettingsChange {
   model: { provider: string; modelId: string } | null;
   thinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  agentId?: string | null;
 }
 
 export const AgentControl = defineService<AgentControl>('slicc.agent.control');
@@ -72,6 +99,8 @@ export type Delivered = 'run' | 'steer' | 'follow-up';
 export interface AgentTranscript {
   readonly state: ReplicatedState<ConversationView>;
   readonly deliveries: ReplicatedState<Record<string, Delivered>>;
+  readonly agents: ReplicatedState<AgentsSummary>;
+  readonly views: ReplicatedState<Record<string, ConversationView>>;
 }
 
 export const AgentTranscript = defineService<AgentTranscript>('slicc.agent.transcript');

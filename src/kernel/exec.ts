@@ -103,7 +103,8 @@ export async function execute(
   cwd: string,
   command: string | readonly string[],
   options: ShellExecOptions | undefined,
-  context: Context
+  context: Context,
+  spawned?: (process: KernelProcess) => void
 ): Promise<Result<ShellExecResult, ExecutionError>> {
   const argv = typeof command === 'string' ? [...SHELL, command] : [...command];
   if (argv.length === 0) return err(new ExecutionError('spawn_error', 'No program to run'));
@@ -124,6 +125,7 @@ export async function execute(
     const message = error instanceof Error ? error.message : String(error);
     return err(new ExecutionError('spawn_error', message));
   }
+  spawned?.(process);
   const watch = guard(process, options, context);
   const exitCode = await process.exited.finally(() => watch.release());
   out.end();

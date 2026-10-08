@@ -43,4 +43,6 @@ export interface SpawnOptions {
 export interface KernelClient {
   fs: KernelFs;
   spawn(argv: readonly string[], options: SpawnOptions): Promise<KernelProcess>;
+  kill?(pid: number, signal?: string): Promise<void>;
+  ps?(): Promise<readonly { pid: number }[]>;
 }
