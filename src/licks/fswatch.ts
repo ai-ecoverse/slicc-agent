@@ -126,7 +126,14 @@ export class Watches {
       void watch.watcher?.close(context).catch(() => undefined);
     }
     void this.#deliver(
-      { channel: 'fswatch', source: entry.name, title: title(entry), text, target: entry.target },
+      {
+        channel: 'fswatch',
+        source: entry.name,
+        title: title(entry),
+        text,
+        target: entry.target,
+        severity: stopped ? 'error' : 'warn',
+      },
       context
     ).catch(() => undefined);
   }

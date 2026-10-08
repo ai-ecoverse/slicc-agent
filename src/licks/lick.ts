@@ -22,6 +22,8 @@ export type LickChannel = (typeof LICK_CHANNELS)[number];
 
 export type LickAction = 'confirm' | 'dismiss';
 
+export type LickSeverity = 'warn' | 'error';
+
 export type LickTarget = 'cone' | `scoop:${string}`;
 
 export type Lick = {
@@ -34,6 +36,7 @@ export type Lick = {
   count: number;
   at: number;
   actions?: LickAction[];
+  severity?: LickSeverity;
 };
 
 const ENTITIES: Record<string, string> = {
@@ -79,6 +82,7 @@ export function formatLick(lick: Lick): string {
     ['at', new Date(lick.at).toISOString()],
   ];
   if (lick.actions?.length) attributes.push(['actions', lick.actions.join(' ')]);
+  if (lick.severity) attributes.push(['severity', lick.severity]);
   const head = attributes.map(([name, value]) => `${name}="${escapeAttribute(value)}"`).join(' ');
   const lines = [escapeText(oneLine(lick.text))];
   if (lick.body) lines.push(escapeText(lick.body));
@@ -90,6 +94,10 @@ const ATTRIBUTE = /([a-z]+)="([^"]*)"/g;
 
 function isChannel(value: string | undefined): value is LickChannel {
   return (LICK_CHANNELS as readonly string[]).includes(value ?? '');
+}
+
+function severityOf(value: string | undefined): { severity?: LickSeverity } {
+  return value === 'warn' || value === 'error' ? { severity: value } : {};
 }
 
 export function parseLick(text: string): Lick | undefined {
@@ -117,5 +125,6 @@ export function parseLick(text: string): Lick | undefined {
     count: Number.isSafeInteger(count) && count > 0 ? count : 1,
     at: Number.isNaN(at) ? 0 : at,
     ...(actions.length ? { actions } : {}),
+    ...severityOf(attributes.get('severity')),
   };
 }
