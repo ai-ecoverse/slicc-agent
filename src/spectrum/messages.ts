@@ -109,10 +109,20 @@ const unavailable =
   /access|invalid|not found|identifier|unsupported|not supported|isn['’]t supported|not available|isn['’]t available/i;
 
 const providerNames: Record<string, string> = { 'amazon-bedrock': 'Bedrock' };
+const filtered =
+  /Provider (?:stopped with|finish_reason): (?:content_filter(?:ed)?|guardrail_intervened|sensitive)|refused to complete the request/i;
 const missing = /no api key|missing|not configured|no credentials/i;
 
 export function errorPart(error: string, provider?: string): MessagePart {
   const action = errorAction(error);
+  if (action === 'drop-turn') {
+    return {
+      type: 'error',
+      message: "The model's content filter stopped this reply.",
+      detail: error,
+      action,
+    };
+  }
   if (action === 'settings' && provider === 'adobe') {
     return {
       type: 'error',
@@ -136,6 +146,7 @@ export function errorPart(error: string, provider?: string): MessagePart {
 }
 
 export function errorAction(message: string): ErrorAction {
+  if (filtered.test(message)) return 'drop-turn';
   if (credentials.test(message)) return 'settings';
   if (models.test(message) && unavailable.test(message)) return 'change-model';
   return 'retry';
@@ -200,6 +211,15 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
   call.status = result.isError ? 'error' : 'done';
 }
 
+const rewound = (id: string): SystemMessage => ({
+  id,
+  role: 'system',
+  kind: 'notice',
+  title: 'Rewound 1 turn',
+  text: 'Its prompt is back in the composer.',
+  createdAt: 0,
+});
+
 function entryMessage(
   entry: EntryRecord,
   out: Message[],
@@ -208,7 +228,8 @@ function entryMessage(
 ): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
-  if (entry.kind === 'pi.user' && model) out.push(user(id, model, delivered));
+  if (entry.kind === 'slicc.rewound') out.push(rewound(id));
+  else if (entry.kind === 'pi.user' && model) out.push(user(id, model, delivered));
   else if (entry.kind === 'pi.assistant' && model) {
     const message = assistant(id, model);
     out.push(message);

@@ -127,6 +127,11 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     if (!sent.accepted) throw new Error(sent.error.message);
   }
 
+  async rewind(_agentId: string, messageId: string): Promise<Outgoing | null> {
+    const rewound = await this.#connection.control.rewind(messageId, BACKGROUND_CONTEXT);
+    return rewound.done ? { text: rewound.text } : null;
+  }
+
   stop(): void {
     void this.#connection.control.abort(BACKGROUND_CONTEXT);
   }

@@ -1,12 +1,16 @@
 import {
+  type AgentChange,
   AssistantEntry,
   type Conversation,
   ConversationBusy,
+  type ConversationView,
   type EntryId,
+  type EntryRecord,
   type Harness,
   type SubmissionId,
 } from '@earendil-works/pi-durable';
 import { answerText } from './agent.ts';
+import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
 import type { AgentControl, OperationError, SendResponse } from './services.ts';
 
@@ -30,15 +34,75 @@ async function accepted(operation: () => Promise<{ id: number } | number>): Prom
   }
 }
 
+function cones(target: Conversation | Cones): Cones {
+  if ('cone' in target) return target;
+  return {
+    cone: () => target,
+    switchCone: async () => {
+      throw new Error('this conversation has no cone to rewind');
+    },
+  };
+}
+
+interface Turn {
+  text: string;
+  at: EntryId | null;
+}
+
+function lastTurn(view: ConversationView, messageId: string | null): Turn | null {
+  const { entries } = view;
+  const target = entries.findIndex((entry) => `e${entry.id}` === messageId);
+  const before = target < 0 ? entries.length : target;
+  const turn = entries.slice(0, before).findLastIndex((entry) => entry.kind === 'pi.user');
+  if (turn < 0) return null;
+  const user = entries[turn] as EntryRecord;
+  return { text: answerText(user.model?.[0]?.content), at: entries[turn - 1]?.id ?? null };
+}
+
+function busy(view: ConversationView): boolean {
+  const live = view.docs['pi.live'] as { run?: unknown } | undefined;
+  const inbox = view.docs['pi.inbox'] as { items?: unknown[] } | undefined;
+  return Boolean(live?.run) || Boolean(inbox?.items?.length);
+}
+
 export function createAgentControl(
   harness: Harness,
-  conversation: Conversation,
+  target: Conversation | Cones,
   deliveries?: Deliveries
 ): AgentControl {
+  const cone = cones(target);
+  const current = () => cone.cone();
   return {
+    async rewind(messageId, context) {
+      const conversation = current();
+      const attached = await conversation.viewState(context);
+      const view = attached.value;
+      attached.dispose();
+      if (busy(view)) return { done: false, text: null, reason: 'busy' };
+      const turn = lastTurn(view, messageId);
+      if (!turn) return { done: false, text: null, reason: 'no-turn' };
+      const agent = view.docs['pi.agent'] as AgentChange | undefined;
+      const ownership = { kind: 'ownerless' } as const;
+      const fork =
+        turn.at === null
+          ? await harness.createConversation(
+              {
+                ownership,
+                agent: { model: agent?.model ?? null, thinkingLevel: agent?.thinkingLevel ?? null },
+              },
+              context
+            )
+          : await conversation.fork(turn.at, { ownership }, context);
+      await fork.submit(
+        { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1 } } },
+        context
+      );
+      await cone.switchCone(fork, context);
+      return { done: true, text: turn.text, reason: null };
+    },
     async send(request, context) {
       const response = await accepted(() =>
-        conversation.submit(
+        current().submit(
           {
             type: 'input',
             content: request.text,
@@ -66,16 +130,16 @@ export function createAgentControl(
     async withdraw(id, context) {
       const parsed = submissionId(id);
       if (parsed === undefined) return { outcome: 'not_found' };
-      const result = await harness.abortSubmission(parsed, context, conversation.id);
+      const result = await harness.abortSubmission(parsed, context, current().id);
       if (result === 'aborted') return { outcome: 'withdrawn' };
       return { outcome: result === 'not_found' ? 'not_found' : 'already_placed' };
     },
-    abort: (context) => conversation.abort(context),
+    abort: (context) => current().abort(context),
     compact: (instructions, context) =>
-      accepted(() => conversation.compact(instructions ?? undefined, context)),
-    reset: (handoff, context) => conversation.reset(handoff ?? undefined, context),
+      accepted(() => current().compact(instructions ?? undefined, context)),
+    reset: (handoff, context) => current().reset(handoff ?? undefined, context),
     configure: (change, context) =>
-      conversation.configure(
+      current().configure(
         {
           ...(change.model ? { model: change.model } : {}),
           ...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),
