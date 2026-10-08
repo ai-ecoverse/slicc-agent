@@ -6,6 +6,7 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { openAgent } from './agent.ts';
 import { EncryptedCredentialStore } from './credentials.ts';
 import { type AgentHost, hostAgent } from './host.ts';
+import { createActivity } from './kernel/activity.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment } from './kernel/env.ts';
 import { setupLicks } from './licks/index.ts';
@@ -57,7 +58,8 @@ async function start(
   registry.install(CodingTools);
   registry.install(sliccPrompt(facts));
   const licks = setupLicks(registry);
-  const environment = kernelEnvironment(client);
+  const activity = createActivity();
+  const environment = kernelEnvironment(client, { activity });
   const agent = await openAgent({
     models,
     model: options.model ?? DEFAULT_MODEL,
@@ -65,7 +67,11 @@ async function start(
     registry,
     env: environment,
   });
-  const sources = licks.attach(agent, { env: environment({ cwd: HOME }), home: HOME });
+  const sources = licks.attach(agent, {
+    env: kernelEnvironment(client)({ cwd: HOME }),
+    home: HOME,
+    activity,
+  });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
     { version: facts.version, boot: await kernelBoot(client) },

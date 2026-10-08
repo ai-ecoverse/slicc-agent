@@ -1,5 +1,6 @@
 import type { Context } from '@earendil-works/chord';
 import type { ExecutionEnv, FileWatcher, WatchChange } from '@earendil-works/pi-durable/env';
+import type { Activity } from '../kernel/activity.ts';
 import { type ConfigError, parseWatch, type WatchEntry } from './config.ts';
 import { glob } from './glob.ts';
 import type { LickEvent } from './licks.ts';
@@ -57,12 +58,14 @@ export class Watches {
   readonly #files: ConfigFiles;
   readonly #home: string;
   readonly #watching = new Map<string, Watching>();
+  readonly #activity: Activity | undefined;
 
-  constructor(env: ExecutionEnv, deliver: Deliver, home: string) {
+  constructor(env: ExecutionEnv, deliver: Deliver, home: string, activity?: Activity) {
     this.#env = env;
     this.#deliver = deliver;
     this.#files = configFiles(env);
     this.#home = home;
+    this.#activity = activity;
   }
 
   get names(): string[] {
@@ -97,7 +100,8 @@ export class Watches {
   #paths(watch: Watching, paths: readonly string[], context: Context): void {
     for (const path of paths) {
       const relative = relativeTo(watch.entry.path, path);
-      if (relative && watch.match(relative)) watch.paths.add(path);
+      if (relative && watch.match(relative) && !this.#activity?.agentMade(path))
+        watch.paths.add(path);
     }
     if (!watch.paths.size) return;
     clearTimeout(watch.timer);
@@ -111,11 +115,16 @@ export class Watches {
       this.#paths(watch, change.paths, context);
       return;
     }
-    const text =
-      'overflow' in change
-        ? 'Changes may have been missed for a while; look at the watched files again.'
-        : `The watch stopped: ${change.error.message}. Save its file again to restart it.`;
+    const stopped = 'error' in change;
+    const text = stopped
+      ? `The watch stopped: ${change.error.message}. Save its file again to restart it.`
+      : 'Changes may have been missed for a while; look at the watched files again.';
     const { entry } = watch;
+    if (stopped && this.#watching.get(entry.name) === watch) {
+      this.#watching.delete(entry.name);
+      clearTimeout(watch.timer);
+      void watch.watcher?.close(context).catch(() => undefined);
+    }
     void this.#deliver(
       { channel: 'fswatch', source: entry.name, title: title(entry), text, target: entry.target },
       context

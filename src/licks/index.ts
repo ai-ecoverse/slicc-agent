@@ -1,6 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import type { Conversation, ConversationId, Harness, Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import type { Activity } from '../kernel/activity.ts';
 import { cronTask, licksExtension } from './extension.ts';
 import type { LickTarget } from './lick.ts';
 import { createLicks, type Licks, type LicksHost } from './licks.ts';
@@ -16,7 +17,13 @@ export interface LicksSetup {
   licks: Licks;
   attach(
     agent: LicksAgent,
-    options: { env: ExecutionEnv; home: string; now?: () => number; flushEvery?: number }
+    options: {
+      env: ExecutionEnv;
+      home: string;
+      now?: () => number;
+      flushEvery?: number;
+      activity?: Activity;
+    }
   ): LickSources;
 }
 

@@ -135,24 +135,36 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     return list.length ? list : undefined;
   };
 
-  async function queued(harness: Harness, id: number | null, context: Context): Promise<boolean> {
-    if (id === null) return false;
+  async function previous(
+    harness: Harness,
+    id: number | null,
+    context: Context
+  ): Promise<'queued' | 'withdrawn' | 'gone'> {
+    if (id === null) return 'gone';
     const submission = await harness.submission(id as SubmissionId, context);
-    return (await submission?.status(context))?.status === 'queued';
+    const record = await submission?.status(context);
+    if (record?.status === 'queued') return 'queued';
+    return record?.status === 'unanswered' && record.reason === 'aborted' ? 'withdrawn' : 'gone';
+  }
+
+  async function settled(key: string, context: Context): Promise<Queue | undefined> {
+    const { harness } = await host;
+    const queue = (await harness.snapshot(LicksOutbox, context))?.queues[key];
+    if (!queue) return undefined;
+    const before = await previous(harness, queue.submission, context);
+    if (before === 'queued') return undefined;
+    if (queue.pending && before === 'gone') return queue;
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(LicksOutbox);
+      if (doc.queues[key]?.submission === queue.submission) delete doc.queues[key];
+    }, context);
+    return undefined;
   }
 
   async function flushKey(key: string, context: Context): Promise<void> {
     const { harness, resolve } = await host;
-    const queue = (await harness.snapshot(LicksOutbox, context))?.queues[key];
-    if (!queue) return;
-    if (await queued(harness, queue.submission, context)) return;
-    if (!queue.pending) {
-      await harness.commit(async (tx) => {
-        const doc = await tx.doc(LicksOutbox);
-        if (doc.queues[key] && !doc.queues[key].pending) delete doc.queues[key];
-      }, context);
-      return;
-    }
+    const queue = await settled(key, context);
+    if (!queue?.pending) return;
     const lick = render(queue.pending);
     const target = key.split('|')[0] as LickTarget;
     const conversation = await resolve(target, context);
@@ -160,7 +172,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
       {
         type: 'input',
         content: formatLick(lick),
-        whenBusy: 'followUp',
+        whenBusy: 'steer',
         requestId: `lick:${lick.id}`,
       },
       context
@@ -193,6 +205,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
       return serial(async () => {
         const { harness } = await host;
         const key = keyOf(event);
+        await settled(key, context);
         const stream = `${event.channel}|${event.source}`;
         const now = event.at ?? Date.now();
         const accepted = await harness.commit(async (tx) => {

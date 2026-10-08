@@ -8,7 +8,7 @@ import {
   defineTool,
   section,
 } from '@earendil-works/pi-durable';
-import { missedFires, nextFire, parseSchedule } from './cron.ts';
+import { type Missed, missedFires, nextFire, parseSchedule } from './cron.ts';
 import type { LickAction, LickTarget } from './lick.ts';
 import type { Licks } from './licks.ts';
 
@@ -64,11 +64,17 @@ export interface CronInput {
 
 type CronState = { phase: 'wait'; at: number | null };
 
-export function cronText(schedule: string, at: number, missed: number): string {
-  const when = new Date(at).toISOString();
-  if (!missed) return `${schedule} fired at ${when}`;
-  const more = missed > 1 ? `${missed} more fires were` : '1 more fire was';
-  return `${schedule} was due at ${when}; ${more} missed while seven was closed`;
+function clock(at: number): string {
+  const date = new Date(at);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function cronText(schedule: string, at: number, missed: Missed): string {
+  if (!missed.count) return `${schedule} fired at ${clock(at)}`;
+  const count = `${missed.more ? 'at least ' : ''}${missed.count}`;
+  const more = missed.count > 1 || missed.more ? `${count} more fires were` : '1 more fire was';
+  return `${schedule} was due at ${clock(at)}; ${more} missed while seven was closed`;
 }
 
 export function cronTask(licks: Licks) {
@@ -103,7 +109,7 @@ export function cronTask(licks: Licks) {
             title: name,
             text: cronText(task.input.schedule, at, missed),
             ...(message ? { body: message } : {}),
-            count: 1 + missed,
+            count: 1 + missed.count,
             target,
             eventId: `${name}@${at}`,
             at: now,

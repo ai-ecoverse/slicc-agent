@@ -131,13 +131,24 @@ export function nextFire(schedule: Schedule, after: number): number | null {
   return null;
 }
 
-export function missedFires(schedule: Schedule, from: number, until: number, cap = 1000): number {
+export interface Missed {
+  count: number;
+  more: boolean;
+}
+
+export function missedFires(
+  schedule: Schedule,
+  from: number,
+  until: number,
+  cap = 100_000
+): Missed {
   let count = 0;
   let at: number | null = from;
   while (count < cap) {
     at = nextFire(schedule, at);
-    if (at === null || at > until) break;
+    if (at === null || at > until) return { count, more: false };
     count++;
   }
-  return count;
+  const next = nextFire(schedule, at);
+  return { count, more: next !== null && next <= until };
 }

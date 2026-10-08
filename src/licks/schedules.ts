@@ -20,13 +20,14 @@ type HostState = {
   agent: string | null;
   boot: string | null;
   mark: number;
+  upgrades: number;
 };
 
 export const LicksHostDoc = defineDoc<HostState>({
   kind: 'slicc.licks.host',
   version: 1,
   scope: 'session',
-  initial: () => ({ cron: {}, agent: null, boot: null, mark: 0 }),
+  initial: () => ({ cron: {}, agent: null, boot: null, mark: 0, upgrades: 0 }),
 });
 
 function same(entry: CronEntry | undefined, record: CronRecord): boolean {

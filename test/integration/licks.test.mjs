@@ -67,7 +67,7 @@ test('licks reach the cone through the production worker: a webhook, a file watc
   const [config, webhook, watch] = seen.licks;
   assert.equal(config.channel, 'cron');
   assert.equal(config.title, 'Invalid ~/.slicc/crontab');
-  assert.equal(config.text, '~/.slicc/crontab line 1: minute: 61 is outside 0–59');
+  assert.equal(config.text, 'line 1: minute: 61 is outside 0–59');
   assert.equal(webhook.channel, 'webhook');
   assert.equal(webhook.text, 'The build finished');
   assert.equal(webhook.body, `x-event: done\n\n${JSON.stringify(seen.hostile)}`);

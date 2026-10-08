@@ -1,6 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import type { Conversation, Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
+import type { Activity } from '../kernel/activity.ts';
 import { type BootFacts, bootLicks } from './boot.ts';
 import { type ConfigError, parseCrontab, parseWebhook, type WebhookEntry } from './config.ts';
 import type { cronTask } from './extension.ts';
@@ -21,6 +22,7 @@ export interface LickSourcesOptions {
   cron: ReturnType<typeof cronTask>;
   now?: () => number;
   flushEvery?: number;
+  activity?: Activity;
 }
 
 export interface WebhookDelivery {
@@ -54,15 +56,15 @@ export function configLick(error: ConfigError, home: string): LickEvent {
     : error.file.includes('/webhooks/')
       ? 'webhook'
       : 'cron';
-  const text = `${file}${error.line ? ` line ${error.line}` : ''}: ${error.error}`;
+  const text = `${error.line ? `line ${error.line}: ` : ''}${error.error}`;
   return {
     channel,
     source: `config:${file}`,
     title: `Invalid ${file}`,
     text,
-    body: 'Fix the file and save it again; until then this entry is ignored. The formats are in the slicc-agent README.',
+    body: 'Ignored until the file is fixed.\nThe formats are in the slicc-agent README.',
     target: 'cone',
-    eventId: hash(text),
+    eventId: hash(`${file}\n${text}`),
   };
 }
 
@@ -116,7 +118,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
   const now = options.now ?? Date.now;
   const files = configFiles(env);
   const deliver = (event: LickEvent, context: Context) => licks.deliver(event, context);
-  const watches = new Watches(env, deliver, home);
+  const watches = new Watches(env, deliver, home, options.activity);
   const webhooks = new Map<string, WebhookEntry>();
   let control: FileWatcher | undefined;
   let reconcileTimer: ReturnType<typeof setTimeout> | undefined;

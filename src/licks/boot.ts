@@ -30,7 +30,7 @@ export function bashCommands(entries: readonly EntryRecord[], after: number): st
   return commands;
 }
 
-function upgraded(from: string, to: string) {
+function upgraded(from: string, to: string, upgrades: number) {
   return {
     channel: 'upgrade',
     source: 'slicc-agent',
@@ -38,7 +38,7 @@ function upgraded(from: string, to: string) {
     text: `The agent was updated from ${from} to ${to}.`,
     body: `Release notes: https://github.com/ai-ecoverse/slicc-agent/releases/tag/v${to}`,
     target: 'cone',
-    eventId: `${from}->${to}`,
+    eventId: `${from}->${to}#${upgrades}`,
   } as const;
 }
 
@@ -67,7 +67,7 @@ export async function bootLicks(
   const state = await harness.snapshot(LicksHostDoc, context);
   const previous = state?.agent ?? null;
   if (previous !== null && previous !== facts.version)
-    await deliver(upgraded(previous, facts.version), context);
+    await deliver(upgraded(previous, facts.version, state?.upgrades ?? 0), context);
   const { entries } = await cone.context(context);
   if (facts.boot !== null && state?.boot && facts.boot !== state.boot) {
     const commands = bashCommands(entries, state.mark);
@@ -77,6 +77,7 @@ export async function bootLicks(
   const mark = Number(after.at(-1)?.id ?? 0);
   await harness.commit(async (tx) => {
     const doc = await tx.doc(LicksHostDoc);
+    if (doc.agent !== null && doc.agent !== facts.version) doc.upgrades += 1;
     doc.agent = facts.version;
     if (facts.boot !== null && doc.boot !== facts.boot) {
       doc.boot = facts.boot;
