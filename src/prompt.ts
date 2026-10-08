@@ -1,4 +1,5 @@
 import { defineExtension, section } from '@earendil-works/pi-durable';
+import { type SystemFacts, systemSection } from './system.ts';
 
 const PREAMBLE = [
   'You are sliccy, the agent of SLICC. You run in a worker inside the user’s browser tab.',
@@ -7,10 +8,15 @@ const PREAMBLE = [
   'Be brief, do the work with your tools, and say what you changed.',
 ].join('\n');
 
-export const SliccPrompt = defineExtension({
-  name: 'slicc',
-  sections: [
-    section('preamble', () => PREAMBLE, { tag: false }),
-    section('cwd', (input) => input.env?.cwd),
-  ],
-});
+export function sliccPrompt(facts?: SystemFacts) {
+  return defineExtension({
+    name: 'slicc',
+    sections: [
+      section('preamble', () => PREAMBLE, { tag: false }),
+      ...(facts ? [section('system', () => systemSection(facts))] : []),
+      section('cwd', (input) => input.env?.cwd),
+    ],
+  });
+}
+
+export const SliccPrompt = sliccPrompt();

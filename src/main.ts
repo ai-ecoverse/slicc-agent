@@ -8,7 +8,7 @@ import { type AgentHost, hostAgent } from './host.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { kernelEnvironment } from './kernel/env.ts';
 import { type Transport, transportFetch } from './net.ts';
-import { SliccPrompt } from './prompt.ts';
+import { sliccPrompt } from './prompt.ts';
 import {
   createAgentSettings,
   createSliccModels,
@@ -16,6 +16,7 @@ import {
   sliccProviders,
 } from './settings.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
+import { agentVersion, commandsOnPath, transportName } from './system.ts';
 import { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
 
 export interface AgentWorkerScope extends WorkerScope {
@@ -40,13 +41,19 @@ async function start(
 ): Promise<AgentHost> {
   const attach: KernelAttach = options.attach ?? attachKernel;
   const client = await attach(await port);
-  scope.fetch = transportFetch(client.transport, scope.location.origin, scope.fetch.bind(scope));
+  const native = scope.fetch.bind(scope);
+  scope.fetch = transportFetch(client.transport, scope.location.origin, native);
+  const facts = {
+    version: await agentVersion((url) => native(url)),
+    commands: await commandsOnPath(client),
+    transport: transportName(client.transport),
+  };
   const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
   const providers = options.providers ?? sliccProviders();
   const models = createSliccModels(credentials, providers);
   const registry = createRegistry();
   registry.install(CodingTools);
-  registry.install(SliccPrompt);
+  registry.install(sliccPrompt(facts));
   const agent = await openAgent({
     models,
     model: options.model ?? DEFAULT_MODEL,

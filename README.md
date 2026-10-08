@@ -65,6 +65,15 @@ A conversation without a `cwd` works in `/home`.
 - opens the encrypted credential store, the AWS Bedrock provider and the session in OPFS SQLite;
 - installs durable's coding tools and SLICC's system prompt, and serves the agent.
 
+The system prompt has a `system` section generated at startup from the running worker (`sliccPrompt(facts)`, `systemSection`). It covers:
+- the slicc-agent version, read from its own `package.json`, and that bash runs on the page's slicc-kernel in the browser;
+- the filesystem layout, with `/os` and `/opt` as the system;
+- the commands on `PATH`, listed by a kernel bash;
+- installing tools with `pnpm add -g`, and that there is no ipk;
+- the active transport, from its traits: the page's fetch, a local proxy or the extension;
+- that `localhost` is the sandbox's own loopback;
+- what isn't there yet: node or python3 when not on `PATH`, a browser or CDP tool, and GitHub credentials.
+
 ```js
 const owner = await startAgent({
   worker: () => new Worker(new URL('@ai-ecoverse/slicc-agent/agent-worker', import.meta.url), { type: 'module' }),
