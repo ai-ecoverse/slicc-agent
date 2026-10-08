@@ -26,7 +26,7 @@ export function packageAssets(base: URL = new URL('../../', import.meta.url)): A
 export interface AttachOptions {
   harness: Harness;
   agents: Agents;
-  groups?: ProcessGroups;
+  groups: ProcessGroups;
   env: ExecutionEnv;
   home: string;
   assets?: Assets;
@@ -34,6 +34,7 @@ export interface AttachOptions {
   controlDir?: string;
   sweepEvery?: number;
   alive?: (pid: number) => Promise<boolean>;
+  reads: () => readonly string[];
 }
 
 export interface ScoopsRuntime {
@@ -99,7 +100,14 @@ export function setupScoops(
     async attach(options, context) {
       const { harness, agents, groups, env, home } = options;
       const assets = options.assets ?? packageAssets();
-      bind({ harness, agents, licks, tools: fileTools, ...(groups ? { groups } : {}) });
+      bind({
+        harness,
+        agents,
+        licks,
+        tools: fileTools,
+        groups,
+        reads: options.reads,
+      });
       const builtin = async () => {
         const out: { path: string; text: string }[] = [];
         for (const name of BUILTIN_ROLES) {

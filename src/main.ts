@@ -89,6 +89,10 @@ async function start(
     { version: facts.version, boot: await kernelBoot(client) },
     BACKGROUND_CONTEXT
   );
+  const skillsRuntime = await skills.attach(
+    { env: home, home: HOME, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
+    BACKGROUND_CONTEXT
+  );
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -97,12 +101,9 @@ async function start(
       env: home,
       home: HOME,
       alive: alive(client),
+      reads: skillsRuntime.dirs,
       ...(options.assets ? { assets: options.assets } : {}),
     },
-    BACKGROUND_CONTEXT
-  );
-  const skillsRuntime = await skills.attach(
-    { env: home, home: HOME, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
     BACKGROUND_CONTEXT
   );
   return hostAgent(agent, {

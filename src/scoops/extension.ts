@@ -337,11 +337,12 @@ export function allowed(
   record: Pick<ScoopRecord, 'folder'> & { roots?: ScoopRecord['roots'] },
   coneCwd: string,
   path: string,
-  writing: boolean
+  writing: boolean,
+  reads: readonly string[] = []
 ): boolean {
   const own = `${SCOOPS_ROOT}/${record.folder}`;
   const write = [own, '/tmp', ...(record.roots?.write ?? [])];
-  const roots = writing ? write : [...write, coneCwd, ...(record.roots?.read ?? [])];
+  const roots = writing ? write : [...write, coneCwd, ...(record.roots?.read ?? []), ...reads];
   return roots.some((root) => path === root || path.startsWith(`${root === '/' ? '' : root}/`));
 }
 
@@ -356,16 +357,21 @@ export function guardExtension(lookup: Lookup, tools: readonly ToolRegistration[
       wrapTool(tool, (inner) => ({
         ...inner,
         async execute(args, api, context) {
-          const { agents } = await lookup();
+          const { agents, reads } = await lookup();
           const record = Object.values(agents.state().scoops).find(
             (scoop) => scoop.conversation === api.conversationId
           );
           if (!record) return inner.execute(args, api, context);
           const path = String((args as { path: unknown }).path);
-          let target = normalize(resolve(workspace(record.folder), path));
-          const canonical = await api.env?.canonicalPath(target, context);
-          if (canonical?.ok) target = canonical.value;
-          if (allowed(record, HOME, target, WRITES.has(inner.name)))
+          const asked = normalize(resolve(workspace(record.folder), path));
+          const canonical = await api.env?.canonicalPath(asked, context);
+          const target = canonical?.ok ? canonical.value : asked;
+          const writing = WRITES.has(inner.name);
+          const skills = reads?.() ?? [];
+          if (
+            allowed(record, HOME, target, writing, skills) ||
+            allowed(record, HOME, asked, writing, skills)
+          )
             return inner.execute(args, api, context);
           return refusal(
             `${target} is outside this scoop's folders. ${inner.name} reaches ${SCOOPS_ROOT}/${record.folder} and /tmp${WRITES.has(inner.name) ? '' : `, and reads ${HOME}`}.`

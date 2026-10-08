@@ -5,7 +5,7 @@ import { parseFrontmatter } from '../roles/frontmatter.ts';
 export const MAX_NAME_LENGTH = 64;
 export const MAX_DESCRIPTION_LENGTH = 1024;
 
-export type SkillFiles = Pick<ExecutionEnv, 'readTextFile' | 'listDir'>;
+export type SkillFiles = Pick<ExecutionEnv, 'readTextFile' | 'listDir' | 'canonicalPath'>;
 
 export type SkillSource = 'user' | 'compat' | 'package' | 'builtin';
 
@@ -103,9 +103,14 @@ export async function loadSkillsFromDir(
   dir: string,
   source: SkillSource,
   context: Context,
-  root = true
+  root = true,
+  visited = new Set<string>()
 ): Promise<Loaded> {
   const out: Loaded = { skills: [], diagnostics: [] };
+  const real = await files.canonicalPath(dir, context);
+  const key = real.ok ? real.value : dir;
+  if (visited.has(key)) return out;
+  visited.add(key);
   const listed = await files.listDir(dir, context);
   if (!listed.ok) return out;
   const merge = (found: Loaded) => {
@@ -121,7 +126,7 @@ export async function loadSkillsFromDir(
     if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
     const path = `${dir}/${entry.name}`;
     if (entry.kind === 'directory' || entry.kind === 'symlink')
-      merge(await loadSkillsFromDir(files, path, source, context, false));
+      merge(await loadSkillsFromDir(files, path, source, context, false, visited));
     if (entry.kind !== 'directory' && root && entry.name.endsWith('.md'))
       merge(await loadFile(files, path, source, context));
   }

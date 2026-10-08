@@ -29,6 +29,7 @@ export const RELOAD_MS = 300;
 export interface SkillsRuntime {
   readonly commands: ReplicatedState<Command[]>;
   skills(): readonly Skill[];
+  dirs(): string[];
   templates(): readonly PromptTemplate[];
   expand(text: string, context: Context): Promise<string>;
   reload(context: Context): Promise<void>;
@@ -189,6 +190,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       return {
         commands,
         skills: () => current,
+        dirs: () => current.map((skill) => skill.baseDir),
         templates: () => templates,
         async expand(text, using) {
           const expanded = await expandSkillCommand(text, current, env, using);

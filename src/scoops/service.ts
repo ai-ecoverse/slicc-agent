@@ -64,6 +64,7 @@ export interface ScoopsHost {
   licks: Licks;
   groups?: ProcessGroups;
   tools?: readonly ToolRegistration[];
+  reads?: () => readonly string[];
 }
 
 export interface Rewound {
