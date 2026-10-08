@@ -3,7 +3,7 @@ import { AgentAdapter } from './agent-port.ts';
 import { SettingsAdapter } from './settings-port.ts';
 
 export { AgentAdapter, CONE } from './agent-port.ts';
-export { assistant, isBusy, queued, textOf, toMessages } from './messages.ts';
+export { assistant, errorAction, isBusy, queued, textOf, toMessages } from './messages.ts';
 export { SETTINGS_KEY, SettingsAdapter } from './settings-port.ts';
 
 export function createAgentModel(

@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   AssistantStatus,
+  ErrorAction,
   Message,
   MessagePart,
   SystemMessage,
@@ -101,6 +102,17 @@ function usage(message: ModelMessage): Usage | undefined {
 
 const statuses: Record<string, AssistantStatus> = { error: 'error', aborted: 'stopped' };
 
+const credentials =
+  /security token|unrecognizedclient|not authori[sz]ed|unauthori[sz]ed|forbidden|\b40[13]\b|api key|credential|bearer/i;
+const models = /model/i;
+const unavailable = /access|invalid|not found|identifier|unsupported|not available/i;
+
+export function errorAction(message: string): ErrorAction {
+  if (credentials.test(message)) return 'settings';
+  if (models.test(message) && unavailable.test(message)) return 'change-model';
+  return 'retry';
+}
+
 export function assistant(
   id: string,
   message: ModelMessage,
@@ -109,7 +121,11 @@ export function assistant(
   const blocks = Array.isArray(message.content) ? message.content : [];
   const parts = blocks.map(part).filter((item): item is MessagePart => item !== undefined);
   if (message.errorMessage)
-    parts.push({ type: 'error', message: message.errorMessage, action: 'retry' });
+    parts.push({
+      type: 'error',
+      message: message.errorMessage,
+      action: errorAction(message.errorMessage),
+    });
   const used = usage(message);
   return {
     id,
