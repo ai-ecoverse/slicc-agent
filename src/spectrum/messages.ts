@@ -10,6 +10,7 @@ import type {
   UserMessage,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
+import type { Delivered } from '../services.ts';
 
 type Json = Record<string, unknown>;
 
@@ -121,8 +122,14 @@ export function assistant(
   };
 }
 
-function user(id: string, message: ModelMessage): UserMessage {
-  return { id, role: 'user', text: textOf(message.content), createdAt: message.timestamp ?? 0 };
+function user(id: string, message: ModelMessage, delivered: Delivered | undefined): UserMessage {
+  return {
+    id,
+    role: 'user',
+    text: textOf(message.content),
+    createdAt: message.timestamp ?? 0,
+    ...(delivered ? { delivered } : {}),
+  };
 }
 
 function system(id: string, entry: EntryRecord, text: string): SystemMessage {
@@ -154,10 +161,15 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
   call.status = result.isError ? 'error' : 'done';
 }
 
-function entryMessage(entry: EntryRecord, out: Message[], calls: Map<string, ToolCall>): void {
+function entryMessage(
+  entry: EntryRecord,
+  out: Message[],
+  calls: Map<string, ToolCall>,
+  delivered: Delivered | undefined
+): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
-  if (entry.kind === 'pi.user' && model) out.push(user(id, model));
+  if (entry.kind === 'pi.user' && model) out.push(user(id, model, delivered));
   else if (entry.kind === 'pi.assistant' && model) {
     const message = assistant(id, model);
     out.push(message);
@@ -205,11 +217,19 @@ function live(view: ConversationView, out: Message[], calls: Map<string, ToolCal
     });
 }
 
-export function toMessages(view: ConversationView | undefined): Message[] {
+export function toMessages(
+  view: ConversationView | undefined,
+  deliveries: Readonly<Record<string, Delivered>> = {}
+): Message[] {
   const out: Message[] = [];
   if (!view) return out;
   const calls = new Map<string, ToolCall>();
-  for (const entry of view.entries) entryMessage(entry, out, calls);
+  let previous: EntryRecord | undefined;
+  for (const entry of view.entries) {
+    const steered = previous?.kind === 'pi.tool-result' ? 'steer' : undefined;
+    entryMessage(entry, out, calls, deliveries[String(entry.id)] ?? steered);
+    previous = entry;
+  }
   live(view, out, calls);
   return out;
 }
