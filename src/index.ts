@@ -1,3 +1,14 @@
+export {
+  ADOBE,
+  ADOBE_PROXY,
+  type AdobeConfig,
+  type AdobeModelInfo,
+  adobeConfig,
+  adobeModel,
+  adobeProvider,
+  adobeUsage,
+  type Budget,
+} from './adobe.ts';
 export { type Agent, type AgentOptions, answerText, openAgent } from './agent.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
 export { createAgentControl } from './control.ts';
@@ -36,6 +47,7 @@ export {
   AgentSettings,
   type AgentSettingsChange,
   AgentTranscript,
+  type BudgetState,
   type ModelChoice,
   type OperationError,
   type PromptResult,
@@ -43,6 +55,7 @@ export {
   type SendRequest,
   type SendResponse,
   type SettingsState,
+  type SignIn,
 } from './services.ts';
 export {
   BEDROCK,

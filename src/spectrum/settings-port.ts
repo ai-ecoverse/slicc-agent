@@ -6,7 +6,7 @@ import type {
   SettingsPort,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { AgentSettings, SettingsState } from '../services.ts';
+import type { AgentSettings, SettingsState, SignIn } from '../services.ts';
 import type { AgentAdapter } from './agent-port.ts';
 import { Emitter } from './emitter.ts';
 
@@ -23,21 +23,26 @@ const defaults: Settings = {
 
 type Local = Omit<Settings, 'model' | 'thinking'>;
 
+export type Login = (providerId: string, signIn: SignIn) => Promise<string>;
+
 export class SettingsAdapter extends Emitter<SettingsEvents> implements SettingsPort {
   readonly #settings: AgentSettings;
   readonly #agent: AgentAdapter;
   readonly #storage: Pick<Storage, 'getItem' | 'setItem'> | null;
+  readonly #login: Login | null;
   #local: Local;
 
   constructor(
     settings: AgentSettings,
     agent: AgentAdapter,
-    storage: Pick<Storage, 'getItem' | 'setItem'> | null
+    storage: Pick<Storage, 'getItem' | 'setItem'> | null,
+    login: Login | null = null
   ) {
     super();
     this.#settings = settings;
     this.#agent = agent;
     this.#storage = storage;
+    this.#login = login;
     const saved = JSON.parse(storage?.getItem(SETTINGS_KEY) ?? '{}') as Partial<Local>;
     const { model: _model, thinking: _thinking, ...local } = { ...defaults, ...saved };
     this.#local = local;
@@ -84,8 +89,13 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   }
 
   async connect(id: string, secret?: string, options: { region?: string } = {}): Promise<void> {
-    if (!secret) throw new Error(`${id} needs an API key`);
-    await this.#settings.connect(id, secret, options.region ?? null, BACKGROUND_CONTEXT);
+    const account = this.#state().accounts.find((candidate) => candidate.id === id);
+    const login = account?.auth === 'oauth' ? this.#login : null;
+    const options_ = login ? await this.#settings.signIn(id, BACKGROUND_CONTEXT) : null;
+    const key = secret ?? (login && options_ ? await login(id, options_) : undefined);
+    if (!key)
+      throw new Error(`${id} needs ${account?.auth === 'oauth' ? 'a sign-in' : 'an API key'}`);
+    await this.#settings.connect(id, key, options.region ?? null, BACKGROUND_CONTEXT);
   }
 
   disconnect(id: string): void {

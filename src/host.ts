@@ -75,6 +75,7 @@ const noSettings: AgentSettings = {
     throw new Error('this agent has no accounts');
   },
   disconnect: async () => {},
+  signIn: async () => null,
 };
 
 export async function hostAgent(

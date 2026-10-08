@@ -74,13 +74,27 @@ export interface AccountState {
   provider: string;
   identity: string;
   status: 'connected' | 'disconnected';
-  auth: 'api-key';
+  auth: 'api-key' | 'oauth';
   needs: 'cors-free-transport' | null;
+}
+
+export interface BudgetState {
+  provider: string;
+  percent: number;
+  window: 'weekly';
+  resets: string;
+}
+
+export interface SignIn {
+  clientId: string;
+  scopes: string;
+  imsEnvironment: string;
 }
 
 export interface SettingsState {
   models: ModelChoice[];
   accounts: AccountState[];
+  budget?: BudgetState | null;
 }
 
 export interface AgentSettings {
@@ -92,6 +106,7 @@ export interface AgentSettings {
     context: Context
   ): Promise<void>;
   disconnect(providerId: string, context: Context): Promise<void>;
+  signIn(providerId: string, context: Context): Promise<SignIn | null>;
 }
 
 export const AgentSettings = defineService<AgentSettings>('slicc.agent.settings');

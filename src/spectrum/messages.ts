@@ -113,6 +113,14 @@ const missing = /no api key|missing|not configured|no credentials/i;
 
 export function errorPart(error: string, provider?: string): MessagePart {
   const action = errorAction(error);
+  if (action === 'settings' && provider === 'adobe') {
+    return {
+      type: 'error',
+      message: 'Your Adobe session has expired.',
+      detail: error,
+      action: 'login',
+    };
+  }
   const name = providerNames[provider ?? ''] ?? 'The provider';
   const lead =
     action === 'settings'

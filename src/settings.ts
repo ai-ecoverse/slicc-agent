@@ -1,17 +1,28 @@
 import { type Context, replicatedState } from '@earendil-works/chord';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
 import { createModels, type MutableModels } from '@earendil-works/pi-ai/models';
 import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
+import {
+  ADOBE,
+  ADOBE_PROXY,
+  adobeConfig,
+  adobeProvider,
+  adobeUsage,
+  type Budget,
+} from './adobe.ts';
 import type { AccountState, AgentSettings, ModelChoice, SettingsState } from './services.ts';
 
 export const BEDROCK = 'amazon-bedrock';
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
 export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
 
-const corsFree = new Set([BEDROCK]);
+const corsFree = new Set([BEDROCK, ADOBE]);
+const signIn = new Set([ADOBE]);
+const BUDGET_EVERY = 5 * 60 * 1000;
 
 export function sliccProviders(): Provider[] {
-  return [amazonBedrockProvider() as Provider];
+  return [amazonBedrockProvider() as Provider, adobeProvider()];
 }
 
 export function withDefaultRegions(credentials: CredentialStore): CredentialStore {
@@ -60,28 +71,54 @@ async function accounts(
   return providers.map((provider) => ({
     id: provider.id,
     provider: provider.name ?? provider.id,
-    identity: stored.has(provider.id) ? 'API key' : '',
+    identity: stored.has(provider.id) ? (signIn.has(provider.id) ? 'Adobe ID' : 'API key') : '',
     status: stored.has(provider.id) ? 'connected' : 'disconnected',
-    auth: 'api-key',
+    auth: signIn.has(provider.id) ? 'oauth' : 'api-key',
     needs: corsFree.has(provider.id) ? 'cors-free-transport' : null,
   }));
+}
+
+export type UsageReader = (token: string) => Promise<Budget | null>;
+
+async function budget(credentials: CredentialStore, usage: UsageReader) {
+  const credential = await credentials.read(ADOBE);
+  const key = credential?.type === 'api_key' ? credential.key : undefined;
+  const found = key ? await usage(key).catch(() => null) : null;
+  return found ? { provider: ADOBE, ...found } : null;
 }
 
 export async function createAgentSettings(
   models: MutableModels,
   credentials: CredentialStore,
-  providers = sliccProviders()
+  providers = sliccProviders(),
+  {
+    usage = (token) => adobeUsage(token),
+    every = BUDGET_EVERY,
+  }: { usage?: UsageReader; every?: number } = {}
 ): Promise<AgentSettings> {
-  const state = replicatedState<SettingsState>({
+  const snapshot = async (): Promise<SettingsState> => ({
     models: choices(models, providers),
     accounts: await accounts(credentials, providers),
+    budget: await budget(credentials, usage),
   });
+  const state = replicatedState<SettingsState>(await snapshot());
   const refresh = async (context: Context) => {
-    state.replace(context, {
-      models: choices(models, providers),
-      accounts: await accounts(credentials, providers),
-    });
+    state.replace(context, await snapshot());
   };
+  const signedIn = providers
+    .filter((provider) => signIn.has(provider.id))
+    .map((provider) => provider.id);
+  if (signedIn.length) {
+    void models
+      .refresh({ providers: signedIn })
+      .then(() => refresh(BACKGROUND_CONTEXT))
+      .catch(() => undefined);
+    const timer: unknown = setInterval(
+      () => void refresh(BACKGROUND_CONTEXT).catch(() => undefined),
+      every
+    );
+    (timer as { unref?: () => void }).unref?.();
+  }
   return {
     state,
     async connect(providerId, secret, region, context) {
@@ -90,7 +127,17 @@ export async function createAgentSettings(
         key: secret,
         ...(region ? { env: { AWS_REGION: region } } : {}),
       }));
+      if (signIn.has(providerId)) {
+        await models.refresh({ providers: [providerId] }).catch(() => undefined);
+      }
       await refresh(context);
+    },
+    async signIn(providerId) {
+      if (providerId !== ADOBE) return null;
+      const { clientId, scopes, imsEnvironment } = await adobeConfig(ADOBE_PROXY, (input, init) =>
+        globalThis.fetch(input, init)
+      );
+      return { clientId, scopes, imsEnvironment: imsEnvironment || 'prod' };
     },
     async disconnect(providerId, context) {
       await credentials.delete(providerId);
