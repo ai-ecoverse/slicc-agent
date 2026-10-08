@@ -156,7 +156,7 @@ gone /home/notes/old.md
 
 A **cone** is a top-level agent the user talks to; a **scoop** is a helper agent with its own conversation and its own folder, `/scoops/<handle>/`. The session document `slicc.agents` is the registry. The first cone's id is `cone`, later ones `cone-<n>`, counting up only. A scoop's id is `scoop:<handle>`, where the handle is its name made safe for a folder; a handle that is or was ever taken gets `-2`, `-3` and so on, so ids and folders are never reused. `AgentControl` adds `selectCone`, `createCone`, `createScoop`, `stopAgent`, `drop` (stop a scoop and keep its folder) and `unqueue(agentId, submissionId)`; `send` and `configure` take an `agentId`. Its errors are sentences the UI can show as they are, such as "A cone named harbor already exists." The transcript service adds `agents`, a summary of every cone and scoop, and `views`, one durable view per live agent, which the spectrum adapter shows in the agents rail (the header picker lists cones only). With spectrum ≥ 1.23.0 the rail drops scoops and the picker creates cones. A scoop created from the rail has a provisional id until the worker answers; the adapter then moves the selection, and sends, to the id the worker gave it.
 
-Each scoop is owned by a background durable task, its **anchor**, so Stop in its cone doesn't end it; `agent stop` does, and keeps its transcript and folder. Each request handed to a scoop gets a **reporter** task that waits for the run, writes the answer to `/scoops/<handle>/reports/<task id>.md` and reports it to whoever asked. Requests from a cone's or a scoop's bash report into that agent's `pi.inbox` as a lick, through the licks outbox, so they steer and coalesce like any lick; requests from a terminal report nowhere, and a user typing in a scoop's chat gets the answer there. In a scoop's chat, a request someone else sent shows who sent it (`UserMessage.from`): the asking cone's or scoop's name, or `terminal`. Once the request is placed, the reporter appends a `slicc.from` entry (`{ from, entry }`) without model messages, and the adapter sets `from` on that entry's message. A request withdrawn before it was placed leaves no entry. The report lick's text is `[scoop <name> (<role>) <status>]`, and its body has the report's path and line count and a 1,000-character preview. A scoop's prompt has a `scoop` section with its name, its cone, its folders and its limits; a cone's has a `subagent` section with the `agent` skill and up to 16 roles.
+Each scoop is owned by a background durable task, its **anchor**, so Stop in its cone doesn't end it; `agent stop` does, and keeps its transcript and folder. Each request handed to a scoop gets a **reporter** task that waits for the run, writes the answer to `/scoops/<handle>/reports/<task id>.md` and reports it to whoever asked. Requests from a cone's or a scoop's bash report into that agent's `pi.inbox` as a lick, through the licks outbox, so they steer and coalesce like any lick; requests from a terminal report nowhere, and a user typing in a scoop's chat gets the answer there. In a scoop's chat, a request someone else sent shows who sent it (`UserMessage.from`): the asking cone's or scoop's name, or `terminal`. Once the request is placed, the reporter appends a `slicc.from` entry (`{ from, entry }`) without model messages, and the adapter sets `from` on that entry's message. A request withdrawn before it was placed leaves no entry. The report lick's text is `[scoop <name> (<role>) <status>]`, and its body has the report's path and line count and a 1,000-character preview. A scoop's prompt has a `scoop` section with its name, its cone, its folders and its limits. The `agent` command is taught by the built-in `agent` skill (below), whose description says that roles exist and that `agent list --agents` lists them.
 
 **The `agent` command.** One bash script is installed as `agent` and `subagent` in `$PNPM_HOME/bin`, so the user, a cone or a scoop runs it in any bash. It writes a request (NUL-separated fields: `slicc-agent/1`, the name it was called by, `$SLICC_AGENT`, the working directory, its pid, argc, the arguments and stdin) to `/var/lib/slicc/agent/requests/in/` and polls `out/` for the answer and exit code; the worker writes `<id>.ack` when it picks a request up, and the script gives up after 20 s without one ("the SLICC agent isn't running", exit 1). The kernel environment exports `SLICC_AGENT`, `PI_PROVIDER`, `PI_MODEL` and `PI_REASONING_LEVEL` into every agent command, so the worker knows the caller. `/var/lib/slicc/agent/scoops/<handle>/metadata.json` mirrors each scoop's state for scripts.
 - `agent [options] --prompt <text>` (or `--file <path>`, or `-` for stdin, or v6's `agent <cwd> <allowed-commands> <prompt>`) is **synchronous**: an ephemeral scoop runs, and the command prints its final answer and exits 0, or prints the reason on stderr and exits 1. Afterwards the scoop is stopped, its folder removed, its conversation marked dropped and its transcript archived as Markdown in `/tmp/agent-sessions/<handle>.md` (`/home/sessions/` with `--persist-session`, nowhere with `--no-persist-session`). The script traps TERM, INT and HUP and cancels the scoop, and the worker checks the script's pid in the kernel's process table every second for a SIGKILL. If the caller's run is still going when the bash call dies (a bash timeout), the scoop continues and its answer arrives as a `bash` lick; `--background-after <seconds>` does the same on purpose. Sync calls nest up to three deep. Allowed commands in v6's form are told to the scoop, not enforced.
@@ -168,6 +168,51 @@ Each scoop is owned by a background durable task, its **anchor**, so Stop in its
 **Isolation, for now.** The file tools of a scoop write only under its folder and `/tmp`, plus the cwd of a v6-form call, and read those, their cone's working folder (`/home` by default) and `--read-only` paths; paths are normalized, `..` included, before the check. bash isn't confined, and the scoop is told so: the guard is a guardrail, not a boundary. Every process group a scoop starts is recorded, and stopping the scoop signals them all.
 
 **Rewind.** Dropping a turn never waits for scoops. Scoops the dropped turn created are stopped and marked gone; requests it handed to older scoops are aborted and their reports withdrawn; scoops it stopped come back idle. The `slicc.rewound` entry lists them, and its notice says "Stopped scoop X. Restored scoop Y."
+
+### Skills and prompt templates
+
+Skills and prompt templates work as in pi's coding-agent. pi's loaders read with Node's `fs` and come with its whole CLI, so they're ported here over the kernel environment, keeping pi's rules and prompt text word for word.
+
+**Skills** follow the [Agent Skills specification](https://agentskills.io/specification):
+- **The format.** A skill is a folder with a `SKILL.md`, whose frontmatter has a `name` (lowercase letters, digits and single hyphens, at most 64 characters; the folder name if missing) and a required `description` (at most 1,024 characters). `disable-model-invocation: true` hides a skill from the model. `license`, `compatibility`, `metadata` and `allowed-tools` are accepted, and `allowed-tools` restricts nothing.
+- **Where skills are found.** These roots are scanned in this order:
+  1. `~/.pi/agent/skills`;
+  2. `~/.agents/skills`;
+  3. `/workspace/skills`, read-only, for skills copied from SLICC v6;
+  4. packages in the kernel's `/node_modules` whose `package.json` lists folders in `pi.skills`;
+  5. the built-ins, which the worker writes to `/var/lib/slicc/agent/skills` on every start.
+
+  On a name collision the first skill found wins.
+- **Inside a root.** Folders with `SKILL.md` are found at any depth, and a `SKILL.md` ends its branch. A `.md` file with a description directly in a root counts too. Folders starting with `.` and `node_modules` are skipped. Symbolic links are followed, but each folder is read once by its real path, so a link back up a tree can't loop. Scoops may `read` the folders of the loaded skills, even outside their own folders.
+- **Problems.** A problem (a missing description, a bad name, a collision, a line the frontmatter parser can't read) becomes one lick with `severity="warn"` per distinct problem. A skill without a description is skipped; any other problem only warns.
+- **Untrusted folders.** A project's `.pi/skills` and `.agents/skills` are read only in trusted folders, which come with PR 21.
+
+The worker watches the roots and reloads on change. A `skills` prompt section, given to cones and scoops, lists every skill's name, description and location in pi's `<available_skills>` block, and the model reads a `SKILL.md` with the `read` tool when a task matches.
+
+**Prompt templates.**
+- **Where they come from.** Each is a Markdown file directly in `~/.pi/agent/prompts`, in a package's `pi.prompts` (a file, a folder or `folder/*.md`), or one of the built-ins in `/var/lib/slicc/agent/prompts`. Its name is the file name.
+- **Frontmatter.** `description` (otherwise the first line) and `argument-hint`.
+- **Substitutions.** `$1`, `$@`, `$ARGUMENTS`, `${1:-default}`, `${@:-default}`, `${@:N}` and `${@:N:L}`, with shell-like quoting of the arguments.
+
+**Commands.**
+- **How they expand.** `AgentControl.send` expands `/skill:<name> [request]` (the skill's body in a `<skill name location>` block, then the request) and `/<template> [arguments]`, exactly as pi does. Only text sent from a composer is expanded: licks and `agent send` never are.
+- **What the composer shows.** The transcript service's `commands` lists templates (`kind: 'prompt'`) and skills (`skill:<name>`, `kind: 'skill'`), and the spectrum adapter returns them from `AgentPort.commands()`.
+
+**Built-ins.**
+- **Skills:**
+  - `agent`: the `agent` and `subagent` commands;
+  - `licks`: schedules, watches and webhooks as files in `~/.slicc`, replacing v6's `automation`;
+  - `skill-authoring`: writing skills and templates for SLICC.
+- **Templates:** `/parallel-review` and `/review-loop`, from [pi-subagents](https://github.com/nicobailon/pi-subagents) (MIT). Their wording is kept, and they're rewritten to use `agent --async --agent reviewer|worker`, `agent wait --notify`, `agent send` and `agent stop` instead of pi-subagents' `subagent` tool. The parts that need workflow scripts or forked contexts are left out.
+
+**v6 skills.** None of the 29 skills SLICC v6 ships runs here unchanged. They name v6 paths (`/shared`, `/workspace`) or commands this kernel doesn't have. By what they wait for:
+- **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`) and `skill-authoring`. `sprinkles` and `welcome` follow with sprinkles in PR 13c.
+- **Memory (PR 14):** `memory`, `gelatiere`, `wiki` (needs its `wiki` CLI).
+- **The freezer (PR 15):** `transcript-export`.
+- **The tray hub, upskill or the Install/Update panel:** `upgrade` (`upgrade apply`, bios#70), `handoff`, `slicc`, `ssh`, `cherry`.
+- **A browser and CDP:** `playwright-cli`, `computer`, `v86`.
+- **v6's JS realm, `.jsh` and `ipk` (slicc-kernel#68):** `jshd`, `mcp`, `workflows`, `package-execution`, `biome`, `ffmpeg`.
+- **Commands the kernel doesn't have:** `mount`, `theme`, `dips`, `image-processing` (ImageMagick), `dns` (`dig`), `meminfo`, `x-search` (xAI credentials).
 
 ## Patched dependencies
 

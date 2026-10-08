@@ -254,7 +254,11 @@ export function findRole(roles: readonly Role[], name: string): Role | undefined
   );
 }
 
-async function manifestDirs(files: RoleFiles, root: string, context: Context): Promise<string[]> {
+export async function manifestDirs(
+  files: RoleFiles,
+  root: string,
+  context: Context
+): Promise<string[]> {
   const top = await files.listDir(root, context);
   if (!top.ok) return [];
   const out: string[] = [];

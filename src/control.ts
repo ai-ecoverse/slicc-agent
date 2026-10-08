@@ -18,6 +18,7 @@ import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
 import type { AgentControl, Created, OperationError, SendResponse } from './services.ts';
+import type { SkillsRuntime } from './skills/index.ts';
 
 export interface HostLicks {
   licks: Licks;
@@ -100,7 +101,8 @@ export function createAgentControl(
   target: Conversation | Cones,
   deliveries?: Deliveries,
   licks?: HostLicks,
-  scoops?: HostScoops
+  scoops?: HostScoops,
+  skills?: Pick<SkillsRuntime, 'expand'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -129,11 +131,12 @@ export function createAgentControl(
   return {
     send(request, context) {
       return serial(async () => {
+        const text = skills ? await skills.expand(request.text, context) : request.text;
         const response = await accepted(async () =>
           (await conversationFor(request.agentId, context)).submit(
             {
               type: 'input',
-              content: request.text,
+              content: text,
               whenBusy: request.whenBusy,
               ...(request.requestId ? { requestId: request.requestId } : {}),
             },

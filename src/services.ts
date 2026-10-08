@@ -101,6 +101,13 @@ export interface AgentTranscript {
   readonly deliveries: ReplicatedState<Record<string, Delivered>>;
   readonly agents: ReplicatedState<AgentsSummary>;
   readonly views: ReplicatedState<Record<string, ConversationView>>;
+  readonly commands: ReplicatedState<Command[]>;
+}
+
+export interface Command {
+  name: string;
+  description: string;
+  kind: 'prompt' | 'skill';
 }
 
 export const AgentTranscript = defineService<AgentTranscript>('slicc.agent.transcript');

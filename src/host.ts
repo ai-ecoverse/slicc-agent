@@ -24,7 +24,9 @@ import {
   AgentSessions,
   AgentSettings,
   AgentTranscript,
+  type Command,
 } from './services.ts';
+import type { SkillsRuntime } from './skills/index.ts';
 import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
 
@@ -111,6 +113,7 @@ export async function hostAgent(
     settings?: AgentSettings;
     licks?: HostLicks;
     scoops?: HostScoops;
+    skills?: SkillsRuntime;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -126,13 +129,21 @@ export async function hostAgent(
   const deliveries = trackDeliveries(agent.harness, state, context);
   provider.provide(
     AgentControl,
-    createAgentControl(agent.harness, agent, deliveries, options.licks, options.scoops)
+    createAgentControl(
+      agent.harness,
+      agent,
+      deliveries,
+      options.licks,
+      options.scoops,
+      options.skills
+    )
   );
   provider.provide(AgentTranscript, {
     state,
     deliveries: deliveries.state,
     agents: mounted.agents,
     views: mounted.views,
+    commands: options.skills?.commands ?? replicatedState<Command[]>([]),
   });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
@@ -156,6 +167,7 @@ export async function hostAgent(
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();
+      await options.skills?.close(context);
       await options.scoops?.runtime.close(context);
       await options.licks?.sources.close(context);
       await agent.close();

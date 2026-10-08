@@ -45,6 +45,8 @@ test('a terminal runs agent through the production worker: a sync call, an async
     const spawned = await run('subagent spawn --name helper --prompt "Work on it"');
     const waited = await run('agent wait helper --timeout 20');
     const listed = await run('agent list');
+    const skills = await run('ls /var/lib/slicc/agent/skills /var/lib/slicc/agent/prompts');
+    const commands = connection.commands.value.map((command) => `${command.kind}:${command.name}`);
     await owner.release();
     return {
       sync,
@@ -52,6 +54,8 @@ test('a terminal runs agent through the production worker: a sync call, an async
       spawned,
       waited,
       listed,
+      skills,
+      commands,
     };
   });
   assert.deepEqual(seen.sync, { code: 0, out: 'From the sync scoop.\n' });
@@ -63,4 +67,8 @@ test('a terminal runs agent through the production worker: a sync call, an async
   assert.equal(seen.waited.code, 0);
   assert.match(seen.waited.out, /From the async scoop\./);
   assert.match(seen.listed.out, /^helper\t/m);
+  assert.match(seen.skills.out, /agent\n/);
+  assert.match(seen.skills.out, /review-loop\.md/);
+  assert.ok(seen.commands.includes('prompt:parallel-review'));
+  assert.ok(seen.commands.includes('skill:skill:licks'));
 });

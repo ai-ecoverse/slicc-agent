@@ -27,45 +27,92 @@ function scalar(raw: string): FrontmatterValue {
   return unquote(value);
 }
 
+type Block = { key: string; folded: boolean; strip: boolean; lines: string[] };
+
+const BLOCK = /^([|>])([+-]?)$/;
+
+function blockValue(block: Block): string {
+  const indents = block.lines
+    .filter((line) => line.trim())
+    .map((line) => (/^\s*/.exec(line) as RegExpExecArray)[0].length);
+  const indent = indents.length ? Math.min(...indents) : 0;
+  const lines = block.lines.map((line) => line.slice(indent));
+  while (lines.length && !lines.at(-1)?.trim()) lines.pop();
+  const text = block.folded
+    ? lines.reduce(
+        (out, line) =>
+          !line.trim()
+            ? `${out}\n`
+            : out && !out.endsWith('\n')
+              ? `${out} ${line}`
+              : `${out}${line}`,
+        ''
+      )
+    : lines.join('\n');
+  return block.strip || !text ? text : `${text}\n`;
+}
+
+type State = {
+  fields: Record<string, FrontmatterValue>;
+  problems: string[];
+  nested: Set<string>;
+  list: string | undefined;
+  block: Block | undefined;
+};
+
+function pair(state: State, line: string): void {
+  const found = /^([A-Za-z][\w-]*):(?:\s+(.*))?$/.exec(line);
+  state.list = undefined;
+  if (!found) {
+    state.problems.push(`can't read the line "${line.trim()}"`);
+    return;
+  }
+  const key = found[1] as string;
+  const value = found[2]?.trim() ?? '';
+  const style = BLOCK.exec(value);
+  if (style) state.block = { key, folded: style[1] === '>', strip: style[2] === '-', lines: [] };
+  else if (value === '') {
+    state.fields[key] = [];
+    state.list = key;
+  } else state.fields[key] = scalar(value);
+}
+
+function line(state: State, text: string): void {
+  const { block, list } = state;
+  if (block && (!text.trim() || /^\s/.test(text))) {
+    block.lines.push(text);
+    return;
+  }
+  if (block) state.fields[block.key] = blockValue(block);
+  state.block = undefined;
+  if (!text.trim() || text.trimStart().startsWith('#')) return;
+  const item = /^\s+-\s+(.*)$/.exec(text);
+  if (item && list) (state.fields[list] as string[]).push(unquote((item[1] as string).trim()));
+  else if (/^\s/.test(text) && list) state.nested.add(list);
+  else pair(state, text);
+}
+
 export function parseFrontmatter(text: string): Frontmatter {
   const normalized = text.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized);
   if (!match)
     return { fields: {}, body: normalized.trim(), problems: ['no frontmatter between --- lines'] };
-  const fields: Record<string, FrontmatterValue> = {};
-  const problems: string[] = [];
-  let list: string | undefined;
-  const nested = new Set<string>();
-  for (const line of (match[1] as string).split('\n')) {
-    if (!line.trim() || line.trimStart().startsWith('#')) continue;
-    const item = /^\s+-\s+(.*)$/.exec(line);
-    if (item && list) {
-      (fields[list] as string[]).push(unquote((item[1] as string).trim()));
-      continue;
-    }
-    if (/^\s/.test(line) && list) {
-      nested.add(list);
-      continue;
-    }
-    const pair = /^([A-Za-z][\w-]*):(?:\s+(.*))?$/.exec(line);
-    if (!pair) {
-      problems.push(`can't read the line "${line.trim()}"`);
-      list = undefined;
-      continue;
-    }
-    const key = pair[1] as string;
-    const value = pair[2]?.trim() ?? '';
-    if (value === '') {
-      fields[key] = [];
-      list = key;
-    } else {
-      fields[key] = scalar(value);
-      list = undefined;
-    }
+  const state: State = {
+    fields: {},
+    problems: [],
+    nested: new Set(),
+    list: undefined,
+    block: undefined,
+  };
+  for (const text of (match[1] as string).split('\n')) line(state, text);
+  if (state.block) state.fields[state.block.key] = blockValue(state.block);
+  for (const key of state.nested) {
+    delete state.fields[key];
+    state.problems.push(`"${key}" has nested values, which SLICC doesn't read`);
   }
-  for (const key of nested) {
-    delete fields[key];
-    problems.push(`"${key}" has nested values, which SLICC doesn't read`);
-  }
-  return { fields, body: normalized.slice(match[0].length).trim(), problems };
+  return {
+    fields: state.fields,
+    body: normalized.slice(match[0].length).trim(),
+    problems: state.problems,
+  };
 }

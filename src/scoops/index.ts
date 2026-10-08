@@ -26,7 +26,7 @@ export function packageAssets(base: URL = new URL('../../', import.meta.url)): A
 export interface AttachOptions {
   harness: Harness;
   agents: Agents;
-  groups?: ProcessGroups;
+  groups: ProcessGroups;
   env: ExecutionEnv;
   home: string;
   assets?: Assets;
@@ -34,6 +34,7 @@ export interface AttachOptions {
   controlDir?: string;
   sweepEvery?: number;
   alive?: (pid: number) => Promise<boolean>;
+  reads: () => readonly string[];
 }
 
 export interface ScoopsRuntime {
@@ -92,15 +93,21 @@ export function setupScoops(
   const tasks = scoopTasks(lookup);
   const scoops = createScoops(host, () => tasks);
   let cached: Roles = { roles: [], warnings: [], limits: { ...DEFAULT_LIMITS } };
-  let skill = '';
-  registry.install(scoopsExtension(tasks, { roles: () => cached.roles, skill: () => skill }));
+  registry.install(scoopsExtension(tasks));
   registry.install(guardExtension(lookup, fileTools));
   return {
     scoops,
     async attach(options, context) {
       const { harness, agents, groups, env, home } = options;
       const assets = options.assets ?? packageAssets();
-      bind({ harness, agents, licks, tools: fileTools, ...(groups ? { groups } : {}) });
+      bind({
+        harness,
+        agents,
+        licks,
+        tools: fileTools,
+        groups,
+        reads: options.reads,
+      });
       const builtin = async () => {
         const out: { path: string; text: string }[] = [];
         for (const name of BUILTIN_ROLES) {
@@ -127,9 +134,6 @@ export function setupScoops(
         );
         return cached;
       };
-      skill = (await assets('packages/vfs-root/skills/agent/SKILL.md').catch(() => ''))
-        .replace(/^---[\s\S]*?---\n/, '')
-        .trim();
       await roles(context).catch(() => cached);
       const script = await assets('bin/agent').catch(() => undefined);
       if (script)

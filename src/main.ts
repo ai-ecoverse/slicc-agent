@@ -14,13 +14,14 @@ import { setupLicks } from './licks/index.ts';
 import { type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { identity } from './scoops/identity.ts';
-import { type Assets, setupScoops } from './scoops/index.ts';
+import { type Assets, packageAssets, setupScoops } from './scoops/index.ts';
 import {
   createAgentSettings,
   createSliccModels,
   DEFAULT_MODEL,
   sliccProviders,
 } from './settings.ts';
+import { RELOAD_MS, setupSkills } from './skills/index.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
 import { agentVersion, commandsOnPath, kernelBoot, transportName } from './system.ts';
 import { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
@@ -63,6 +64,7 @@ async function start(
   registry.install(sliccPrompt(facts));
   const licks = setupLicks(registry);
   const scoops = setupScoops(registry, licks.licks, CodingTools.tools);
+  const skills = setupSkills(registry, licks.licks);
   const activity = createActivity();
   const groups = processGroups(client);
   const model = options.model ?? DEFAULT_MODEL;
@@ -87,6 +89,10 @@ async function start(
     { version: facts.version, boot: await kernelBoot(client) },
     BACKGROUND_CONTEXT
   );
+  const skillsRuntime = await skills.attach(
+    { env: home, home: HOME, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
+    BACKGROUND_CONTEXT
+  );
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -95,6 +101,7 @@ async function start(
       env: home,
       home: HOME,
       alive: alive(client),
+      reads: skillsRuntime.dirs,
       ...(options.assets ? { assets: options.assets } : {}),
     },
     BACKGROUND_CONTEXT
@@ -103,6 +110,7 @@ async function start(
     settings: await createAgentSettings(models, credentials, providers),
     licks: { licks: licks.licks, sources },
     scoops: { scoops: scoops.scoops, runtime },
+    skills: skillsRuntime,
   });
 }
 
