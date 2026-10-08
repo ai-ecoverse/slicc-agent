@@ -1,4 +1,5 @@
 import type { Context, JsonValue } from '@earendil-works/chord';
+import { withAbortSignal } from '@earendil-works/chord/context';
 import { Type } from '@earendil-works/pi-ai';
 import { validateToolArguments } from '@earendil-works/pi-ai/utils/validation';
 import {
@@ -239,7 +240,8 @@ export function codemodeTool(options: CodemodeOptions): ToolRegistration {
       let count = 0;
       const tools: CodemodeTool[] = callable.map((tool) => ({
         ...scriptTool(tool),
-        execute: (args) => callNested(tool, args, api, context, `${api.callId}:${++count}`),
+        execute: (args, { signal }) =>
+          callNested(tool, args, api, withAbortSignal(signal, context), `${api.callId}:${++count}`),
       }));
       const saved = await api.snapshot(CodemodeDoc, api.conversationId, context);
       const sandbox = options.sandbox({
@@ -282,8 +284,8 @@ export function codemodeTool(options: CodemodeOptions): ToolRegistration {
   }) as ToolRegistration;
 }
 
-export function codemodeExtension(options: CodemodeOptions): Extension {
-  return defineExtension({ name: 'slicc-codemode', tools: [codemodeTool(options)] });
+export function codemodeExtension(tools: readonly ToolRegistration[]): Extension {
+  return defineExtension({ name: 'slicc-codemode', tools });
 }
 
 export function disabledBySettings(text: string | undefined): boolean {

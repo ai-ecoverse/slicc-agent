@@ -11,6 +11,7 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { type Agent, openAgent } from './agent.ts';
 import {
   codemodeExtension,
+  codemodeTool,
   disabledBySettings,
   locateWasm,
   sandboxFactory,
@@ -78,18 +79,23 @@ async function start(
   const settings = await client.fs
     .readFile(`${HOME}/.pi/agent/settings.json`)
     .catch(() => undefined);
-  if (!disabledBySettings(settings === undefined ? undefined : new TextDecoder().decode(settings)))
-    registry.install(
-      codemodeExtension({
-        declared: CodingTools.tools as readonly ToolRegistration[],
-        sandbox: sandboxFactory(
-          options.codemodeWasm ?? (() => locateWasm(native, new URL(import.meta.url))),
-          options.codemodeWorker
-        ),
-      })
-    );
+  const coding = CodingTools.tools as readonly ToolRegistration[];
+  const codemode = disabledBySettings(
+    settings === undefined ? undefined : new TextDecoder().decode(settings)
+  )
+    ? []
+    : [
+        codemodeTool({
+          declared: coding,
+          sandbox: sandboxFactory(
+            options.codemodeWasm ?? (() => locateWasm(native, new URL(import.meta.url))),
+            options.codemodeWorker
+          ),
+        }),
+      ];
+  registry.install(codemodeExtension(codemode));
   const licks = setupLicks(registry);
-  const scoops = setupScoops(registry, licks.licks, CodingTools.tools);
+  const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode]);
   const skills = setupSkills(registry, licks.licks);
   const activity = createActivity();
   const groups = processGroups(client);
