@@ -15,7 +15,7 @@ import {
   SessionNotFoundError,
 } from '@earendil-works/pi-server';
 import type { Agent } from './agent.ts';
-import { createAgentControl } from './control.ts';
+import { createAgentControl, type HostLicks } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
 import { PortListener } from './listener.ts';
 import {
@@ -104,7 +104,12 @@ async function follow(agent: Agent, context: Context) {
 
 export async function hostAgent(
   agent: Agent,
-  options: { serverId?: string; context?: Context; settings?: AgentSettings } = {}
+  options: {
+    serverId?: string;
+    context?: Context;
+    settings?: AgentSettings;
+    licks?: HostLicks;
+  } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const serverId = options.serverId ?? crypto.randomUUID();
@@ -116,7 +121,10 @@ export async function hostAgent(
     { service: AgentSettings, mode: 'singleton' },
   ]);
   const deliveries = trackDeliveries(agent.harness, state, context);
-  provider.provide(AgentControl, createAgentControl(agent.harness, agent, deliveries));
+  provider.provide(
+    AgentControl,
+    createAgentControl(agent.harness, agent, deliveries, options.licks)
+  );
   provider.provide(AgentTranscript, { state, deliveries: deliveries.state });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
@@ -139,6 +147,7 @@ export async function hostAgent(
       provider.dispose();
       deliveries.dispose();
       transcript.dispose();
+      await options.licks?.sources.close(context);
       await agent.close();
     },
   };

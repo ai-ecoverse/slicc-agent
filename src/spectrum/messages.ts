@@ -2,6 +2,7 @@ import type {
   AssistantMessage,
   AssistantStatus,
   ErrorAction,
+  LickMessage,
   Message,
   MessagePart,
   SystemMessage,
@@ -11,6 +12,8 @@ import type {
   UserMessage,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
+import { parseLick } from '../licks/lick.ts';
+import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import type { Delivered } from '../services.ts';
 
 type Json = Record<string, unknown>;
@@ -249,6 +252,32 @@ function user(id: string, message: ModelMessage, delivered: Delivered | undefine
   };
 }
 
+function lickMessage(
+  id: string,
+  entry: EntryRecord,
+  decisions: ReadonlyMap<string, LickDecision>
+): LickMessage | undefined {
+  const lick = entryLick(entry);
+  if (!lick) return undefined;
+  const state = lick.actions?.length ? (decisions.get(lick.id) ?? 'pending') : undefined;
+  return {
+    id,
+    role: 'lick',
+    channel: lick.channel,
+    title: lick.title,
+    text: lick.text,
+    createdAt: lick.at,
+    ...(lick.body ? { body: lick.body } : {}),
+    ...(lick.count > 1 ? { count: lick.count } : {}),
+    ...(state ? { state } : {}),
+  };
+}
+
+function withoutLickTools(message: AssistantMessage): AssistantMessage {
+  const parts = message.parts.filter((item) => item.type !== 'tool' || !LICK_TOOLS[item.tool.name]);
+  return parts.length === message.parts.length ? message : { ...message, parts };
+}
+
 function system(id: string, entry: EntryRecord, text: string): SystemMessage {
   const reason = (entry.data as Json | undefined)?.reason as SystemMessage['trigger'] | undefined;
   return {
@@ -295,15 +324,17 @@ function entryMessage(
   entry: EntryRecord,
   out: Message[],
   calls: Map<string, ToolCall>,
-  delivered: Delivered | undefined
+  delivered: Delivered | undefined,
+  decisions: ReadonlyMap<string, LickDecision>
 ): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
   if (entry.kind === 'slicc.rewound') out.push(rewound(id));
-  else if (entry.kind === 'pi.user' && model) out.push(user(id, model, delivered));
+  else if (entry.kind === 'pi.user' && model)
+    out.push(lickMessage(id, entry, decisions) ?? user(id, model, delivered));
   else if (entry.kind === 'pi.assistant' && model) {
     const message = assistant(id, model);
-    out.push(message);
+    out.push(withoutLickTools(message));
     for (const [key, value] of tools([message])) calls.set(key, value);
   } else if (entry.kind === 'pi.tool-result' && model) settle(calls, model);
   else if (entry.kind === 'pi.compaction') out.push(system(id, entry, textOf(model?.content)));
@@ -355,10 +386,11 @@ export function toMessages(
   const out: Message[] = [];
   if (!view) return out;
   const calls = new Map<string, ToolCall>();
+  const decisions = lickDecisions(view.entries);
   let previous: EntryRecord | undefined;
   for (const entry of view.entries) {
     const steered = previous?.kind === 'pi.tool-result' ? 'steer' : undefined;
-    entryMessage(entry, out, calls, deliveries[String(entry.id)] ?? steered);
+    entryMessage(entry, out, calls, deliveries[String(entry.id)] ?? steered, decisions);
     previous = entry;
   }
   live(view, out, calls);
@@ -376,7 +408,7 @@ export function queued(view: ConversationView | undefined): UserMessage[] {
     content?: ModelMessage['content'];
   }[];
   return items
-    .filter((item) => item.mode !== 'write')
+    .filter((item) => item.mode !== 'write' && !parseLick(textOf(item.content)))
     .map((item) => ({
       id: `q${item.id}`,
       role: 'user',

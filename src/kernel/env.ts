@@ -16,6 +16,7 @@ import {
   type WatchChange,
   type WatchTarget,
 } from '@earendil-works/pi-durable/env';
+import type { Activity } from './activity.ts';
 import type { KernelClient } from './client.ts';
 import { execute } from './exec.ts';
 import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from './files.ts';
@@ -26,6 +27,7 @@ export interface KernelEnvOptions {
   cwd: string;
   id?: string;
   watch?: PollOptions;
+  activity?: Activity;
 }
 
 type FileResult<T> = Promise<Result<T, FileError>>;
@@ -36,16 +38,24 @@ export class SliccKernelEnv implements ExecutionEnv {
   readonly #client: KernelClient;
   readonly #watchers = new Set<FileWatcher>();
   readonly #poll: PollOptions;
+  readonly #activity: Activity | undefined;
 
   constructor(client: KernelClient, options: KernelEnvOptions) {
     this.#client = client;
     this.cwd = options.cwd;
     this.id = options.id ?? 'slicc-kernel';
     this.#poll = options.watch ?? {};
+    this.#activity = options.activity;
   }
 
   #path(path: string): string {
     return resolve(this.cwd, path);
+  }
+
+  #written(path: string): string {
+    const resolved = this.#path(path);
+    this.#activity?.wrote(resolved);
+    return resolved;
   }
 
   get #fs() {
@@ -114,7 +124,7 @@ export class SliccKernelEnv implements ExecutionEnv {
   }
 
   writeFile(path: string, content: string | Uint8Array, context: Context): FileResult<void> {
-    const resolved = this.#path(path);
+    const resolved = this.#written(path);
     return attempt(context, resolved, async () => {
       await this.#fs.mkdir(dirname(resolved));
       await this.#fs.writeFile(resolved, content);
@@ -122,7 +132,7 @@ export class SliccKernelEnv implements ExecutionEnv {
   }
 
   appendFile(path: string, content: string | Uint8Array, context: Context): FileResult<void> {
-    const resolved = this.#path(path);
+    const resolved = this.#written(path);
     return attempt(context, resolved, async () => {
       const before = (await this.#fs.exists(resolved))
         ? await this.#fs.readFile(resolved)
@@ -137,7 +147,7 @@ export class SliccKernelEnv implements ExecutionEnv {
   }
 
   truncateFile(path: string, size: number, context: Context): FileResult<void> {
-    const resolved = this.#path(path);
+    const resolved = this.#written(path);
     if (!Number.isSafeInteger(size) || size < 0) {
       return Promise.resolve(
         err(new FileError('invalid', 'File size must be a non-negative integer', resolved))
@@ -160,8 +170,8 @@ export class SliccKernelEnv implements ExecutionEnv {
   }
 
   renameFile(sourcePath: string, destinationPath: string, context: Context): FileResult<void> {
-    const source = this.#path(sourcePath);
-    return attempt(context, source, () => this.#fs.rename(source, this.#path(destinationPath)));
+    const source = this.#written(sourcePath);
+    return attempt(context, source, () => this.#fs.rename(source, this.#written(destinationPath)));
   }
 
   fileInfo(path: string, context: Context): FileResult<FileInfo> {
@@ -219,7 +229,7 @@ export class SliccKernelEnv implements ExecutionEnv {
     _options: { recursive?: boolean } | undefined,
     context: Context
   ): FileResult<void> {
-    const resolved = this.#path(path);
+    const resolved = this.#written(path);
     return attempt(context, resolved, () => this.#fs.mkdir(resolved));
   }
 
@@ -228,7 +238,7 @@ export class SliccKernelEnv implements ExecutionEnv {
     options: { recursive?: boolean; force?: boolean } | undefined,
     context: Context
   ): FileResult<void> {
-    const resolved = this.#path(path);
+    const resolved = this.#written(path);
     return attempt(context, resolved, async () => {
       if (!options?.recursive) {
         const stat = await this.#fs.lstat(resolved).catch((error: unknown) => {
@@ -267,7 +277,8 @@ export class SliccKernelEnv implements ExecutionEnv {
     options: ShellExecOptions | undefined,
     context: Context
   ): Promise<Result<ShellExecResult, ExecutionError>> {
-    return execute(this.#client, this.cwd, command, options, context);
+    const ended = this.#activity?.began();
+    return execute(this.#client, this.cwd, command, options, context).finally(ended);
   }
 
   async cleanup(context: Context): Promise<void> {

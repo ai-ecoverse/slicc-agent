@@ -60,3 +60,19 @@ export function systemSection(facts: SystemFacts): string {
     `Not here yet: ${[...missing, 'a browser or CDP tool', 'GitHub credentials'].join(', ')}.`,
   ].join('\n');
 }
+
+export async function kernelBoot(client: KernelClient): Promise<string | null> {
+  const decoder = new TextDecoder();
+  let out = '';
+  try {
+    const process = await client.spawn(['cat', '/proc/stat'], {
+      onStdout: (bytes) => {
+        out += decoder.decode(bytes, { stream: true });
+      },
+    });
+    await process.exited;
+  } catch {
+    return null;
+  }
+  return /^btime (\d+)$/m.exec(out)?.[1] ?? null;
+}
