@@ -64,6 +64,7 @@ export function configLick(error: ConfigError, home: string): LickEvent {
     text,
     body: 'Ignored until the file is fixed.\nThe formats are in the slicc-agent README.',
     target: 'cone',
+    severity: 'error',
     eventId: hash(`${file}\n${text}`),
   };
 }

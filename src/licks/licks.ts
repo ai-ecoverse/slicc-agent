@@ -10,6 +10,7 @@ import {
   type Lick,
   type LickAction,
   type LickChannel,
+  type LickSeverity,
   type LickTarget,
   lickId,
 } from './lick.ts';
@@ -25,6 +26,7 @@ export interface LickEvent {
   count?: number;
   target: LickTarget;
   coalesce?: boolean;
+  severity?: LickSeverity;
   eventId?: string;
   at?: number;
 }
@@ -110,6 +112,24 @@ function merge(pending: Pending, event: LickEvent, now: number): Pending {
     },
     items,
     body: event.body ?? pending.body,
+  };
+}
+
+function fresh(event: LickEvent, now: number, listed: LickAction[] | undefined): Pending {
+  return {
+    lick: {
+      id: lickId(),
+      channel: event.channel,
+      source: event.source,
+      title: event.title,
+      text: event.text,
+      count: event.count ?? 1,
+      at: now,
+      ...(listed ? { actions: listed } : {}),
+      ...(event.severity ? { severity: event.severity } : {}),
+    },
+    items: [...new Set(event.items ?? [])],
+    body: event.body ?? null,
   };
 }
 
@@ -216,23 +236,9 @@ export function createLicks(host: Promise<LicksHost>): Licks {
             doc.events[stream] = [...seen, event.eventId].slice(-MAX_EVENTS);
           }
           const queue = doc.queues[key] ?? { submission: null, pending: null };
-          const listed = actions(event.channel);
           queue.pending = queue.pending
             ? merge(queue.pending, event, now)
-            : {
-                lick: {
-                  id: lickId(),
-                  channel: event.channel,
-                  source: event.source,
-                  title: event.title,
-                  text: event.text,
-                  count: event.count ?? 1,
-                  at: now,
-                  ...(listed ? { actions: listed } : {}),
-                },
-                items: [...new Set(event.items ?? [])],
-                body: event.body ?? null,
-              };
+            : fresh(event, now, actions(event.channel));
           doc.queues[key] = queue;
           return true;
         }, context);
