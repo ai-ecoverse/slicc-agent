@@ -9,6 +9,7 @@ const options = {
     ['/bin/', 'bin/'],
     ['/packages/', 'packages/'],
     ['/node_modules/@ai-ecoverse/', 'node_modules/@ai-ecoverse/'],
+    ['/node_modules/quickjs-wasi/', 'node_modules/quickjs-wasi/'],
     ['/', 'test/integration/page/'],
   ],
   isolated: true,

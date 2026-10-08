@@ -214,13 +214,35 @@ The worker watches the roots and reloads on change. A `skills` prompt section, g
 - **v6's JS realm, `.jsh` and `ipk` (slicc-kernel#68):** `jshd`, `mcp`, `workflows`, `package-execution`, `biome`, `ffmpeg`.
 - **Commands the kernel doesn't have:** `mount`, `theme`, `dips`, `image-processing` (ImageMagick), `dns` (`dig`), `meminfo`, `x-search` (xAI credentials).
 
+### Codemode
+
+The model can write a short JavaScript program that calls its tools, with the `codemode` tool from pi's [`@earendil-works/pi-codemode`](https://www.npmjs.com/package/@earendil-works/pi-codemode). Only the script's output reaches the model, so a script can run tool calls in a loop or in parallel and filter large results first. Codemode is separate from v6's `.jsh` and the node shim: it has no Node APIs, file system, network or timers, only the agent's tools.
+
+**On by default.** Cones and scoops get `codemode` next to their other tools, which stay declared as before (pi's `codemode.mode: on`). `"defaultTools": ["-codemode"]` in `~/.pi/agent/settings.json` turns it off. The setting is read when the worker starts.
+
+**The tool** follows coding-agent's `codemode` tool:
+- **Input.** The input is raw JavaScript, run as the body of an async function. An optional first line, `// @options: {"max_output_tokens": …, "timeout_ms": …}`, sets an output budget and a deadline. The budget defaults to 10,000 tokens, and there's no deadline by default.
+- **Tools.** `tools.<name>(args)` calls the agent's own tools through their registrations, so a scoop's file guard applies to nested calls too. Arguments are validated as for a model call. `bash` resolves to `{ output, exit_code }`, also for a non-zero exit; the other tools resolve to their text and reject on an error.
+- **Globals.** `text()`, `image()`, `console.*`, `return`, `exit()`, `ALL_TOOLS`, and `store()`/`load()`.
+- **The store** lives in the conversation document `slicc.codemode`, which is rewindable and forks as of the fork point, so each branch keeps its own values. Writes are kept only when the script succeeds.
+- **The result** starts with `Script completed` or `Script failed` and the wall time. Several text items each start with `==> text N/M <==`, and `console` lines come last in one `<console_output>` block. A failure adds `Script error:` with the error and the tool calls made before it, which aren't undone. Output past the budget keeps its start and end, and the full text goes to `/tmp/slicc-codemode-<call>.txt`.
+- **Not ported.** coding-agent's `models`, `searchTools`, `describeTool` and `describeNamespace`.
+
+**In the browser.** pi-codemode runs QuickJS (`quickjs-wasi`) in a worker of its own, so a spinning script never blocks the agent worker.
+- **The worker.** It starts through `node:worker_threads`, which slicc-bios provides as an `environment` stub (see Patched dependencies).
+- **The wasm.** The agent compiles `quickjs.wasm` itself and hands it over: it walks up the `node_modules` folders from its own module, as bios's resolver does, and fetches the first `quickjs-wasi/quickjs.wasm` it finds. On Node, pi-codemode loads it itself.
+- **Isolation.** Seven is cross-origin isolated, so pi-codemode's `SharedArrayBuffer` interrupt works.
+- **Overrides.** `runAgentWorker` takes `codemodeWasm` and `codemodeWorker` to override both, for bundled hosts.
+
 ## Patched dependencies
 
 Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.json) lists each one with its `kind`, `package`, `patchedVersion`, `reason`, `removeWhen` and `verify` command, and an optional `marker` (a file in the package and a string it must contain):
 
 - `monkeypatch`: code that runs in users' browsers is patched at runtime. `applyPatches()` in [`src/patches.ts`](src/patches.ts) applies them once before pi is used: `PortListener.start()` calls it, so `hostAgent` and a `PortListener` used directly with pi's `Server` both get them. Each one checks that the code it replaces still looks as expected and throws, naming its manifest entry, if not. Today there is one: pi-server's `Server.accept` calls `unref()` on its handshake timer, which browsers don't have, so the patch gives numeric timer ids a no-op `unref`.
 - `patch-package`: repository-only fixes go in `patches/<package>+<version>.patch`, applied by a `postinstall` that runs [patch-package](https://github.com/ds300/patch-package). There are none yet.
-- `environment`: something the host must provide. pi-server imports `randomUUID` from `node:crypto`; slicc-bios serves a stub backed by `globalThis.crypto`, and the integration bundles alias it to `test/integration/shims/node-crypto.js`.
+- `environment`: something the host must provide.
+  - pi-server imports `randomUUID` from `node:crypto`. slicc-bios serves a stub backed by `globalThis.crypto`, and the integration bundles alias it to `test/integration/shims/node-crypto.js`.
+  - pi-codemode runs QuickJS in a `node:worker_threads` Worker. slicc-bios must serve a `node:worker_threads` stub that wraps a module Web Worker; inside the worker, the stub gives `parentPort` and `workerData` from the first message. `test/integration/shims/node-worker-threads.js` is that stub, and the integration bundles alias to it.
 
 `npm run lint:patches` (part of `npm run lint`) fails when an installed version differs from `patchedVersion`, a marker is gone, a monkeypatch isn't named in `src/patches.ts`, a patch file and its entry don't match, or `renovate.json` doesn't route the package to the `patched dependencies` group with automerge off. That group covers every `@earendil-works/*` package, so a pi bump is always a reviewed PR: rerun each entry's `verify`, then move `patchedVersion` forward or drop the entry.
 
