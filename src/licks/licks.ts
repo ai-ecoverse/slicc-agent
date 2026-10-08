@@ -99,16 +99,30 @@ export function render(pending: Pending): Lick {
   return lines.length ? { ...lick, body: lines.join('\n') } : lick;
 }
 
+const RANK: Record<LickSeverity, number> = { warn: 1, error: 2 };
+
+export function strongest(
+  a: LickSeverity | undefined,
+  b: LickSeverity | undefined
+): LickSeverity | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return RANK[b] > RANK[a] ? b : a;
+}
+
 function merge(pending: Pending, event: LickEvent, now: number): Pending {
   const items = [...pending.items];
   for (const item of event.items ?? []) if (!items.includes(item)) items.push(item);
+  const { severity: _, ...lick } = pending.lick;
+  const severity = strongest(pending.lick.severity, event.severity);
   return {
     lick: {
-      ...pending.lick,
+      ...lick,
       title: event.title,
       text: event.text,
       count: pending.lick.count + (event.count ?? 1),
       at: event.at ?? now,
+      ...(severity ? { severity } : {}),
     },
     items,
     body: event.body ?? pending.body,
