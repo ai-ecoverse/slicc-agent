@@ -34,6 +34,7 @@ export type Feed = {
   report: boolean;
   target: string | null;
   channel: 'scoop-notify' | 'bash';
+  from?: string;
 };
 type Wait = { scoops: string[]; done: Record<string, string>; cone: string };
 export type Answer = { code: number; out: string; tasks?: number[] };
@@ -92,6 +93,7 @@ export interface SpawnRequest {
   cwd?: string;
   instructions?: string;
   target?: string | null;
+  asker?: string | null;
   name: string;
   role?: Role;
   model?: { provider: string; modelId: string };
@@ -171,7 +173,12 @@ async function answered(
   return (await harness.snapshot(ScoopWorkDoc, context))?.ledger[request];
 }
 
-type NewFeed = Omit<Feed, 'channel'> & { prompt: string; request?: string; followUp?: boolean };
+type NewFeed = Omit<Feed, 'channel' | 'from'> & {
+  from: string;
+  prompt: string;
+  request?: string;
+  followUp?: boolean;
+};
 
 async function addFeed(core: Core, tx: Tx, parent: number, feed: NewFeed): Promise<number> {
   const task = await tx.createTask(
@@ -194,6 +201,7 @@ async function addFeed(core: Core, tx: Tx, parent: number, feed: NewFeed): Promi
     report: feed.report,
     target: feed.target,
     channel: 'scoop-notify',
+    from: feed.from,
   };
   return Number(task);
 }
@@ -290,6 +298,7 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
           : null
         : request.target;
     const made: number[] = [];
+    const from = askerName(doc, request.asker === undefined ? target : request.asker);
     for (const prompt of request.prompts)
       made.push(
         await addFeed(core, tx, parent.id, {
@@ -297,6 +306,7 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
           created,
           report: target !== null,
           target,
+          from,
           prompt,
         })
       );
@@ -304,6 +314,12 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
     remember(work as WorkState, request.request, answer);
     return answer;
   }, context);
+}
+
+export function askerName(state: Readonly<AgentsState>, asker: string | null): string {
+  if (asker === null) return 'terminal';
+  if (asker.startsWith('cone:')) return state.cones[asker.slice('cone:'.length)]?.name ?? asker;
+  return state.scoops[asker]?.name ?? asker;
 }
 
 const missing = (id: string): Answer => ({
@@ -332,6 +348,7 @@ async function feed(
       created,
       report: target !== null,
       target,
+      from: askerName(agents.state(), target),
       prompt,
       followUp: options.followUp,
       request: options.request,

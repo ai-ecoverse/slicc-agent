@@ -14,6 +14,7 @@ import type {
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
 import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
+import { FROM_KIND, type From } from '../scoops/from.ts';
 import type { Delivered } from '../services.ts';
 
 type Json = Record<string, unknown>;
@@ -242,14 +243,30 @@ export function assistant(
   };
 }
 
-function user(id: string, message: ModelMessage, delivered: Delivered | undefined): UserMessage {
+function user(
+  id: string,
+  message: ModelMessage,
+  delivered: Delivered | undefined,
+  from: string | undefined
+): UserMessage {
   return {
     id,
     role: 'user',
     text: textOf(message.content),
     createdAt: message.timestamp ?? 0,
     ...(delivered ? { delivered } : {}),
+    ...(from ? { from } : {}),
   };
+}
+
+export function origins(entries: readonly EntryRecord[]): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const entry of entries)
+    if (entry.kind === FROM_KIND) {
+      const note = entry.data as From;
+      out.set(note.entry, note.from);
+    }
+  return out;
 }
 
 function lickMessage(
@@ -338,13 +355,16 @@ function entryMessage(
   out: Message[],
   calls: Map<string, ToolCall>,
   delivered: Delivered | undefined,
-  decisions: ReadonlyMap<string, LickDecision>
+  notes: { decisions: ReadonlyMap<string, LickDecision>; origins: ReadonlyMap<number, string> }
 ): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   else if (entry.kind === 'pi.user' && model)
-    out.push(lickMessage(id, entry, decisions) ?? user(id, model, delivered));
+    out.push(
+      lickMessage(id, entry, notes.decisions) ??
+        user(id, model, delivered, notes.origins.get(entry.id))
+    );
   else if (entry.kind === 'pi.assistant' && model) {
     const message = assistant(id, model);
     out.push(withoutLickTools(message));
@@ -399,11 +419,11 @@ export function toMessages(
   const out: Message[] = [];
   if (!view) return out;
   const calls = new Map<string, ToolCall>();
-  const decisions = lickDecisions(view.entries);
+  const notes = { decisions: lickDecisions(view.entries), origins: origins(view.entries) };
   let previous: EntryRecord | undefined;
   for (const entry of view.entries) {
     const steered = previous?.kind === 'pi.tool-result' ? 'steer' : undefined;
-    entryMessage(entry, out, calls, deliveries[String(entry.id)] ?? steered, decisions);
+    entryMessage(entry, out, calls, deliveries[String(entry.id)] ?? steered, notes);
     previous = entry;
   }
   live(view, out, calls);

@@ -275,6 +275,7 @@ export async function runSync(
       ...(planned.workdir ? { cwd: planned.workdir } : {}),
       ...(planned.instructions ? { instructions: planned.instructions } : {}),
       target: null,
+      asker: who.id,
       name: last(parsed, '--name') ?? found.role?.name ?? 'agent',
       ...(found.role ? { role: found.role } : {}),
       ...(chosen.model ? { model: chosen.model } : {}),
