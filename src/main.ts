@@ -1,9 +1,20 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
-import { createRegistry, type ModelRef, type Storage } from '@earendil-works/pi-durable';
+import {
+  createRegistry,
+  type ModelRef,
+  type Storage,
+  type ToolRegistration,
+} from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { type Agent, openAgent } from './agent.ts';
+import {
+  codemodeExtension,
+  disabledBySettings,
+  locateWasm,
+  sandboxFactory,
+} from './codemode/index.ts';
 import { EncryptedCredentialStore } from './credentials.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { createActivity } from './kernel/activity.ts';
@@ -40,6 +51,8 @@ export interface AgentWorkerOptions {
   credentials?: () => Promise<CredentialStore>;
   storage?: () => Promise<Storage>;
   assets?: Assets;
+  codemodeWasm?: () => Promise<WebAssembly.Module | undefined>;
+  codemodeWorker?: string | URL;
 }
 
 async function start(
@@ -62,6 +75,19 @@ async function start(
   const registry = createRegistry();
   registry.install(CodingTools);
   registry.install(sliccPrompt(facts));
+  const settings = await client.fs
+    .readFile(`${HOME}/.pi/agent/settings.json`)
+    .catch(() => undefined);
+  if (!disabledBySettings(settings === undefined ? undefined : new TextDecoder().decode(settings)))
+    registry.install(
+      codemodeExtension({
+        declared: CodingTools.tools as readonly ToolRegistration[],
+        sandbox: sandboxFactory(
+          options.codemodeWasm ?? (() => locateWasm(native, new URL(import.meta.url))),
+          options.codemodeWorker
+        ),
+      })
+    );
   const licks = setupLicks(registry);
   const scoops = setupScoops(registry, licks.licks, CodingTools.tools);
   const skills = setupSkills(registry, licks.licks);

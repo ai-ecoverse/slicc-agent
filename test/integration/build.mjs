@@ -8,6 +8,7 @@ await build({
     'test/integration/page/storage-worker.js',
     'test/integration/page/page.js',
     'test/integration/page/main-worker.js',
+    'test/integration/page/codemode-worker.js',
   ],
   outdir: 'dist-test',
   bundle: true,
@@ -15,7 +16,12 @@ await build({
   platform: 'browser',
   target: 'es2024',
   sourcemap: 'linked',
-  alias: { 'node:crypto': './test/integration/shims/node-crypto.js' },
+  alias: {
+    'node:crypto': './test/integration/shims/node-crypto.js',
+    'node:worker_threads': './test/integration/shims/node-worker-threads.js',
+    'node:fs/promises': './test/integration/shims/node-only.js',
+    'node:module': './test/integration/shims/node-only.js',
+  },
   plugins: [
     {
       name: 'lazy-bedrock',
@@ -40,6 +46,9 @@ await build({
   logLevel: 'warning',
   alias: {
     'node:crypto': './test/integration/shims/node-crypto.js',
+    'node:worker_threads': './test/integration/shims/node-worker-threads.js',
+    'node:fs/promises': './test/integration/shims/node-only.js',
+    'node:module': './test/integration/shims/node-only.js',
     '@smithy/node-http-handler': './test/integration/shims/node-only.js',
     'http-proxy-agent': './test/integration/shims/node-only.js',
     'https-proxy-agent': './test/integration/shims/node-only.js',

@@ -3,7 +3,10 @@
     "kind": "monkeypatch",
     "package": "@earendil-works/pi-server",
     "patchedVersion": "1.0.4",
-    "marker": { "file": "dist/server.js", "includes": "handshakeTimeout.unref()" },
+    "marker": {
+      "file": "dist/server.js",
+      "includes": "handshakeTimeout.unref()"
+    },
     "reason": "Server.accept calls unref() on its handshake timer, but browser setTimeout returns a number, so every connection in a worker throws. applyPatches() wraps accept so the timer id gets no-op unref and ref methods.",
     "removeWhen": "pi-server stops calling unref() on timers, or guards the call.",
     "verify": "npm test"
@@ -12,9 +15,24 @@
     "kind": "environment",
     "package": "@earendil-works/pi-server",
     "patchedVersion": "1.0.4",
-    "marker": { "file": "dist/session-router.js", "includes": "from \"node:crypto\"" },
+    "marker": {
+      "file": "dist/session-router.js",
+      "includes": "from \"node:crypto\""
+    },
     "reason": "The session router imports randomUUID from node:crypto. In SLICC the bios service worker serves a node:crypto stub backed by globalThis.crypto; the integration bundles alias it to test/integration/shims/node-crypto.js.",
     "removeWhen": "pi-server uses globalThis.crypto.randomUUID instead of node:crypto.",
+    "verify": "npm test"
+  },
+  "pi-codemode-worker-threads": {
+    "kind": "environment",
+    "package": "@earendil-works/pi-codemode",
+    "patchedVersion": "1.1.0",
+    "marker": {
+      "file": "dist/runtime/host.js",
+      "includes": "import { Worker } from \"node:worker_threads\""
+    },
+    "reason": "CodemodeSandbox runs QuickJS in a node:worker_threads Worker, and its worker reads parentPort and workerData; wasm.js also imports node:fs/promises and node:module, which are unused when SLICC passes the compiled wasm. In SLICC the bios service worker must serve a node:worker_threads stub that wraps a module Web Worker (named slicc-worker-threads) and, inside it, gives parentPort and workerData from the first message; test/integration/shims/node-worker-threads.js is that stub, and the integration bundles alias node:worker_threads to it. The agent finds quickjs.wasm by walking up node_modules from its own module (locateWasm).",
+    "removeWhen": "pi-codemode accepts a browser Worker (or a worker factory) and never imports Node built-ins in the browser.",
     "verify": "npm test"
   }
 }
