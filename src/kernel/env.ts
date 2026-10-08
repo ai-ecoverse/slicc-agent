@@ -21,7 +21,7 @@ import type { KernelClient } from './client.ts';
 import { execute } from './exec.ts';
 import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from './files.ts';
 import { dirname, normalize, resolve } from './paths.ts';
-import { type PollOptions, pollWatch } from './watch.ts';
+import { nativeWatch, type PollOptions, pollWatch, RESCAN_MS } from './watch.ts';
 
 export interface KernelEnvOptions {
   cwd: string;
@@ -201,7 +201,29 @@ export class SliccKernelEnv implements ExecutionEnv {
     context: Context
   ): FileResult<FileWatcher> {
     return attempt(context, this.cwd, async () => {
-      const watcher = await pollWatch(this.#fs, this.cwd, targets, onChange, this.#poll);
+      let absorb: (paths: readonly string[]) => void = () => undefined;
+      const reported = (change: WatchChange) => {
+        if ('paths' in change) absorb(change.paths);
+        onChange(change);
+      };
+      const native =
+        this.#poll.mode === 'polling'
+          ? undefined
+          : await nativeWatch(this.#fs, this.cwd, targets, reported);
+      const intervalMs = native ? (this.#poll.rescanMs ?? RESCAN_MS) : this.#poll.intervalMs;
+      const polled = await pollWatch(this.#fs, this.cwd, targets, onChange, {
+        ...(intervalMs === undefined ? {} : { intervalMs }),
+      });
+      absorb = (paths) => polled.absorb(paths);
+      const watcher: FileWatcher = native
+        ? {
+            mode: 'native',
+            async close(closing: Context) {
+              await native.close(closing);
+              await polled.close(closing);
+            },
+          }
+        : polled;
       this.#watchers.add(watcher);
       return {
         mode: watcher.mode,

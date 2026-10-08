@@ -64,7 +64,33 @@ export function differences(before: Snapshot, after: Snapshot): string[] {
 
 export interface PollOptions {
   intervalMs?: number;
+  rescanMs?: number;
+  mode?: 'native' | 'polling';
 }
+
+export const RESCAN_MS = 2000;
+
+function baseOf(path: string, target: WatchTarget): string | undefined {
+  if (inside(path, target.path)) return target.path;
+  return inside(target.path, path) ? path : undefined;
+}
+
+async function absorbPaths(
+  fs: KernelFs,
+  current: Snapshot,
+  targets: readonly WatchTarget[],
+  paths: readonly string[]
+): Promise<void> {
+  for (const path of paths)
+    for (const target of targets) {
+      const base = baseOf(path, target);
+      if (base === undefined) continue;
+      for (const key of [...current.keys()]) if (inside(base, key)) current.delete(key);
+      await scan(fs, base, target, base === target.path || target.recursive === true, current);
+    }
+}
+
+export type PolledWatcher = FileWatcher & { absorb(paths: readonly string[]): void };
 
 export async function pollWatch(
   fs: KernelFs,
@@ -72,8 +98,10 @@ export async function pollWatch(
   targets: readonly WatchTarget[],
   onChange: (change: WatchChange) => void,
   options: PollOptions = {}
-): Promise<FileWatcher> {
+): Promise<PolledWatcher> {
   let current = await snapshot(fs, cwd, targets);
+  const resolved = targets.map((target) => ({ ...target, path: resolve(cwd, target.path) }));
+  const refresh = (paths: readonly string[]) => absorbPaths(fs, current, resolved, paths);
   let open = true;
   let running = Promise.resolve();
   const tick = async () => {
@@ -87,10 +115,89 @@ export async function pollWatch(
   }, options.intervalMs ?? 100);
   return {
     mode: 'polling',
+    absorb(paths) {
+      running = running.then(() => refresh(paths));
+    },
     async close(_context: Context) {
       open = false;
       clearInterval(timer);
       await running;
+    },
+  };
+}
+
+function hidden(base: string, path: string, target: WatchTarget): boolean {
+  if (!target.exclude || path === base) return false;
+  const below = path.slice(base === '/' ? 1 : base.length + 1);
+  return below.split('/').some((name) => excluded(name, target));
+}
+
+function inside(base: string, path: string): boolean {
+  return path === base || path.startsWith(base === '/' ? '/' : `${base}/`);
+}
+
+const FALLBACK = new Set(['ENOSYS', 'ENOENT', 'ENOTDIR']);
+
+type Watched = WatchTarget & { real: string };
+
+export function mapChange(targets: readonly Watched[], path: string): string[] {
+  const out: string[] = [];
+  for (const target of targets) {
+    if (inside(target.path, path)) {
+      if (!hidden(target.path, path, target)) out.push(path);
+    } else if (inside(path, target.path)) out.push(target.path);
+    else if (target.real !== target.path && inside(target.real, path)) {
+      const mapped = `${target.path}${path.slice(target.real.length)}`;
+      if (!hidden(target.path, mapped, target)) out.push(mapped);
+    }
+  }
+  return out;
+}
+
+export async function nativeWatch(
+  fs: KernelFs,
+  cwd: string,
+  targets: readonly WatchTarget[],
+  onChange: (change: WatchChange) => void
+): Promise<FileWatcher | undefined> {
+  const watch = fs.watch?.bind(fs);
+  if (!watch) return undefined;
+  const resolved: Watched[] = [];
+  for (const target of targets) {
+    const path = resolve(cwd, target.path);
+    if (!(await fs.exists(path).catch(() => false))) return undefined;
+    resolved.push({ ...target, path, real: await fs.realpath(path).catch(() => path) });
+  }
+  let open = true;
+  const handles: { close(): unknown }[] = [];
+  const closeAll = async () => {
+    for (const handle of handles.splice(0)) await handle.close();
+  };
+  const report = (change: { paths: string[] } | { overflow: true }) => {
+    if (!open) return;
+    if (!('paths' in change)) {
+      onChange({ overflow: true });
+      return;
+    }
+    const paths = [...new Set(change.paths.flatMap((path) => mapChange(resolved, path)))];
+    if (paths.length) onChange({ paths });
+  };
+  try {
+    for (const target of resolved) {
+      const recursive = { recursive: target.recursive === true };
+      handles.push(await watch([target.path], recursive, report));
+      if (target.real !== target.path) handles.push(await watch([target.real], recursive, report));
+    }
+  } catch (error) {
+    await closeAll();
+    if (FALLBACK.has((error as { code?: string }).code ?? '')) return undefined;
+    throw error;
+  }
+  return {
+    mode: 'native',
+    async close(_context: Context) {
+      open = false;
+      await closeAll();
     },
   };
 }
