@@ -108,6 +108,25 @@ const models = /model/i;
 const unavailable =
   /access|invalid|not found|identifier|unsupported|not supported|isn['’]t supported|not available|isn['’]t available/i;
 
+const providerNames: Record<string, string> = { 'amazon-bedrock': 'Bedrock' };
+const missing = /no api key|missing|not configured|no credentials/i;
+
+export function errorPart(error: string, provider?: string): MessagePart {
+  const action = errorAction(error);
+  const name = providerNames[provider ?? ''] ?? 'The provider';
+  const lead =
+    action === 'settings'
+      ? missing.test(error)
+        ? `${name} needs an API key.`
+        : `${name} rejected the API key.`
+      : action === 'change-model'
+        ? "This model isn't available with the current account."
+        : null;
+  return lead
+    ? { type: 'error', message: lead, detail: error, action }
+    : { type: 'error', message: error, action };
+}
+
 export function errorAction(message: string): ErrorAction {
   if (credentials.test(message)) return 'settings';
   if (models.test(message) && unavailable.test(message)) return 'change-model';
@@ -121,12 +140,7 @@ export function assistant(
 ): AssistantMessage {
   const blocks = Array.isArray(message.content) ? message.content : [];
   const parts = blocks.map(part).filter((item): item is MessagePart => item !== undefined);
-  if (message.errorMessage)
-    parts.push({
-      type: 'error',
-      message: message.errorMessage,
-      action: errorAction(message.errorMessage),
-    });
+  if (message.errorMessage) parts.push(errorPart(message.errorMessage, message.provider));
   const used = usage(message);
   return {
     id,
