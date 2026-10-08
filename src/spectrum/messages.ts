@@ -279,6 +279,7 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
   const patch = result.details?.patch;
   const diff = typeof patch === 'string' ? fromPatch(patch) : undefined;
   if (diff) call.diff = diff;
+  else if (result.isError) delete call.diff;
 }
 
 const rewound = (id: string): SystemMessage => ({
