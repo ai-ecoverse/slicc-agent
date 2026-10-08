@@ -64,8 +64,11 @@ export function differences(before: Snapshot, after: Snapshot): string[] {
 
 export interface PollOptions {
   intervalMs?: number;
+  rescanMs?: number;
   mode?: 'native' | 'polling';
 }
+
+export const RESCAN_MS = 2000;
 
 export async function pollWatch(
   fs: KernelFs,
@@ -133,6 +136,7 @@ export async function nativeWatch(
   const resolved: Watched[] = [];
   for (const target of targets) {
     const path = resolve(cwd, target.path);
+    if (!(await fs.exists(path).catch(() => false))) return undefined;
     resolved.push({ ...target, path, real: await fs.realpath(path).catch(() => path) });
   }
   let open = true;

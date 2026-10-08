@@ -33,6 +33,8 @@ test('licks reach the cone through the production worker: a webhook, a file watc
       '{"path":"~/notes","glob":"**/*.md","debounce":200}'
     );
     await write('/home/.slicc/crontab', '61 * * * * broken\n');
+    await write('/home/docs/readme.md', '# docs');
+    await write('/home/.slicc/watches/docs.json', '{"path":"~/docs","glob":"*.md","debounce":200}');
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
@@ -55,6 +57,10 @@ test('licks reach the cone through the production worker: a webhook, a file watc
     await wait(() => licks().length === 2);
     await write('/home/notes/today.md', '# today');
     await wait(() => licks().length === 3);
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const client = await attachKernel(await kernel.connect());
+    await client.fs.writeFile('/home/docs/guide.md', '# guide');
+    await wait(() => licks().length === 4);
     await wait(() => !agent.busy(agent.active()));
     return {
       sent,
@@ -74,5 +80,8 @@ test('licks reach the cone through the production worker: a webhook, a file watc
   assert.equal(watch.channel, 'fswatch');
   assert.equal(watch.title, 'notes: /home/notes/**/*.md');
   assert.equal(watch.body, 'changed /home/notes/today.md');
+  const docs = seen.licks[3];
+  assert.equal(docs.title, 'docs: /home/docs/*.md');
+  assert.equal(docs.body, 'changed /home/docs/guide.md');
   assert.ok(seen.replies >= 3);
 });

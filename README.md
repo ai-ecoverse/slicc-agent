@@ -54,7 +54,7 @@ const agent = await openAgent({ models, model, storage, registry, env: kernelEnv
 - string commands run as `bash -c`, each in its own process group; timeouts and aborts kill the group;
 - output past the spill limits goes to `/tmp/slicc-agent-output-*.log`;
 - files and directories go through the kernel's OPFS view and metadata sidecar;
-- `watch()` uses the kernel client's own `fs.watch` (slicc-kernel protocol 1.1), so a change made through the kernel by any process or client is reported in the same task. A watched path whose parent is renamed or replaced counts as changed, and a watched symbolic link also reports changes to its target. On a kernel without it (`ENOSYS`), or for a target that doesn't exist yet, it falls back to polling snapshots every 100 ms; `watch: { mode: 'polling' }` forces that.
+- `watch()` uses the kernel client's own `fs.watch` (slicc-kernel protocol 1.1), so a change made through the kernel by any process or client is reported in the same task. A watched path whose parent is renamed or replaced counts as changed, and a watched symbolic link also reports changes to its target. Writers that bypass the kernel, such as spectrum's Files panel writing OPFS directly, are caught by a rescan every 2 s (`watch: { rescanMs }`). On a kernel without `fs.watch` (`ENOSYS`), or for a target that doesn't exist yet, it polls every 100 ms instead; `watch: { mode: 'polling' }` forces that.
 
 A conversation without a `cwd` works in `/home`.
 
