@@ -70,14 +70,38 @@ export interface PollOptions {
 
 export const RESCAN_MS = 2000;
 
+function baseOf(path: string, target: WatchTarget): string | undefined {
+  if (inside(path, target.path)) return target.path;
+  return inside(target.path, path) ? path : undefined;
+}
+
+async function absorbPaths(
+  fs: KernelFs,
+  current: Snapshot,
+  targets: readonly WatchTarget[],
+  paths: readonly string[]
+): Promise<void> {
+  for (const path of paths)
+    for (const target of targets) {
+      const base = baseOf(path, target);
+      if (base === undefined) continue;
+      for (const key of [...current.keys()]) if (inside(base, key)) current.delete(key);
+      await scan(fs, base, target, base === target.path || target.recursive === true, current);
+    }
+}
+
+export type PolledWatcher = FileWatcher & { absorb(paths: readonly string[]): void };
+
 export async function pollWatch(
   fs: KernelFs,
   cwd: string,
   targets: readonly WatchTarget[],
   onChange: (change: WatchChange) => void,
   options: PollOptions = {}
-): Promise<FileWatcher> {
+): Promise<PolledWatcher> {
   let current = await snapshot(fs, cwd, targets);
+  const resolved = targets.map((target) => ({ ...target, path: resolve(cwd, target.path) }));
+  const refresh = (paths: readonly string[]) => absorbPaths(fs, current, resolved, paths);
   let open = true;
   let running = Promise.resolve();
   const tick = async () => {
@@ -91,6 +115,9 @@ export async function pollWatch(
   }, options.intervalMs ?? 100);
   return {
     mode: 'polling',
+    absorb(paths) {
+      running = running.then(() => refresh(paths));
+    },
     async close(_context: Context) {
       open = false;
       clearInterval(timer);
@@ -119,8 +146,10 @@ export function mapChange(targets: readonly Watched[], path: string): string[] {
     if (inside(target.path, path)) {
       if (!hidden(target.path, path, target)) out.push(path);
     } else if (inside(path, target.path)) out.push(target.path);
-    else if (target.real !== target.path && inside(target.real, path))
-      out.push(`${target.path}${path.slice(target.real.length)}`);
+    else if (target.real !== target.path && inside(target.real, path)) {
+      const mapped = `${target.path}${path.slice(target.real.length)}`;
+      if (!hidden(target.path, mapped, target)) out.push(mapped);
+    }
   }
   return out;
 }

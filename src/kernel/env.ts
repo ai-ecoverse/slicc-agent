@@ -201,14 +201,20 @@ export class SliccKernelEnv implements ExecutionEnv {
     context: Context
   ): FileResult<FileWatcher> {
     return attempt(context, this.cwd, async () => {
+      let absorb: (paths: readonly string[]) => void = () => undefined;
+      const reported = (change: WatchChange) => {
+        if ('paths' in change) absorb(change.paths);
+        onChange(change);
+      };
       const native =
         this.#poll.mode === 'polling'
           ? undefined
-          : await nativeWatch(this.#fs, this.cwd, targets, onChange);
+          : await nativeWatch(this.#fs, this.cwd, targets, reported);
       const intervalMs = native ? (this.#poll.rescanMs ?? RESCAN_MS) : this.#poll.intervalMs;
       const polled = await pollWatch(this.#fs, this.cwd, targets, onChange, {
         ...(intervalMs === undefined ? {} : { intervalMs }),
       });
+      absorb = (paths) => polled.absorb(paths);
       const watcher: FileWatcher = native
         ? {
             mode: 'native',
