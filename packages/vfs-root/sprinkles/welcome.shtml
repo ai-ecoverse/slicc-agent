@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Welcome</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: var(--s2-font-family, 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+        background: transparent;
+        color: var(--s2-content-default, #e8e8e8);
+      }
+
+      .step { display: none; animation: fadeUp 0.18s ease both; }
+      .step.active { display: block; }
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      .pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 34px;
+        padding: 0 14px;
+        border-radius: var(--s2-radius-pill, 9999px);
+        background: var(--s2-bg-elevated, #2c2c2c);
+        border: 1px solid var(--s2-border-subtle, #3a3a3a);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--s2-content-default, #e8e8e8);
+        transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+        user-select: none;
+        white-space: nowrap;
+      }
+      .pill:hover {
+        background: var(--s2-bg-layer-2, #252525);
+        border-color: var(--s2-border-default, #4a4a4a);
+      }
+      .pill.selected {
+        border-color: var(--s2-accent, #3562ff);
+        box-shadow: 0 0 0 1px var(--s2-accent, #3562ff);
+        background: var(--s2-bg-layer-2, #252525);
+      }
+
+      .step-heading {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--s2-content-default, #e8e8e8);
+        line-height: 1.3;
+      }
+      .step-sub {
+        font-size: 12px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        margin-top: 3px;
+      }
+
+      .input-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+        background: var(--s2-bg-elevated, #2c2c2c);
+        border: 1px solid var(--s2-border-subtle, #3a3a3a);
+        border-radius: var(--s2-radius-pill, 9999px);
+        padding: 6px 6px 6px 14px;
+      }
+
+      .input-row input {
+        flex: 1;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-family: inherit;
+        font-size: 14px;
+        color: var(--s2-content-default, #e8e8e8);
+      }
+      .input-row input::placeholder { color: var(--s2-content-tertiary, #8a8a8a); }
+      .input-row button {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: none;
+        background: var(--s2-accent, #3562ff);
+        color: var(--s2-gray-25, #f5f5f5);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: background 0.15s;
+      }
+      .input-row button:hover { background: var(--s2-accent-hover, #4a75ff); }
+
+      .cta-row { margin-top: 14px; }
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 22px;
+        border-radius: var(--s2-radius-pill, 9999px);
+        background: var(--s2-accent, #3562ff);
+        color: var(--s2-gray-25, #f5f5f5);
+        border: none;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .cta:hover { background: var(--s2-accent-hover, #4a75ff); }
+
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 16px;
+      }
+      .dots { display: flex; gap: 5px; }
+      .dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--s2-gray-300, #4a4a4a);
+        transition: background 0.2s, transform 0.2s;
+      }
+      .dot.active { background: var(--s2-accent, #3562ff); transform: scale(1.3); }
+      .dot.done   { background: var(--s2-accent, #3562ff); }
+
+      .skip-btn {
+        background: none;
+        border: none;
+        font-family: inherit;
+        font-size: 11px;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        cursor: pointer;
+        padding: 2px 4px;
+      }
+      .skip-btn:hover { color: var(--s2-content-secondary, #a1a1a1); }
+
+      .back-btn {
+        background: none;
+        border: none;
+        font-family: inherit;
+        font-size: 11px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 0;
+        margin-bottom: 10px;
+      }
+      .back-btn:hover { color: var(--s2-content-default, #e8e8e8); }
+      .back-btn[hidden] { display: none; }
+
+      .done-state {
+        text-align: center;
+        padding: 12px 0 4px;
+        font-size: 14px;
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sprinkle-action-card">
+
+      <div class="sprinkle-action-card__body" style="padding: 16px 24px 0">
+        <button class="back-btn" id="backBtn" hidden onclick="goBack()">
+          <i data-lucide="arrow-left" style="width:12px;height:12px"></i> Back
+        </button>
+
+        <div class="step active" id="s1">
+          <div class="step-heading">What brings you here?</div>
+          <div class="pills" id="purposePills"></div>
+        </div>
+
+        <div class="step" id="s2">
+          <div class="step-heading" id="s2Heading">What do you do?</div>
+          <div class="pills" id="rolePills"></div>
+        </div>
+
+        <div class="step" id="s3">
+          <div class="step-heading" id="s3Heading">What do you want to tackle?</div>
+          <div class="step-sub">Pick as many as you like</div>
+          <div class="pills" id="taskPills"></div>
+          <div class="cta-row">
+            <button class="cta" onclick="goStep(4)">Continue</button>
+          </div>
+        </div>
+
+        <div class="step" id="s4">
+          <div class="step-heading">What should I call you?</div>
+          <div class="input-row">
+            <input type="text" id="nameIn" placeholder="Your name"
+              onkeydown="if(event.key==='Enter') advanceFrom(4)" />
+            <button onclick="advanceFrom(4)" aria-label="Continue">
+              <i data-lucide="arrow-right" style="width:14px;height:14px"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="step" id="s5">
+          <div class="step-heading">Where do you work?</div>
+          <div class="input-row">
+            <input type="text" id="companyIn" placeholder="Company or organization"
+              onkeydown="if(event.key==='Enter') advanceFrom(5)" />
+            <button onclick="advanceFrom(5)" aria-label="Continue">
+              <i data-lucide="arrow-right" style="width:14px;height:14px"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="step" id="s6">
+          <div class="step-heading" id="s6Heading">What apps do you use most?</div>
+          <div class="step-sub">Pick any that apply</div>
+          <div class="pills" id="appPills"></div>
+          <div class="cta-row">
+            <button class="cta" onclick="finish()">Let's go</button>
+          </div>
+        </div>
+
+        <div class="step" id="sDone">
+          <div class="done-state" id="sDoneText">Setting things up&hellip;</div>
+        </div>
+      </div>
+
+      <div class="sprinkle-action-card__body" style="padding-top:0" id="footerArea">
+        <div class="footer">
+          <div class="dots" id="dots">
+            <div class="dot active"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+          </div>
+          <button class="skip-btn" id="skipBtn" onclick="skipStep()">skip</button>
+        </div>
+      </div>
+
+    </div>
+
+    <script>
+      var cur = 1;
+      var profile = { purpose: '', role: '', tasks: [], name: '', company: '', apps: [] };
+
+      var ROLE_FONTS = {
+        'developer':    'monospace',
+        'designer':     'Papyrus, fantasy',
+        'product-pm':   '"Comic Sans MS", "Comic Sans", cursive',
+      };
+
+      var TASK_HEADINGS_BY_ROLE = {
+        'developer':       'What are you hacking?',
+        'designer':        'What do you dream of?',
+        'product-pm':      "What's your mission?",
+        'content-creator': "What's your story?",
+        'marketer':        "What's your ambition?",
+        'founder':         'What do you want to create?',
+        'student':         'What are you learning?',
+        'researcher':      'What are you researching?',
+      };
+      var TASK_HEADING_DEFAULT = 'What do you want to tackle?';
+
+      var PURPOSES = [
+        { id: 'work',        label: 'Work',           icon: 'briefcase' },
+        { id: 'school',      label: 'School',         icon: 'graduation-cap' },
+        { id: 'personal',    label: 'Personal',       icon: 'user' },
+        { id: 'side-project',label: 'Side project',   icon: 'lightbulb' },
+        { id: 'exploring',   label: 'Just exploring', icon: 'compass' },
+      ];
+
+      var ROLES_BY_PURPOSE = {
+        work: {
+          heading: "What's your role?",
+          roles: [
+            { id: 'developer',    label: 'Developer',      icon: 'code' },
+            { id: 'designer',     label: 'Designer',       icon: 'palette' },
+            { id: 'content-creator', label: 'Content creator', icon: 'pen-tool' },
+            { id: 'marketer',     label: 'Marketer',       icon: 'megaphone' },
+            { id: 'product-pm',   label: 'Product / PM',   icon: 'layout-dashboard' },
+            { id: 'founder',      label: 'Founder',        icon: 'rocket' },
+            { id: 'other',        label: 'Something else', icon: 'help-circle' },
+          ],
+        },
+        school: {
+          heading: "What are you studying?",
+          roles: [
+            { id: 'student',    label: 'Student',    icon: 'book-open' },
+            { id: 'researcher', label: 'Researcher', icon: 'microscope' },
+            { id: 'developer',  label: 'Developer',  icon: 'code' },
+            { id: 'designer',   label: 'Designer',   icon: 'palette' },
+            { id: 'other',      label: 'Something else', icon: 'help-circle' },
+          ],
+        },
+        _default: {
+          heading: "What's your background?",
+          roles: [
+            { id: 'developer',    label: 'Developer',      icon: 'code' },
+            { id: 'designer',     label: 'Designer',       icon: 'palette' },
+            { id: 'content-creator', label: 'Content creator', icon: 'pen-tool' },
+            { id: 'marketer',     label: 'Marketer',       icon: 'megaphone' },
+            { id: 'product-pm',   label: 'Product / PM',   icon: 'layout-dashboard' },
+            { id: 'student',      label: 'Student',        icon: 'book-open' },
+            { id: 'researcher',   label: 'Researcher',     icon: 'microscope' },
+            { id: 'founder',      label: 'Founder',        icon: 'rocket' },
+            { id: 'other',        label: 'Something else', icon: 'help-circle' },
+          ],
+        },
+      };
+
+      var TASKS = [
+        { id: 'build-websites',     label: 'Build websites',      icon: 'globe' },
+        { id: 'migrate-page-aem',   label: 'Migrate a page to AEM', icon: 'book-up' },
+        { id: 'automate',           label: 'Automate tasks',      icon: 'zap' },
+        { id: 'research',           label: 'Research & analyze',  icon: 'search' },
+        { id: 'write-content',      label: 'Write content',       icon: 'file-text' },
+        { id: 'extract-data',       label: 'Extract data',        icon: 'database' },
+        { id: 'monitor',            label: 'Monitor sites',       icon: 'activity' },
+        { id: 'seo',                label: 'SEO & audits',        icon: 'bar-chart' },
+        { id: 'manage-files',       label: 'Manage files',        icon: 'folder' },
+        { id: 'browser-automation', label: 'Browser automation',  icon: 'mouse-pointer' },
+        { id: 'not-sure',           label: 'Not sure yet',        icon: 'circle-help' },
+      ];
+
+      var APPS = [
+        { id: 'aem',      label: 'Adobe Experience Manager', icon: 'box',
+          relevance: ['build-websites','migrate-page-aem','write-content','seo','content-creator','marketer','designer'] },
+        { id: 'imessage', label: 'iMessage',                 icon: 'message-circle',
+          relevance: ['personal','side-project','exploring'] },
+        { id: 'teams',    label: 'Microsoft Teams',          icon: 'users',
+          relevance: ['work','school','developer','designer','marketer','product-pm','founder','student'] },
+        { id: 'slack',    label: 'Slack',                    icon: 'hash',
+          relevance: ['work','school','developer','designer','marketer','product-pm','founder','student'] },
+      ];
+
+      function applyFontJoke(stepEl) {
+        var font = ROLE_FONTS[profile.role];
+        if (font) stepEl.style.fontFamily = font;
+        else stepEl.style.fontFamily = '';
+      }
+
+      function makePill(item, multiSelect, onSelect, preselected) {
+        var btn = document.createElement('button');
+        btn.className = 'pill';
+        btn.dataset.id = item.id;
+        if (preselected) btn.classList.add('selected');
+        if (item.icon) {
+          var ic = document.createElement('i');
+          ic.setAttribute('data-lucide', item.icon);
+          ic.style.width = '14px';
+          ic.style.height = '14px';
+          btn.appendChild(ic);
+        }
+        btn.appendChild(document.createTextNode(item.label));
+        btn.onclick = function () {
+          if (multiSelect) {
+            btn.classList.toggle('selected');
+          } else {
+            btn.parentElement.querySelectorAll('.pill').forEach(function(p){ p.classList.remove('selected'); });
+            btn.classList.add('selected');
+          }
+          onSelect(item, btn);
+        };
+        return btn;
+      }
+
+      function buildPills(containerId, items, multiSelect, onSelect, selectedIds) {
+        var el = document.getElementById(containerId);
+        el.innerHTML = '';
+        var pre = selectedIds || [];
+        items.forEach(function(item) {
+          el.appendChild(makePill(item, multiSelect, onSelect, pre.indexOf(item.id) >= 0));
+        });
+        if (window.LucideIcons) window.LucideIcons.render();
+      }
+
+      function getRelevantApps() {
+        var ctx = profile.tasks.concat([profile.role, profile.purpose]);
+        return APPS.slice().sort(function(a, b) {
+          var sa = a.relevance.filter(function(t){ return ctx.indexOf(t) >= 0; }).length;
+          var sb = b.relevance.filter(function(t){ return ctx.indexOf(t) >= 0; }).length;
+          return sb - sa;
+        });
+      }
+
+      function updateDots(step) {
+
+        var effective = step;
+        if (profile.purpose !== 'work' && step >= 5) effective = step - 1;
+        var dots = document.getElementById('dots').children;
+        for (var i = 0; i < dots.length; i++) {
+          dots[i].className = 'dot';
+          if (i + 1 === effective) dots[i].className = 'dot active';
+          else if (i + 1 < effective) dots[i].className = 'dot done';
+        }
+
+        dots[5].style.display = (profile.purpose !== 'work') ? 'none' : '';
+      }
+
+      function goBack() {
+        var prev = cur - 1;
+        if (prev === 5 && profile.purpose !== 'work') prev = 4;
+        if (prev >= 1) goStep(prev);
+      }
+
+      function skipStep() {
+        if (cur === 4) {
+          profile.name = '';
+          var nameIn = document.getElementById('nameIn');
+          if (nameIn) nameIn.value = '';
+          goStep(nextStep(cur));
+        } else if (cur === 5) {
+          profile.company = '';
+          var companyIn = document.getElementById('companyIn');
+          if (companyIn) companyIn.value = '';
+          goStep(nextStep(cur));
+        } else if (cur < 6) {
+          goStep(nextStep(cur));
+        } else {
+          finish();
+        }
+      }
+
+      function nextStep(n) {
+        if (n === 4 && profile.purpose !== 'work') return 6;
+        return n + 1;
+      }
+
+      function advanceFrom(n) {
+        goStep(nextStep(n));
+      }
+
+      function goStep(n) {
+
+        if (cur === 4) profile.name    = (document.getElementById('nameIn').value || '').trim();
+        if (cur === 5) profile.company = (document.getElementById('companyIn').value || '').trim();
+
+        if (n === 1) {
+          buildPills('purposePills', PURPOSES, false, function(item) {
+            profile.purpose = item.id;
+            setTimeout(function(){ goStep(2); }, 280);
+          }, profile.purpose ? [profile.purpose] : []);
+        }
+        if (n === 2) {
+          var cfg = ROLES_BY_PURPOSE[profile.purpose] || ROLES_BY_PURPOSE._default;
+          document.getElementById('s2Heading').textContent = cfg.heading;
+          buildPills('rolePills', cfg.roles, false, function(item) {
+            profile.role = item.id;
+            setTimeout(function(){ goStep(3); }, 280);
+          }, profile.role ? [profile.role] : []);
+        }
+        if (n === 3) {
+          var s3 = document.getElementById('s3');
+          applyFontJoke(s3);
+          var taskHeading = TASK_HEADINGS_BY_ROLE[profile.role] || TASK_HEADING_DEFAULT;
+          document.getElementById('s3Heading').textContent = taskHeading;
+          buildPills('taskPills', TASKS, true, function(item) {
+            profile.tasks = [];
+            document.querySelectorAll('#taskPills .pill.selected').forEach(function(p){
+              profile.tasks.push(p.dataset.id);
+            });
+          }, profile.tasks);
+        }
+        if (n === 6) {
+          var s6 = document.getElementById('s6');
+          applyFontJoke(s6);
+          buildPills('appPills', getRelevantApps(), true, function(item) {
+            profile.apps = [];
+            document.querySelectorAll('#appPills .pill.selected').forEach(function(p){
+              profile.apps.push(p.dataset.id);
+            });
+          }, profile.apps);
+        }
+
+        document.getElementById('s' + cur).classList.remove('active');
+        document.getElementById('s' + n).classList.add('active');
+        cur = n;
+        updateDots(n);
+
+        document.getElementById('backBtn').hidden = (n <= 1 || n > 6);
+        document.getElementById('footerArea').style.display = (n > 6) ? 'none' : '';
+
+        if (n === 4) setTimeout(function(){ document.getElementById('nameIn').focus(); }, 80);
+        if (n === 5) setTimeout(function(){ document.getElementById('companyIn').focus(); }, 80);
+      }
+
+      function finish() {
+        if (!profile.name)    profile.name    = (document.getElementById('nameIn').value || '').trim();
+        if (!profile.company) profile.company = (document.getElementById('companyIn').value || '').trim();
+
+        document.getElementById('s' + cur).classList.remove('active');
+        document.getElementById('sDone').classList.add('active');
+        document.getElementById('footerArea').style.display = 'none';
+        document.getElementById('backBtn').hidden = true;
+
+        if (window.slicc) {
+          slicc.lick({ action: 'onboarding-complete', data: profile });
+        }
+      }
+
+      function startWizard() {
+        document.getElementById('sDone').classList.remove('active');
+        document.getElementById('s1').classList.add('active');
+        document.getElementById('footerArea').style.display = '';
+
+        buildPills('purposePills', PURPOSES, false, function(item) {
+          profile.purpose = item.id;
+          setTimeout(function(){ goStep(2); }, 280);
+        }, profile.purpose ? [profile.purpose] : []);
+
+        updateDots(1);
+        document.getElementById('backBtn').hidden = true;
+        document.getElementById('dots').children[5].style.display = 'none';
+      }
+
+      function showAlreadyComplete() {
+        var wizard = document.querySelector('.sprinkle-action-card');
+        if (wizard) wizard.remove();
+      }
+
+      ['s1','s2','s3','s4','s5','s6','sDone'].forEach(function(id){
+        var el = document.getElementById(id);
+        if (el) el.classList.remove('active');
+      });
+
+      function bootByMarker() {
+        if (!window.slicc || typeof slicc.exists !== 'function') {
+          startWizard();
+          return;
+        }
+        Promise.resolve(slicc.exists('/shared/.welcomed')).then(
+          function(welcomed) { welcomed ? showAlreadyComplete() : startWizard(); },
+          function() { startWizard(); }
+        );
+      }
+      bootByMarker();
+    </script>
+  </body>
+</html>

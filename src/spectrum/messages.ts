@@ -16,6 +16,7 @@ import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
 import type { Delivered } from '../services.ts';
+import { SPRINKLE_KIND } from '../sprinkles/kind.ts';
 
 type Json = Record<string, unknown>;
 
@@ -223,6 +224,17 @@ export function errorAction(message: string): ErrorAction {
   return 'retry';
 }
 
+function sprinkleMessage(id: string, entry: EntryRecord): AssistantMessage {
+  const data = (entry.data ?? {}) as { sprinkle?: unknown };
+  return {
+    id,
+    role: 'assistant',
+    parts: [{ type: 'sprinkle', sprinkle: String(data.sprinkle ?? '') }],
+    status: 'done',
+    createdAt: 0,
+  };
+}
+
 export function assistant(
   id: string,
   message: ModelMessage,
@@ -360,6 +372,7 @@ function entryMessage(
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
+  else if (entry.kind === SPRINKLE_KIND) out.push(sprinkleMessage(id, entry));
   else if (entry.kind === 'pi.user' && model)
     out.push(
       lickMessage(id, entry, notes.decisions) ??

@@ -8,7 +8,7 @@ export const STALE_MS = 10 * 60_000;
 
 export interface Request {
   id: string;
-  as: 'agent' | 'subagent';
+  as: 'agent' | 'subagent' | 'sprinkle';
   caller: string;
   cwd: string;
   pid: number | null;
@@ -41,7 +41,7 @@ export function parseRequest(id: string, bytes: Uint8Array): Request | undefined
   const process = Number(pid);
   return {
     id,
-    as: as === 'subagent' ? 'subagent' : 'agent',
+    as: as === 'subagent' || as === 'sprinkle' ? as : 'agent',
     caller: caller as string,
     cwd: cwd || '/',
     pid: Number.isInteger(process) && process > 0 ? process : null,

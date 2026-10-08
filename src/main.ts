@@ -34,6 +34,7 @@ import {
   sliccProviders,
 } from './settings.ts';
 import { RELOAD_MS, setupSkills } from './skills/index.ts';
+import { setupSprinkles } from './sprinkles/index.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
 import { agentVersion, commandsOnPath, kernelBoot, transportName } from './system.ts';
 import { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
@@ -125,6 +126,17 @@ async function start(
     { env: home, home: HOME, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
     BACKGROUND_CONTEXT
   );
+  const sprinkles = await setupSprinkles().attach(
+    {
+      harness: agent.harness,
+      agents: agent.agents,
+      licks: licks.licks,
+      env: home,
+      assets: options.assets ?? packageAssets(),
+      reloadMs: RELOAD_MS,
+    },
+    BACKGROUND_CONTEXT
+  );
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -134,6 +146,7 @@ async function start(
       home: HOME,
       alive: alive(client),
       reads: skillsRuntime.dirs,
+      sprinkle: sprinkles.command,
       ...(options.assets ? { assets: options.assets } : {}),
     },
     BACKGROUND_CONTEXT
@@ -143,6 +156,7 @@ async function start(
     licks: { licks: licks.licks, sources },
     scoops: { scoops: scoops.scoops, runtime },
     skills: skillsRuntime,
+    sprinkles,
   });
 }
 

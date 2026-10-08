@@ -17,6 +17,7 @@ import {
   type Delivered,
   type SendMode,
 } from './services.ts';
+import type { Sprinkle } from './sprinkles/kind.ts';
 import { PortChannel, type PortEndpoint } from './wire.ts';
 
 export interface AgentConnection {
@@ -27,6 +28,7 @@ export interface AgentConnection {
   readonly agents?: ReplicatedState<AgentsSummary>;
   readonly views?: ReplicatedState<Record<string, ConversationView>>;
   readonly commands?: ReplicatedState<Command[]>;
+  readonly sprinkles?: ReplicatedState<Sprinkle[]>;
   readonly settings: AgentSettings;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
@@ -63,7 +65,14 @@ export async function connectAgent(
     bound: true,
   });
   const control = session.use(AgentControl);
-  const { state: transcript, deliveries, agents, views, commands } = session.use(AgentTranscript);
+  const {
+    state: transcript,
+    deliveries,
+    agents,
+    views,
+    commands,
+    sprinkles,
+  } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   await session.ready(context);
   return {
@@ -74,6 +83,7 @@ export async function connectAgent(
     agents,
     views,
     commands,
+    sprinkles,
     settings,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);

@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Suggestions</title>
+
+    <link rel="icon" href="ice-cream-cone" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: var(--s2-font-family, 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+        background: transparent;
+        color: var(--s2-content-default, #e8e8e8);
+        padding: 14px 18px 20px;
+      }
+
+      #gelatiereStream[hidden] { display: none; }
+
+      .gelatiere-entry { padding: 18px 0; }
+      .gelatiere-entry:first-child { padding-top: 2px; }
+      .gelatiere-entry + .gelatiere-entry,
+      .gelatiere-done {
+        border-top: 1px solid var(--s2-border-subtle, var(--s2-gray-200, #e8e8e8));
+      }
+
+      .gelatiere-entry__head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.35;
+        color: var(--s2-content-default, #e8e8e8);
+      }
+
+      .gelatiere-entry__head :is(i, svg) { width: 15px; height: 15px; flex-shrink: 0; }
+      .gelatiere-entry__title { flex: 1; }
+      .gelatiere-kind {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        white-space: nowrap;
+      }
+
+      .gelatiere-why {
+        margin-top: 6px;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
+      .gelatiere-cmd {
+        margin-top: 8px;
+        font-size: 11px;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        overflow-wrap: anywhere;
+      }
+      .gelatiere-cmd code,
+      .gelatiere-why code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+      }
+
+      .gelatiere-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 14px;
+        margin-top: 12px;
+      }
+      .gelatiere-actions .gelatiere-taken-note { margin-right: auto; }
+
+      .gelatiere-quiet-btn {
+        background: none;
+        border: none;
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        cursor: pointer;
+        padding: 4px 0;
+      }
+      .gelatiere-quiet-btn:hover { color: var(--s2-content-secondary, #a1a1a1); }
+
+      .gelatiere-empty { padding: 2px 0 4px; }
+      .gelatiere-explore {
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 1px solid var(--s2-border-subtle, var(--s2-gray-200, #e8e8e8));
+      }
+      .gelatiere-explore__link {
+        display: block;
+        padding: 10px 0;
+        text-decoration: none;
+        color: inherit;
+      }
+      .gelatiere-explore__link + .gelatiere-explore__link {
+        border-top: 1px solid var(--s2-border-subtle, var(--s2-gray-200, #e8e8e8));
+      }
+      .gelatiere-explore__link:hover .gelatiere-entry__title { text-decoration: underline; }
+
+      .gelatiere-entry--taken .gelatiere-entry__head,
+      .gelatiere-entry--taken .gelatiere-why,
+      .gelatiere-entry--taken .gelatiere-cmd { opacity: 0.6; }
+      .gelatiere-taken-note {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--s2-content-positive, #2d9d78);
+      }
+      .gelatiere-taken-note :is(i, svg) { width: 14px; height: 14px; flex-shrink: 0; }
+
+      .gelatiere-done { margin-top: 6px; padding-top: 14px; }
+      .gelatiere-done-title {
+        padding-bottom: 6px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--s2-content-tertiary, #8a8a8a);
+      }
+      .gelatiere-done-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+        font-size: 12px;
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
+      .gelatiere-done-row :is(i, svg) {
+        width: 13px;
+        height: 13px;
+        flex-shrink: 0;
+        color: var(--s2-content-positive, #2d9d78);
+      }
+      .gelatiere-done-row .gelatiere-done-title-text {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .gelatiere-done-row .gelatiere-done-what {
+        color: var(--s2-content-tertiary, #8a8a8a);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+
+    <div id="gelatiereStream" hidden></div>
+
+    <script>
+
+      var GELATIERE_SUGGESTIONS_PATH = '/shared/.gelatiere/suggestions.json';
+
+      var KIND_LABELS = {
+        'skill':      { label: 'Skill',     icon: 'package',       action: 'Install',   done: 'installed' },
+        'use-case':   { label: 'Try this',  icon: 'sparkles',      action: 'Try it',    done: 'tried' },
+        'tip':        { label: 'Tip',       icon: 'lightbulb',     action: null,        done: 'tried' },
+        'skill-idea': { label: 'New skill', icon: 'wand-sparkles', action: 'Draft it',  done: 'drafted' },
+        'issue':      { label: 'Report',    icon: 'bug',           action: 'Report it', done: 'reported' },
+      };
+
+      var USE_CASE_COMMAND = 'gelatiere use-cases --limit 3 --json';
+      var USE_CASE_CACHE_MS = 12 * 60 * 60 * 1000;
+      var EMPTY_HEADLINE = 'Nothing here yet';
+      var EMPTY_BODY =
+        'The gelatiere reads how you actually work, nightly and after each chat ' +
+        'ends, and leaves what it finds here: a skill worth installing, a use ' +
+        'case worth trying, a habit worth changing. Check back after your next session.';
+
+      function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text != null) node.textContent = text;
+        return node;
+      }
+
+      function lucide(name) {
+        var ic = document.createElement('i');
+        ic.setAttribute('data-lucide', name);
+        return ic;
+      }
+
+      function gelatierePrimaryButton(label, onClick) {
+        var btn = el('button', 'sprinkle-btn sprinkle-btn--primary', label);
+        btn.type = 'button';
+        btn.onclick = onClick;
+        return btn;
+      }
+
+      function gelatiereQuietButton(label, onClick, title) {
+        var btn = el('button', 'gelatiere-quiet-btn', label);
+        btn.type = 'button';
+        if (title) btn.title = title;
+        btn.onclick = onClick;
+        return btn;
+      }
+
+      function buildSuggestionCard(s) {
+        var meta = KIND_LABELS[s.kind] || KIND_LABELS.tip;
+        var card = el('div', 'gelatiere-entry');
+        card.dataset.id = s.id;
+
+        var head = el('div', 'gelatiere-entry__head');
+        head.appendChild(lucide(meta.icon));
+        head.appendChild(el('span', 'gelatiere-entry__title', s.title));
+        head.appendChild(el('span', 'gelatiere-kind', meta.label));
+        card.appendChild(head);
+
+        card.appendChild(el('div', 'gelatiere-why', s.body));
+        if (s.install) {
+          var install = el('div', 'gelatiere-cmd');
+          install.appendChild(document.createTextNode('Installs with '));
+          install.appendChild(el('code', null, s.install));
+          card.appendChild(install);
+        }
+
+        var actions = el('div', 'gelatiere-actions');
+
+        function markTaken(note) {
+          card.classList.add('gelatiere-entry--taken');
+          var done = el('div', 'gelatiere-taken-note');
+          done.appendChild(lucide('check'));
+          done.appendChild(document.createTextNode(note));
+          actions.replaceChildren(done);
+          if (window.LucideIcons) window.LucideIcons.render();
+        }
+
+        actions.appendChild(gelatiereQuietButton('Dismiss', function () {
+          if (window.slicc) slicc.lick({ action: 'gelatiere-dismiss', data: { id: s.id } });
+          card.remove();
+          if (!document.querySelector('.gelatiere-entry')) renderGelatiereCaughtUp();
+        }, "that's not for me"));
+        if (s.kind === 'skill') {
+          actions.appendChild(gelatierePrimaryButton(meta.action, function () {
+            if (window.slicc) slicc.lick({ action: 'gelatiere-install',
+              data: { id: s.id, skill: s.skill || null, install: s.install || null, title: s.title } });
+            markTaken('Installing. The cone is on it.');
+          }));
+        } else if (meta.action && s.prompt) {
+          actions.appendChild(gelatierePrimaryButton(meta.action, function () {
+            if (window.slicc) slicc.lick({ action: 'gelatiere-try',
+              data: { id: s.id, prompt: s.prompt, title: s.title } });
+            markTaken('Sent to the cone. Watch the chat.');
+          }));
+        } else if (s.url && /^https?:\/\//i.test(s.url)) {
+
+          var link = el('a', 'gelatiere-quiet-btn', 'Read more');
+          link.href = s.url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          actions.appendChild(link);
+        }
+        card.appendChild(actions);
+        return card;
+      }
+
+      var DONE_LEDGER_LIMIT = 5;
+      function buildDoneLedger(taken) {
+        var wrap = el('div', 'gelatiere-done');
+        wrap.appendChild(el('div', 'gelatiere-done-title', 'Done'));
+        taken.slice(0, DONE_LEDGER_LIMIT).forEach(function (s) {
+          var meta = KIND_LABELS[s.kind] || KIND_LABELS.tip;
+          var row = el('div', 'gelatiere-done-row');
+          row.appendChild(lucide('check'));
+          row.appendChild(el('span', 'gelatiere-done-title-text', s.title));
+          row.appendChild(el('span', 'gelatiere-done-what', meta.done));
+          wrap.appendChild(row);
+        });
+        return wrap;
+      }
+
+      function readCachedUseCases() {
+        try {
+          var saved = window.slicc && slicc.getState && slicc.getState();
+          if (!saved || !saved.useCases || !saved.fetchedAt) return null;
+          if (Date.now() - saved.fetchedAt > USE_CASE_CACHE_MS) return null;
+          return saved.useCases;
+        } catch (e) { return null; }
+      }
+
+      function loadUseCases() {
+        var cached = readCachedUseCases();
+        if (cached) return Promise.resolve(cached);
+        if (!window.slicc || typeof slicc.exec !== 'function') return Promise.resolve([]);
+        return Promise.resolve(slicc.exec(USE_CASE_COMMAND)).then(function (result) {
+          if (!result || result.exitCode !== 0) return [];
+          var parsed = JSON.parse(result.stdout);
+          if (!Array.isArray(parsed)) return [];
+          var cases = parsed.filter(function (c) { return c && c.url && c.title; });
+          try { slicc.setState({ fetchedAt: Date.now(), useCases: cases }); } catch (e) {}
+          return cases;
+        }, function () { return []; });
+      }
+
+      function appendUseCases(stream) {
+        loadUseCases().then(function (cases) {
+          if (!cases.length || !stream.isConnected) return;
+          var wrap = el('div', 'gelatiere-explore');
+          wrap.appendChild(el('div', 'gelatiere-done-title', 'Meanwhile, from sliccy.com'));
+          cases.forEach(function (c) {
+            var link = el('a', 'gelatiere-explore__link');
+            link.href = c.url;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            var head = el('div', 'gelatiere-entry__head');
+            head.appendChild(el('span', 'gelatiere-entry__title', c.title));
+            head.appendChild(lucide('arrow-up-right'));
+            link.appendChild(head);
+            if (c.description) link.appendChild(el('div', 'gelatiere-why', c.description));
+            wrap.appendChild(link);
+          });
+          stream.appendChild(wrap);
+          if (window.LucideIcons) window.LucideIcons.render();
+        });
+      }
+
+      function renderGelatiereEmpty(headline, body) {
+        var stream = document.getElementById('gelatiereStream');
+        stream.innerHTML = '';
+        var empty = el('div', 'gelatiere-empty');
+        var head = el('div', 'gelatiere-entry__head');
+        head.appendChild(lucide('ice-cream-cone'));
+        head.appendChild(el('span', 'gelatiere-entry__title', headline));
+        empty.appendChild(head);
+        empty.appendChild(el('div', 'gelatiere-why', body));
+        stream.appendChild(empty);
+        stream.hidden = false;
+        if (window.LucideIcons) window.LucideIcons.render();
+        appendUseCases(stream);
+      }
+
+      function renderGelatiereCaughtUp() {
+        renderGelatiereEmpty(
+          'All caught up',
+          'You have answered everything the gelatiere left here. The next pass runs ' +
+            'tonight, and again after your next chat ends.'
+        );
+      }
+
+      function renderGelatiereStream() {
+        var stream = document.getElementById('gelatiereStream');
+        if (!stream) return;
+
+        if (!window.slicc || typeof slicc.readFile !== 'function') {
+          renderGelatiereEmpty(EMPTY_HEADLINE, EMPTY_BODY);
+          return;
+        }
+
+        Promise.resolve(slicc.exists(GELATIERE_SUGGESTIONS_PATH)).then(function (present) {
+          return present ? slicc.readFile(GELATIERE_SUGGESTIONS_PATH) : '[]';
+        }).then(function (raw) {
+          var list = [];
+          try { list = JSON.parse(raw); } catch (e) { list = []; }
+          if (!Array.isArray(list)) list = [];
+          var readable = list.filter(function (s) {
+            return s && typeof s === 'object' && s.id && s.title && s.body;
+          });
+
+          var open = readable.filter(function (s) { return !s.dismissedAt && !s.takenAt; });
+          var taken = readable.filter(function (s) { return s.takenAt; });
+          if (open.length === 0 && taken.length === 0) {
+            renderGelatiereEmpty(EMPTY_HEADLINE, EMPTY_BODY);
+            return;
+          }
+
+          if (open.length === 0) {
+            renderGelatiereCaughtUp();
+            stream.appendChild(buildDoneLedger(taken));
+            if (window.LucideIcons) window.LucideIcons.render();
+            return;
+          }
+          stream.innerHTML = '';
+          open.forEach(function (s) { stream.appendChild(buildSuggestionCard(s)); });
+          if (taken.length > 0) stream.appendChild(buildDoneLedger(taken));
+          stream.hidden = false;
+          if (window.LucideIcons) window.LucideIcons.render();
+        }, function () {
+          renderGelatiereEmpty(EMPTY_HEADLINE, EMPTY_BODY);
+        });
+      }
+
+      renderGelatiereStream();
+    </script>
+  </body>
+</html>

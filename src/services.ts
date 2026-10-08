@@ -1,5 +1,11 @@
-import { type Context, defineService, type ReplicatedState } from '@earendil-works/chord';
+import {
+  type Context,
+  defineService,
+  type JsonValue,
+  type ReplicatedState,
+} from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { Sprinkle } from './sprinkles/kind.ts';
 
 export type SendMode = 'steer' | 'followUp' | 'reject';
 
@@ -55,6 +61,17 @@ export interface AgentControl {
     submissionId: string,
     context: Context
   ): Promise<{ outcome: 'withdrawn' | 'already_placed' | 'not_found' }>;
+  sprinkleSend(
+    sprinkleId: string,
+    payload: { action: string; data: JsonValue | null; target: string | null },
+    context: Context
+  ): Promise<{ delivered: boolean }>;
+  sprinkleCall(
+    sprinkleId: string,
+    method: string,
+    args: JsonValue[],
+    context: Context
+  ): Promise<JsonValue>;
 }
 
 export type Created = { id: string; error: null } | { id: null; error: string };
@@ -102,6 +119,7 @@ export interface AgentTranscript {
   readonly agents: ReplicatedState<AgentsSummary>;
   readonly views: ReplicatedState<Record<string, ConversationView>>;
   readonly commands: ReplicatedState<Command[]>;
+  readonly sprinkles: ReplicatedState<Sprinkle[]>;
 }
 
 export interface Command {
