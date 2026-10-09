@@ -209,7 +209,8 @@ export const INSTALLER = 'https://raw.githubusercontent.com/ai-ecoverse/gh-upski
 
 export function upskillScript(repo: string, skill: string): string {
   return [
-    `command -v upskill >/dev/null 2>&1 || curl -fsSL ${INSTALLER} | bash`,
+    'export PATH="$PATH:$HOME/.local/bin"',
+    `{ command -v upskill >/dev/null 2>&1 || curl -fsSL ${INSTALLER} | bash; }`,
     `upskill '${repo}' --skill '${skill}' --dest "$HOME/.pi/agent/skills"`,
   ].join(' && ');
 }
