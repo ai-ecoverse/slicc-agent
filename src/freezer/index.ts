@@ -60,6 +60,7 @@ export interface FreezerRuntime {
   thaw(id: string, context: Context): Promise<string>;
   discard(id: string, context: Context): Promise<void>;
   refresh(): Promise<readonly FrozenCone[]>;
+  touch(): void;
   frozenTarget(target: LickTarget): Frozen | undefined;
   command(argv: readonly string[], caller: string | null, context: Context): Promise<Answer>;
   close(): void;
@@ -74,6 +75,7 @@ Delete a cone, or start a new conversation, from the chat toolbar or the command
 `;
 
 const TITLE_LENGTH = 60;
+export const TOUCH_MS = 500;
 
 function textOf(entry: EntryRecord): string {
   return answerText(entry.model?.[0]?.content).trim();
@@ -412,8 +414,17 @@ function listing(harness: Harness, agents: Agents) {
   };
   const quiet = () => void refresh().catch(() => undefined);
   quiet();
-  const off = agents.onChange(quiet);
-  return { frozen, refresh, off };
+  const stop = agents.onChange(quiet);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(quiet, TOUCH_MS);
+  };
+  const off = () => {
+    clearTimeout(timer);
+    stop();
+  };
+  return { frozen, refresh, touch, off };
 }
 
 async function thawFrozen(agents: Agents, id: string, context: Context): Promise<string> {
@@ -460,7 +471,7 @@ async function discardFrozen(options: FreezerAttach, id: string, context: Contex
 export function attachFreezer(options: FreezerAttach): FreezerRuntime {
   const { harness, agents } = options;
   const now = options.now ?? Date.now;
-  const { frozen, refresh, off } = listing(harness, agents);
+  const { frozen, refresh, touch, off } = listing(harness, agents);
   const conversationOf = async (agentId: string, context: Context) => {
     const conversation = await agents.conversation(agentId, context);
     if (!conversation) throw new Error(`There is no cone ${agentId}.`);
@@ -596,6 +607,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       return discardFrozen(options, id, context);
     },
     refresh,
+    touch,
     frozenTarget: (target) => frozenTarget(agents.state(), target),
     command: (argv, _caller, context) => command(options, runtime, argv, context),
     close: () => off(),

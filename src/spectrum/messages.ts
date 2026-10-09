@@ -383,7 +383,7 @@ function thawed(id: string, entry: EntryRecord): SystemMessage {
     kind: 'notice',
     title: `Thawed from ${what} ${data.name ?? ''}`.trim(),
     text: textOf(entry.model?.[0]?.content ?? ''),
-    createdAt: 0,
+    createdAt: entry.model?.[0]?.timestamp ?? 0,
   };
 }
 
