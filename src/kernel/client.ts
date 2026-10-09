@@ -36,6 +36,7 @@ export interface KernelProcess {
 export interface SpawnOptions {
   cwd?: string;
   env?: Record<string, string>;
+  pgid?: number;
   onStdout?(bytes: Uint8Array): void;
   onStderr?(bytes: Uint8Array): void;
 }
@@ -44,5 +45,5 @@ export interface KernelClient {
   fs: KernelFs;
   spawn(argv: readonly string[], options: SpawnOptions): Promise<KernelProcess>;
   kill?(pid: number, signal?: string): Promise<void>;
-  ps?(): Promise<readonly { pid: number }[]>;
+  ps?(): Promise<readonly { pid: number; ppid?: number }[]>;
 }

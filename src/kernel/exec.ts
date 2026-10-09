@@ -8,7 +8,8 @@ import {
   type ShellExecResult,
   StreamDecoder,
 } from '@earendil-works/pi-durable/env';
-import type { KernelClient, KernelProcess } from './client.ts';
+import type { KernelClient, KernelProcess, SpawnOptions } from './client.ts';
+import { descendants, REFUSED } from './groups.ts';
 import { resolve } from './paths.ts';
 
 export const SHELL = ['bash', '-c'] as const;
@@ -74,11 +75,25 @@ function sink(
 
 type Ending = 'timeout' | 'aborted' | undefined;
 
-function guard(process: KernelProcess, options: ShellExecOptions | undefined, context: Context) {
+export async function sweep(
+  client: Pick<KernelClient, 'kill' | 'ps'>,
+  process: KernelProcess
+): Promise<void> {
+  const table = (await client.ps?.().catch(() => undefined)) ?? [];
+  const pids = [process.pid, ...descendants(table, process.pid)];
+  await Promise.all(pids.map((pid) => client.kill?.(pid, 'SIGKILL').catch(() => undefined)));
+}
+
+function guard(
+  process: KernelProcess,
+  options: ShellExecOptions | undefined,
+  context: Context,
+  kill: () => void
+) {
   let ending: Ending;
   const stop = (why: Ending) => {
     ending ??= why;
-    process.signal('SIGKILL');
+    kill();
   };
   const timer =
     options?.timeout === undefined
@@ -98,13 +113,37 @@ function guard(process: KernelProcess, options: ShellExecOptions | undefined, co
   };
 }
 
+export interface Join {
+  pgid?: number;
+  refused(code: string): void;
+}
+
+async function start(
+  client: KernelClient,
+  argv: readonly string[],
+  options: SpawnOptions,
+  join: Join | undefined
+): Promise<{ process: KernelProcess; joined: boolean }> {
+  if (join?.pgid !== undefined) {
+    try {
+      return { process: await client.spawn(argv, { ...options, pgid: join.pgid }), joined: true };
+    } catch (error) {
+      const code = String((error as { code?: unknown }).code ?? '');
+      if (!REFUSED.has(code)) throw error;
+      join.refused(code);
+    }
+  }
+  return { process: await client.spawn(argv, options), joined: false };
+}
+
 export async function execute(
   client: KernelClient,
   cwd: string,
   command: string | readonly string[],
   options: ShellExecOptions | undefined,
   context: Context,
-  spawned?: (process: KernelProcess) => void
+  spawned?: (process: KernelProcess) => void,
+  join?: Join
 ): Promise<Result<ShellExecResult, ExecutionError>> {
   const argv = typeof command === 'string' ? [...SHELL, command] : [...command];
   if (argv.length === 0) return err(new ExecutionError('spawn_error', 'No program to run'));
@@ -113,20 +152,28 @@ export async function execute(
   const spill = new Spill(options?.spill);
   const out = sink('stdout', spill, options, context);
   const errors = sink('stderr', spill, options, context);
-  let process: KernelProcess;
+  let started: { process: KernelProcess; joined: boolean };
   try {
-    process = await client.spawn(argv, {
-      cwd: resolve(cwd, options?.cwd ?? '.'),
-      ...(options?.env ? { env: options.env } : {}),
-      onStdout: (bytes) => out.push(bytes),
-      onStderr: (bytes) => errors.push(bytes),
-    });
+    started = await start(
+      client,
+      argv,
+      {
+        cwd: resolve(cwd, options?.cwd ?? '.'),
+        ...(options?.env ? { env: options.env } : {}),
+        onStdout: (bytes) => out.push(bytes),
+        onStderr: (bytes) => errors.push(bytes),
+      },
+      join
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return err(new ExecutionError('spawn_error', message));
   }
+  const { process } = started;
   spawned?.(process);
-  const watch = guard(process, options, context);
+  const watch = guard(process, options, context, () =>
+    join ? void sweep(client, process) : process.signal('SIGKILL')
+  );
   const exitCode = await process.exited.finally(() => watch.release());
   out.end();
   errors.end();
