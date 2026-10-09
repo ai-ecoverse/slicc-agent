@@ -11,6 +11,7 @@ import {
   type ToolRegistration,
   type Tx,
 } from '@earendil-works/pi-durable';
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import {
   type Agents,
   type AgentsState,
@@ -66,6 +67,7 @@ export interface ScoopsHost {
   groups?: ProcessGroups;
   tools?: readonly ToolRegistration[];
   reads?: () => readonly string[];
+  files?: Pick<ExecutionEnv, 'remove' | 'createDir'>;
 }
 
 export interface Rewound {
@@ -402,7 +404,7 @@ async function stopFeeds(
 }
 
 async function stop(core: Core, id: string, fromAgent: boolean, context: Context): Promise<Answer> {
-  const { agents } = await core.host;
+  const { agents, files } = await core.host;
   const record = agents.state().scoops[id];
   if (!record || !live(record)) return missing(id);
   await stopFeeds(core, id, async () => false, context);
@@ -413,9 +415,17 @@ async function stop(core: Core, id: string, fromAgent: boolean, context: Context
   await agents.update((_tx, state) => {
     (state.scoops[id] as ScoopRecord).dropped = mark;
   }, context);
+  const removed = await files?.remove(
+    workspace(record.folder),
+    { recursive: true, force: true },
+    context
+  );
+  const folder = removed?.ok
+    ? `removed ${workspace(record.folder)}`
+    : `kept ${workspace(record.folder)}`;
   return {
     code: 0,
-    out: `stopped ${record.folder}; its transcript is kept, and its files stay in ${SCOOPS_ROOT}/${record.folder}\n`,
+    out: `stopped ${record.folder}; its transcript is kept, ${folder}, and its reports stay in ${SCOOPS_ROOT}/${record.folder}/reports\n`,
   };
 }
 
@@ -442,7 +452,7 @@ async function rewindOne(
   result: Rewound,
   context: Context
 ): Promise<Partial<ScoopRecord> | undefined> {
-  const { harness, licks } = await core.host;
+  const { harness, licks, files } = await core.host;
   if (!(await seen(record.created))) {
     if (live(record)) {
       await stopFeeds(core, id, async () => false, context);
@@ -454,6 +464,8 @@ async function rewindOne(
   if (record.dropped !== null) {
     if (await seen(record.dropped)) return undefined;
     result.restored.push(record.name);
+    await files?.remove(workspace(record.folder), { recursive: true, force: true }, context);
+    await files?.createDir(workspace(record.folder), { recursive: true }, context);
     return { dropped: null };
   }
   const withdrawn = await stopFeeds(core, id, (entry) => seen(entry.created), context);

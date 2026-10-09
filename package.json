@@ -62,7 +62,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/slicc-shared-web": "1.10.0",
-    "@ai-ecoverse/slicc-spectrum": "1.27.3",
+    "@ai-ecoverse/slicc-spectrum": "1.28.0",
     "@ai-ecoverse/wasm-bash": "5.3.0-8",
     "@ai-ecoverse/wasm-coreutils": "9.7.0-3",
     "@biomejs/biome": "2.5.15",
@@ -87,7 +87,7 @@
     "@sqlite.org/sqlite-wasm": "3.53.4-build2"
   },
   "peerDependencies": {
-    "@ai-ecoverse/slicc-spectrum": "^1.27.2"
+    "@ai-ecoverse/slicc-spectrum": "^1.28.0"
   },
   "peerDependenciesMeta": {
     "@ai-ecoverse/slicc-spectrum": {
