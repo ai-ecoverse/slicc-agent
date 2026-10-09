@@ -292,8 +292,8 @@ pi durable keeps every conversation and entry in the session database, and has n
   - if it was active, another cone is selected, and if it was the last one, a fresh cone takes its name.
   - Before it moves, 14b's memory extraction is scheduled for anything new.
   - Its title starts as the first user line, then one background call (with `memory.extractModel` or the cone's model) replaces it with a short title.
-- **New chat** (spectrum's `clear`) archives the chat the same way, when it isn't empty, and gives the cone a fresh conversation with the same configuration; its scoops stay. `createAgentModel(connection, { newChat: 'reset' })` makes it a plain reset instead.
-- **Thaw** puts a frozen cone back under its old id when that's free (otherwise a new `cone-<n>`, with a number added to a name that's taken), unfreezes its scoops idle with their workspaces, and selects it. It continues where it stopped.
+- **New chat** (spectrum's `clear` and `/clear`, Lars's W9) archives the chat the same way, when it isn't empty, and gives the cone a fresh conversation with the same configuration; its scoops stay. On a scoop, `clear` is a plain reset.
+- **Thaw** puts a frozen cone back under its old id when that's free (otherwise a new `cone-<n>`), unfreezes its scoops idle with their workspaces, and selects it. A taken name becomes `<name> (earlier)`, then `(earlier 2)` and so on, as in spectrum's dummy. It continues where it stopped.
 - **Delete** removes the frozen entry, marks its scoops gone and deletes their folders. The history stays in the session database, which SLICC can't remove from.
 - **While frozen:**
   - its scoops aren't listed, and `agent send|wait|stop` on one says it is frozen with its cone;
