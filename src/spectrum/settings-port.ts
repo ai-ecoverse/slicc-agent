@@ -23,13 +23,18 @@ const defaults: Settings = {
 
 type Local = Omit<Settings, 'model' | 'thinking'>;
 
-export type Login = (providerId: string, signIn: () => Promise<SignIn | null>) => Promise<string>;
+export type Login = (
+  providerId: string,
+  signIn: () => Promise<SignIn | null>,
+  options?: { signal: AbortSignal }
+) => Promise<string>;
 
 export class SettingsAdapter extends Emitter<SettingsEvents> implements SettingsPort {
   readonly #settings: AgentSettings;
   readonly #agent: AgentAdapter;
   readonly #storage: Pick<Storage, 'getItem' | 'setItem'> | null;
   readonly #login: Login | null;
+  readonly #signing = new Map<string, AbortController>();
   #local: Local;
 
   constructor(
@@ -84,20 +89,45 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   }
 
   accounts(): readonly Account[] {
-    return this.#state().accounts.map(({ needs, ...account }) =>
-      needs ? { ...account, needs } : account
-    );
+    return this.#state().accounts.map(({ needs, ...account }) => {
+      const shown = this.#signing.has(account.id)
+        ? { ...account, status: 'signing-in' as const }
+        : account;
+      return needs ? { ...shown, needs } : shown;
+    });
   }
 
   async connect(id: string, secret?: string, options: { region?: string } = {}): Promise<void> {
     const account = this.#state().accounts.find((candidate) => candidate.id === id);
     const login = account?.auth === 'oauth' ? this.#login : null;
-    const key =
-      secret ??
-      (login ? await login(id, () => this.#settings.signIn(id, BACKGROUND_CONTEXT)) : undefined);
+    const key = secret ?? (login ? await this.#signIn(id, login) : undefined);
     if (!key)
       throw new Error(`${id} needs ${account?.auth === 'oauth' ? 'a sign-in' : 'an API key'}`);
     await this.#settings.connect(id, key, options.region ?? null, BACKGROUND_CONTEXT);
+  }
+
+  async #signIn(id: string, login: Login): Promise<string> {
+    const controller = new AbortController();
+    this.#signing.set(id, controller);
+    this.emit('accounts', this.accounts());
+    try {
+      const key = await login(id, () => this.#settings.signIn(id, BACKGROUND_CONTEXT), {
+        signal: controller.signal,
+      });
+      controller.signal.throwIfAborted();
+      return key;
+    } finally {
+      if (this.#signing.get(id) === controller) this.#signing.delete(id);
+      this.emit('accounts', this.accounts());
+    }
+  }
+
+  cancel(id: string): void {
+    const controller = this.#signing.get(id);
+    if (!controller) return;
+    this.#signing.delete(id);
+    controller.abort(new DOMException('The sign-in was cancelled.', 'AbortError'));
+    this.emit('accounts', this.accounts());
   }
 
   disconnect(id: string): void {
