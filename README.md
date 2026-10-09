@@ -258,13 +258,13 @@ The `memory` section, read before every request, holds the first 200 lines (at m
 - `gelatiere init` starts the scoop in the first cone, writes `~/.pi/agent/GELATIERE.md` (its procedure, which the user can edit) unless it exists, and puts one crontab line `0 3 * * * gelatiere scoop:<handle> …` in `~/.slicc/crontab`, replacing an older one.
 - On each pass it reads memory, the installed skills, the roles and the lick files, and writes at most three suggestions as JSON. `gelatiere suggest <file>` validates them and folds them into `/home/.gelatiere/suggestions.json` by id:
   - kinds `skill`, `use-case`, `tip`, `skill-idea` and `issue`;
-  - a `skill` with its name and its `source`, the https URL of a single-file `SKILL.md`;
+  - a `skill` with its name and its GitHub `repo` (`owner/repo`);
   - https URLs only;
   - secrets redacted;
   - at most 50 open;
   - dismissed and taken ids are never reopened.
 - `gelatiere deliver` sends each cone named in a suggestion's `cones` (or the first cone) one `sprinkle` lick with the action `gelatiere-suggestions`. The built-in `gelatiere` skill answers it with `sprinkle show suggestions`, and looks ids up in the store before installing or trying anything.
-- `gelatiere install <id>` is what a card's Install leads to. It fetches the suggestion's `source` with curl (seven has no `upskill` and no `git`), checks that the file is a valid `SKILL.md` for that name, writes `~/.pi/agent/skills/<name>/SKILL.md`, which the skills loader picks up, and marks the suggestion taken. It refuses a skill that already exists and any source that isn't https. Before anyone clicks, the card shows where the skill comes from: "Installs github from raw.githubusercontent.com/…".
+- `gelatiere install <id>` is what a card's Install leads to. It installs [upskill](https://github.com/ai-ecoverse/gh-upskill) if it's missing (`command -v upskill || curl -fsSL …/install.sh | bash`, into `$PNPM_HOME`), runs `upskill <repo> --skill <name> --dest ~/.pi/agent/skills`, checks that the skill is there for the skills loader, and marks the suggestion taken. It refuses a skill that's already installed. In seven, upskill reaches GitHub through the page's fetch, which `raw.githubusercontent.com` and `api.github.com` allow with CORS; `GITHUB_TOKEN` raises GitHub's rate limit. Before anyone clicks, the card shows where the skill comes from: "Installs github from github.com/example/skills".
 - `gelatiere run`, `list [--all] [--json]`, `dismiss <id>` and `status` complete the command.
 - The gelatiere doesn't read the www.sliccy.com skill catalog or use-case pages, and doesn't consolidate other agents' memory, which only cones and the user write.
 

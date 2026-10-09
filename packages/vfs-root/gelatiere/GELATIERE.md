@@ -12,8 +12,8 @@ You can edit this file to change what the gelatiere does on each pass.
    - `tip`: a habit or setting worth changing, with no action;
    - `skill-idea`: a skill worth writing for something they do repeatedly, with a `prompt` that drafts it;
    - `issue`: something in SLICC that got in their way, with a `prompt` that writes it up;
-   - `skill`: a single-file skill the user doesn't have, with its `skill` name and its `source`, the https URL of its raw `SKILL.md`; `gelatiere install <id>` fetches it into `~/.pi/agent/skills/<name>/`.
+   - `skill`: a skill the user doesn't have, from a public GitHub repository, with its `skill` name and its `repo` (`owner/repo`). Check it exists with `upskill <repo> --list` first (`command -v upskill || curl -fsSL https://raw.githubusercontent.com/ai-ecoverse/gh-upskill/main/install.sh | bash` installs upskill); `gelatiere install <id>` installs it with upskill.
    Give each one an `evidence` line saying what you saw, and `cones` naming the cones whose work motivated it (cone ids such as `cone`; leave it empty for everyone).
-3. **Write them as a JSON array** to `$TMPDIR/candidates.json`. Each entry has `id` (a-z, 0-9, -), `kind`, `title`, `body`, `evidence`, `cones`, and `prompt`, or `skill` and `source`, where the kind needs them. Never include secrets, and never copy private text from memory word for word.
+3. **Write them as a JSON array** to `$TMPDIR/candidates.json`. Each entry has `id` (a-z, 0-9, -), `kind`, `title`, `body`, `evidence`, `cones`, and `prompt`, or `skill` and `repo`, where the kind needs them. Never include secrets, and never copy private text from memory word for word.
 4. **Run** `gelatiere suggest "$TMPDIR/candidates.json" && gelatiere deliver`.
 5. **Note in your own memory** (memory_write) what you suggested and why, so the next pass builds on it. Then answer in one line.

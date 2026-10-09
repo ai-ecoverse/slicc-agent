@@ -35,7 +35,7 @@ export const USAGE = `usage:
   gelatiere run             ask the gelatiere for a pass now
   gelatiere suggest <file>  fold a JSON array of suggestions into the store
   gelatiere deliver         lick each cone with the suggestions that are new for it
-  gelatiere install <id>    install a suggested skill from its source into ~/.pi/agent/skills
+  gelatiere install <id>    install a suggested skill with upskill into ~/.pi/agent/skills
   gelatiere list [--all] [--json]
   gelatiere dismiss <id>    mark a suggestion as not wanted
   gelatiere status
@@ -205,15 +205,24 @@ async function deliver(g: G, context: Context): Promise<Answer> {
   };
 }
 
-async function fetchText(env: ExecutionEnv, url: string, temp: string, context: Context) {
-  const fetched = await env.exec(
-    ['curl', '-fsSL', '--max-time', '30', '-o', temp, url],
-    undefined,
-    context
-  );
-  const read = await env.readTextFile(temp, context);
-  await env.remove(temp, { force: true }, context);
-  return fetched.ok && fetched.value.exitCode === 0 && read.ok ? read.value : undefined;
+export const INSTALLER = 'https://raw.githubusercontent.com/ai-ecoverse/gh-upskill/main/install.sh';
+
+export function upskillScript(repo: string, skill: string): string {
+  return [
+    `command -v upskill >/dev/null 2>&1 || curl -fsSL ${INSTALLER} | bash`,
+    `upskill '${repo}' --skill '${skill}' --dest "$HOME/.pi/agent/skills"`,
+  ].join(' && ');
+}
+
+async function installed(env: ExecutionEnv, home: string, skill: string, context: Context) {
+  const root = `${home}/.pi/agent/skills`;
+  const listed = await env.listDir(root, context);
+  for (const info of listed.ok ? listed.value : []) {
+    const path = `${root}/${info.name}/SKILL.md`;
+    const read = await env.readTextFile(path, context);
+    if (read.ok && skillFromText(read.value, path, 'user').skills[0]?.name === skill) return path;
+  }
+  return undefined;
 }
 
 async function install(g: G, id: string, context: Context): Promise<Answer> {
@@ -221,23 +230,25 @@ async function install(g: G, id: string, context: Context): Promise<Answer> {
   const item = (await g.load(context)).find((entry) => entry.id === id && entry.kind === 'skill');
   const checked = item ? validate(item) : `there is no skill suggestion ${id}`;
   if (typeof checked === 'string') return fail(checked);
-  const { skill, source } = checked as Required<Pick<Suggestion, 'skill' | 'source'>>;
-  const dir = `${home}/.pi/agent/skills/${skill}`;
-  const present = await env.exists(`${dir}/SKILL.md`, context);
-  if (present.ok && present.value) return fail(`${skill} is already installed in ${dir}`);
-  const text = await fetchText(env, source, `${home}/.gelatiere-${id}.md`, context);
-  if (text === undefined) return fail(`couldn't fetch ${source}`);
-  const parsed = skillFromText(text, `${dir}/SKILL.md`, 'user');
-  if (parsed.skills[0]?.name !== skill) {
-    const why = parsed.diagnostics[0] ? ` (${parsed.diagnostics[0].message})` : '';
-    return fail(`${source} is not a SKILL.md for ${skill}${why}`);
-  }
-  await env.createDir(dir, { recursive: true }, context);
-  await env.writeFile(`${dir}/SKILL.md`, text, context);
+  const { skill, repo } = checked as Required<Pick<Suggestion, 'skill' | 'repo'>>;
+  const before = await installed(env, home, skill, context);
+  if (before) return fail(`${skill} is already installed in ${before}`);
+  const lines: string[] = [];
+  const ran = await env.exec(
+    upskillScript(repo, skill),
+    { cwd: home, onOutput: (text) => void lines.push(text) },
+    context
+  );
+  const output = lines.join('').trim().split('\n').slice(-8).join('\n');
+  const path = await installed(env, home, skill, context);
+  if (!ran.ok || ran.value.exitCode !== 0 || !path)
+    return fail(
+      `upskill couldn't install ${skill} from github.com/${repo}${output ? `:\n${output}` : ''}`
+    );
   await g.mark(id, 'takenAt', context);
   return {
     code: 0,
-    out: `installed ${skill} in ${dir}; it is /skill:${skill} once the skills reload\n`,
+    out: `installed ${skill} in ${path}; it is /skill:${skill} once the skills reload\n`,
   };
 }
 
