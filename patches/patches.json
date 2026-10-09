@@ -58,5 +58,17 @@
     "reason": "chord depends on esbuild only for its Node-only dist/node/bundle.js, which the browser never loads, so slicc-bios removes esbuild from /opt/agent with a pnpm override (esbuild: '-' in src/packages/agent/pnpm-workspace.yaml).",
     "removeWhen": "chord drops the esbuild dependency, or the agent starts using chord's Node bundler in the browser (drop the bios override first).",
     "verify": "npm test"
+  },
+  "pi-ai-google-vertex-lazy": {
+    "kind": "environment",
+    "package": "@earendil-works/pi-ai",
+    "patchedVersion": "1.0.4",
+    "marker": {
+      "file": "dist/api/google-vertex.lazy.js",
+      "includes": "import(\"./google-vertex.js\")"
+    },
+    "reason": "The second of pi-ai's two @google/genai importers (see pi-ai-google-genai-lazy): google-vertex.js must also stay behind a lazy dynamic import for the slicc-bios override ('@google/genai': '-') to be safe.",
+    "removeWhen": "seven adds a Google provider (drop the bios override first), or pi-ai stops depending on @google/genai.",
+    "verify": "npm test"
   }
 }

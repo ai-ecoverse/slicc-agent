@@ -381,7 +381,7 @@ Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.js
 - `environment`, pruned from seven's install: slicc-bios's `/opt/agent` (its `src/packages/agent`) removes `@google/genai` and `esbuild` with pnpm overrides in `pnpm-workspace.yaml` (#22).
   - A real Bedrock turn loads 28 of 95 installed packages and never those two trees. Adobe's APIs reach only `@anthropic-ai/sdk`, `openai` and `partial-json`, so those stay.
   - The prune takes the install from 99 to 58 packages and `node_modules` from 143 to 92 MB.
-  - The markers keep pi-ai's Google APIs lazy and chord's esbuild Node-only. Seven offers only the Bedrock and Adobe providers: if a Google provider is ever added, the bios override has to go first, and a failing marker is the reminder.
+  - The markers keep pi-ai's two Google APIs (Gemini and Vertex) lazy and chord's esbuild Node-only. Seven offers only the Bedrock and Adobe providers: if a Google provider is ever added, the bios override has to go first, and a failing marker is the reminder.
 
 `npm run lint:patches` (part of `npm run lint`) fails when an installed version differs from `patchedVersion`, a marker is gone, a monkeypatch isn't named in `src/patches.ts`, a patch file and its entry don't match, or `renovate.json` doesn't route the package to the `patched dependencies` group with automerge off. That group covers every `@earendil-works/*` package, so a pi bump is always a reviewed PR: rerun each entry's `verify`, then move `patchedVersion` forward or drop the entry.
 
