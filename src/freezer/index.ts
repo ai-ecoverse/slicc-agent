@@ -110,10 +110,12 @@ function list(state: Readonly<AgentsState>): FrozenCone[] {
     .sort((a, b) => b.frozenAt - a.frozenAt);
 }
 
-function freeName(state: Readonly<AgentsState>, wanted: string): string {
+export function freeName(state: Readonly<AgentsState>, wanted: string): string {
   const taken = new Set(Object.values(state.cones).map((cone) => cone.name));
   if (!taken.has(wanted)) return wanted;
-  for (let n = 2; ; n++) if (!taken.has(`${wanted} ${n}`)) return `${wanted} ${n}`;
+  if (!taken.has(`${wanted} (earlier)`)) return `${wanted} (earlier)`;
+  for (let n = 2; ; n++)
+    if (!taken.has(`${wanted} (earlier ${n})`)) return `${wanted} (earlier ${n})`;
 }
 
 type Snapshot = { entries: readonly EntryRecord[]; record: Omit<FrozenRecord, 'scoops' | 'cone'> };
@@ -180,6 +182,28 @@ async function command(
   const conversation = await options.harness.conversation(record.conversation as never, context);
   const entries = conversation ? (await conversation.context(context)).entries : [];
   return { code: 0, out: markdown(record, entries) };
+}
+
+async function freshLike(
+  harness: Harness,
+  conversation: Conversation,
+  context: Context
+): Promise<Conversation> {
+  const agent = await conversation.agent(context);
+  return harness.createConversation(
+    {
+      ownership: { kind: 'ownerless' },
+      agent: {
+        model: agent.model,
+        thinkingLevel: agent.thinkingLevel,
+        extensions: agent.extensions,
+        tools: agent.tools,
+        instructions: agent.instructions ?? null,
+        cwd: agent.cwd ?? null,
+      },
+    },
+    context
+  );
 }
 
 export function attachFreezer(options: FreezerAttach): FreezerRuntime {
@@ -279,25 +303,16 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
     },
     async newChat(agentId, context) {
       const cone = agents.state().cones[agentId];
+      const scoop = agents.state().scoops[agentId];
+      if (!cone && scoop && live(scoop)) {
+        await (await agents.conversation(agentId, context))?.reset(undefined, context);
+        return null;
+      }
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
       const conversation = await conversationOf(agentId, context);
       const before = (await conversation.context(context)).entries;
       if (!before.some((entry) => entry.kind === 'pi.user')) return null;
-      const agent = await conversation.agent(context);
-      const fresh = await harness.createConversation(
-        {
-          ownership: { kind: 'ownerless' },
-          agent: {
-            model: agent.model,
-            thinkingLevel: agent.thinkingLevel,
-            extensions: agent.extensions,
-            tools: agent.tools,
-            instructions: agent.instructions ?? null,
-            cwd: agent.cwd ?? null,
-          },
-        },
-        context
-      );
+      const fresh = await freshLike(harness, conversation, context);
       await agents.setConversation(agentId, fresh, context);
       await conversation.abort(context).catch(() => undefined);
       const { entries, record } = await snapshot(conversation, cone.name, now(), context);

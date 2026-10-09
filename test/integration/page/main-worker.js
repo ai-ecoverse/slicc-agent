@@ -14,6 +14,10 @@ faux.setResponses([
     .map((code) =>
       fauxAssistantMessage([fauxToolCall('codemode', { code })], { stopReason: 'toolUse' })
     ),
+  ...params.getAll('tool').map((spec) => {
+    const { name, args } = JSON.parse(spec);
+    return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: 'toolUse' });
+  }),
   ...params.getAll('memory').map((args) =>
     fauxAssistantMessage([fauxToolCall('memory_write', JSON.parse(args))], {
       stopReason: 'toolUse',

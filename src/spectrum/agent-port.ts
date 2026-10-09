@@ -20,8 +20,6 @@ import { isBusy, queued, toMessages } from './messages.ts';
 
 export const CONE = 'cone';
 
-export type NewChat = 'freeze' | 'reset';
-
 const thinking: Record<string, Thinking> = {
   off: 'off',
   minimal: 'low',
@@ -53,12 +51,9 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   #active: string | null = null;
   #creating = new Map<string, Promise<string | null>>();
 
-  readonly #newChat: NewChat;
-
-  constructor(connection: AgentConnection, options: { newChat?: NewChat } = {}) {
+  constructor(connection: AgentConnection) {
     super();
     this.#connection = connection;
-    this.#newChat = options.newChat ?? 'freeze';
     connection.frozen?.subscribe(() => this.emit('frozen', this.frozen()));
     this.#ready = new Promise((resolve) => {
       connection.transcript.subscribe(() => {
@@ -218,9 +213,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   clear(agentId: string = this.active()): void {
-    if (this.#newChat === 'freeze')
-      void this.#connection.control.newChat(agentId, BACKGROUND_CONTEXT);
-    else void this.#connection.control.reset(null, BACKGROUND_CONTEXT);
+    void this.#connection.control.newChat(agentId, BACKGROUND_CONTEXT);
   }
 
   freeze(agentId: string = this.active()): void {

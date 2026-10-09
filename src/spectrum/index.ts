@@ -1,11 +1,11 @@
 import type { AgentConnection } from '../client.ts';
-import { AgentAdapter, type NewChat } from './agent-port.ts';
+import { AgentAdapter } from './agent-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { type Login, SettingsAdapter } from './settings-port.ts';
 import { SprinkleAdapter } from './sprinkle-port.ts';
 import { TrayAdapter } from './tray-port.ts';
 
-export { AgentAdapter, CONE, type NewChat } from './agent-port.ts';
+export { AgentAdapter, CONE } from './agent-port.ts';
 export { MemoryAdapter } from './memory-port.ts';
 export {
   assistant,
@@ -25,7 +25,6 @@ export function createAgentModel(
   options: {
     storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
     login?: Login;
-    newChat?: NewChat;
   } = {}
 ): {
   agent: AgentAdapter;
@@ -34,7 +33,7 @@ export function createAgentModel(
   sprinkles: SprinkleAdapter;
   memory: MemoryAdapter;
 } {
-  const agent = new AgentAdapter(connection, options.newChat ? { newChat: options.newChat } : {});
+  const agent = new AgentAdapter(connection);
   return {
     agent,
     settings: new SettingsAdapter(
