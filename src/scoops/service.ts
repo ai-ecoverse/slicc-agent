@@ -441,6 +441,17 @@ async function rename(core: Core, id: string, name: string, context: Context): P
   return { code: 0, out: `${record.folder} is now called ${wanted}\n` };
 }
 
+async function resetWorkspace(
+  files: ScoopsHost['files'],
+  folder: string,
+  context: Context
+): Promise<boolean> {
+  if (!files) return true;
+  const cleared = await files.remove(workspace(folder), { recursive: true, force: true }, context);
+  if (!cleared.ok) return false;
+  return (await files.createDir(workspace(folder), { recursive: true }, context)).ok;
+}
+
 type Seen = (mark: Mark | null) => Promise<boolean>;
 
 async function rewindOne(
@@ -463,9 +474,10 @@ async function rewindOne(
   }
   if (record.dropped !== null) {
     if (await seen(record.dropped)) return undefined;
-    result.restored.push(record.name);
-    await files?.remove(workspace(record.folder), { recursive: true, force: true }, context);
-    await files?.createDir(workspace(record.folder), { recursive: true }, context);
+    const reset = await resetWorkspace(files, record.folder, context);
+    result.restored.push(
+      reset ? record.name : `${record.name} (its working folder could not be reset)`
+    );
     return { dropped: null };
   }
   const withdrawn = await stopFeeds(core, id, (entry) => seen(entry.created), context);
