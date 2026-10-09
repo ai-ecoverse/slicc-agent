@@ -12,7 +12,7 @@ The welcome card in the first chat asks the user who they are and what they want
   "purpose": "work",
   "role": "developer",
   "tasks": ["build-websites"],
-  "name": "Paolo",
+  "name": "Sam",
   "company": "Example Inc.",
   "apps": ["github"]
 }
