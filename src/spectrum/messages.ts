@@ -182,7 +182,9 @@ const unavailable =
 
 const providerNames: Record<string, string> = { 'amazon-bedrock': 'Bedrock' };
 const filtered =
-  /Provider (?:stopped with|finish_reason): (?:content_filter(?:ed)?|guardrail_intervened|sensitive)|refused to complete the request/i;
+  /Provider (?:stopped with|finish_reason): (?:content_filter(?:ed)?|guardrail_intervened|sensitive)|content[_ ]filter(?:ed|ing)?\b|guardrail[_ ]intervened/i;
+const refused =
+  /refused to complete the request|Provider (?:stopped with|finish_reason): refusal|\bstop_?reason\W+refusal\b/i;
 const missing = /no api key|missing|not configured|no credentials/i;
 
 export function errorPart(error: string, provider?: string): MessagePart {
@@ -190,7 +192,9 @@ export function errorPart(error: string, provider?: string): MessagePart {
   if (action === 'drop-turn') {
     return {
       type: 'error',
-      message: "The model's content filter stopped this reply.",
+      message: filtered.test(error)
+        ? "The model's content filter stopped this reply."
+        : 'The model refused to answer this turn.',
       detail: error,
       action,
     };
@@ -218,7 +222,7 @@ export function errorPart(error: string, provider?: string): MessagePart {
 }
 
 export function errorAction(message: string): ErrorAction {
-  if (filtered.test(message)) return 'drop-turn';
+  if (filtered.test(message) || refused.test(message)) return 'drop-turn';
   if (credentials.test(message)) return 'settings';
   if (models.test(message) && unavailable.test(message)) return 'change-model';
   return 'retry';

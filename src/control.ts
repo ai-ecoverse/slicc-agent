@@ -18,7 +18,7 @@ import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
-import type { AgentControl, Created, OperationError, SendResponse } from './services.ts';
+import type { AgentControl, Created, OperationError, Rewound, SendResponse } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 
@@ -126,6 +126,78 @@ function busy(view: ConversationView): boolean {
   return Boolean(live?.run) || Boolean(inbox?.items?.length);
 }
 
+type RewindDeps = { harness: Harness; agents?: Agents; cone: Cones; scoops?: HostScoops };
+
+async function turnIn(
+  harness: Harness,
+  conversation: Conversation,
+  messageId: string | null,
+  context: Context
+): Promise<{ turn: Turn; view: ConversationView } | Rewound> {
+  const attached = await conversation.viewState(context);
+  const view = attached.value;
+  attached.dispose();
+  const pending = (await harness.inspect(context)).submissions.some(
+    (submission) => submission.conversationId === conversation.id
+  );
+  if (pending || busy(view)) return { done: false, text: null, reason: 'busy' };
+  const turn = lastTurn(view, messageId);
+  return turn ? { turn, view } : { done: false, text: null, reason: 'no-turn' };
+}
+
+async function forkAt(
+  harness: Harness,
+  conversation: Conversation,
+  found: { turn: Turn },
+  context: Context
+): Promise<Conversation> {
+  const ownership = { kind: 'ownerless' } as const;
+  if (found.turn.at !== null) return conversation.fork(found.turn.at, { ownership }, context);
+  const agent = await conversation.agent(context);
+  const change: AgentChange = {
+    model: agent.model ?? null,
+    thinkingLevel: agent.thinkingLevel,
+    extensions: agent.extensions,
+    tools: agent.tools,
+    instructions: agent.instructions ?? null,
+    cwd: agent.cwd ?? null,
+  };
+  return harness.createConversation({ ownership, agent: change }, context);
+}
+
+async function rewindAgent(
+  deps: RewindDeps,
+  agentId: string | null,
+  messageId: string | null,
+  context: Context
+): Promise<Rewound> {
+  const { harness, agents, cone, scoops } = deps;
+  const scoop = agentId && agents ? agents.state().scoops[agentId] : undefined;
+  if (agentId && agents && !scoop && agentId !== agents.activeCone())
+    await agents.selectCone(agentId, context);
+  const conversation =
+    scoop && agents
+      ? ((await agents.conversation(agentId as string, context)) as Conversation)
+      : cone.cone();
+  const found = await turnIn(harness, conversation, messageId, context);
+  if ('reason' in found) return found;
+  const fork = await forkAt(harness, conversation, found, context);
+  const changed =
+    scoops && agents && !scoop
+      ? await scoops.scoops.rewound(agents.activeCone(), fork, context)
+      : { stopped: [], restored: [] };
+  await fork.submit(
+    { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1, ...changed } } },
+    context
+  );
+  if (scoop && agents)
+    await agents.update((_tx, state) => {
+      (state.scoops[agentId as string] as { conversation: number }).conversation = fork.id;
+    }, context);
+  else await cone.switchCone(fork, context);
+  return { done: true, text: found.turn.text, reason: null };
+}
+
 export function createAgentControl(
   harness: Harness,
   target: Conversation | Cones,
@@ -160,6 +232,8 @@ export function createAgentControl(
     lock = run.catch(() => undefined);
     return run;
   };
+  const rewindIn = (agentId: string | null, messageId: string | null, context: Context) =>
+    serial(() => rewindAgent({ harness, agents, cone, scoops }, agentId, messageId, context));
   return {
     send(request, context) {
       return serial(async () => {
@@ -180,45 +254,8 @@ export function createAgentControl(
         return response;
       });
     },
-    rewind(messageId, context) {
-      return serial(async () => {
-        const conversation = current();
-        const attached = await conversation.viewState(context);
-        const view = attached.value;
-        attached.dispose();
-        const pending = (await harness.inspect(context)).submissions.some(
-          (submission) => submission.conversationId === conversation.id
-        );
-        if (pending || busy(view)) return { done: false, text: null, reason: 'busy' };
-        const turn = lastTurn(view, messageId);
-        if (!turn) return { done: false, text: null, reason: 'no-turn' };
-        const agent = view.docs['pi.agent'] as AgentChange | undefined;
-        const ownership = { kind: 'ownerless' } as const;
-        const fork =
-          turn.at === null
-            ? await harness.createConversation(
-                {
-                  ownership,
-                  agent: {
-                    model: agent?.model ?? null,
-                    thinkingLevel: agent?.thinkingLevel ?? null,
-                  },
-                },
-                context
-              )
-            : await conversation.fork(turn.at, { ownership }, context);
-        const changed =
-          scoops && agents
-            ? await scoops.scoops.rewound(agents.activeCone(), fork, context)
-            : { stopped: [], restored: [] };
-        await fork.submit(
-          { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1, ...changed } } },
-          context
-        );
-        await cone.switchCone(fork, context);
-        return { done: true, text: turn.text, reason: null };
-      });
-    },
+    rewind: (messageId, context) => rewindIn(null, messageId, context),
+    rewindAgent: (agentId, messageId, context) => rewindIn(agentId, messageId, context),
 
     async wait(id, context) {
       const parsed = submissionId(id);
