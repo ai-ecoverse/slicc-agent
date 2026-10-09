@@ -61,7 +61,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.23.0",
+    "@ai-ecoverse/slicc-kernel": "1.26.4",
     "@ai-ecoverse/slicc-shared-web": "1.11.0",
     "@ai-ecoverse/slicc-spectrum": "1.37.1",
     "@ai-ecoverse/wasm-bash": "5.3.0-8",
