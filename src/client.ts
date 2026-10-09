@@ -41,25 +41,41 @@ export interface AgentConnection {
   close(): Promise<void>;
 }
 
-export function lasting<T>(state: ReplicatedState<T>): ReplicatedState<T> {
+export interface Lasting<T> {
+  readonly state: ReplicatedState<T>;
+  freeze(): void;
+}
+
+export function lasting<T>(state: ReplicatedState<T>): Lasting<T> {
   let last: T | undefined;
+  let frozen = false;
+  const read = () => {
+    if (frozen) return last;
+    try {
+      last = state.value;
+    } catch {}
+    return last;
+  };
   return {
-    get value() {
-      try {
-        last = state.value;
-        return last;
-      } catch {
-        return last;
-      }
+    state: {
+      get value() {
+        return read();
+      },
+      subscribe: (listener) => (frozen ? () => undefined : state.subscribe(listener)),
     },
-    subscribe: (listener) => state.subscribe(listener),
+    freeze() {
+      read();
+      frozen = true;
+    },
   };
 }
 
-function lastingSettings(settings: AgentSettings): AgentSettings {
-  const state = lasting(settings.state);
+function lastingSettings(
+  settings: AgentSettings,
+  hold: <T>(state: ReplicatedState<T>) => ReplicatedState<T>
+): AgentSettings {
   return {
-    state,
+    state: hold(settings.state),
     connect: (providerId, secret, region, context) =>
       settings.connect(providerId, secret, region, context),
     disconnect: (providerId, context) => settings.disconnect(providerId, context),
@@ -112,20 +128,26 @@ export async function connectAgent(
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   await session.ready(context);
+  const held: Lasting<unknown>[] = [];
+  const hold = <T>(state: ReplicatedState<T>): ReplicatedState<T> => {
+    const kept = lasting(state);
+    held.push(kept as Lasting<unknown>);
+    return kept.state;
+  };
   return {
     serverId,
     control,
-    transcript: lasting(transcript),
-    deliveries: lasting(deliveries),
-    agents: lasting(agents),
-    views: lasting(views),
-    commands: lasting(commands),
-    sprinkles: lasting(sprinkles),
-    memories: lasting(memories),
-    memoryScopes: lasting(memoryScopes),
-    frozen: lasting(frozen),
-    changes: lasting(changes),
-    settings: lastingSettings(settings),
+    transcript: hold(transcript),
+    deliveries: hold(deliveries),
+    agents: hold(agents),
+    views: hold(views),
+    commands: hold(commands),
+    sprinkles: hold(sprinkles),
+    memories: hold(memories),
+    memoryScopes: hold(memoryScopes),
+    frozen: hold(frozen),
+    changes: hold(changes),
+    settings: lastingSettings(settings, hold),
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
       if (!sent.accepted) throw new Error(`${sent.error.code}: ${sent.error.message}`);
@@ -134,6 +156,7 @@ export async function connectAgent(
       return settled.text;
     },
     async close() {
+      for (const kept of held) kept.freeze();
       await server.use(AgentSessions).detach(context);
       await session.dispose(context);
       await server.dispose(context);
