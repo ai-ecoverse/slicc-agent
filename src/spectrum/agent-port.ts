@@ -317,7 +317,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   thaw(id: string): Agent | null {
     const record = this.frozen().find((item) => item.id === id);
     if (!record) return null;
-    if (this.#connection.frozen?.value?.find((item) => item.id === id)?.live) {
+    if (record.live) {
       const running = this.list().find((agent) => agent.id === id) ?? null;
       if (running) this.select(id);
       return running;
