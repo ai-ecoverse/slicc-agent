@@ -94,11 +94,10 @@ export function webhookLick(
 async function webhooksIn(
   files: ConfigFiles,
   dir: string,
-  into: Map<string, WebhookEntry>,
   context: Context
-): Promise<ConfigError[]> {
+): Promise<{ entries: Map<string, WebhookEntry>; errors: ConfigError[] }> {
   const errors: ConfigError[] = [];
-  into.clear();
+  const into = new Map<string, WebhookEntry>();
   for (const name of await files.list(dir, context)) {
     const file = `${dir}/${name}`;
     const json = await files.read(file, context);
@@ -110,7 +109,7 @@ async function webhooksIn(
       errors.push({ file, error: (error as Error).message });
     }
   }
-  return errors;
+  return { entries: into, errors };
 }
 
 export function createLickSources(options: LickSourcesOptions): LickSources {
@@ -120,7 +119,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
   const files = configFiles(env);
   const deliver = (event: LickEvent, context: Context) => licks.deliver(event, context);
   const watches = new Watches(env, deliver, home, options.activity);
-  const webhooks = new Map<string, WebhookEntry>();
+  let webhooks = new Map<string, WebhookEntry>();
   let control: FileWatcher | undefined;
   let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   let flushTimer: ReturnType<typeof setInterval> | undefined;
@@ -137,11 +136,10 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     const crontabFile = `${dir}/crontab`;
     const crontab = parseCrontab(crontabFile, (await files.read(crontabFile, context)) ?? '');
     await reconcileCron({ ...options, now }, crontab.entries, context);
-    const errors = [
-      ...crontab.errors,
-      ...(await watches.reconcile(`${dir}/watches`, context)),
-      ...(await webhooksIn(files, `${dir}/webhooks`, webhooks, context)),
-    ];
+    const watchErrors = await watches.reconcile(`${dir}/watches`, context);
+    const found = await webhooksIn(files, `${dir}/webhooks`, context);
+    webhooks = found.entries;
+    const errors = [...crontab.errors, ...watchErrors, ...found.errors];
     for (const error of errors) await deliver(configLick(error, home), context);
   }
 
