@@ -11,11 +11,15 @@ export const NO_REPO =
   'Changes lists the changes in git repositories, and there is none here yet. Run `git init` in a folder under /home, or clone one with slicc-node or the extension connected.';
 
 export type ChangeStatus = 'added' | 'modified' | 'deleted';
+export type ChangeKind = 'tracked' | 'untracked' | 'conflict';
+
+const UNMERGED = ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'];
 
 export interface FileChange {
   path: string;
   repo: string;
   status: ChangeStatus;
+  kind: ChangeKind;
   before: string | null;
   after: string | null;
 }
@@ -28,6 +32,7 @@ export interface ChangesView {
 export interface Pending {
   path: string;
   status: ChangeStatus;
+  kind: ChangeKind;
 }
 
 export function parseStatus(out: string): Pending[] {
@@ -40,10 +45,13 @@ export function parseStatus(out: string): Pending[] {
     const tree = part[1] as string;
     const path = part.slice(3);
     if (index === 'R' || index === 'C') i++;
-    if (index === '?' && tree === '?') found.push({ path, status: 'added' });
-    else if (tree === 'D') found.push({ path, status: 'deleted' });
-    else if (tree === 'A') found.push({ path, status: 'added' });
-    else if (tree !== ' ' && tree !== '!') found.push({ path, status: 'modified' });
+    if (UNMERGED.includes(index + tree)) found.push({ path, status: 'modified', kind: 'conflict' });
+    else if (index === '?' && tree === '?')
+      found.push({ path, status: 'added', kind: 'untracked' });
+    else if (tree === 'D') found.push({ path, status: 'deleted', kind: 'tracked' });
+    else if (tree === 'A') found.push({ path, status: 'added', kind: 'tracked' });
+    else if (tree !== ' ' && tree !== '!')
+      found.push({ path, status: 'modified', kind: 'tracked' });
   }
   return found;
 }

@@ -8,7 +8,7 @@ echo "$root $*" >> /tmp/fake-git.log
 case "$1" in
   rev-parse) echo "$root" ;;
   status) if [ -f "$root/.git/status" ]; then tr '\n' '\000' < "$root/.git/status"; fi ;;
-  show) cat "$root/.git/index-files/${2#:}" ;;
+  show) cat "$root/.git/index-files/${2#:}" 2>/dev/null || exit 128 ;;
   add) drop="$4" ;;
   restore)
     if [ "$3" = "locked.txt" ]; then echo "error: unable to restore $3" >&2; exit 1; fi

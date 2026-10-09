@@ -111,7 +111,15 @@ async function sideOf(env: Env, repo: string, pending: Pending, context: Context
 async function statusOf(env: Env, repo: string, context: Context): Promise<FileChange[] | null> {
   const ran = await run(
     env,
-    ['git', '--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    [
+      'git',
+      '--no-optional-locks',
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--ignore-submodules=all',
+    ],
     repo,
     context
   );
@@ -119,7 +127,7 @@ async function statusOf(env: Env, repo: string, context: Context): Promise<FileC
   const out: FileChange[] = [];
   for (const pending of parseStatus(ran.out).slice(0, MAX_FILES)) {
     const side = await sideOf(env, repo, pending, context);
-    out.push({ ...side, repo, status: pending.status });
+    out.push({ ...side, repo, status: pending.status, kind: pending.kind });
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -224,7 +232,9 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     async revert(path, context) {
       const change = await find(path, context);
       const rel = relative(change.path, change.repo);
-      if (change.status === 'added') {
+      if (change.kind === 'conflict')
+        throw new Error(`${change.path} has a merge conflict; resolve it with git first.`);
+      if (change.kind === 'untracked') {
         const removed = await env.remove(change.path, { force: true }, context);
         if (!removed.ok) throw removed.error;
       } else {
