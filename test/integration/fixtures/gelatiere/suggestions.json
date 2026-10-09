@@ -1,0 +1,72 @@
+[
+  {
+    "id": "skill-github",
+    "kind": "skill",
+    "title": "Install the GitHub skill",
+    "body": "Manage pull requests, issues and workflow runs from chat. Three of Sam's last five sessions opened GitHub by hand.",
+    "evidence": "Sam told the welcome card they live in GitHub.",
+    "skill": "github",
+    "source": "https://raw.githubusercontent.com/example/skills/main/github/SKILL.md",
+    "install": "github from raw.githubusercontent.com/example/skills/main/github/SKILL.md",
+    "cones": ["cone"],
+    "createdAt": 1791500000000
+  },
+  {
+    "id": "use-case-release-notes",
+    "kind": "use-case",
+    "title": "Draft Friday's release notes from merged pull requests",
+    "body": "A crontab line can ask the cone every Friday at 16:00 to collect what merged this week at Example Inc. and draft the notes.",
+    "evidence": "Memory says release notes are drafted every Friday.",
+    "prompt": "Add a crontab line that every Friday at 16:00 asks you to draft release notes from this week's merged pull requests.",
+    "cones": [],
+    "createdAt": 1791500000000
+  },
+  {
+    "id": "tip-utc",
+    "kind": "tip",
+    "title": "Keep schedules in UTC",
+    "body": "Sam works in UTC, but crontab lines run in the browser's local time. Say the time zone when you add a schedule.",
+    "evidence": "Memory: Works in UTC.",
+    "cones": [],
+    "createdAt": 1791500000000
+  },
+  {
+    "id": "skill-idea-forecast",
+    "kind": "skill-idea",
+    "title": "A skill for the harbor forecast API",
+    "body": "Sam asked for the same three forecast queries in four sessions. A small skill could keep the endpoints and the cache-key rules.",
+    "evidence": "Memory: harbor cache keys are city:UTC-date.",
+    "prompt": "Draft a skill in ~/.pi/agent/skills/harbor-forecast that documents the forecast API endpoints and the city:UTC-date cache keys.",
+    "cones": ["cone"],
+    "createdAt": 1791500000000
+  },
+  {
+    "id": "issue-terminal-paste",
+    "kind": "issue",
+    "title": "Report: pasting into the terminal drops the last line",
+    "body": "Twice this week a pasted command lost its last line. Worth reporting with the steps.",
+    "evidence": "Two sessions retried a pasted command.",
+    "prompt": "Write up an issue report about multi-line paste into the terminal dropping its last line, with steps to reproduce.",
+    "cones": [],
+    "createdAt": 1791500000000
+  },
+  {
+    "id": "use-case-watch-notes",
+    "kind": "use-case",
+    "title": "Watch ~/notes and summarize changes",
+    "body": "A watch on ~/notes can summarize each change for Sam.",
+    "prompt": "Add a watch on ~/notes that summarizes each change.",
+    "cones": [],
+    "createdAt": 1791400000000,
+    "takenAt": 1791450000000
+  },
+  {
+    "id": "tip-dark-mode",
+    "kind": "tip",
+    "title": "Try the dark theme at night",
+    "body": "Settings has a dark theme.",
+    "cones": [],
+    "createdAt": 1791400000000,
+    "dismissedAt": 1791450000000
+  }
+]

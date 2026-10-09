@@ -5,10 +5,11 @@ import type { Answer } from './service.ts';
 export const CONTROL_DIR = '/var/lib/slicc/agent/requests';
 export const PROTOCOL = 'slicc-agent/1';
 export const STALE_MS = 10 * 60_000;
+const COMMAND_NAMES = new Set(['subagent', 'sprinkle', 'memory', 'gelatiere']);
 
 export interface Request {
   id: string;
-  as: 'agent' | 'subagent' | 'sprinkle' | 'memory';
+  as: 'agent' | 'subagent' | 'sprinkle' | 'memory' | 'gelatiere';
   caller: string;
   cwd: string;
   pid: number | null;
@@ -41,7 +42,7 @@ export function parseRequest(id: string, bytes: Uint8Array): Request | undefined
   const process = Number(pid);
   return {
     id,
-    as: as === 'subagent' || as === 'sprinkle' || as === 'memory' ? as : 'agent',
+    as: COMMAND_NAMES.has(as as string) ? (as as Request['as']) : 'agent',
     caller: caller as string,
     cwd: cwd || '/',
     pid: Number.isInteger(process) && process > 0 ? process : null,

@@ -7,6 +7,9 @@ export { SPRINKLE_KIND, type Sprinkle } from './kind.ts';
 
 export const SPRINKLES_DIR = '/home/sprinkles';
 export const WELCOME = 'welcome';
+export const SUGGESTIONS = 'suggestions';
+export const SUGGESTIONS_DIR = '/home/.gelatiere';
+export const SUGGESTIONS_STORE = `${SUGGESTIONS_DIR}/suggestions.json`;
 export const WELCOMED = '/home/.welcomed';
 export const DEFAULT_ICON = 'sparkles';
 

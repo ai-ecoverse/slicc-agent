@@ -17,6 +17,7 @@ import {
   sandboxFactory,
 } from './codemode/index.ts';
 import { EncryptedCredentialStore } from './credentials.ts';
+import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { createActivity } from './kernel/activity.ts';
 import type { KernelClient } from './kernel/client.ts';
@@ -128,8 +129,10 @@ async function start(
     { env: home, home: HOME, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
     BACKGROUND_CONTEXT
   );
+  const gelatiere = lateGelatiere();
   const sprinkles = await setupSprinkles().attach(
     {
+      intercept: gelatiere.intercept,
       harness: agent.harness,
       agents: agent.agents,
       licks: licks.licks,
@@ -162,11 +165,21 @@ async function start(
       reads: skillsRuntime.dirs,
       sprinkle: sprinkles.command,
       memory: memoryRuntime.command,
+      gelatiere: gelatiere.command,
       ...(options.assets ? { assets: options.assets } : {}),
     },
     BACKGROUND_CONTEXT
   );
   roles = runtime;
+  gelatiere.attach({
+    agents: agent.agents,
+    licks: licks.licks,
+    env: home,
+    home: HOME,
+    scoops: scoops.scoops,
+    roles: runtime.roles,
+    assets: options.assets ?? packageAssets(),
+  });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
   return hostAgent(agent, {
     settings: await createAgentSettings(models, credentials, providers),
