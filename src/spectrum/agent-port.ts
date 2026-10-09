@@ -54,7 +54,10 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   constructor(connection: AgentConnection) {
     super();
     this.#connection = connection;
-    connection.frozen?.subscribe(() => this.emit('frozen', this.frozen()));
+    connection.frozen?.subscribe(() => {
+      this.emit('frozen', this.frozen());
+      this.emit('agents', this.list());
+    });
     this.#ready = new Promise((resolve) => {
       connection.transcript.subscribe(() => {
         this.#refresh();
@@ -110,9 +113,12 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   list(): readonly Agent[] {
+    const rows = this.#connection.frozen?.value ?? [];
     return this.#summary().map((summary) => {
       const view = this.#view(summary.id);
       const doc = view?.docs['pi.agent'] as AgentDoc | undefined;
+      const title =
+        summary.kind === 'cone' ? rows.find((row) => row.id === summary.id)?.title : undefined;
       return {
         id: summary.id,
         name: summary.role ? `${summary.name} · ${summary.role}` : summary.name,
@@ -123,6 +129,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
         contextFill: 0,
         unread: 0,
         thinking: thinking[doc?.thinkingLevel ?? 'off'] ?? 'off',
+        ...(title ? { title } : {}),
       };
     });
   }
