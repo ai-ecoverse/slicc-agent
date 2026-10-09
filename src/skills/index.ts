@@ -19,7 +19,7 @@ import {
 } from './skills.ts';
 import { expandPromptTemplate, loadTemplates, type PromptTemplate } from './templates.ts';
 
-export const BUILTIN_SKILLS = ['agent', 'licks', 'skill-authoring'];
+export const BUILTIN_SKILLS = ['agent', 'licks', 'skill-authoring', 'sprinkles', 'welcome'];
 export const BUILTIN_PROMPTS = ['parallel-review', 'review-loop'];
 export const SKILLS_DIR = '/var/lib/slicc/agent/skills';
 export const PROMPTS_DIR = '/var/lib/slicc/agent/prompts';

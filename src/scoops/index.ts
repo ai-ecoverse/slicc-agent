@@ -5,7 +5,7 @@ import { type Agents, live } from '../agents.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
 import type { Licks } from '../licks/licks.ts';
 import { DEFAULT_LIMITS, loadRoles, packageDirs, type Roles } from '../roles/roles.ts';
-import { createCli, RUN_DIR } from './cli.ts';
+import { type CliOptions, createCli, RUN_DIR } from './cli.ts';
 import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
 import { type ControlPlane, controlPlane } from './requests.ts';
 import { createScoops, type Scoops, type ScoopsHost } from './service.ts';
@@ -35,6 +35,7 @@ export interface AttachOptions {
   sweepEvery?: number;
   alive?: (pid: number) => Promise<boolean>;
   reads: () => readonly string[];
+  sprinkle?: CliOptions['sprinkle'];
 }
 
 export interface ScoopsRuntime {
@@ -48,7 +49,7 @@ export interface ScoopsSetup {
   attach(options: AttachOptions, context: Context): Promise<ScoopsRuntime>;
 }
 
-export const COMMANDS = ['agent', 'subagent'];
+export const COMMANDS = ['agent', 'subagent', 'sprinkle'];
 
 async function install(env: ExecutionEnv, script: string, pnpmHome: string, context: Context) {
   await env.createDir(`${pnpmHome}/bin`, { recursive: true }, context);
@@ -145,6 +146,7 @@ export function setupScoops(
         scoops,
         roles: () => roles(context),
         ...(options.alive ? { alive: options.alive } : {}),
+        ...(options.sprinkle ? { sprinkle: options.sprinkle } : {}),
       });
       const plane = controlPlane(env, cli, {
         ...(options.controlDir ? { dir: options.controlDir } : {}),

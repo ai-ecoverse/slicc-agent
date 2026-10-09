@@ -27,6 +27,8 @@ import {
   type Command,
 } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
+import type { SprinklesRuntime } from './sprinkles/index.ts';
+import type { Sprinkle } from './sprinkles/kind.ts';
 import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
 
@@ -114,6 +116,7 @@ export async function hostAgent(
     licks?: HostLicks;
     scoops?: HostScoops;
     skills?: SkillsRuntime;
+    sprinkles?: SprinklesRuntime;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -135,7 +138,8 @@ export async function hostAgent(
       deliveries,
       options.licks,
       options.scoops,
-      options.skills
+      options.skills,
+      options.sprinkles
     )
   );
   provider.provide(AgentTranscript, {
@@ -144,6 +148,7 @@ export async function hostAgent(
     agents: mounted.agents,
     views: mounted.views,
     commands: options.skills?.commands ?? replicatedState<Command[]>([]),
+    sprinkles: options.sprinkles?.sprinkles ?? replicatedState<Sprinkle[]>([]),
   });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
@@ -167,6 +172,7 @@ export async function hostAgent(
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();
+      await options.sprinkles?.close(context);
       await options.skills?.close(context);
       await options.scoops?.runtime.close(context);
       await options.licks?.sources.close(context);

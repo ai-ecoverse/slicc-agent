@@ -19,6 +19,7 @@ import { LICK_STATE_KIND } from './licks/state.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
 import type { AgentControl, Created, OperationError, SendResponse } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
+import type { SprinklesRuntime } from './sprinkles/index.ts';
 
 export interface HostLicks {
   licks: Licks;
@@ -43,6 +44,19 @@ function created(run: () => Promise<string>): Promise<Created> {
     (id) => ({ id, error: null }),
     (error: Error) => ({ id: null, error: error.message })
   );
+}
+
+function sprinkleControl(
+  sprinkles: Pick<SprinklesRuntime, 'send' | 'call'> | undefined
+): Pick<AgentControl, 'sprinkleSend' | 'sprinkleCall'> {
+  return {
+    sprinkleSend: async (id, payload, context) =>
+      sprinkles ? sprinkles.send(id, payload, context) : { delivered: false },
+    async sprinkleCall(id, method, args, context) {
+      if (!sprinkles) throw new Error('This agent has no sprinkles.');
+      return sprinkles.call(id, method, args, context);
+    },
+  };
 }
 
 export function submissionId(value: string): SubmissionId | undefined {
@@ -102,7 +116,8 @@ export function createAgentControl(
   deliveries?: Deliveries,
   licks?: HostLicks,
   scoops?: HostScoops,
-  skills?: Pick<SkillsRuntime, 'expand'>
+  skills?: Pick<SkillsRuntime, 'expand'>,
+  sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -200,6 +215,7 @@ export function createAgentControl(
       return { status: 'done', text: answerText(entry?.model?.[0]?.content), reason: null };
     },
     withdraw: (id, context) => withdraw(current(), id, context),
+    ...sprinkleControl(sprinkles),
     async unqueue(agentId, id, context) {
       return withdraw(await conversationFor(agentId, context), id, context);
     },

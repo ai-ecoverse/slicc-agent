@@ -206,7 +206,7 @@ The worker watches the roots and reloads on change. A `skills` prompt section, g
 - **Templates:** `/parallel-review` and `/review-loop`, from [pi-subagents](https://github.com/nicobailon/pi-subagents) (MIT). Their wording is kept, and they're rewritten to use `agent --async --agent reviewer|worker`, `agent wait --notify`, `agent send` and `agent stop` instead of pi-subagents' `subagent` tool. The parts that need workflow scripts or forked contexts are left out.
 
 **v6 skills.** None of the 29 skills SLICC v6 ships runs here unchanged. They name v6 paths (`/shared`, `/workspace`) or commands this kernel doesn't have. By what they wait for:
-- **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`) and `skill-authoring`. `sprinkles` and `welcome` follow with sprinkles in PR 13c.
+- **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`), `skill-authoring`, `sprinkles` and `welcome`.
 - **Memory (PR 14):** `memory`, `gelatiere`, `wiki` (needs its `wiki` CLI).
 - **The freezer (PR 15):** `transcript-export`.
 - **The tray hub, upskill or the Install/Update panel:** `upgrade` (`upgrade apply`, bios#70), `handoff`, `slicc`, `ssh`, `cherry`.
@@ -233,6 +233,35 @@ The model can write a short JavaScript program that calls its tools, with the `c
 - **The wasm.** The agent compiles `quickjs.wasm` itself and hands it over: it walks up the `node_modules` folders from its own module, as bios's resolver does, and fetches the first `quickjs-wasi/quickjs.wasm` it finds. On Node, pi-codemode loads it itself.
 - **Isolation.** Seven is cross-origin isolated, so pi-codemode's `SharedArrayBuffer` interrupt works.
 - **Overrides.** `runAgentWorker` takes `codemodeWasm` and `codemodeWorker` to override both, for bundled hosts.
+
+||||||| parent of d578592 (wip: sprinkles)
+### Sprinkles
+
+A sprinkle is a small HTML panel next to the chat. pi has nothing for this; it's SLICC's UI, rendered by slicc-spectrum (≥ 1.23) through its `SprinklePort`.
+
+**Files.** Every `.shtml` file in `/home/sprinkles`, as `<name>.shtml` or `<name>/<name>.shtml`, is a sprinkle. `<name>` is 1–64 of `a-z 0-9 . _ -`, and `welcome` is reserved for the built-in one. Its `<title>` and `<link rel="icon" href="<lucide name>">` give its title and rail icon (default `sparkles`). The worker watches the folder: the transcript service's `sprinkles` lists every one with its HTML, so spectrum gives each a rail button, and editing a file reloads its panel. Deleting the file retires it.
+
+**Owners.** Each sprinkle talks to one agent, its owner. The owner is whoever first showed it, or the agent named with `sprinkle own`, otherwise the active cone at the time of the send. Owners live in the session document `slicc.sprinkles`.
+
+**Talking back.**
+- **Sends.** `SprinklePort.send(id, { action, data, target })` becomes `AgentControl.sprinkleSend`, then a lick on the `sprinkle` channel for the owner: source `sprinkle:<name>`, the action as its text and the data as JSON in its body. It steers and coalesces per sprinkle like any lick.
+- **Calls.** `SprinklePort.call(id, method, args)` becomes `AgentControl.sprinkleCall`:
+  - `readFile` and `exists` reach only `/home`, with `/shared/…` mapped to `/home/…` so SLICC's own sprinkles run unchanged. Paths with `.` or `..` segments are refused, and a link is followed only if its target is in `/home` too;
+  - `getState` and `setState` keep one JSON value per sprinkle in `slicc.sprinkles`;
+  - there's no `exec`: a sprinkle that asks for one gets an error telling it to send the agent a message with `slicc.lick()` instead, so every command goes through an agent and its transcript.
+
+**The `sprinkle` command** is the same script as `agent`, installed as `sprinkle`:
+- `sprinkle list`;
+- `sprinkle show <name>`: posts a `slicc.sprinkle` entry in the caller's chat, which the adapter shows as an inline sprinkle;
+- `sprinkle own <name> [<agent>]`.
+
+v6's `open`, `reload`, `close`, `send` and `chat` answer with what to do instead.
+
+**Shipped sprinkles.** Only `welcome` and `suggestions`, with slicc-spectrum's reviewed copy.
+- **Welcome.** The worker posts it inline in the first cone's chat once per session. Its `onboarding-complete` send writes `/home/.welcomed`, which the card checks, and the built-in `welcome` skill answers the lick.
+- **Suggestions.** It needs the gelatiere, which comes with memory, so it ships but isn't listed yet.
+
+The built-in `sprinkles` skill teaches the files, the bridge and the command.
 
 ## Patched dependencies
 
