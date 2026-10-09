@@ -74,7 +74,7 @@ export async function noteWhenPlaced(
   runtime: Noting,
   submission: Pick<Submission, 'status'>,
   conversation: ConversationId,
-  note: { from: string | undefined; noted: boolean | undefined },
+  note: { from: string | undefined; agent?: boolean; noted: boolean | undefined },
   context: Context
 ): Promise<void> {
   const { from } = note;
@@ -85,7 +85,10 @@ export async function noteWhenPlaced(
       const entry = record.entry;
       await runtime
         .commit(async (tx) => {
-          await tx.appendEntry(conversation, { kind: FROM_KIND, data: { from, entry } });
+          await tx.appendEntry(conversation, {
+            kind: FROM_KIND,
+            data: { from, entry, ...(note.agent ? { agent: true } : {}) },
+          });
           return { status: 'running', checkpoint: { phase: 'deliver', noted: true } };
         }, context)
         .catch(() => undefined);
@@ -218,7 +221,7 @@ export function scoopTasks(lookup: Lookup) {
           return;
         }
         const requestId = task.input.request ? `subagent:${task.input.request}` : `feed:${task.id}`;
-        const from = (await runtime.snapshot(ScoopWorkDoc, context))?.feeds[String(task.id)]?.from;
+        const feed = (await runtime.snapshot(ScoopWorkDoc, context))?.feeds[String(task.id)];
         const submission = await handle.submit(
           {
             type: 'input',
@@ -232,7 +235,7 @@ export function scoopTasks(lookup: Lookup) {
           runtime,
           submission,
           record?.conversation as ConversationId,
-          { from, noted: task.state.checkpoint.noted },
+          { from: feed?.from, agent: feed?.agent === true, noted: task.state.checkpoint.noted },
           context
         );
         const settled = await submission.wait(context);
