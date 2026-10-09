@@ -28,7 +28,7 @@ Read pages with `snapshot`; use `eval <expression>` only for a value the snapsho
 
 ## Calling an app's backend: curlwright
 
-`curlwright` takes curl's arguments but runs the request as a `fetch()` inside an open tab, so it carries that tab's cookies, origin and service worker. It doesn't change the page; it calls the app's own backend as that page would.
+`curlwright` (slicc-cdp 1.2.1 and later; check with `command -v curlwright`, and fall back to `playwright-cli` if it isn't there) takes curl's arguments but runs the request as a `fetch()` inside an open tab, so it carries that tab's cookies, origin and service worker. It doesn't change the page; it calls the app's own backend as that page would.
 
 ```bash
 curlwright -s --tab <id> https://app.example.com/api/me
