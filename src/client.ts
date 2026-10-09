@@ -41,6 +41,32 @@ export interface AgentConnection {
   close(): Promise<void>;
 }
 
+export function lasting<T>(state: ReplicatedState<T>): ReplicatedState<T> {
+  let last: T | undefined;
+  return {
+    get value() {
+      try {
+        last = state.value;
+        return last;
+      } catch {
+        return last;
+      }
+    },
+    subscribe: (listener) => state.subscribe(listener),
+  };
+}
+
+function lastingSettings(settings: AgentSettings): AgentSettings {
+  const state = lasting(settings.state);
+  return {
+    state,
+    connect: (providerId, secret, region, context) =>
+      settings.connect(providerId, secret, region, context),
+    disconnect: (providerId, context) => settings.disconnect(providerId, context),
+    signIn: (providerId, context) => settings.signIn(providerId, context),
+  };
+}
+
 function attached(client: Client): Promise<void> {
   return new Promise((resolve) => {
     const stop = client.onAttachmentChange(() => {
@@ -89,17 +115,17 @@ export async function connectAgent(
   return {
     serverId,
     control,
-    transcript,
-    deliveries,
-    agents,
-    views,
-    commands,
-    sprinkles,
-    memories,
-    memoryScopes,
-    frozen,
-    changes,
-    settings,
+    transcript: lasting(transcript),
+    deliveries: lasting(deliveries),
+    agents: lasting(agents),
+    views: lasting(views),
+    commands: lasting(commands),
+    sprinkles: lasting(sprinkles),
+    memories: lasting(memories),
+    memoryScopes: lasting(memoryScopes),
+    frozen: lasting(frozen),
+    changes: lasting(changes),
+    settings: lastingSettings(settings),
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
       if (!sent.accepted) throw new Error(`${sent.error.code}: ${sent.error.message}`);
