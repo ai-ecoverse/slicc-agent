@@ -114,7 +114,7 @@ function guard(
 }
 
 export interface Join {
-  pgid: number;
+  pgid?: number;
   refused(code: string): void;
 }
 
@@ -124,7 +124,7 @@ async function start(
   options: SpawnOptions,
   join: Join | undefined
 ): Promise<{ process: KernelProcess; joined: boolean }> {
-  if (join) {
+  if (join?.pgid !== undefined) {
     try {
       return { process: await client.spawn(argv, { ...options, pgid: join.pgid }), joined: true };
     } catch (error) {
@@ -169,10 +169,10 @@ export async function execute(
     const message = error instanceof Error ? error.message : String(error);
     return err(new ExecutionError('spawn_error', message));
   }
-  const { process, joined } = started;
+  const { process } = started;
   spawned?.(process);
   const watch = guard(process, options, context, () =>
-    joined ? void sweep(client, process) : process.signal('SIGKILL')
+    join ? void sweep(client, process) : process.signal('SIGKILL')
   );
   const exitCode = await process.exited.finally(() => watch.release());
   out.end();

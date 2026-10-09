@@ -323,19 +323,35 @@ export class SliccKernelEnv implements ExecutionEnv {
     context: Context
   ): Promise<Result<ShellExecResult, ExecutionError>> {
     const ended = this.#activity?.began();
+    const line = typeof command === 'string' ? prefixed(command, this.#exports) : command;
     const groups = this.#groups;
     const owner = this.#owner;
-    const spawned =
-      groups && owner !== undefined
-        ? (process: KernelProcess) => groups.track(owner, process)
-        : undefined;
-    const pgid = groups && owner !== undefined ? groups.shared(owner) : undefined;
-    const join =
-      groups && owner !== undefined && pgid !== undefined
-        ? { pgid, refused: (code: string) => groups.refused(owner, code) }
-        : undefined;
-    const line = typeof command === 'string' ? prefixed(command, this.#exports) : command;
-    return execute(this.#client, this.cwd, line, options, context, spawned, join).finally(ended);
+    if (!groups || owner === undefined)
+      return execute(this.#client, this.cwd, line, options, context).finally(ended);
+    return this.#grouped(groups, owner, line, options, context).finally(ended);
+  }
+
+  async #grouped(
+    groups: ProcessGroups,
+    owner: number,
+    line: string | readonly string[],
+    options: ShellExecOptions | undefined,
+    context: Context
+  ): Promise<Result<ShellExecResult, ExecutionError>> {
+    for (let wait = groups.pending(owner); wait; wait = groups.pending(owner)) await wait;
+    const pgid = groups.shared(owner);
+    const release = pgid === undefined && groups.joins() ? groups.reserve(owner) : () => undefined;
+    const spawned = (process: KernelProcess) => {
+      groups.track(owner, process);
+      release();
+    };
+    const join = groups.joins()
+      ? {
+          ...(pgid === undefined ? {} : { pgid }),
+          refused: (code: string) => groups.refused(owner, code),
+        }
+      : undefined;
+    return execute(this.#client, this.cwd, line, options, context, spawned, join).finally(release);
   }
 
   async cleanup(context: Context): Promise<void> {

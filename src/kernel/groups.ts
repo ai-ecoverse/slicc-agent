@@ -6,6 +6,9 @@ export interface ProcessGroups {
   track(owner: number, process: KernelProcess): void;
   of(owner: number): number[];
   shared(owner: number): number | undefined;
+  joins(): boolean;
+  pending(owner: number): Promise<void> | undefined;
+  reserve(owner: number): () => void;
   refused(owner: number, code: string): void;
   signal(owner: number, signal?: string): Promise<number[]>;
 }
@@ -13,6 +16,7 @@ export interface ProcessGroups {
 export function processGroups(client: Pick<KernelClient, 'kill'>): ProcessGroups {
   const groups = new Map<number, Set<number>>();
   const shared = new Map<number, number>();
+  const leading = new Map<number, Promise<void>>();
   let joining = true;
   return {
     track(owner, process) {
@@ -27,6 +31,21 @@ export function processGroups(client: Pick<KernelClient, 'kill'>): ProcessGroups
     },
     of: (owner) => [...(groups.get(owner) ?? [])],
     shared: (owner) => (joining ? shared.get(owner) : undefined),
+    joins: () => joining,
+    pending: (owner) => leading.get(owner),
+    reserve(owner) {
+      let done: () => void = () => undefined;
+      leading.set(
+        owner,
+        new Promise<void>((resolve) => {
+          done = resolve;
+        })
+      );
+      return () => {
+        leading.delete(owner);
+        done();
+      };
+    },
     refused(owner, code) {
       if (code === 'ENOSYS') joining = false;
       shared.delete(owner);
