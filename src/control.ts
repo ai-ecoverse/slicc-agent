@@ -14,6 +14,7 @@ import { answerText } from './agent.ts';
 import type { Agents } from './agents.ts';
 import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
+import type { FreezerRuntime } from './freezer/index.ts';
 import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
@@ -45,6 +46,26 @@ function created(run: () => Promise<string>): Promise<Created> {
     (id) => ({ id, error: null }),
     (error: Error) => ({ id: null, error: error.message })
   );
+}
+
+function freezerControl(
+  freezer: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'> | undefined
+): Pick<AgentControl, 'freeze' | 'newChat' | 'thaw' | 'discard'> {
+  const needed = () => {
+    if (!freezer) throw new Error('This agent has no freezer.');
+    return freezer;
+  };
+  return {
+    freeze: (agentId, context) => created(async () => needed().freeze(agentId, context)),
+    newChat: (agentId, context) =>
+      created(async () => (await needed().newChat(agentId, context)) ?? ''),
+    thaw: (id, context) => created(async () => needed().thaw(id, context)),
+    discard: (id, context) =>
+      created(async () => {
+        await needed().discard(id, context);
+        return id;
+      }),
+  };
 }
 
 function memoryControl(
@@ -206,7 +227,8 @@ export function createAgentControl(
   scoops?: HostScoops,
   skills?: Pick<SkillsRuntime, 'expand'>,
   sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>,
-  memory?: Pick<MemoryRuntime, 'save' | 'remove'>
+  memory?: Pick<MemoryRuntime, 'save' | 'remove'>,
+  freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -271,6 +293,7 @@ export function createAgentControl(
     withdraw: (id, context) => withdraw(current(), id, context),
     ...sprinkleControl(sprinkles),
     ...memoryControl(memory),
+    ...freezerControl(freezer),
     async unqueue(agentId, id, context) {
       return withdraw(await conversationFor(agentId, context), id, context);
     },

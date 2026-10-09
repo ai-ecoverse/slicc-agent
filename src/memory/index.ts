@@ -18,6 +18,7 @@ export const IDLE_CHECK_MS = 60_000;
 export interface MemorySetup {
   extension: Extension;
   tools: readonly ToolRegistration[];
+  extract(conversation: number, tail: number, context: Context, cone?: string): Promise<boolean>;
   attach(options: MemoryAttach, context: Context): Promise<MemoryRuntime>;
 }
 
@@ -41,6 +42,7 @@ export function setupMemory(registry: Registry): MemorySetup {
   return {
     extension,
     tools: [tool],
+    extract: schedule,
     async attach(options, context) {
       const runtime = await attachMemory(options, connect, context);
       const stop = idleWatch(

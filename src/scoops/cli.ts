@@ -1,7 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
-import type { Agents } from '../agents.ts';
+import type { Agents, AgentsState } from '../agents.ts';
 import { resolve } from '../kernel/paths.ts';
 import { findRole, type Roles } from '../roles/roles.ts';
 import type { Request, Runner } from './requests.ts';
@@ -46,6 +46,7 @@ export interface CliOptions {
   sprinkle?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   memory?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   gelatiere?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
+  freezer?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
 }
 
 export type Deps = CliOptions & { now: () => number; sync: SyncState };
@@ -288,7 +289,7 @@ async function status(
   context: Context
 ): Promise<Answer> {
   const found = handle(deps, who, request.argv[1]);
-  if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
+  if (!found) return fail(noScoop(deps.agents.state(), request.argv[1] ?? ''));
   const [, record] = found;
   const busy = await deps.scoops.busy(record.conversation, context);
   return ok(
@@ -327,7 +328,7 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   }
   if (who.scoop) return fail('a scoop can only send to its parent');
   const found = handle(deps, who, request.argv[1]);
-  if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
+  if (!found) return fail(noScoop(deps.agents.state(), request.argv[1] ?? ''));
   const followUp = parsed.switches.has('--follow-up');
   return deps.scoops.feed(
     found[0],
@@ -351,7 +352,8 @@ async function latest(deps: Deps, folder: string, context: Context): Promise<str
 function waitTargets(deps: Deps, who: Caller, rest: readonly string[]): string[] | Answer {
   if (!rest.length) return fail('wait needs at least one handle', 2);
   const missing = rest.filter((name) => !handle(deps, who, name));
-  if (missing.length) return fail(`there is no scoop ${missing.join(', ')}`);
+  if (missing.length)
+    return fail(missing.map((name) => noScoop(deps.agents.state(), name)).join('; '));
   return rest.map((name) => (handle(deps, who, name) as [string, unknown])[0]);
 }
 
@@ -401,7 +403,7 @@ async function wait(deps: Deps, request: Request, who: Caller, context: Context)
 async function stop(deps: Deps, request: Request, who: Caller, context: Context): Promise<Answer> {
   if (who.scoop) return fail('a scoop cannot stop scoops');
   const found = handle(deps, who, request.argv[1]);
-  if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
+  if (!found) return fail(noScoop(deps.agents.state(), request.argv[1] ?? ''));
   return deps.scoops.stop(found[0], who.fromAgent, context);
 }
 
@@ -413,7 +415,7 @@ async function rename(
 ): Promise<Answer> {
   if (who.scoop) return fail('a scoop cannot rename scoops');
   const found = handle(deps, who, request.argv[1]);
-  if (!found) return fail(`there is no scoop ${request.argv[1] ?? ''}`.trim());
+  if (!found) return fail(noScoop(deps.agents.state(), request.argv[1] ?? ''));
   return deps.scoops.rename(found[0], request.argv.slice(2).join(' '), context);
 }
 
@@ -435,6 +437,19 @@ const VERBS: Record<string, Verb> = {
   __detach: (deps, request, _who, context) => detachSync(deps, request.argv[1] ?? '', context),
 };
 
+export function noScoop(state: Readonly<AgentsState>, name: string): string {
+  const id = name.startsWith('scoop:') ? name : `scoop:${name}`;
+  const record =
+    state.scoops[id]?.frozen !== undefined
+      ? state.scoops[id]
+      : Object.values(state.scoops).find(
+          (candidate) => candidate.frozen && candidate.name === name
+        );
+  const frozen = record?.frozen ? state.frozen?.[record.frozen] : undefined;
+  if (frozen) return `scoop ${name} is frozen with cone ${frozen.name}; thaw the cone first`;
+  return `there is no scoop ${name}`.trim();
+}
+
 async function dispatch(
   deps: Deps,
   request: Request,
@@ -453,6 +468,10 @@ async function dispatch(
     return deps.gelatiere
       ? deps.gelatiere(request.argv, who.id, context)
       : fail('the gelatiere is not available in this agent');
+  if (request.as === 'freezer')
+    return deps.freezer
+      ? deps.freezer(request.argv, who.id, context)
+      : fail('the freezer is not available in this agent');
   const first = request.argv[0] ?? '';
   const verb = VERBS[first];
   if (verb) return verb(deps, request, who, context);

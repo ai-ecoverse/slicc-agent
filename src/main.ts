@@ -17,6 +17,8 @@ import {
   sandboxFactory,
 } from './codemode/index.ts';
 import { EncryptedCredentialStore } from './credentials.ts';
+import { attachFreezer } from './freezer/index.ts';
+import { settingsText, titler } from './freezer/title.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { createActivity } from './kernel/activity.ts';
@@ -154,6 +156,14 @@ async function start(
     },
     BACKGROUND_CONTEXT
   );
+  const freezer = attachFreezer({
+    harness: agent.harness,
+    agents: agent.agents,
+    env: home,
+    extract: memory.extract,
+    title: titler(models, settingsText(home, HOME)),
+  });
+  licks.licks.guard(freezer.frozenTarget);
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -166,6 +176,7 @@ async function start(
       sprinkle: sprinkles.command,
       memory: memoryRuntime.command,
       gelatiere: gelatiere.command,
+      freezer: freezer.command,
       ...(options.assets ? { assets: options.assets } : {}),
     },
     BACKGROUND_CONTEXT
@@ -188,6 +199,7 @@ async function start(
     skills: skillsRuntime,
     sprinkles,
     memory: memoryRuntime,
+    freezer,
   });
 }
 

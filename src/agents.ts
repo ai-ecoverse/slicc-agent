@@ -32,10 +32,22 @@ export type ScoopRecord = {
   created: Mark | null;
   dropped: Mark | null;
   gone: boolean;
+  frozen?: string;
+};
+
+export type FrozenRecord = {
+  cone: string;
+  name: string;
+  conversation: number;
+  title: string;
+  model: string;
+  messages: number;
+  frozenAt: number;
+  scoops: string[];
 };
 
 export function live(record: ScoopRecord): boolean {
-  return record.dropped === null && !record.gone;
+  return record.dropped === null && !record.gone && !record.frozen;
 }
 
 export type AgentsState = {
@@ -43,6 +55,8 @@ export type AgentsState = {
   active: string;
   next: number;
   scoops: Record<string, ScoopRecord>;
+  frozen?: Record<string, FrozenRecord>;
+  frozenNext?: number;
 };
 
 export const AgentsDoc = defineDoc<AgentsState>({
@@ -81,6 +95,7 @@ export interface Agents {
   selectCone(id: string, context: Context): Promise<void>;
   createCone(name: string, context: Context): Promise<string>;
   switchCone(conversation: Conversation, context: Context): Promise<void>;
+  setConversation(coneId: string, conversation: Conversation, context: Context): Promise<void>;
   update<T>(change: (tx: Tx, state: AgentsState) => T | Promise<T>, context: Context): Promise<T>;
   onChange(listener: (state: Readonly<AgentsState>) => void): () => void;
   onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
@@ -167,13 +182,16 @@ export async function openAgents(
         return id;
       }, using);
     },
-    async switchCone(conversation, using) {
+    switchCone(conversation, using) {
+      return agents.setConversation(state.active, conversation, using);
+    },
+    async setConversation(coneId, conversation, using) {
       handles.set(conversation.id, conversation);
       await update(async (tx, doc) => {
-        (doc.cones[doc.active] as ConeRecord).conversation = conversation.id;
-        (await tx.doc(ConeDoc)).conversation = conversation.id;
+        (doc.cones[coneId] as ConeRecord).conversation = conversation.id;
+        if (coneId === doc.active) (await tx.doc(ConeDoc)).conversation = conversation.id;
       }, using);
-      await notifyCone(conversation);
+      if (coneId === state.active) await notifyCone(conversation);
     },
     update,
     onChange(listener) {

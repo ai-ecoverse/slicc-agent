@@ -170,7 +170,7 @@ async function deliver(g: G, context: Context): Promise<Answer> {
   const byCone = new Map<string, Suggestion[]>();
   for (const item of fresh) {
     const named = (item.cones ?? []).filter((cone) => cones.includes(cone));
-    for (const cone of named.length ? named : ['cone'])
+    for (const cone of named.length ? named : [g.options.agents.activeCone()])
       byCone.set(cone, [...(byCone.get(cone) ?? []), item]);
   }
   for (const [cone, items] of byCone) {

@@ -6,7 +6,7 @@ import {
 } from '@earendil-works/chord';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
-import type { Agents } from '../agents.ts';
+import { type Agents, live } from '../agents.ts';
 import type { LickTarget } from '../licks/lick.ts';
 import type { Licks } from '../licks/licks.ts';
 import {
@@ -87,6 +87,13 @@ function named(agents: Agents, value: string): string | undefined {
   return id in state.scoops ? id : undefined;
 }
 
+export function ownerOf(agents: Agents, owner: string | undefined): string {
+  const state = agents.state();
+  if (owner && state.cones[owner]) return owner;
+  const scoop = owner ? state.scoops[owner] : undefined;
+  return scoop && live(scoop) ? (owner as string) : agents.activeCone();
+}
+
 function entry(name: string, html: string, agentId: string): Sprinkle {
   return { id: name, name, ...describe(name, html), agentId, html };
 }
@@ -110,14 +117,15 @@ function reloader(
     for (const { name, path } of await sprinkleFiles(env, dir, using)) {
       if (reserved.has(name)) continue;
       const read = await env.readTextFile(path, using);
-      if (read.ok) out.push(entry(name, read.value, owned[name] ?? agents.activeCone()));
+      if (read.ok) out.push(entry(name, read.value, ownerOf(agents, owned[name])));
     }
     if (offered)
-      out.push(
-        entry(SUGGESTIONS, suggestions as string, owned[SUGGESTIONS] ?? agents.activeCone())
-      );
+      out.push(entry(SUGGESTIONS, suggestions as string, ownerOf(agents, owned[SUGGESTIONS])));
     if (welcome !== undefined)
-      out.push({ ...entry(WELCOME, welcome, owned[WELCOME] ?? 'cone'), inline: true });
+      out.push({
+        ...entry(WELCOME, welcome, ownerOf(agents, owned[WELCOME] ?? 'cone')),
+        inline: true,
+      });
     sprinkles.replace(using, out);
   };
 }
@@ -221,7 +229,7 @@ export function setupSprinkles() {
               title: sprinkle.title,
               text: payload.action || '(no action)',
               ...(payload.data === null ? {} : { body: JSON.stringify(payload.data, null, 2) }),
-              target: targetOf((await owners(using))[id] ?? agents.activeCone()),
+              target: targetOf(ownerOf(agents, (await owners(using))[id])),
             },
             using
           );

@@ -7,6 +7,7 @@ You can edit this file to change what the gelatiere does on each pass.
    - `gelatiere list --all --json`: everything already suggested, and what was taken or dismissed. Never suggest a dismissed id again, and don't repeat a taken one.
    - The installed skills: `ls ~/.pi/agent/skills ~/.agents/skills /var/lib/slicc/agent/skills 2>/dev/null`.
    - `agent list --agents` for the roles, and `ls ~/.slicc` for schedules, watches and webhooks.
+   - `freezer list`, then `freezer show <id>` for chats frozen since your last pass (your memory notes say when that was): what the user worked on and where they got stuck.
 2. **Think of at most three suggestions** that would help this user next week. Use these kinds:
    - `use-case`: something SLICC can do for them that they haven't tried, with a `prompt` the cone can run as if the user typed it;
    - `tip`: a habit or setting worth changing, with no action;
