@@ -22,7 +22,7 @@ If either is empty, the browser isn't connected (the extension isn't installed o
 1. `playwright-cli open <url>` opens a tab and prints its target id. Keep that id.
 2. `playwright-cli snapshot --tab <id>` prints the page as an ARIA tree with refs: `e1`, `e2`, and `f1e5` inside iframes.
 3. Act on refs: `click <ref>`, `fill <ref> <text>` (`--submit` presses Enter), `type <text>`, `press <key>`. Each takes `--tab <id>`.
-4. Snapshot again before the next action: refs go stale after navigation or a re-render.
+4. Snapshot again before every next action. Refs are renumbered after each `fill`, `click`, `type` or `press`, and after navigation, so a ref from an older snapshot can point at something else; an action without a fresh snapshot fails with "No snapshot available".
 
 Read pages with `snapshot`; use `eval <expression>` only for a value the snapshot doesn't show. Free text that starts with `-` goes after `--`: `fill --tab <id> e3 -- -5`. `playwright-cli <command> --help` explains each command. For long flows, a codemode script can chain the commands through `tools.bash` and save turns.
 
