@@ -182,9 +182,12 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     const live: string[] = [];
     for (const repo of repos) {
       const found = await statusOf(env, repo, context);
-      if (!found) continue;
+      if (!found) {
+        const still = await env.exists(joined(repo, '.git'), context);
+        if (!still.ok || !still.value) continue;
+      }
       live.push(repo);
-      changes.push(...found);
+      changes.push(...(found ?? view.value.changes.filter((change) => change.repo === repo)));
     }
     repos = live;
     view.replace(context, { unavailable: live.length ? null : NO_REPO, changes });
@@ -208,12 +211,14 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     clearTimeout(timer);
     timer = setTimeout(() => void kick(context), options.reloadMs);
   };
-  const find = async (path: string, context: Context) => {
-    await refresh(context);
-    const change = view.value.changes.find((item) => item.path === path);
-    if (!change) throw new Error(`${path} has no pending change`);
-    return change;
-  };
+  const change = (path: string, context: Context, act: (found: FileChange) => Promise<void>) =>
+    serial(async () => {
+      await scan(context);
+      const found = view.value.changes.find((item) => item.path === path);
+      if (!found) throw new Error(`${path} has no pending change`);
+      await act(found);
+      await scan(context);
+    });
   const start = async (context: Context) => {
     await refresh(context);
     const watched = await env.watch(
@@ -239,27 +244,25 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
       opened ??= start(context);
       return opened;
     },
-    async accept(path, context) {
-      const change = await find(path, context);
-      const rel = relative(change.path, change.repo);
-      const ran = await run(env, ['git', 'add', '-A', '--', rel], change.repo, context);
-      if (ran.code !== 0) throw failure(ran, `git add ${rel}`);
-      await refresh(context);
-    },
-    async revert(path, context) {
-      const change = await find(path, context);
-      const rel = relative(change.path, change.repo);
-      if (change.kind === 'conflict')
-        throw new Error(`${change.path} has a merge conflict; resolve it with git first.`);
-      if (change.kind === 'untracked') {
-        const removed = await env.remove(change.path, { force: true }, context);
-        if (!removed.ok) throw removed.error;
-      } else {
-        const ran = await run(env, ['git', 'restore', '--', rel], change.repo, context);
-        if (ran.code !== 0) throw failure(ran, `git restore ${rel}`);
-      }
-      await refresh(context);
-    },
+    accept: (path, context) =>
+      change(path, context, async (found) => {
+        const rel = relative(found.path, found.repo);
+        const ran = await run(env, ['git', 'add', '-A', '--', rel], found.repo, context);
+        if (ran.code !== 0) throw failure(ran, `git add ${rel}`);
+      }),
+    revert: (path, context) =>
+      change(path, context, async (found) => {
+        const rel = relative(found.path, found.repo);
+        if (found.kind === 'conflict')
+          throw new Error(`${found.path} has a merge conflict; resolve it with git first.`);
+        if (found.kind === 'untracked') {
+          const removed = await env.remove(found.path, { force: true }, context);
+          if (!removed.ok) throw removed.error;
+        } else {
+          const ran = await run(env, ['git', 'restore', '--', rel], found.repo, context);
+          if (ran.code !== 0) throw failure(ran, `git restore ${rel}`);
+        }
+      }),
     refresh,
     async close(context) {
       clearTimeout(timer);
