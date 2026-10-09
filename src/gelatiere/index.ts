@@ -169,7 +169,7 @@ async function deliver(g: G, context: Context): Promise<Answer> {
   const cones = Object.keys(g.options.agents.state().cones);
   const byCone = new Map<string, Suggestion[]>();
   for (const item of fresh) {
-    const named = item.cones.filter((cone) => cones.includes(cone));
+    const named = (item.cones ?? []).filter((cone) => cones.includes(cone));
     for (const cone of named.length ? named : ['cone'])
       byCone.set(cone, [...(byCone.get(cone) ?? []), item]);
   }
@@ -209,9 +209,9 @@ export const INSTALLER = 'https://raw.githubusercontent.com/ai-ecoverse/gh-upski
 
 export function upskillScript(repo: string, skill: string): string {
   return [
-    'export PATH="$PATH:$HOME/.local/bin"',
-    `{ command -v upskill >/dev/null 2>&1 || curl -fsSL ${INSTALLER} | bash; }`,
-    `upskill '${repo}' --skill '${skill}' --dest "$HOME/.pi/agent/skills"`,
+    'bin="${PNPM_HOME:-$HOME/.local/share/pnpm}/bin"',
+    `{ command -v upskill >/dev/null 2>&1 || curl -fsSL ${INSTALLER} | bash -s -- --bin-dir "$bin"; }`,
+    `upskill '${repo}' --skill '${skill}' --dest-path "$HOME/.pi/agent/skills"`,
   ].join(' && ');
 }
 

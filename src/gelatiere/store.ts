@@ -40,6 +40,14 @@ function text(value: unknown, limit: number): string | undefined {
   return clean ? clean.slice(0, limit) : undefined;
 }
 
+export function repoOf(source: unknown): string | undefined {
+  if (typeof source !== 'string') return undefined;
+  const found = /^https:\/\/raw\.githubusercontent\.com\/([^/\s]+)\/([^/\s]+)\//.exec(
+    source.trim()
+  );
+  return found ? `${found[1]}/${found[2]}` : undefined;
+}
+
 function origin(skill: string | undefined, repo: string | undefined): string {
   return `${skill} from github.com/${repo}`;
 }
@@ -74,7 +82,7 @@ export function validate(candidate: unknown): Suggestion | string {
   const body = text(item.body, 600);
   if (!title || !body) return `${id}: needs a title and a body`;
   const skill = typeof item.skill === 'string' ? item.skill.trim() : undefined;
-  const repo = typeof item.repo === 'string' ? item.repo.trim() : undefined;
+  const repo = typeof item.repo === 'string' ? item.repo.trim() : repoOf(item.source);
   const url = typeof item.url === 'string' ? item.url.trim() : undefined;
   const cones = Array.isArray(item.cones)
     ? item.cones.filter((cone): cone is string => typeof cone === 'string')
@@ -144,7 +152,10 @@ export async function readStore(
   try {
     const parsed = JSON.parse(read.value) as unknown;
     return Array.isArray(parsed)
-      ? parsed.filter((item): item is Suggestion => typeof validate(item) !== 'string')
+      ? parsed.filter(
+          (item): item is Suggestion =>
+            Boolean(item) && typeof item === 'object' && typeof (item as Suggestion).id === 'string'
+        )
       : [];
   } catch {
     return [];
