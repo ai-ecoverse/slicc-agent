@@ -36,6 +36,10 @@ tag: feedback
 Keep replies short. Lead with the result, then the detail.
 ```
 
+## Extraction
+
+Besides your own writes, SLICC mines a cone's conversation for memory when it is compacted and after it has been idle for a while (30 minutes by default), with one model call that writes into the cone's file through the same writer. `"memory": { "extract": false }` in `~/.pi/agent/settings.json` turns it off, `"extractModel": "<provider>/<model>"` picks a cheaper model, and `"idleMinutes"` changes the wait (`0` turns the idle trigger off). If the user asks why something was remembered, it may have come from extraction; edit or remove it like any entry.
+
 ## The `memory` command
 
 - `memory scopes` lists every scope with its entry count and file.

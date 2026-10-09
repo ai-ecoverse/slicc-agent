@@ -1,6 +1,6 @@
 import type { Context } from '@earendil-works/chord';
 import { Type } from '@earendil-works/pi-ai';
-import { defineTool, section } from '@earendil-works/pi-durable';
+import { defineTool, type Harness, section } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState, ScoopRecord } from '../agents.ts';
 import { loadContextFiles, renderContextFiles } from './context.ts';
@@ -10,6 +10,7 @@ import { GLOBAL, type MemoryFiles, type Place, placeOf, rolePlace, type Written 
 export const MEMORY_WRITE = 'memory_write';
 
 export type Host = {
+  harness: Harness;
   agents: Agents;
   env: ExecutionEnv;
   home: string;

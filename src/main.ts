@@ -142,6 +142,7 @@ async function start(
   let roles: ScoopsRuntime | undefined;
   const memoryRuntime = await memory.attach(
     {
+      harness: agent.harness,
       agents: agent.agents,
       env: home,
       home: HOME,
