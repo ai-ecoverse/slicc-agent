@@ -36,6 +36,7 @@ export interface AttachOptions {
   alive?: (pid: number) => Promise<boolean>;
   reads: () => readonly string[];
   sprinkle?: CliOptions['sprinkle'];
+  memory?: CliOptions['memory'];
 }
 
 export interface ScoopsRuntime {
@@ -49,7 +50,7 @@ export interface ScoopsSetup {
   attach(options: AttachOptions, context: Context): Promise<ScoopsRuntime>;
 }
 
-export const COMMANDS = ['agent', 'subagent', 'sprinkle'];
+export const COMMANDS = ['agent', 'subagent', 'sprinkle', 'memory'];
 
 async function install(env: ExecutionEnv, script: string, pnpmHome: string, context: Context) {
   await env.createDir(`${pnpmHome}/bin`, { recursive: true }, context);
@@ -147,6 +148,7 @@ export function setupScoops(
         roles: () => roles(context),
         ...(options.alive ? { alive: options.alive } : {}),
         ...(options.sprinkle ? { sprinkle: options.sprinkle } : {}),
+        ...(options.memory ? { memory: options.memory } : {}),
       });
       const plane = controlPlane(env, cli, {
         ...(options.controlDir ? { dir: options.controlDir } : {}),

@@ -287,6 +287,8 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
       conversation: child.id,
       anchor,
       role: request.role?.name ?? null,
+      ...(request.role?.memory ? { memory: request.role.memory } : {}),
+      ...(request.role?.context ? { context: request.role.context } : {}),
       kind: request.kind ?? 'async',
       parent: request.parent ?? request.cone,
       depth: request.depth ?? 1,

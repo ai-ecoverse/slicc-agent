@@ -55,7 +55,7 @@ function blockValue(block: Block): string {
 type State = {
   fields: Record<string, FrontmatterValue>;
   problems: string[];
-  nested: Set<string>;
+  nested: Map<string, string[]>;
   list: string | undefined;
   block: Block | undefined;
 };
@@ -88,11 +88,12 @@ function line(state: State, text: string): void {
   if (!text.trim() || text.trimStart().startsWith('#')) return;
   const item = /^\s+-\s+(.*)$/.exec(text);
   if (item && list) (state.fields[list] as string[]).push(unquote((item[1] as string).trim()));
-  else if (/^\s/.test(text) && list) state.nested.add(list);
+  else if (/^\s/.test(text) && list)
+    state.nested.set(list, [...(state.nested.get(list) ?? []), text.trim()]);
   else pair(state, text);
 }
 
-export function parseFrontmatter(text: string): Frontmatter {
+export function parseFrontmatter(text: string, mappings: readonly string[] = []): Frontmatter {
   const normalized = text.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized);
   if (!match)
@@ -100,13 +101,17 @@ export function parseFrontmatter(text: string): Frontmatter {
   const state: State = {
     fields: {},
     problems: [],
-    nested: new Set(),
+    nested: new Map(),
     list: undefined,
     block: undefined,
   };
   for (const text of (match[1] as string).split('\n')) line(state, text);
   if (state.block) state.fields[state.block.key] = blockValue(state.block);
-  for (const key of state.nested) {
+  for (const [key, lines] of state.nested) {
+    if (mappings.includes(key)) {
+      state.fields[key] = `{ ${lines.join(', ')} }`;
+      continue;
+    }
     delete state.fields[key];
     state.problems.push(`"${key}" has nested values, which SLICC doesn't read`);
   }

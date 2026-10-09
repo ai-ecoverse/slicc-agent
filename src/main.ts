@@ -23,10 +23,11 @@ import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
 import { setupLicks } from './licks/index.ts';
+import { setupMemory } from './memory/index.ts';
 import { type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { identity } from './scoops/identity.ts';
-import { type Assets, packageAssets, setupScoops } from './scoops/index.ts';
+import { type Assets, packageAssets, type ScoopsRuntime, setupScoops } from './scoops/index.ts';
 import {
   createAgentSettings,
   createSliccModels,
@@ -77,6 +78,7 @@ async function start(
   const registry = createRegistry();
   registry.install(CodingTools);
   registry.install(sliccPrompt(facts));
+  const memory = setupMemory(registry);
   const settings = await client.fs
     .readFile(`${HOME}/.pi/agent/settings.json`)
     .catch(() => undefined);
@@ -96,7 +98,7 @@ async function start(
       ];
   registry.install(codemodeExtension(codemode));
   const licks = setupLicks(registry);
-  const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode]);
+  const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
   const skills = setupSkills(registry, licks.licks);
   const activity = createActivity();
   const groups = processGroups(client);
@@ -137,6 +139,17 @@ async function start(
     },
     BACKGROUND_CONTEXT
   );
+  let roles: ScoopsRuntime | undefined;
+  const memoryRuntime = await memory.attach(
+    {
+      agents: agent.agents,
+      env: home,
+      home: HOME,
+      reloadMs: RELOAD_MS,
+      roles: async (using) => roles?.roles(using),
+    },
+    BACKGROUND_CONTEXT
+  );
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -147,16 +160,19 @@ async function start(
       alive: alive(client),
       reads: skillsRuntime.dirs,
       sprinkle: sprinkles.command,
+      memory: memoryRuntime.command,
       ...(options.assets ? { assets: options.assets } : {}),
     },
     BACKGROUND_CONTEXT
   );
+  roles = runtime;
   return hostAgent(agent, {
     settings: await createAgentSettings(models, credentials, providers),
     licks: { licks: licks.licks, sources },
     scoops: { scoops: scoops.scoops, runtime },
     skills: skillsRuntime,
     sprinkles,
+    memory: memoryRuntime,
   });
 }
 

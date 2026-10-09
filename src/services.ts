@@ -5,6 +5,7 @@ import {
   type ReplicatedState,
 } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 
 export type SendMode = 'steer' | 'followUp' | 'reject';
@@ -72,6 +73,17 @@ export interface AgentControl {
     args: JsonValue[],
     context: Context
   ): Promise<JsonValue>;
+  memorySave(draft: MemoryDraft, context: Context): Promise<MemoryEntry>;
+  memoryRemove(id: string, context: Context): Promise<{ removed: boolean }>;
+}
+
+export interface MemoryDraft {
+  id: string | null;
+  scope: string;
+  section: string;
+  title: string;
+  body: string;
+  tag: MemoryTag | null;
 }
 
 export type Created = { id: string; error: null } | { id: null; error: string };
@@ -120,6 +132,8 @@ export interface AgentTranscript {
   readonly views: ReplicatedState<Record<string, ConversationView>>;
   readonly commands: ReplicatedState<Command[]>;
   readonly sprinkles: ReplicatedState<Sprinkle[]>;
+  readonly memories: ReplicatedState<MemoryEntry[]>;
+  readonly memoryScopes: ReplicatedState<MemoryScope[]>;
 }
 
 export interface Command {

@@ -1,5 +1,6 @@
 import type { Context } from '@earendil-works/chord';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import type { RoleMemory } from '../memory/store.ts';
 import { type FrontmatterValue, parseFrontmatter } from './frontmatter.ts';
 
 export type RoleSource = 'builtin' | 'package' | 'user' | 'project';
@@ -15,6 +16,8 @@ export interface Role {
   thinking?: Thinking;
   aliases: string[];
   output?: string;
+  memory?: RoleMemory;
+  context?: { project: boolean; global: boolean };
   source: RoleSource;
   path: string;
 }
@@ -35,7 +38,10 @@ const TOOLS: Record<string, string> = {
   grep: 'bash',
   find: 'bash',
   ls: 'bash',
+  memory_write: 'memory_write',
 };
+
+const WRITERS = new Set(['write', 'edit', 'bash']);
 
 const THINKING = new Set<string>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 
@@ -51,14 +57,12 @@ const APPLIED = new Set([
   'package',
   'advertise',
   'inheritProjectContext',
+  'inheritGlobalContext',
   'inheritSkills',
+  'memory',
   'skills',
   'defaultReads',
 ]);
-
-const LATER: Record<string, string> = {
-  memory: 'per-agent memory comes with SLICC’s memory panel',
-};
 
 export type RoleFiles = Pick<ExecutionEnv, 'readTextFile' | 'listDir'>;
 
@@ -88,13 +92,54 @@ function tools(names: string[], where: string, warnings: string[]): string[] {
   return mapped;
 }
 
+export function roleMemory(value: FrontmatterValue): RoleMemory | undefined {
+  if (typeof value !== 'string') return undefined;
+  const inline = /^\{(.*)\}$/s.exec(value.trim());
+  const pairs = new Map<string, string>();
+  for (const part of (inline ? (inline[1] as string) : value).split(/[,\n]/)) {
+    const found = /^\s*([\w-]+)\s*:\s*(.*?)\s*$/.exec(part);
+    if (found) pairs.set(found[1] as string, (found[2] as string).replace(/^(["'])(.*)\1$/, '$2'));
+  }
+  const scope = pairs.get('scope');
+  const path = pairs.get('path');
+  if ((scope !== 'user' && scope !== 'project') || !path) return undefined;
+  return { scope, path };
+}
+
+function memoryFields(
+  fields: Record<string, FrontmatterValue>,
+  path: string,
+  warnings: string[]
+): Pick<Role, 'memory' | 'context'> & { listed: string[] | undefined } {
+  const memory = fields.memory === undefined ? undefined : roleMemory(fields.memory);
+  if (fields.memory !== undefined && !memory)
+    warnings.push(`${path}: memory needs a scope (user or project) and a path; ignored`);
+  const listed = fields.tools !== undefined ? tools(list(fields.tools), path, warnings) : undefined;
+  if (memory && listed?.some((tool) => WRITERS.has(tool)) && !listed.includes('memory_write'))
+    listed.push('memory_write');
+  const inherits =
+    fields.inheritProjectContext !== undefined || fields.inheritGlobalContext !== undefined;
+  return {
+    ...(memory ? { memory } : {}),
+    listed,
+    ...(inherits
+      ? {
+          context: {
+            project: fields.inheritProjectContext !== false,
+            global: fields.inheritGlobalContext === true,
+          },
+        }
+      : {}),
+  };
+}
+
 export function parseRole(
   text: string,
   source: RoleSource,
   path: string,
   warnings: string[]
 ): Role | undefined {
-  const { fields, body, problems } = parseFrontmatter(text);
+  const { fields, body, problems } = parseFrontmatter(text, ['memory']);
   for (const problem of problems) warnings.push(`${path}: ${problem}`);
   const name = fields.name;
   const description = fields.description;
@@ -104,26 +149,27 @@ export function parseRole(
   }
   for (const key of Object.keys(fields))
     if (!APPLIED.has(key))
-      warnings.push(
-        `${path}: "${key}" ${LATER[key] ? `is not read yet (${LATER[key]})` : "isn't supported in SLICC; it's ignored"}`
-      );
+      warnings.push(`${path}: "${key}" isn't supported in SLICC; it's ignored`);
   const thinking =
     typeof fields.thinking === 'string' && THINKING.has(fields.thinking)
       ? (fields.thinking as Thinking)
       : undefined;
   if (fields.thinking !== undefined && !thinking)
     warnings.push(`${path}: thinking "${String(fields.thinking)}" is unknown; ignored`);
+  const { memory, listed, context } = memoryFields(fields, path, warnings);
   const pkg = typeof fields.package === 'string' && fields.package ? `${fields.package}.` : '';
   return {
     name: `${pkg}${name}`,
     description,
     prompt: body,
     mode: fields.systemPromptMode === 'append' ? 'append' : 'replace',
-    ...(fields.tools !== undefined ? { tools: tools(list(fields.tools), path, warnings) } : {}),
+    ...(listed ? { tools: listed } : {}),
     ...(typeof fields.model === 'string' ? { model: fields.model } : {}),
     ...(thinking ? { thinking } : {}),
     aliases: list(fields.aliases),
     ...(typeof fields.output === 'string' ? { output: fields.output } : {}),
+    ...(memory ? { memory } : {}),
+    ...(context ? { context } : {}),
     source,
     path,
   };
