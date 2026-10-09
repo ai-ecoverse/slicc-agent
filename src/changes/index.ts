@@ -9,6 +9,7 @@ import {
   joined,
   MAX_FILES,
   NO_GIT,
+  NO_REPO,
   type Pending,
   parseStatus,
   relative,
@@ -175,7 +176,7 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
       changes.push(...found);
     }
     repos = live;
-    view.replace(context, { unavailable: live.length ? null : NO_GIT, changes });
+    view.replace(context, { unavailable: live.length ? null : NO_REPO, changes });
   };
   const refresh = (context: Context) => serial(() => scan(context));
   const later = (context: Context) => {

@@ -6,7 +6,9 @@ export const MAX_FILES = 200;
 export const SCAN_DEPTH = 3;
 export const SCAN_ENTRIES = 200;
 export const NO_GIT =
-  'Changes needs git and a git repository. Install git with `pnpm add -g @ai-ecoverse/wasm-git`, then `git init`, or clone with slicc-node or the extension connected.';
+  "Changes needs git, and git isn't installed. Install it with `pnpm add -g @ai-ecoverse/wasm-git`, then run `git init` in a folder under /home, or clone with slicc-node or the extension connected.";
+export const NO_REPO =
+  'Changes lists the changes in git repositories, and there is none here yet. Run `git init` in a folder under /home, or clone one with slicc-node or the extension connected.';
 
 export type ChangeStatus = 'added' | 'modified' | 'deleted';
 

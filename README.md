@@ -311,7 +311,8 @@ pi has no git integration and no changes list; pi coding-agent leaves that to th
   - Untracked files show as added, and a rename shows as a deleted plus an added file.
   - `before` is the index version (`git show :<path>`) and `after` is the working file. Binary files and files over 1 MB get null for both, which spectrum shows as "no diff".
   - At most 200 files per repo are listed. There's no store of our own, and `agentId` is null, because git doesn't know which agent wrote a file.
-- **Without git, or outside any repo,** `unavailable()` returns the empty state: "Changes needs git and a git repository. Install git with `pnpm add -g @ai-ecoverse/wasm-git`, then `git init`, or clone with slicc-node or the extension connected." Cloning from github.com needs a proxy.
+- **Without git,** `unavailable()` says git isn't installed and how to get it (`pnpm add -g @ai-ecoverse/wasm-git`). **With git but no repo,** it says to `git init` a folder under /home or clone one with slicc-node or the extension connected; cloning over HTTPS through the page alone fails. Seven doesn't have to ship git: either way works.
+- **The `system` section** adds a Git line when `git` is on PATH: local repositories work, and clone, fetch and push need slicc-node or the extension.
 - **Which repos:**
   - the repo of each live agent's cwd (`git rev-parse --show-toplevel`), with the active cone's first;
   - plus a scan of /home and each /mnt/<name>, three levels deep and at most 200 directories per level, skipping node_modules and dot-directories.
