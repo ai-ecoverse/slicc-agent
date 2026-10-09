@@ -109,6 +109,7 @@ export function setupScoops(
         tools: fileTools,
         groups,
         reads: options.reads,
+        files: env,
       });
       const builtin = async () => {
         const out: { path: string; text: string }[] = [];
