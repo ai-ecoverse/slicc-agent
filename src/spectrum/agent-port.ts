@@ -293,8 +293,6 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     return [];
   }
 
-  freeze(): void {}
-
   thaw(): Agent | null {
     return null;
   }
