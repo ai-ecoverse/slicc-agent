@@ -259,7 +259,7 @@ function user(
   id: string,
   message: ModelMessage,
   delivered: Delivered | undefined,
-  from: string | undefined
+  from: From | undefined
 ): UserMessage {
   return {
     id,
@@ -267,16 +267,17 @@ function user(
     text: textOf(message.content),
     createdAt: message.timestamp ?? 0,
     ...(delivered ? { delivered } : {}),
-    ...(from ? { from } : {}),
+    ...(from ? { from: from.from } : {}),
+    ...(from?.agent ? { origin: 'agent' as const } : {}),
   };
 }
 
-export function origins(entries: readonly EntryRecord[]): Map<number, string> {
-  const out = new Map<number, string>();
+export function origins(entries: readonly EntryRecord[]): Map<number, From> {
+  const out = new Map<number, From>();
   for (const entry of entries)
     if (entry.kind === FROM_KIND) {
       const note = entry.data as From;
-      out.set(note.entry, note.from);
+      out.set(note.entry, note);
     }
   return out;
 }
@@ -367,7 +368,7 @@ function entryMessage(
   out: Message[],
   calls: Map<string, ToolCall>,
   delivered: Delivered | undefined,
-  notes: { decisions: ReadonlyMap<string, LickDecision>; origins: ReadonlyMap<number, string> }
+  notes: { decisions: ReadonlyMap<string, LickDecision>; origins: ReadonlyMap<number, From> }
 ): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
