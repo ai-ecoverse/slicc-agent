@@ -300,13 +300,16 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
 
   frozen(): readonly FrozenCone[] {
     return (this.#connection.frozen?.value ?? []).map(
-      ({ id, name, title, model, messages, frozenAt }) => ({
+      ({ id, name, title, model, messages, frozenAt, kind, live, thawedAs }) => ({
         id,
         name,
         title,
         model,
         messages,
         frozenAt,
+        kind,
+        live,
+        ...(thawedAs ? { thawedAs } : {}),
       })
     );
   }
@@ -314,6 +317,11 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   thaw(id: string): Agent | null {
     const record = this.frozen().find((item) => item.id === id);
     if (!record) return null;
+    if (this.#connection.frozen?.value?.find((item) => item.id === id)?.live) {
+      const running = this.list().find((agent) => agent.id === id) ?? null;
+      if (running) this.select(id);
+      return running;
+    }
     const provisional = `thawing-${crypto.randomUUID()}`;
     const thawed = this.#connection.control.thaw(id, BACKGROUND_CONTEXT).then(
       (result) => result.id,

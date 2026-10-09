@@ -235,7 +235,6 @@ The model can write a short JavaScript program that calls its tools, with the `c
 - **Isolation.** Seven is cross-origin isolated, so pi-codemode's `SharedArrayBuffer` interrupt works.
 - **Overrides.** `runAgentWorker` takes `codemodeWasm` and `codemodeWorker` to override both, for bundled hosts.
 
-||||||| parent of d578592 (wip: sprinkles)
 ### Memory
 
 pi has no memory store or memory tool; its coding agent loads context files, and [pi-subagents](https://github.com/nicobailon/pi-subagents) gives a role a `MEMORY.md`. Both are ported here over `ExecutionEnv`.
@@ -285,24 +284,38 @@ pi core has no browser tooling, and Mario's pi-skills `browser-tools` launches i
 
 ### The freezer
 
-pi durable keeps every conversation and entry in the session database, and has no archive flag and no delete. So freezing is bookkeeping in the `slicc.agents` registry.
+pi durable keeps every conversation and entry in the session database, and has no archive flag and no delete (#75). The `slicc.agents` registry is the index of which conversations exist and what they are, so the Freezer lists from it, as Lars put it: the list of sessions in the database.
 
-- **Freeze a cone** (the Freezer's button, or `freeze` in the command palette):
+- **The list** (`frozen` on the transcript service): every cone, frozen cone, scoop and `agent` run the registry knows.
+  - Each row has its id, name (names needn't be unique), title (the first user line), model, message count and last activity.
+  - It also has `kind` (`cone`, `scoop` or `agent`), `live` and `thawedAs`.
+  - Live rows come first, then the newest. A stopped conversation's numbers are read once and cached.
+- **New conversation** (spectrum's `clear` and `/clear`, Lars's W9) gives the same cone, with its id and name, a fresh conversation with the same configuration, when the chat isn't empty. The old conversation becomes a frozen row. On a scoop, `clear` is a plain reset.
+- **Delete cone** (the Freezer's freeze):
   - its run and its scoops' runs stop;
-  - it moves from `cones` to `frozen` (`frozen-<n>`, with its name, conversation, title, model, message count and time), and its live scoops are marked frozen, keeping their transcripts and their workspaces;
+  - it moves from `cones` to `frozen` with its live scoops marked frozen, keeping their transcripts and workspaces;
   - if it was active, another cone is selected, and if it was the last one, a fresh cone takes its name.
-  - Before it moves, 14b's memory extraction is scheduled for anything new.
-  - Its title starts as the first user line, then one background call (with `memory.extractModel` or the cone's model) replaces it with a short title.
-- **New chat** (spectrum's `clear` and `/clear`, Lars's W9) archives the chat the same way, when it isn't empty, and gives the cone a fresh conversation with the same configuration; its scoops stay. On a scoop, `clear` is a plain reset.
-- **Thaw** puts a frozen cone back under its old id when that's free (otherwise a new `cone-<n>`), unfreezes its scoops idle with their workspaces, and selects it. A taken name becomes `<name> (earlier)`, then `(earlier 2)` and so on, as in spectrum's dummy. It continues where it stopped.
-- **Delete** removes the frozen entry, marks its scoops gone and deletes their folders. The history stays in the session database, which SLICC can't remove from.
+  - 14b's memory extraction runs first, and one background call (with `memory.extractModel` or the cone's model) gives it a short title.
+- **Thaw:**
+  - **A frozen cone** comes back under its old id when that's free (otherwise a new `cone-<n>`), keeping its name, with its scoops unfrozen.
+  - **A live row** just opens: it's selected.
+  - **A stopped scoop or `agent` run comes back as a cone, as a fork:** a conversation's task ownership can't change, so `Conversation.fork` at its last entry gives an ownerless conversation with the cone's tools and instructions, cwd `/home`, and the scoop's model and thinking level. It becomes `cone-<n>` with the scoop's name, and the scoop's row records `thawedAs`.
+  - The thawed cone's first entry is a `slicc.thawed` line the model sees and spectrum shows as a notice: whose conversation it was, and whether its workspace is still there or was deleted when it stopped.
+- **Remove** (the Freezer's delete, `discard`):
+  - on a frozen cone, it removes the record, marks its scoops gone and deletes their folders;
+  - on a stopped scoop or `agent` run, it sets `removed` (a tombstone in the registry, so the row never returns) and deletes its folder.
+  - The history stays in the session database. Live rows can't be removed.
 - **While frozen:**
-  - its scoops aren't listed, and `agent send|wait|stop` on one says it is frozen with its cone;
-  - cron fires, watches and webhooks aimed at the cone or its scoops are skipped, and the active cone gets one `warn` lick per source naming what was skipped;
+  - a frozen cone's scoops aren't listed by `agent list`, and `agent send|wait|stop` on one says it is frozen with its cone;
+  - cron fires, watches and webhooks aimed at it are skipped, and the active cone gets one `warn` lick per source naming what was skipped;
   - sprinkles it owned send to the active cone;
   - it can't be rewound.
-- **The `freezer` command** is the same script as `agent`: `freezer list`, `freezer show <id>` (the chat as Markdown, which replaces v6's `transcript-export`) and `freezer thaw <id>`. The gelatiere's pass reads frozen chats with it.
-- **The panel:** the transcript service adds `frozen`, and `AgentControl` adds `freeze`, `newChat`, `thaw` and `discard`.
+- **The `freezer` command** is the same script as `agent`:
+  - `freezer list` shows every conversation with its kind, and `(live)` on live ones;
+  - `freezer show <id>` shows a conversation as Markdown, which replaces v6's `transcript-export`;
+  - `freezer thaw <id>` thaws it.
+  - The gelatiere's pass reads frozen chats with it.
+- **The panel:** `AgentControl` has `freeze` (Delete cone), `newChat` (New conversation), `thaw` and `discard` (Remove).
 
 ### Changes
 
