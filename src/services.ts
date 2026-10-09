@@ -5,6 +5,7 @@ import {
   type ReplicatedState,
 } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
@@ -81,6 +82,9 @@ export interface AgentControl {
   newChat(agentId: string, context: Context): Promise<Created>;
   thaw(frozenId: string, context: Context): Promise<Created>;
   discard(frozenId: string, context: Context): Promise<Created>;
+  changesOpen(context: Context): Promise<void>;
+  changeAccept(path: string, context: Context): Promise<Created>;
+  changeRevert(path: string, context: Context): Promise<Created>;
 }
 
 export interface MemoryDraft {
@@ -141,6 +145,7 @@ export interface AgentTranscript {
   readonly memories: ReplicatedState<MemoryEntry[]>;
   readonly memoryScopes: ReplicatedState<MemoryScope[]>;
   readonly frozen: ReplicatedState<FrozenCone[]>;
+  readonly changes: ReplicatedState<ChangesView>;
 }
 
 export interface Command {

@@ -104,7 +104,7 @@ const agent = await owner.connect();
 app.model = { ...createKernelModel({ kernel, root }), ...createAgentModel(agent, { storage: localStorage }) };
 ```
 
-`createAgentModel()` returns the `agent` and `settings` ports. Settings keeps the UI preferences in `storage`; model and thinking belong to the conversation, and accounts and models come from the worker.
+`createAgentModel()` returns the `agent`, `settings`, `tray`, `sprinkles`, `memory` and `changes` ports. Settings keeps the UI preferences in `storage`; model and thinking belong to the conversation, and accounts and models come from the worker.
 
 The adapter keeps the replicated transcript and maps it on every update. User, assistant and compaction entries become messages; tool results fill in the tool calls they answer; the generation in flight shows as a streaming message; retries and running compactions show as system messages. A failed generation ends in an error card whose action fits the error: credential errors (an invalid or missing key, 401/403, not authorized) open settings, a model the account can't use offers the model picker, and anything else offers Retry. A content-filter stop is different: every later request resends the content that tripped the filter, so Retry, and any new message, would be stopped again. Content-filter stops are Bedrock's `content_filtered` and `guardrail_intervened`, Anthropic's `sensitive` and refusals, and OpenAI's `content_filter`. Their card leads with "The model's content filter stopped this reply." and offers **Drop the last turn** (spectrum ≥ 1.12.0). `AgentControl.rewind(messageId)` finds the user turn before that message and forks the cone's conversation at the entry before it (`Conversation.fork`, so `pi.agent` comes back as it was there). It points the cone at the fork and returns the turn's prompt, which spectrum puts back into the composer. Forking the very first turn creates a fresh conversation with the same model and thinking level. The filtered branch stays in storage, off the active path. The fork starts with a `slicc.rewound` entry that shows as a "Rewound 1 turn" notice, and clicking the card of an earlier filtered turn rewinds that turn.
 
@@ -302,6 +302,25 @@ pi durable keeps every conversation and entry in the session database, and has n
   - it can't be rewound.
 - **The `freezer` command** is the same script as `agent`: `freezer list`, `freezer show <id>` (the chat as Markdown, which replaces v6's `transcript-export`) and `freezer thaw <id>`. The gelatiere's pass reads frozen chats with it.
 - **The panel:** the transcript service adds `frozen`, and `AgentControl` adds `freeze`, `newChat`, `thaw` and `discard`.
+
+### Changes
+
+pi has no git integration and no changes list; pi coding-agent leaves that to the user's git. So the Changes surface is git, run in the kernel, and works only when git is installed and only in git repos.
+
+- **What's listed:** each repo's unstaged work, the working tree against the index (`git --no-optional-locks status --porcelain=v1 -z --untracked-files=all`).
+  - Untracked files show as added, and a rename shows as a deleted plus an added file.
+  - `before` is the index version (`git show :<path>`) and `after` is the working file. Binary files and files over 1 MB get null for both, which spectrum shows as "no diff".
+  - At most 200 files per repo are listed. There's no store of our own, and `agentId` is null, because git doesn't know which agent wrote a file.
+- **Without git, or outside any repo,** `unavailable()` returns the empty state: "Changes needs git and a git repository. Install git with `pnpm add -g @ai-ecoverse/wasm-git`, then `git init`, or clone with slicc-node or the extension connected." Cloning from github.com needs a proxy.
+- **Which repos:**
+  - the repo of each live agent's cwd (`git rev-parse --show-toplevel`), with the active cone's first;
+  - plus a scan of /home and each /mnt/<name>, three levels deep and at most 200 directories per level, skipping node_modules and dot-directories.
+  - Repos under /tmp and /var/lib/slicc are left out.
+- **When it scans:** lazily, when the surface first asks, then on file events in /home, /mnt and /scoops (debounced) and when the agents change. Events inside a known repo's .git count only for its index, HEAD and refs. A new .git, or an overflow, rescans for repos.
+- **Accept** stages the file (`git add -A -- <path>`), so it leaves the list; committing stays the user's job.
+- **Revert** discards the unstaged change: `git restore -- <path>`, or deleting an untracked file. Spectrum asks first with its negative confirm, because this can't be undone.
+- **Rewind** leaves files alone. When the dropped turn had a write, edit, bash or codemode call, its notice adds "Changed files stay; use Changes or git to revert them."
+- **The port:** the transcript service adds `changes` (`{ unavailable, changes }`), and `AgentControl` adds `changesOpen`, `changeAccept` and `changeRevert`. `createAgentModel()` returns `changes`, spectrum's `ChangesPort`, with `repo` on each change.
 
 ### Sprinkles
 

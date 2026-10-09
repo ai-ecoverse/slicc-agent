@@ -15,6 +15,8 @@ import {
   SessionNotFoundError,
 } from '@earendil-works/pi-server';
 import type { Agent } from './agent.ts';
+import type { ChangesView } from './changes/git.ts';
+import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
@@ -122,6 +124,7 @@ export async function hostAgent(
     sprinkles?: SprinklesRuntime;
     memory?: MemoryRuntime;
     freezer?: FreezerRuntime;
+    changes?: ChangesRuntime;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -146,7 +149,8 @@ export async function hostAgent(
       options.skills,
       options.sprinkles,
       options.memory,
-      options.freezer
+      options.freezer,
+      options.changes
     )
   );
   provider.provide(AgentTranscript, {
@@ -159,6 +163,8 @@ export async function hostAgent(
     memories: options.memory?.memories ?? replicatedState<MemoryEntry[]>([]),
     memoryScopes: options.memory?.scopes ?? replicatedState<MemoryScope[]>([]),
     frozen: options.freezer?.frozen ?? replicatedState<FrozenCone[]>([]),
+    changes:
+      options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
   });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
@@ -183,6 +189,7 @@ export async function hostAgent(
       transcript.dispose();
       mounted.dispose();
       options.freezer?.close();
+      await options.changes?.close(context);
       await options.memory?.close(context);
       await options.sprinkles?.close(context);
       await options.skills?.close(context);

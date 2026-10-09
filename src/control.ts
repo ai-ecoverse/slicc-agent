@@ -12,6 +12,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { answerText } from './agent.ts';
 import type { Agents } from './agents.ts';
+import type { ChangesRuntime } from './changes/index.ts';
 import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
 import type { FreezerRuntime } from './freezer/index.ts';
@@ -65,6 +66,25 @@ function freezerControl(
         await needed().discard(id, context);
         return id;
       }),
+  };
+}
+
+function changesControl(
+  changes: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'> | undefined
+): Pick<AgentControl, 'changesOpen' | 'changeAccept' | 'changeRevert'> {
+  const needed = () => {
+    if (!changes) throw new Error('This agent tracks no changes.');
+    return changes;
+  };
+  const done = (path: string, run: (runtime: NonNullable<typeof changes>) => Promise<void>) =>
+    created(async () => {
+      await run(needed());
+      return path;
+    });
+  return {
+    changesOpen: async (context) => changes?.open(context),
+    changeAccept: (path, context) => done(path, (runtime) => runtime.accept(path, context)),
+    changeRevert: (path, context) => done(path, (runtime) => runtime.revert(path, context)),
   };
 }
 
@@ -129,6 +149,23 @@ function cones(target: Conversation | Cones): Cones {
 interface Turn {
   text: string;
   at: EntryId | null;
+  files: boolean;
+}
+
+type Block = { type?: string; name?: string };
+
+const WRITERS = ['write', 'edit', 'bash', 'codemode'];
+
+function writesIn(entries: readonly EntryRecord[]): boolean {
+  return entries.some((entry) =>
+    (entry.model ?? []).some(
+      (message) =>
+        Array.isArray(message.content) &&
+        (message.content as Block[]).some(
+          (block) => block.type === 'toolCall' && WRITERS.includes(String(block.name))
+        )
+    )
+  );
 }
 
 function lastTurn(view: ConversationView, messageId: string | null): Turn | null {
@@ -138,7 +175,11 @@ function lastTurn(view: ConversationView, messageId: string | null): Turn | null
   const turn = entries.slice(0, target).findLastIndex((entry) => entry.kind === 'pi.user');
   if (turn < 0) return null;
   const user = entries[turn] as EntryRecord;
-  return { text: answerText(user.model?.[0]?.content), at: entries[turn - 1]?.id ?? null };
+  return {
+    text: answerText(user.model?.[0]?.content),
+    at: entries[turn - 1]?.id ?? null,
+    files: writesIn(entries.slice(turn)),
+  };
 }
 
 function busy(view: ConversationView): boolean {
@@ -147,7 +188,12 @@ function busy(view: ConversationView): boolean {
   return Boolean(live?.run) || Boolean(inbox?.items?.length);
 }
 
-type RewindDeps = { harness: Harness; agents?: Agents; cone: Cones; scoops?: HostScoops };
+type RewindDeps = {
+  harness: Harness;
+  agents?: Agents;
+  cone: Cones;
+  scoops?: HostScoops;
+};
 
 async function turnIn(
   harness: Harness,
@@ -207,8 +253,9 @@ async function rewindAgent(
     scoops && agents && !scoop
       ? await scoops.scoops.rewound(agents.activeCone(), fork, context)
       : { stopped: [], restored: [] };
+  const files = found.turn.files;
   await fork.submit(
-    { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1, ...changed } } },
+    { type: 'write', entry: { kind: 'slicc.rewound', data: { turns: 1, ...changed, files } } },
     context
   );
   if (scoop && agents)
@@ -228,7 +275,8 @@ export function createAgentControl(
   skills?: Pick<SkillsRuntime, 'expand'>,
   sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>,
   memory?: Pick<MemoryRuntime, 'save' | 'remove'>,
-  freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>
+  freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>,
+  changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -294,6 +342,7 @@ export function createAgentControl(
     ...sprinkleControl(sprinkles),
     ...memoryControl(memory),
     ...freezerControl(freezer),
+    ...changesControl(changes),
     async unqueue(agentId, id, context) {
       return withdraw(await conversationFor(agentId, context), id, context);
     },

@@ -6,6 +6,7 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { Client, createClientServiceTransport } from '@earendil-works/pi-client';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import {
@@ -34,6 +35,7 @@ export interface AgentConnection {
   readonly memories?: ReplicatedState<MemoryEntry[]>;
   readonly memoryScopes?: ReplicatedState<MemoryScope[]>;
   readonly frozen?: ReplicatedState<FrozenCone[]>;
+  readonly changes?: ReplicatedState<ChangesView>;
   readonly settings: AgentSettings;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
@@ -80,6 +82,7 @@ export async function connectAgent(
     memories,
     memoryScopes,
     frozen,
+    changes,
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   await session.ready(context);
@@ -95,6 +98,7 @@ export async function connectAgent(
     memories,
     memoryScopes,
     frozen,
+    changes,
     settings,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
