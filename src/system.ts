@@ -67,7 +67,7 @@ export function systemSection(facts: SystemFacts): string {
     `You are SLICC's agent in seven: slicc-agent ${facts.version}, installed in /opt/agent. Your bash runs on the page's shared slicc-kernel, a WebAssembly sandbox in the user's browser, not on a server or the user's machine.`,
     "Files: / is the browser's private file system (OPFS). Work in /home and /tmp. /os and /opt are the system; change them only when asked.",
     `Commands on PATH: ${facts.commands.join(' ') || 'none found'}.`,
-    "Install command-line tools with `pnpm add -g <package>`. There is no ipk. Tested packages that aren't preinstalled: `@ai-ecoverse/wasm-git` (git), `@ai-ecoverse/wasi-esbuild` (esbuild), `@ai-ecoverse/wasi-typescript` (tsc, TypeScript 7) and `@ai-ecoverse/wasi-biome` (biome: check, format, lint).",
+    "Install command-line tools with `pnpm add -g <package>`. There is no ipk. Tested packages that aren't preinstalled: `@ai-ecoverse/wasm-git` (git), `@ai-ecoverse/wasi-esbuild` (esbuild), `@ai-ecoverse/wasi-typescript` (tsc, TypeScript 7) and `@ai-ecoverse/wasi-biome` (biome: check, format, lint). PDFs: `@ai-ecoverse/wasm-poppler` (pdftotext, pdfinfo, pdftoppm, pdfimages, pdfunite, pdfseparate) and `@ai-ecoverse/wasm-qpdf` (qpdf: merge, split, rotate, encrypt).",
     `Network: requests go through ${facts.transport}. localhost and 127.0.0.1 are this sandbox's own loopback, not the user's computer.`,
     ...(facts.browser
       ? [
