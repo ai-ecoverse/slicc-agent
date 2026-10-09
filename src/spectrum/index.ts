@@ -7,7 +7,7 @@ import { SprinkleAdapter } from './sprinkle-port.ts';
 import { TrayAdapter } from './tray-port.ts';
 
 export { AgentAdapter, CONE } from './agent-port.ts';
-export { ChangesAdapter, type ChangesEvents, type RepoChange } from './changes-port.ts';
+export { ChangesAdapter, type ChangesEvents } from './changes-port.ts';
 export { MemoryAdapter } from './memory-port.ts';
 export {
   assistant,

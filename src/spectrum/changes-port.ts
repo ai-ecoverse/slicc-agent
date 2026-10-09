@@ -1,15 +1,13 @@
-import type { Change } from '@ai-ecoverse/slicc-spectrum/ui';
+import type { Change, ChangesPort } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
 
-export type RepoChange = Change & { repo?: string };
-
 export interface ChangesEvents {
-  changes: readonly RepoChange[];
+  changes: readonly Change[];
 }
 
-export class ChangesAdapter extends Emitter<ChangesEvents> {
+export class ChangesAdapter extends Emitter<ChangesEvents> implements ChangesPort {
   readonly #connection: AgentConnection;
   #opened = false;
 
@@ -25,12 +23,12 @@ export class ChangesAdapter extends Emitter<ChangesEvents> {
     void this.#connection.control.changesOpen(BACKGROUND_CONTEXT).catch(() => undefined);
   }
 
-  changes(): readonly RepoChange[] {
+  changes(): readonly Change[] {
     this.#open();
     return this.#list();
   }
 
-  #list(): readonly RepoChange[] {
+  #list(): readonly Change[] {
     return (this.#connection.changes?.value?.changes ?? []).map((change) => ({
       path: change.path,
       repo: change.repo,
