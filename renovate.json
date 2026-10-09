@@ -17,6 +17,12 @@
         "@ai-ecoverse/wasm-*"
       ],
       "automerge": false
+    },
+    {
+      "description": "The kernel devDependency is the floor of the peer range, so it moves by hand with the range; the newest certified kernel is NEWEST_CERTIFIED_KERNEL in ci.yml.",
+      "matchPackageNames": ["@ai-ecoverse/slicc-kernel"],
+      "matchDepTypes": ["devDependencies"],
+      "enabled": false
     }
   ]
 }
