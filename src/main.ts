@@ -21,6 +21,7 @@ import { attachFreezer } from './freezer/index.ts';
 import { settingsText, titler } from './freezer/title.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
+import { imageReads } from './images/index.ts';
 import { createActivity } from './kernel/activity.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
@@ -40,7 +41,13 @@ import {
 import { RELOAD_MS, setupSkills } from './skills/index.ts';
 import { setupSprinkles } from './sprinkles/index.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
-import { agentVersion, commandsOnPath, kernelBoot, transportName } from './system.ts';
+import {
+  agentVersion,
+  browserConnected,
+  commandsOnPath,
+  kernelBoot,
+  transportName,
+} from './system.ts';
 import { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
 
 export interface AgentWorkerScope extends WorkerScope {
@@ -74,6 +81,7 @@ async function start(
     version: await agentVersion((url) => native(url)),
     commands: await commandsOnPath(client),
     transport: transportName(client.transport),
+    browser: await browserConnected(client),
   };
   const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
   const providers = options.providers ?? sliccProviders();
@@ -81,6 +89,13 @@ async function start(
   const registry = createRegistry();
   registry.install(CodingTools);
   registry.install(sliccPrompt(facts));
+  registry.install(
+    imageReads(
+      (CodingTools.tools as readonly ToolRegistration[]).find(
+        (tool) => tool.name === 'read'
+      ) as ToolRegistration
+    )
+  );
   const memory = setupMemory(registry);
   const settings = await client.fs
     .readFile(`${HOME}/.pi/agent/settings.json`)

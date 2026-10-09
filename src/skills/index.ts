@@ -21,6 +21,7 @@ import { expandPromptTemplate, loadTemplates, type PromptTemplate } from './temp
 
 export const BUILTIN_SKILLS = [
   'agent',
+  'browser',
   'gelatiere',
   'licks',
   'memory',

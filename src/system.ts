@@ -5,6 +5,7 @@ export interface SystemFacts {
   version: string;
   commands: string[];
   transport: string;
+  browser?: boolean;
 }
 
 const LIST_PATH = 'IFS=:; for d in $PATH; do [ -d "$d" ] && ls -1 "$d"; done';
@@ -25,6 +26,17 @@ export async function commandsOnPath(client: KernelClient): Promise<string[]> {
   }
   const names = out.split('\n').map((name) => name.trim());
   return [...new Set(names.filter(Boolean))].sort();
+}
+
+const BROWSER = '[ -n "$SLICC_CDP_URL" ] && command -v playwright-cli >/dev/null';
+
+export async function browserConnected(client: KernelClient): Promise<boolean> {
+  try {
+    const process = await client.spawn(['bash', '-c', BROWSER], {});
+    return (await process.exited) === 0;
+  } catch {
+    return false;
+  }
 }
 
 export function transportName(transport: Transport | undefined): string {
@@ -57,7 +69,12 @@ export function systemSection(facts: SystemFacts): string {
     `Commands on PATH: ${facts.commands.join(' ') || 'none found'}.`,
     'Install command-line tools with `pnpm add -g <package>`. There is no ipk.',
     `Network: requests go through ${facts.transport}. localhost and 127.0.0.1 are this sandbox's own loopback, not the user's computer.`,
-    `Not here yet: ${[...missing, 'a browser or CDP tool', 'GitHub credentials'].join(', ')}.`,
+    ...(facts.browser
+      ? [
+          "Browser: playwright-cli drives the user's own browser through the SLICC extension, with their logins. Read the browser skill before you use it.",
+        ]
+      : []),
+    `Not here yet: ${[...missing, ...(facts.browser ? [] : ['a browser or CDP tool']), 'GitHub credentials'].join(', ')}.`,
   ].join('\n');
 }
 

@@ -340,6 +340,12 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
   if (!call) return;
   call.output = textOf(result.content);
   call.status = result.isError ? 'error' : 'done';
+  const image = Array.isArray(result.content)
+    ? (result.content as { type: string; data?: string; mimeType?: string }[]).find(
+        (part) => part.type === 'image' && part.data && part.mimeType
+      )
+    : undefined;
+  if (image) call.image = `data:${image.mimeType};base64,${image.data}`;
   const patch = result.details?.patch;
   const diff = typeof patch === 'string' ? fromPatch(patch) : undefined;
   if (diff) call.diff = diff;
