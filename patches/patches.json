@@ -34,5 +34,41 @@
     "reason": "CodemodeSandbox runs QuickJS in a node:worker_threads Worker, and its worker reads parentPort and workerData; wasm.js also imports node:fs/promises and node:module, which are unused when SLICC passes the compiled wasm. In SLICC the bios service worker must serve a node:worker_threads stub that wraps a module Web Worker (named slicc-worker-threads) and, inside it, gives parentPort and workerData from the first message; test/integration/shims/node-worker-threads.js is that stub, and the integration bundles alias node:worker_threads to it. The agent finds quickjs.wasm by walking up node_modules from its own module (locateWasm).",
     "removeWhen": "pi-codemode accepts a browser Worker (or a worker factory) and never imports Node built-ins in the browser.",
     "verify": "npm test"
+  },
+  "pi-ai-google-genai-lazy": {
+    "kind": "environment",
+    "package": "@earendil-works/pi-ai",
+    "patchedVersion": "1.0.4",
+    "marker": {
+      "file": "dist/api/google-generative-ai.lazy.js",
+      "includes": "import(\"./google-generative-ai.js\")"
+    },
+    "reason": "pi-ai imports @google/genai (and its tree: google-auth-library, gaxios, gcp-metadata, protobufjs, web-streams-polyfill, node-fetch, ...) only in its google-* APIs, which load through lazy dynamic imports. Seven offers only the Bedrock and Adobe providers, whose APIs (bedrock-converse-stream, anthropic-messages, openai-completions) never reach them, so slicc-bios removes @google/genai from /opt/agent with a pnpm override ('@google/genai': '-' in src/packages/agent/pnpm-workspace.yaml).",
+    "removeWhen": "seven adds a Google provider (drop the bios override first), or pi-ai stops depending on @google/genai.",
+    "verify": "npm test"
+  },
+  "chord-esbuild-node-only": {
+    "kind": "environment",
+    "package": "@earendil-works/chord",
+    "patchedVersion": "1.0.4",
+    "marker": {
+      "file": "dist/node/bundle.js",
+      "includes": "from \"esbuild\""
+    },
+    "reason": "chord depends on esbuild only for its Node-only dist/node/bundle.js, which the browser never loads, so slicc-bios removes esbuild from /opt/agent with a pnpm override (esbuild: '-' in src/packages/agent/pnpm-workspace.yaml).",
+    "removeWhen": "chord drops the esbuild dependency, or the agent starts using chord's Node bundler in the browser (drop the bios override first).",
+    "verify": "npm test"
+  },
+  "pi-ai-google-vertex-lazy": {
+    "kind": "environment",
+    "package": "@earendil-works/pi-ai",
+    "patchedVersion": "1.0.4",
+    "marker": {
+      "file": "dist/api/google-vertex.lazy.js",
+      "includes": "import(\"./google-vertex.js\")"
+    },
+    "reason": "The second of pi-ai's two @google/genai importers (see pi-ai-google-genai-lazy): google-vertex.js must also stay behind a lazy dynamic import for the slicc-bios override ('@google/genai': '-') to be safe.",
+    "removeWhen": "seven adds a Google provider (drop the bios override first), or pi-ai stops depending on @google/genai.",
+    "verify": "npm test"
   }
 }
