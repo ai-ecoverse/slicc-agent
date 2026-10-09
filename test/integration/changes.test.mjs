@@ -114,7 +114,10 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
     return false;
   };
   const version = JSON.parse(await readFile(`${WASM_GIT}package.json`, 'utf8')).version;
-  assert.equal(version, '2.55.0-9');
+  const pinned = JSON.parse(await readFile('package.json', 'utf8')).devDependencies[
+    '@ai-ecoverse/wasm-git'
+  ];
+  assert.equal(version, pinned);
   await page.evaluate(
     async (dir, files) => {
       const { bootKernel } = await import('/kernel.js');
