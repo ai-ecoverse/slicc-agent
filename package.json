@@ -61,7 +61,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.26.4",
+    "@ai-ecoverse/slicc-kernel": "1.26.3",
     "@ai-ecoverse/slicc-shared-web": "1.11.0",
     "@ai-ecoverse/slicc-spectrum": "1.39.0",
     "@ai-ecoverse/wasm-bash": "5.3.0-8",
@@ -88,7 +88,7 @@
     "@sqlite.org/sqlite-wasm": "3.53.4-build2"
   },
   "peerDependencies": {
-    "@ai-ecoverse/slicc-kernel": ">=1.23.0 <2",
+    "@ai-ecoverse/slicc-kernel": ">=1.26.3 <2",
     "@ai-ecoverse/slicc-spectrum": "^1.39.0"
   },
   "peerDependenciesMeta": {
