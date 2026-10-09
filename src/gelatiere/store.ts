@@ -7,6 +7,7 @@ export const STORE_DIR = SUGGESTIONS_DIR;
 export const STORE = SUGGESTIONS_STORE;
 export const KINDS = ['skill', 'use-case', 'tip', 'skill-idea', 'issue'] as const;
 export const MAX_OPEN = 50;
+const PROMPTED = new Set<Kind>(['use-case', 'skill-idea', 'issue']);
 
 export type Kind = (typeof KINDS)[number];
 
@@ -38,6 +39,26 @@ function text(value: unknown, limit: number): string | undefined {
   return clean ? clean.slice(0, limit) : undefined;
 }
 
+function kindProblem(
+  kind: Kind,
+  skill: string | undefined,
+  source: string | undefined,
+  prompt: string | undefined
+): string | undefined {
+  if (kind === 'skill' && (!skill || !ID.test(skill)))
+    return 'a skill needs its name (a-z, 0-9, -)';
+  if (kind === 'skill' && (!source || !SOURCE.test(source)))
+    return 'a skill needs its source, an https URL of its SKILL.md';
+  if (PROMPTED.has(kind) && !prompt) return `a ${kind} needs its prompt`;
+  return undefined;
+}
+
+function shapeProblem(url: string | undefined, cones: string[]): string | undefined {
+  if (url !== undefined && !/^https:\/\/[^\s"'<>]+$/.test(url)) return 'url must be https';
+  if (cones.some((cone) => !CONE.test(cone))) return 'cones must be cone ids';
+  return undefined;
+}
+
 export function validate(candidate: unknown): Suggestion | string {
   if (!candidate || typeof candidate !== 'object') return 'not an object';
   const item = candidate as Record<string, unknown>;
@@ -49,18 +70,14 @@ export function validate(candidate: unknown): Suggestion | string {
   if (!title || !body) return `${id}: needs a title and a body`;
   const skill = typeof item.skill === 'string' ? item.skill.trim() : undefined;
   const source = typeof item.source === 'string' ? item.source.trim() : undefined;
-  if (item.kind === 'skill' && (!skill || !ID.test(skill)))
-    return `${id}: a skill needs its name (a-z, 0-9, -)`;
-  if (item.kind === 'skill' && (!source || !SOURCE.test(source)))
-    return `${id}: a skill needs its source, an https URL of its SKILL.md`;
   const url = typeof item.url === 'string' ? item.url.trim() : undefined;
-  if (url !== undefined && !/^https:\/\/[^\s"'<>]+$/.test(url)) return `${id}: url must be https`;
   const cones = Array.isArray(item.cones)
-    ? item.cones.filter((cone) => typeof cone === 'string')
+    ? item.cones.filter((cone): cone is string => typeof cone === 'string')
     : [];
-  if (cones.some((cone) => !CONE.test(cone))) return `${id}: cones must be cone ids`;
   const evidence = text(item.evidence, 300);
   const prompt = text(item.prompt, 1000);
+  const problem = kindProblem(item.kind as Kind, skill, source, prompt) ?? shapeProblem(url, cones);
+  if (problem) return `${id}: ${problem}`;
   const installs =
     item.kind === 'skill' ? { skill, source, install: `gelatiere install ${id}` } : {};
   return {

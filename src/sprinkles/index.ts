@@ -193,7 +193,8 @@ export function setupSprinkles() {
           if (!find(name)) return { code: 1, out: `sprinkle: there is no sprinkle ${name}\n` };
           const agentId = agentOf(caller, agents);
           await post(name, agentId, using);
-          if (!(await owners(using))[name]) await setOwner(name, agentId, using);
+          if (name !== SUGGESTIONS && !(await owners(using))[name])
+            await setOwner(name, agentId, using);
           return { code: 0, out: `showed ${name} in the chat of ${agentId}\n` };
         },
         async own(argv, caller, using) {

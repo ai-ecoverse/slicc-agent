@@ -66,6 +66,7 @@ function row(item: Suggestion): string {
 }
 
 type G = {
+  serial: <T>(work: () => Promise<T>) => Promise<T>;
   options: GelatiereAttach;
   now: () => number;
   crontab: string;
@@ -274,8 +275,8 @@ const VERBS: Record<string, (g: G, argv: readonly string[], context: Context) =>
   {
     init: (g, _argv, context) => init(g, context),
     run: (g, _argv, context) => run(g, context),
-    suggest: (g, argv, context) => suggest(g, argv[1], context),
-    deliver: (g, _argv, context) => deliver(g, context),
+    suggest: (g, argv, context) => g.serial(() => suggest(g, argv[1], context)),
+    deliver: (g, _argv, context) => g.serial(() => deliver(g, context)),
     install: (g, argv, context) => install(g, argv[1] ?? '', context),
     list: (g, argv, context) => list(g, argv, context),
     status: (g, _argv, context) => status(g, context),
@@ -286,20 +287,28 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
   const { env, home } = options;
   const now = options.now ?? Date.now;
   const load = async (context: Context) => (await readStore(env, context)) ?? [];
+  let chain: Promise<unknown> = Promise.resolve();
+  const serial = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = chain.catch(() => undefined).then(work);
+    chain = next;
+    return next;
+  };
   const g: G = {
+    serial,
     options,
     now,
     crontab: `${home}/.slicc/crontab`,
     procedure: `${home}/.pi/agent/GELATIERE.md`,
     load,
-    async mark(id, field, context) {
-      const store = await load(context);
-      const item = store.find((entry) => entry.id === id);
-      if (!item) return false;
-      item[field] ??= now();
-      await writeStore(env, store, context);
-      return true;
-    },
+    mark: (id, field, context) =>
+      serial(async () => {
+        const store = await load(context);
+        const item = store.find((entry) => entry.id === id);
+        if (!item) return false;
+        item[field] ??= now();
+        await writeStore(env, store, context);
+        return true;
+      }),
   };
   return {
     command(argv, _caller, context) {
