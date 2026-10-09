@@ -1,7 +1,7 @@
 #!/bin/bash
 dir=/var/lib/slicc/agent/requests
 as=$(basename "$0")
-case "$as" in subagent|sprinkle|memory) ;; *) as=agent ;; esac
+case "$as" in subagent|sprinkle|memory|gelatiere) ;; *) as=agent ;; esac
 mkdir -p "$dir/in" "$dir/out" 2>/dev/null
 
 submit() {

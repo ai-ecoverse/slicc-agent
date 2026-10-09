@@ -10,7 +10,7 @@ import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
 import { type ControlPlane, controlPlane } from './requests.ts';
 import { createScoops, type Scoops, type ScoopsHost } from './service.ts';
 
-export const BUILTIN_ROLES = ['scout', 'worker', 'reviewer', 'oracle', 'delegate'];
+export const BUILTIN_ROLES = ['scout', 'worker', 'reviewer', 'oracle', 'delegate', 'gelatiere'];
 export const PNPM_HOME = '/home/.local/share/pnpm';
 
 export type Assets = (path: string) => Promise<string>;
@@ -37,6 +37,7 @@ export interface AttachOptions {
   reads: () => readonly string[];
   sprinkle?: CliOptions['sprinkle'];
   memory?: CliOptions['memory'];
+  gelatiere?: CliOptions['gelatiere'];
 }
 
 export interface ScoopsRuntime {
@@ -50,7 +51,7 @@ export interface ScoopsSetup {
   attach(options: AttachOptions, context: Context): Promise<ScoopsRuntime>;
 }
 
-export const COMMANDS = ['agent', 'subagent', 'sprinkle', 'memory'];
+export const COMMANDS = ['agent', 'subagent', 'sprinkle', 'memory', 'gelatiere'];
 
 async function install(env: ExecutionEnv, script: string, pnpmHome: string, context: Context) {
   await env.createDir(`${pnpmHome}/bin`, { recursive: true }, context);
@@ -150,6 +151,7 @@ export function setupScoops(
         ...(options.alive ? { alive: options.alive } : {}),
         ...(options.sprinkle ? { sprinkle: options.sprinkle } : {}),
         ...(options.memory ? { memory: options.memory } : {}),
+        ...(options.gelatiere ? { gelatiere: options.gelatiere } : {}),
       });
       const plane = controlPlane(env, cli, {
         ...(options.controlDir ? { dir: options.controlDir } : {}),

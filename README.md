@@ -165,7 +165,7 @@ Each scoop is owned by a background durable task, its **anchor**, so Stop in its
 - `agent --async …` (= `subagent spawn …`) starts a persistent scoop and prints its handle; only cones start them. `list [--agents]`, `status`, `rename`, `send [--follow-up]`, `wait [--timeout <s>] [--notify]` (30 s by default; `--notify` returns at once and brings the answers together in one `scoop-wait` lick) and `stop` manage them. From a scoop, `agent send parent "<note>"` posts a progress note to its cone as a lick, coalesced per scoop.
 - Options: `--name`, `--agent <role>`, `--model <provider/model>`, `--thinking <level>` or `--effort low|medium|high|max`, `--tools <a,b>` (or `auto`/`full`), `--read-only <paths>`, `--system-prompt[-file]`. `--schema-b64`, `--tools output`, `--session`, `--resume`, `--image`, `--no-escalate`, `--minimal` and `--usage` answer "not supported in SLICC yet".
 
-**Roles** are pi agent files: Markdown with a frontmatter subset (`name`, `description`, `tools`, `model`, `thinking`, `memory`, `inheritProjectContext`, `inheritGlobalContext`, …) and the role's prompt as the body, added to the scoop's instructions. The built-ins are `scout`, `worker`, `reviewer`, `oracle` and `delegate`. Later sources replace earlier ones by name: built-ins, then packages in the kernel's `node_modules` that name a folder in `pi-subagents.agents` or `pi.subagents.agents`, then `~/.pi/agent/agents/`. A project's `.pi/agents/` will count only in trusted folders, and folders can't be trusted yet. `~/.pi/agent/settings.json` can override roles (`subagents.agentOverrides`) and set the limits `subagents.maxLiveScoops` (16 live scoops per cone) and `subagents.maxPerTurn` (64 scoops started per cone turn), which the worker counts for both kinds.
+**Roles** are pi agent files: Markdown with a frontmatter subset (`name`, `description`, `tools`, `model`, `thinking`, `memory`, `inheritProjectContext`, `inheritGlobalContext`, …) and the role's prompt as the body, added to the scoop's instructions. The built-ins are `scout`, `worker`, `reviewer`, `oracle`, `delegate` and `gelatiere` (below). Later sources replace earlier ones by name: built-ins, then packages in the kernel's `node_modules` that name a folder in `pi-subagents.agents` or `pi.subagents.agents`, then `~/.pi/agent/agents/`. A project's `.pi/agents/` will count only in trusted folders, and folders can't be trusted yet. `~/.pi/agent/settings.json` can override roles (`subagents.agentOverrides`) and set the limits `subagents.maxLiveScoops` (16 live scoops per cone) and `subagents.maxPerTurn` (64 scoops started per cone turn), which the worker counts for both kinds.
 
 **Isolation, for now.** The file tools of a scoop write only under its folder and `/tmp`, plus the cwd of a v6-form call, and read those, their cone's working folder (`/home` by default) and `--read-only` paths; paths are normalized, `..` included, before the check. bash isn't confined, and the scoop is told so: the guard is a guardrail, not a boundary. A scoop's commands share one process group (see Bash and files on slicc-kernel), and stopping the scoop signals it, together with any group recorded for the scoop on an older kernel.
 
@@ -209,7 +209,7 @@ The worker watches the roots and reloads on change. A `skills` prompt section, g
 
 **v6 skills.** None of the 29 skills SLICC v6 ships runs here unchanged. They name v6 paths (`/shared`, `/workspace`) or commands this kernel doesn't have. By what they wait for:
 - **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`), `skill-authoring`, `sprinkles` and `welcome`.
-- **Memory:** `memory` is rewritten here (below); its `status`, `log`, `curate` and `dream` and the curation ledger are not ported. `gelatiere` comes in PR 14c; `wiki` needs its `wiki` CLI.
+- **Memory:** `memory` is rewritten here (below); its `status`, `log`, `curate` and `dream` and the curation ledger are not ported. `gelatiere` is rewritten here (below), without `use-cases` and the www.sliccy.com catalog; `wiki` needs its `wiki` CLI.
 - **The freezer (PR 15):** `transcript-export`.
 - **The tray hub, upskill or the Install/Update panel:** `upgrade` (`upgrade apply`, bios#70), `handoff`, `slicc`, `ssh`, `cherry`.
 - **A browser and CDP:** `playwright-cli`, `computer`, `v86`.
@@ -254,6 +254,19 @@ The `memory` section, read before every request, holds the first 200 lines (at m
 
 **Extraction.** Durable compacts a long conversation into a summary; before it does, a `beforeCompact` hook (which never declines or replaces the summary) schedules a `slicc.memory-extract` task for the cone. A cone that has been idle for `memory.idleMinutes` (30 by default, `0` turns the idle trigger off) gets the same task. The task runs only when there is something new since the last extraction (a cursor per conversation in the session document `slicc.memory-extract`), makes one model call, with the cone's model unless `memory.extractModel` names a cheaper one (`provider/model`), and writes the proposed entries through `memory_write`'s writer into the cone's memory file, within its 16 KB. The transcript it sends is redacted first, its prompt forbids secrets, and the writer redacts again. `"memory": { "extract": false }` in `~/.pi/agent/settings.json` turns extraction off. v6's curator scoop, three-way merge, curation ledger and dreamer aren't ported.
 
+**The gelatiere.** SLICC's resident advisor, as in v6, is a scoop with the built-in `gelatiere` role. That role has its own memory (`memory: { scope: user, path: gelatiere }`), so it keeps its notes there.
+- `gelatiere init` starts the scoop in the first cone, writes `~/.pi/agent/GELATIERE.md` (its procedure, which the user can edit) unless it exists, and puts one crontab line `0 3 * * * gelatiere scoop:<handle> …` in `~/.slicc/crontab`, replacing an older one.
+- On each pass it reads memory, the installed skills, the roles and the lick files, and writes at most three suggestions as JSON. `gelatiere suggest <file>` validates them and folds them into `/home/.gelatiere/suggestions.json` by id:
+  - kinds `skill`, `use-case`, `tip`, `skill-idea` and `issue`;
+  - `install` only as a plain `upskill …` command;
+  - https URLs only;
+  - secrets redacted;
+  - at most 50 open;
+  - dismissed and taken ids are never reopened.
+- `gelatiere deliver` sends each cone named in a suggestion's `cones` (or the first cone) one `sprinkle` lick with the action `gelatiere-suggestions`. The built-in `gelatiere` skill answers it with `sprinkle show suggestions`, and looks ids up in the store before installing or trying anything.
+- `gelatiere run`, `list [--all] [--json]`, `dismiss <id>` and `status` complete the command.
+- The gelatiere doesn't read the www.sliccy.com skill catalog or use-case pages, and doesn't consolidate other agents' memory, which only cones and the user write.
+
 **The panel.** The transcript service adds `memories` and `memoryScopes`, and `AgentControl` `memorySave` and `memoryRemove`; `createAgentModel()` returns a `MemoryAdapter` for spectrum's `MemoryPort`, with `scopes()` (global, cones, roles) for its picker. `memory show [<scope>]` and `memory scopes` in bash print the same files, and the built-in `memory` skill teaches all of it.
 
 ### Sprinkles
@@ -280,7 +293,7 @@ v6's `open`, `reload`, `close`, `send` and `chat` answer with what to do instead
 
 **Shipped sprinkles.** Only `welcome` and `suggestions`, with slicc-spectrum's reviewed copy.
 - **Welcome.** The worker posts it inline in the first cone's chat once per session. Its `onboarding-complete` send writes `/home/.welcomed`, which the card checks, and the built-in `welcome` skill answers the lick.
-- **Suggestions.** It needs the gelatiere, which comes with memory, so it ships but isn't listed yet.
+- **Suggestions.** It's listed once the gelatiere's store `/home/.gelatiere/suggestions.json` exists, and owned by the active cone. Its `gelatiere-dismiss` send marks the suggestion in the store and never reaches an agent; `gelatiere-install` and `gelatiere-try` mark it taken and go to the owner as licks. Its `exec` for use cases is refused, so it shows its static empty state.
 
 The built-in `sprinkles` skill teaches the files, the bridge and the command.
 
