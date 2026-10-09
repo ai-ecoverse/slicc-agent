@@ -73,12 +73,13 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   }
 
   models(): readonly ModelOption[] {
-    return this.#state().models.map(({ id, label, provider, kind, reasoning }) => ({
+    return this.#state().models.map(({ id, label, provider, kind, reasoning, images }) => ({
       id,
       label,
       provider,
       kind,
       reasoning,
+      ...(images === undefined ? {} : { images }),
     }));
   }
 

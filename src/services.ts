@@ -42,6 +42,7 @@ export interface AgentControl {
   reset(handoff: string | null, context: Context): Promise<void>;
   configure(change: AgentSettingsChange, context: Context): Promise<void>;
   rewind(messageId: string | null, context: Context): Promise<Rewound>;
+  rewindAgent(agentId: string, messageId: string | null, context: Context): Promise<Rewound>;
   resolveLick(
     lickId: string,
     state: 'confirmed' | 'dismissed',
@@ -159,6 +160,7 @@ export interface ModelChoice {
   provider: string;
   kind: 'chat' | 'classifier';
   reasoning: boolean;
+  images?: boolean;
   contextWindow: number;
 }
 

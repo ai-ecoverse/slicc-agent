@@ -50,24 +50,27 @@ export function createSliccModels(
   return models;
 }
 
-function choices(models: MutableModels, providers: Provider[]): ModelChoice[] {
-  return providers.flatMap((provider) =>
-    models.getModels(provider.id).map((model) => ({
-      id: `${provider.id}/${model.id}`,
-      label: model.name,
-      provider: provider.name ?? provider.id,
-      kind: 'chat' as const,
-      reasoning: Boolean(model.reasoning),
-      contextWindow: model.contextWindow,
-    }))
-  );
+function choices(
+  models: MutableModels,
+  providers: Provider[],
+  stored: ReadonlySet<string>
+): ModelChoice[] {
+  return providers
+    .filter((provider) => stored.has(provider.id))
+    .flatMap((provider) =>
+      models.getModels(provider.id).map((model) => ({
+        id: `${provider.id}/${model.id}`,
+        label: model.name,
+        provider: provider.name ?? provider.id,
+        kind: 'chat' as const,
+        reasoning: Boolean(model.reasoning),
+        images: model.input.includes('image'),
+        contextWindow: model.contextWindow,
+      }))
+    );
 }
 
-async function accounts(
-  credentials: CredentialStore,
-  providers: Provider[]
-): Promise<AccountState[]> {
-  const stored = new Set((await credentials.list()).map((info) => info.providerId));
+function accounts(stored: ReadonlySet<string>, providers: Provider[]): AccountState[] {
   return providers.map((provider) => ({
     id: provider.id,
     provider: provider.name ?? provider.id,
@@ -95,11 +98,14 @@ export async function createAgentSettings(
 ): Promise<AgentSettings> {
   const endpoint = providers.find((provider) => provider.id === ADOBE)?.baseUrl ?? ADOBE_PROXY;
   const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint }));
-  const snapshot = async (): Promise<SettingsState> => ({
-    models: choices(models, providers),
-    accounts: await accounts(credentials, providers),
-    budget: await budget(credentials, usage),
-  });
+  const snapshot = async (): Promise<SettingsState> => {
+    const stored = new Set((await credentials.list()).map((info) => info.providerId));
+    return {
+      models: choices(models, providers, stored),
+      accounts: accounts(stored, providers),
+      budget: await budget(credentials, usage),
+    };
+  };
   const state = replicatedState<SettingsState>(await snapshot());
   let latest = Promise.resolve();
   const refresh = (context: Context) => {
