@@ -15,3 +15,35 @@ concurrency:
 jobs:
   ci:
     uses: ai-ecoverse/slicc-shared-web/.github/workflows/node-ci.yml@v1.10.0
+
+  newest-kernel:
+    name: integration on the newest certified kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LEFTHOOK: '0'
+      NEWEST_CERTIFIED_KERNEL: 1.26.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm install --no-save "@ai-ecoverse/slicc-kernel@$NEWEST_CERTIFIED_KERNEL"
+
+      - run: npx playwright-core install-deps chromium
+
+      - run: npm test
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: newest-kernel-artifacts
+          path: |
+            coverage/
+            artifacts/
+          if-no-files-found: ignore
