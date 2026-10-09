@@ -71,7 +71,7 @@ export function systemSection(facts: SystemFacts): string {
     `Network: requests go through ${facts.transport}. localhost and 127.0.0.1 are this sandbox's own loopback, not the user's computer.`,
     ...(facts.browser
       ? [
-          "Browser: playwright-cli drives the user's own browser through the SLICC extension, with their logins. Read the browser skill before you use it.",
+          `Browser: ${facts.commands.includes('curlwright') ? 'playwright-cli and curlwright drive' : 'playwright-cli drives'} the user's own browser through the SLICC extension, with their logins. Read the browser skill before you use it.`,
         ]
       : []),
     facts.commands.includes('git')
