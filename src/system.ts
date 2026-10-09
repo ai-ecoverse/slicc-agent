@@ -74,11 +74,9 @@ export function systemSection(facts: SystemFacts): string {
           "Browser: playwright-cli drives the user's own browser through the SLICC extension, with their logins. Read the browser skill before you use it.",
         ]
       : []),
-    ...(facts.commands.includes('git')
-      ? [
-          'Git: local repositories work (init, add, commit, status, diff, restore, branch, checkout, log). Clone, fetch and push over HTTPS need slicc-node or the SLICC extension; through the page alone they fail with a CORS or 502 error.',
-        ]
-      : []),
+    facts.commands.includes('git')
+      ? 'Git: local repositories work (init, add, commit, status, diff, restore, branch, checkout, log). Clone, fetch and push over HTTPS need slicc-node or the SLICC extension; through the page alone they fail with a CORS or 502 error.'
+      : 'Git: not installed. When you need it, install it with `pnpm add -g @ai-ecoverse/wasm-git`.',
     `Not here yet: ${[...missing, ...(facts.browser ? [] : ['a browser or CDP tool']), 'GitHub credentials'].join(', ')}.`,
   ].join('\n');
 }

@@ -311,8 +311,8 @@ pi has no git integration and no changes list; pi coding-agent leaves that to th
   - Untracked files show as added, and a rename shows as a deleted plus an added file.
   - `before` is the index version (`git show :<path>`) and `after` is the working file. Binary files and files over 1 MB get null for both, which spectrum shows as "no diff".
   - At most 200 files per repo are listed. There's no store of our own, and `agentId` is null, because git doesn't know which agent wrote a file.
-- **Without git,** `unavailable()` says git isn't installed and how to get it (`pnpm add -g @ai-ecoverse/wasm-git`). **With git but no repo,** it says to `git init` a folder under /home or clone one with slicc-node or the extension connected; cloning over HTTPS through the page alone fails. Seven doesn't have to ship git: either way works.
-- **The `system` section** adds a Git line when `git` is on PATH: local repositories work, and clone, fetch and push need slicc-node or the extension.
+- **Without git,** `unavailable()` says git isn't installed and how to get it (`pnpm add -g @ai-ecoverse/wasm-git`). **With git but no repo,** it says to `git init` a folder under /home or clone one with slicc-node or the extension connected; cloning over HTTPS through the page alone fails. Seven doesn't preinstall git; the user or the agent installs it with that command.
+- **The `system` section** has a Git line. With `git` on PATH, it says local repositories work and that clone, fetch and push need slicc-node or the extension. Without it, it gives the agent `pnpm add -g @ai-ecoverse/wasm-git` to install it when needed. Seven doesn't preinstall git (Lars, 2026-10-09).
 - **Which repos:**
   - the repo of each live agent's cwd (`git rev-parse --show-toplevel`), with the active cone's first;
   - plus a scan of /home and each /mnt/<name>, three levels deep and at most 200 directories per level, skipping node_modules and dot-directories.
