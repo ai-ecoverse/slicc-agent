@@ -225,13 +225,13 @@ export function errorAction(message: string): ErrorAction {
 }
 
 function sprinkleMessage(id: string, entry: EntryRecord): AssistantMessage {
-  const data = (entry.data ?? {}) as { sprinkle?: unknown };
+  const data = (entry.data ?? {}) as { sprinkle?: unknown; at?: unknown };
   return {
     id,
     role: 'assistant',
     parts: [{ type: 'sprinkle', sprinkle: String(data.sprinkle ?? '') }],
     status: 'done',
-    createdAt: 0,
+    createdAt: typeof data.at === 'number' ? data.at : 0,
   };
 }
 

@@ -131,7 +131,7 @@ export function setupSprinkles() {
         const conversation = await agents.conversation(agentId, using);
         if (!conversation) throw new Error(`there is no agent ${agentId}`);
         await conversation.submit(
-          { type: 'write', entry: { kind: SPRINKLE_KIND, data: { sprinkle: id } } },
+          { type: 'write', entry: { kind: SPRINKLE_KIND, data: { sprinkle: id, at: Date.now() } } },
           using
         );
       };
