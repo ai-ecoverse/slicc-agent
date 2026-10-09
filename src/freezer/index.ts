@@ -331,25 +331,24 @@ async function thawScoop(
   if (scoop.removed) throw new Error(`There is no conversation ${id}.`);
   if (live(scoop)) throw new Error(`${scoop.name} is still running; open it instead.`);
   const conversation = await harness.conversation(scoop.conversation as ConversationId, context);
-  const last = conversation ? (await conversation.context(context)).entries.at(-1) : undefined;
-  if (!conversation || !last) throw new Error(`${scoop.name} has no history to thaw.`);
+  if (!conversation) throw new Error(`There is no conversation ${id}.`);
+  const last = (await conversation.context(context)).entries.at(-1);
   const agent = await conversation.agent(context);
   const cone = await (await activeCone(agents, context)).agent(context);
-  const fork = await conversation.fork(
-    last.id,
-    {
-      ownership: { kind: 'ownerless' },
-      agent: {
-        model: agent.model as NonNullable<typeof agent.model>,
-        thinkingLevel: agent.thinkingLevel,
-        extensions: cone.extensions,
-        tools: cone.tools,
-        instructions: cone.instructions ?? null,
-        cwd: HOME,
-      },
+  const created = {
+    ownership: { kind: 'ownerless' as const },
+    agent: {
+      model: agent.model as NonNullable<typeof agent.model>,
+      thinkingLevel: agent.thinkingLevel,
+      extensions: cone.extensions,
+      tools: cone.tools,
+      instructions: cone.instructions ?? null,
+      cwd: HOME,
     },
-    context
-  );
+  };
+  const fork = last
+    ? await conversation.fork(last.id, created, context)
+    : await harness.createConversation(created, context);
   const folder = workspace(scoop.folder);
   const exists = await env.exists(folder, context);
   const kept = exists.ok && exists.value;
