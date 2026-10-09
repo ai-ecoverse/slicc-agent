@@ -26,7 +26,7 @@ type Local = Omit<Settings, 'model' | 'thinking'>;
 export type Login = (
   providerId: string,
   signIn: () => Promise<SignIn | null>,
-  options?: { signal: AbortSignal }
+  options: { signal: AbortSignal }
 ) => Promise<string>;
 
 export class SettingsAdapter extends Emitter<SettingsEvents> implements SettingsPort {
@@ -108,6 +108,9 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
 
   async #signIn(id: string, login: Login): Promise<string> {
     const controller = new AbortController();
+    this.#signing
+      .get(id)
+      ?.abort(new DOMException('A newer sign-in replaced this one.', 'AbortError'));
     this.#signing.set(id, controller);
     this.emit('accounts', this.accounts());
     try {
