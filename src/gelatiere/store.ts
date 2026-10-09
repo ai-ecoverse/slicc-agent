@@ -18,7 +18,7 @@ export interface Suggestion {
   body: string;
   evidence?: string;
   skill?: string;
-  source?: string;
+  repo?: string;
   install?: string;
   prompt?: string;
   url?: string;
@@ -31,7 +31,8 @@ export interface Suggestion {
 
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CONE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const SOURCE = /^https:\/\/[^\s"'<>]+\/SKILL\.md$/;
+const REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+const SKILL = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$/;
 
 function text(value: unknown, limit: number): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -39,21 +40,28 @@ function text(value: unknown, limit: number): string | undefined {
   return clean ? clean.slice(0, limit) : undefined;
 }
 
-function origin(skill: string | undefined, source: string | undefined): string {
-  const url = new URL(source as string);
-  return `${skill} from ${url.host}${url.pathname}`;
+export function repoOf(source: unknown): string | undefined {
+  if (typeof source !== 'string') return undefined;
+  const found = /^https:\/\/raw\.githubusercontent\.com\/([^/\s]+)\/([^/\s]+)\//.exec(
+    source.trim()
+  );
+  return found ? `${found[1]}/${found[2]}` : undefined;
+}
+
+function origin(skill: string | undefined, repo: string | undefined): string {
+  return `${skill} from github.com/${repo}`;
 }
 
 function kindProblem(
   kind: Kind,
   skill: string | undefined,
-  source: string | undefined,
+  repo: string | undefined,
   prompt: string | undefined
 ): string | undefined {
-  if (kind === 'skill' && (!skill || !ID.test(skill)))
-    return 'a skill needs its name (a-z, 0-9, -)';
-  if (kind === 'skill' && (!source || !SOURCE.test(source)))
-    return 'a skill needs its source, an https URL of its SKILL.md';
+  if (kind === 'skill' && (!skill || !SKILL.test(skill)))
+    return 'a skill needs its name (letters, digits, spaces, . _ -)';
+  if (kind === 'skill' && (!repo || !REPO.test(repo)))
+    return 'a skill needs its repo, a GitHub owner/repo';
   if (PROMPTED.has(kind) && !prompt) return `a ${kind} needs its prompt`;
   return undefined;
 }
@@ -74,16 +82,16 @@ export function validate(candidate: unknown): Suggestion | string {
   const body = text(item.body, 600);
   if (!title || !body) return `${id}: needs a title and a body`;
   const skill = typeof item.skill === 'string' ? item.skill.trim() : undefined;
-  const source = typeof item.source === 'string' ? item.source.trim() : undefined;
+  const repo = typeof item.repo === 'string' ? item.repo.trim() : repoOf(item.source);
   const url = typeof item.url === 'string' ? item.url.trim() : undefined;
   const cones = Array.isArray(item.cones)
     ? item.cones.filter((cone): cone is string => typeof cone === 'string')
     : [];
   const evidence = text(item.evidence, 300);
   const prompt = text(item.prompt, 1000);
-  const problem = kindProblem(item.kind as Kind, skill, source, prompt) ?? shapeProblem(url, cones);
+  const problem = kindProblem(item.kind as Kind, skill, repo, prompt) ?? shapeProblem(url, cones);
   if (problem) return `${id}: ${problem}`;
-  const installs = item.kind === 'skill' ? { skill, source, install: origin(skill, source) } : {};
+  const installs = item.kind === 'skill' ? { skill, repo, install: origin(skill, repo) } : {};
   return {
     id,
     kind: item.kind as Kind,
@@ -144,7 +152,10 @@ export async function readStore(
   try {
     const parsed = JSON.parse(read.value) as unknown;
     return Array.isArray(parsed)
-      ? parsed.filter((item): item is Suggestion => typeof validate(item) !== 'string')
+      ? parsed.filter(
+          (item): item is Suggestion =>
+            Boolean(item) && typeof item === 'object' && typeof (item as Suggestion).id === 'string'
+        )
       : [];
   } catch {
     return [];
