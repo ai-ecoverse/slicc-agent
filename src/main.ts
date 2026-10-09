@@ -166,6 +166,7 @@ async function start(
     BACKGROUND_CONTEXT
   );
   roles = runtime;
+  await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
   return hostAgent(agent, {
     settings: await createAgentSettings(models, credentials, providers),
     licks: { licks: licks.licks, sources },

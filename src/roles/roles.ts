@@ -106,6 +106,15 @@ export function roleMemory(value: FrontmatterValue): RoleMemory | undefined {
   return { scope, path };
 }
 
+function withMemoryWrite(
+  listed: string[] | undefined,
+  memory: RoleMemory | undefined
+): string[] | undefined {
+  if (memory && listed?.some((tool) => WRITERS.has(tool)) && !listed.includes('memory_write'))
+    return [...listed, 'memory_write'];
+  return listed;
+}
+
 function memoryFields(
   fields: Record<string, FrontmatterValue>,
   path: string,
@@ -114,9 +123,10 @@ function memoryFields(
   const memory = fields.memory === undefined ? undefined : roleMemory(fields.memory);
   if (fields.memory !== undefined && !memory)
     warnings.push(`${path}: memory needs a scope (user or project) and a path; ignored`);
-  const listed = fields.tools !== undefined ? tools(list(fields.tools), path, warnings) : undefined;
-  if (memory && listed?.some((tool) => WRITERS.has(tool)) && !listed.includes('memory_write'))
-    listed.push('memory_write');
+  const listed = withMemoryWrite(
+    fields.tools !== undefined ? tools(list(fields.tools), path, warnings) : undefined,
+    memory
+  );
   const inherits =
     fields.inheritProjectContext !== undefined || fields.inheritGlobalContext !== undefined;
   return {
@@ -253,7 +263,10 @@ function apply(role: Role, override: Override | undefined, warnings: string[]): 
   if (typeof override.description === 'string') next.description = override.description;
   if (typeof override.systemPrompt === 'string') next.prompt = override.systemPrompt;
   if (Array.isArray(override.tools))
-    next.tools = tools(override.tools.map(String), `override for ${role.name}`, warnings);
+    next.tools = withMemoryWrite(
+      tools(override.tools.map(String), `override for ${role.name}`, warnings),
+      role.memory
+    );
   return next;
 }
 

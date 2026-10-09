@@ -245,6 +245,7 @@ async function spawnAsync(
       ...(chosen.thinking ? { thinking: chosen.thinking as never } : {}),
       ...(chosen.tools ? { tools: chosen.tools } : {}),
       prompts: given,
+      origin: request.cwd,
       fromAgent: who.fromAgent,
       request: request.id,
       limits: found.roles.limits,

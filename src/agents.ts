@@ -23,6 +23,7 @@ export type ScoopRecord = {
   anchor: number;
   role: string | null;
   memory?: RoleMemory;
+  origin?: string;
   context?: { project: boolean; global: boolean };
   kind: 'async' | 'sync';
   parent: string;

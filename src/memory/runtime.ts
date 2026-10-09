@@ -7,6 +7,7 @@ import {
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Agents } from '../agents.ts';
 import type { Role } from '../roles/roles.ts';
+import { workspace } from '../scoops/service.ts';
 import { MEMORY_FILE, type MemoryEntry, type MemoryScope, type MemoryTag } from './format.ts';
 import type { Host } from './prompt.ts';
 import { MEMORY_WRITE } from './prompt.ts';
@@ -17,6 +18,7 @@ import {
   type Place,
   placeOf,
   ROLE_PREFIX,
+  rolePlace,
   roleRoot,
 } from './store.ts';
 
@@ -102,11 +104,17 @@ export async function listPlaces(options: MemoryAttach, context: Context): Promi
   return out;
 }
 
-function callerScope(agents: Agents, caller: string | null): string {
-  if (caller?.startsWith('cone:')) return caller.slice('cone:'.length);
+async function callerPlace(
+  options: MemoryAttach,
+  caller: string | null,
+  context: Context
+): Promise<Place | { problem: string }> {
+  const { agents, env, home } = options;
   const record = caller ? agents.state().scoops[caller] : undefined;
-  if (record?.memory?.scope === 'user') return `${ROLE_PREFIX}${record.memory.path}`;
-  return agents.activeCone();
+  if (record?.memory)
+    return rolePlace(env, home, record.memory, record.origin ?? workspace(record.folder), context);
+  const cone = caller?.startsWith('cone:') ? caller.slice('cone:'.length) : agents.activeCone();
+  return placeOf(home, cone) ?? { problem: `there is no memory scope ${cone}` };
 }
 
 type Parts = {
@@ -128,26 +136,29 @@ async function save(parts: Parts, draft: MemoryDraft, context: Context): Promise
   const place = placeFor(options.home, draft.scope);
   const previous = draft.id ? memories.value.find((item) => item.id === draft.id) : undefined;
   const moved = previous && previous.scope !== draft.scope;
-  if (previous && moved)
-    await files.change(
-      placeFor(options.home, previous.scope),
-      { kind: 'remove', id: previous.id },
+  try {
+    const written = await files.change(
+      place,
+      {
+        kind: 'save',
+        ...(previous && !moved ? { id: previous.id } : {}),
+        section: draft.section,
+        title: draft.title,
+        body: draft.body,
+        tag: draft.tag,
+      },
       context
     );
-  const written = await files.change(
-    place,
-    {
-      kind: 'save',
-      ...(previous && !moved ? { id: previous.id } : {}),
-      section: draft.section,
-      title: draft.title,
-      body: draft.body,
-      tag: draft.tag,
-    },
-    context
-  );
-  await parts.reload(context);
-  return written.entry as MemoryEntry;
+    if (previous && moved)
+      await files.change(
+        placeFor(options.home, previous.scope),
+        { kind: 'remove', id: previous.id },
+        context
+      );
+    return written.entry as MemoryEntry;
+  } finally {
+    await parts.reload(context).catch(() => undefined);
+  }
 }
 
 async function command(
@@ -168,9 +179,10 @@ async function command(
     return { code: 0, out: `${rows.join('\n')}\n` };
   }
   if (verb !== 'show') return { code: verb === 'help' || verb === '--help' ? 0 : 2, out: USAGE };
-  const scope = argv[1] ?? callerScope(options.agents, caller);
-  const place = placeOf(options.home, scope);
-  if (!place) return { code: 1, out: `memory: there is no memory scope ${scope}\n` };
+  const place = argv[1]
+    ? (placeOf(options.home, argv[1]) ?? { problem: `there is no memory scope ${argv[1]}` })
+    : await callerPlace(options, caller, context);
+  if ('problem' in place) return { code: 1, out: `memory: ${place.problem}\n` };
   const read = await files.read(place.file, context);
   return {
     code: 0,

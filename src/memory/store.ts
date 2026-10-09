@@ -9,6 +9,7 @@ import {
   MEMORY_FILE,
   type MemoryEntry,
   memoryEntries,
+  oneLine,
   parseMemory,
   redactSecrets,
   serializeMemory,
@@ -47,6 +48,18 @@ export function safePath(path: string): string | null {
 export function placeOf(home: string, scope: string): Place | null {
   if (scope === GLOBAL)
     return { scope, file: `${memoryRoot(home)}/${MEMORY_FILE}`, label: 'everyone' };
+  if (scope.startsWith(ROLE_PREFIX) && scope.includes('@')) {
+    const [named, root] = scope.slice(ROLE_PREFIX.length).split('@') as [string, string];
+    const path = safePath(named);
+    const inside = root.startsWith('/') && safePath(root.slice(1)) !== null && trusted(root);
+    return path && inside
+      ? {
+          scope,
+          file: `${root}/.pi/agent-memory/${path}/${MEMORY_FILE}`,
+          label: `role ${path} in ${root}`,
+        }
+      : null;
+  }
   if (scope.startsWith(ROLE_PREFIX)) {
     const path = safePath(scope.slice(ROLE_PREFIX.length));
     return path
@@ -92,11 +105,7 @@ export async function rolePlace(
     return {
       problem: `the project root ${root} is outside /home; it gets memory once SLICC can trust a folder`,
     };
-  return {
-    scope: `${ROLE_PREFIX}${path}@${root}`,
-    file: `${root}/.pi/agent-memory/${path}/${MEMORY_FILE}`,
-    label: `role ${path} in ${root}`,
-  };
+  return placeOf(home, `${ROLE_PREFIX}${path}@${root}`) as Place;
 }
 
 type Files = Pick<
@@ -164,8 +173,8 @@ export class MemoryFiles {
       change.kind === 'save'
         ? {
             ...change,
-            section: clean(change.section).trim() || 'Notes',
-            title: clean(change.title).trim() || 'Untitled',
+            section: oneLine(clean(change.section)) || 'Notes',
+            title: oneLine(clean(change.title)) || 'Untitled',
             body: clean(change.body),
           }
         : change;

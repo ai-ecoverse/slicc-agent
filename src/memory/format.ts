@@ -197,6 +197,22 @@ export type Change =
     }
   | { kind: 'remove'; id?: string; section?: string; title?: string };
 
+export function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+export function demote(body: string): string {
+  let fenced = false;
+  return body
+    .trim()
+    .split('\n')
+    .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+      return fenced ? line : line.replace(/^(\s{0,3})#{2,3}(?=\s)/, '$1####');
+    })
+    .join('\n');
+}
+
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 export function applyChange(
@@ -239,15 +255,16 @@ export function applyChange(
     drop();
     return tidy();
   }
-  const entry: Entry = { title: change.title.trim(), tag: change.tag, body: change.body.trim() };
-  if (target?.kind === 'entry' && same(target.section.name, change.section)) {
+  const name = oneLine(change.section);
+  const entry: Entry = { title: oneLine(change.title), tag: change.tag, body: demote(change.body) };
+  if (target?.kind === 'entry' && same(target.section.name, name)) {
     target.section.entries[target.section.entries.indexOf(target.entry)] = entry;
     return tidy();
   }
   drop();
-  let section = next.sections.find((item) => same(item.name, change.section));
+  let section = next.sections.find((item) => same(item.name, name));
   if (!section) {
-    section = { name: change.section.trim(), intro: '', entries: [] };
+    section = { name, intro: '', entries: [] };
     next.sections.push(section);
   }
   const clash = section.entries.findIndex((item) => same(item.title, entry.title));
@@ -272,36 +289,41 @@ export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-const SECRETS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\b(authorization|proxy-authorization)\s*[:=]\s*("[^"\n]*"|'[^'\n]*'|[^\n]*)/gi,
-  /\bbearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi,
-  /\b(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9_-]{16,}/g,
-  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
-  /\bABSK[A-Za-z0-9+/=]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g,
-  /\bAIza[0-9A-Za-z_-]{30,}\b/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
-  /(https?:\/\/[^\s#)]*)#[^\s)]*\bkey\b[^\s)]*/gi,
-  /\b((?:api|access|secret|private|client)[_-]?(?:key|token|secret)|token|password|passwd|secret)\s*[:=]\s*["']?[^\s"',;]{6,}["']?/gi,
-];
-
 export const REDACTED = '[redacted]';
+
+const named = (match: string, name: string, sign: string) => `${name}${sign} ${REDACTED}`;
+
+const SECRETS: [RegExp, (match: string, ...groups: string[]) => string][] = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, () => REDACTED],
+  [/\b(authorization|proxy-authorization)\s*([:=])\s*("[^"\n]*"|'[^'\n]*'|[^\n]*)/gi, named],
+  [/\bbearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi, () => REDACTED],
+  [/\b(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9_-]{16,}/g, () => REDACTED],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, () => REDACTED],
+  [/\bABSK[A-Za-z0-9+/=]{16,}/g, () => REDACTED],
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, () => REDACTED],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, () => REDACTED],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, () => REDACTED],
+  [/\bAIza[0-9A-Za-z_-]{30,}\b/g, () => REDACTED],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, () => REDACTED],
+  [/(https?:\/\/[^\s#)]*)#[^\s)]*\bkey\b[^\s)]*/gi, (_match, url) => `${url}#${REDACTED}`],
+  [
+    /([?&][\w.-]*(?:sig|signature|token|key|secret|credential|password|auth|code)[\w.-]*=)[^&\s#)"']+/gi,
+    (_match, name) => `${name}${REDACTED}`,
+  ],
+  [
+    /\b((?:api|access|secret|private|client)[_-]?(?:key|token|secret)|token|password|passwd|secret)\s*([:=])\s*["']?[^\s"',;]{6,}["']?/gi,
+    named,
+  ],
+];
 
 export function redactSecrets(text: string): { text: string; count: number } {
   let count = 0;
   let out = text;
-  for (const pattern of SECRETS)
-    out = out.replace(pattern, (match, ...groups) => {
+  for (const [pattern, replace] of SECRETS)
+    out = out.replace(pattern, (match: string, ...groups: string[]) => {
+      if (match.endsWith(REDACTED)) return match;
       count++;
-      if (/^https?:/i.test(match) && typeof groups[0] === 'string')
-        return `${groups[0]}#${REDACTED}`;
-      const named = /^([A-Za-z_-]+)\s*([:=])/.exec(match);
-      if (named && !/^bearer$/i.test(named[1] as string))
-        return `${named[1]}${named[2]} ${REDACTED}`;
-      return REDACTED;
+      return replace(match, ...groups);
     });
   return { text: out, count };
 }

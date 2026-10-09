@@ -38,10 +38,8 @@ Keep replies short. Lead with the result, then the detail.
 
 ## The `memory` command
 
-```bash
-memory scopes          # every scope, its entry count and file
-memory show [<scope>]  # print a memory file, yours by default
-```
+- `memory scopes` lists every scope with its entry count and file.
+- `memory show [<scope>]` prints a memory file, yours by default.
 
 The user sees and edits the same entries in the Memory panel.
 

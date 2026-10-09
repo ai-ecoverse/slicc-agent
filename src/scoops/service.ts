@@ -93,6 +93,7 @@ export interface SpawnRequest {
   depth?: number;
   roots?: { write: string[]; read: string[] };
   cwd?: string;
+  origin?: string;
   instructions?: string;
   target?: string | null;
   asker?: string | null;
@@ -288,6 +289,7 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
       anchor,
       role: request.role?.name ?? null,
       ...(request.role?.memory ? { memory: request.role.memory } : {}),
+      ...(request.role?.memory && request.origin ? { origin: request.origin } : {}),
       ...(request.role?.context ? { context: request.role.context } : {}),
       kind: request.kind ?? 'async',
       parent: request.parent ?? request.cone,

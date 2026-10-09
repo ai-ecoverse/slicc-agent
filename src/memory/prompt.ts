@@ -45,7 +45,7 @@ export async function ownPlace(
     return {
       problem: `this scoop has no memory of its own; only roles with a memory field have one${who.record.role ? ` (role ${who.record.role} has none)` : ''}`,
     };
-  return rolePlace(host.env, host.home, who.record.memory, cwd, context);
+  return rolePlace(host.env, host.home, who.record.memory, who.record.origin ?? cwd, context);
 }
 
 const PREFACE =
