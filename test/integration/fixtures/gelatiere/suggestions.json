@@ -7,7 +7,7 @@
     "evidence": "Sam told the welcome card they live in GitHub.",
     "skill": "github",
     "source": "https://raw.githubusercontent.com/example/skills/main/github/SKILL.md",
-    "install": "gelatiere install skill-github",
+    "install": "github from raw.githubusercontent.com/example/skills/main/github/SKILL.md",
     "cones": ["cone"],
     "createdAt": 1791500000000
   },

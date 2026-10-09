@@ -215,7 +215,7 @@
         card.appendChild(el('div', 'gelatiere-why', s.body));
         if (s.install) {
           var install = el('div', 'gelatiere-cmd');
-          install.appendChild(document.createTextNode('Installs with '));
+          install.appendChild(document.createTextNode('Installs '));
           install.appendChild(el('code', null, s.install));
           card.appendChild(install);
         }

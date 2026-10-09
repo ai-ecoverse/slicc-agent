@@ -39,6 +39,11 @@ function text(value: unknown, limit: number): string | undefined {
   return clean ? clean.slice(0, limit) : undefined;
 }
 
+function origin(skill: string | undefined, source: string | undefined): string {
+  const url = new URL(source as string);
+  return `${skill} from ${url.host}${url.pathname}`;
+}
+
 function kindProblem(
   kind: Kind,
   skill: string | undefined,
@@ -78,8 +83,7 @@ export function validate(candidate: unknown): Suggestion | string {
   const prompt = text(item.prompt, 1000);
   const problem = kindProblem(item.kind as Kind, skill, source, prompt) ?? shapeProblem(url, cones);
   if (problem) return `${id}: ${problem}`;
-  const installs =
-    item.kind === 'skill' ? { skill, source, install: `gelatiere install ${id}` } : {};
+  const installs = item.kind === 'skill' ? { skill, source, install: origin(skill, source) } : {};
   return {
     id,
     kind: item.kind as Kind,
