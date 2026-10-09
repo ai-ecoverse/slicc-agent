@@ -20,6 +20,8 @@ import { isBusy, queued, toMessages } from './messages.ts';
 
 export const CONE = 'cone';
 
+export type NewChat = 'freeze' | 'reset';
+
 const thinking: Record<string, Thinking> = {
   off: 'off',
   minimal: 'low',
@@ -51,9 +53,13 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   #active: string | null = null;
   #creating = new Map<string, Promise<string | null>>();
 
-  constructor(connection: AgentConnection) {
+  readonly #newChat: NewChat;
+
+  constructor(connection: AgentConnection, options: { newChat?: NewChat } = {}) {
     super();
     this.#connection = connection;
+    this.#newChat = options.newChat ?? 'freeze';
+    connection.frozen?.subscribe(() => this.emit('frozen', this.frozen()));
     this.#ready = new Promise((resolve) => {
       connection.transcript.subscribe(() => {
         this.#refresh();
@@ -211,8 +217,14 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     void this.#connection.control.compact(null, BACKGROUND_CONTEXT);
   }
 
-  clear(): void {
-    void this.#connection.control.reset(null, BACKGROUND_CONTEXT);
+  clear(agentId: string = this.active()): void {
+    if (this.#newChat === 'freeze')
+      void this.#connection.control.newChat(agentId, BACKGROUND_CONTEXT);
+    else void this.#connection.control.reset(null, BACKGROUND_CONTEXT);
+  }
+
+  freeze(agentId: string = this.active()): void {
+    void this.#connection.control.freeze(agentId, BACKGROUND_CONTEXT);
   }
 
   #configure(agentId: string, change: Partial<AgentSettingsChange>): void {
@@ -294,12 +306,46 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   frozen(): readonly FrozenCone[] {
-    return [];
+    return (this.#connection.frozen?.value ?? []).map(
+      ({ id, name, title, model, messages, frozenAt }) => ({
+        id,
+        name,
+        title,
+        model,
+        messages,
+        frozenAt,
+      })
+    );
   }
 
-  thaw(): Agent | null {
-    return null;
+  thaw(id: string): Agent | null {
+    const record = this.frozen().find((item) => item.id === id);
+    if (!record) return null;
+    const provisional = `thawing-${crypto.randomUUID()}`;
+    const thawed = this.#connection.control.thaw(id, BACKGROUND_CONTEXT).then(
+      (result) => result.id,
+      () => null
+    );
+    this.#creating.set(provisional, thawed);
+    void thawed.then((cone) => {
+      if (this.#active !== provisional) return;
+      this.#active = cone ?? CONE;
+      this.emit('active', this.#active);
+      this.emit('messages', this.#active);
+    });
+    return {
+      id: provisional,
+      name: record.name,
+      kind: 'cone',
+      parentId: null,
+      status: 'idle',
+      model: record.model,
+      contextFill: 0,
+      unread: 0,
+    };
   }
 
-  discard(): void {}
+  discard(id: string): void {
+    void this.#connection.control.discard(id, BACKGROUND_CONTEXT);
+  }
 }

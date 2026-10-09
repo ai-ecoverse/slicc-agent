@@ -38,6 +38,7 @@ export interface AttachOptions {
   sprinkle?: CliOptions['sprinkle'];
   memory?: CliOptions['memory'];
   gelatiere?: CliOptions['gelatiere'];
+  freezer?: CliOptions['freezer'];
 }
 
 export interface ScoopsRuntime {
@@ -51,7 +52,7 @@ export interface ScoopsSetup {
   attach(options: AttachOptions, context: Context): Promise<ScoopsRuntime>;
 }
 
-export const COMMANDS = ['agent', 'subagent', 'sprinkle', 'memory', 'gelatiere'];
+export const COMMANDS = ['agent', 'subagent', 'sprinkle', 'memory', 'gelatiere', 'freezer'];
 
 async function install(env: ExecutionEnv, script: string, pnpmHome: string, context: Context) {
   await env.createDir(`${pnpmHome}/bin`, { recursive: true }, context);
@@ -152,6 +153,7 @@ export function setupScoops(
         ...(options.sprinkle ? { sprinkle: options.sprinkle } : {}),
         ...(options.memory ? { memory: options.memory } : {}),
         ...(options.gelatiere ? { gelatiere: options.gelatiere } : {}),
+        ...(options.freezer ? { freezer: options.freezer } : {}),
       });
       const plane = controlPlane(env, cli, {
         ...(options.controlDir ? { dir: options.controlDir } : {}),

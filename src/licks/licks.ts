@@ -78,6 +78,22 @@ export interface Licks {
   handle(channel: LickChannel, handler: LickHandler): void;
   pending(context: Context): Promise<number>;
   forget(target: LickTarget, channel: LickChannel, source: string, context: Context): Promise<void>;
+  guard(check: (target: LickTarget) => Blocked | undefined): void;
+}
+
+export type Blocked = { id: string; name: string; at: number };
+
+export function frozenNotice(event: LickEvent, blocked: Blocked): LickEvent {
+  return {
+    channel: event.channel,
+    source: `frozen:${event.source}`,
+    title: `${blocked.name} is frozen`,
+    text: `${event.title} was skipped`,
+    body: `${event.target} belongs to ${blocked.name}, which is frozen (${blocked.id}). Thaw it in the Freezer to get its licks again.`,
+    target: 'cone',
+    severity: 'warn',
+    eventId: `${blocked.id}|${event.target}|${event.channel}|${event.source}|${blocked.at}`,
+  };
 }
 
 export interface LicksHost {
@@ -235,8 +251,14 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     return { lick, decision: lickDecisions(entries).get(id) };
   }
 
+  let check: ((target: LickTarget) => Blocked | undefined) | undefined;
   return {
-    deliver(event, context) {
+    guard(next) {
+      check = next;
+    },
+    deliver(incoming, context) {
+      const blocked = check?.(incoming.target);
+      const event = blocked ? frozenNotice(incoming, blocked) : incoming;
       return serial(async () => {
         const { harness } = await host;
         const key = keyOf(event);

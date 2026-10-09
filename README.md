@@ -208,9 +208,8 @@ The worker watches the roots and reloads on change. A `skills` prompt section, g
 - **Templates:** `/parallel-review` and `/review-loop`, from [pi-subagents](https://github.com/nicobailon/pi-subagents) (MIT). Their wording is kept, and they're rewritten to use `agent --async --agent reviewer|worker`, `agent wait --notify`, `agent send` and `agent stop` instead of pi-subagents' `subagent` tool. The parts that need workflow scripts or forked contexts are left out.
 
 **v6 skills.** None of the 29 skills SLICC v6 ships runs here unchanged. They name v6 paths (`/shared`, `/workspace`) or commands this kernel doesn't have. By what they wait for:
-- **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`), `skill-authoring`, `sprinkles` and `welcome`.
+- **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`), `skill-authoring`, `sprinkles`, `welcome` and `transcript-export` (now `freezer show`).
 - **Memory:** `memory` is rewritten here (below); its `status`, `log`, `curate` and `dream` and the curation ledger are not ported. `gelatiere` is rewritten here (below), without `use-cases` and the www.sliccy.com catalog; `wiki` needs its `wiki` CLI.
-- **The freezer (PR 15):** `transcript-export`.
 - **The tray hub, upskill or the Install/Update panel:** `upgrade` (`upgrade apply`, bios#70), `handoff`, `slicc`, `ssh`, `cherry`.
 - **A browser and CDP:** `playwright-cli`, `computer`, `v86`.
 - **v6's JS realm, `.jsh` and `ipk` (slicc-kernel#68):** `jshd`, `mcp`, `workflows`, `package-execution`, `biome`, `ffmpeg`.
@@ -269,6 +268,27 @@ The `memory` section, read before every request, holds the first 200 lines (at m
 - The gelatiere doesn't read the www.sliccy.com skill catalog or use-case pages, and doesn't consolidate other agents' memory, which only cones and the user write.
 
 **The panel.** The transcript service adds `memories` and `memoryScopes`, and `AgentControl` `memorySave` and `memoryRemove`; `createAgentModel()` returns a `MemoryAdapter` for spectrum's `MemoryPort`, with `scopes()` (global, cones, roles) for its picker. `memory show [<scope>]` and `memory scopes` in bash print the same files, and the built-in `memory` skill teaches all of it.
+
+### The freezer
+
+pi durable keeps every conversation and entry in the session database, and has no archive flag and no delete. So freezing is bookkeeping in the `slicc.agents` registry.
+
+- **Freeze a cone** (the Freezer's button, or `freeze` in the command palette):
+  - its run and its scoops' runs stop;
+  - it moves from `cones` to `frozen` (`frozen-<n>`, with its name, conversation, title, model, message count and time), and its live scoops are marked frozen, keeping their transcripts and their workspaces;
+  - if it was active, another cone is selected, and if it was the last one, a fresh cone takes its name.
+  - Before it moves, 14b's memory extraction is scheduled for anything new.
+  - Its title starts as the first user line, then one background call (with `memory.extractModel` or the cone's model) replaces it with a short title.
+- **New chat** (spectrum's `clear`) archives the chat the same way, when it isn't empty, and gives the cone a fresh conversation with the same configuration; its scoops stay. `createAgentModel(connection, { newChat: 'reset' })` makes it a plain reset instead.
+- **Thaw** puts a frozen cone back under its old id when that's free (otherwise a new `cone-<n>`, with a number added to a name that's taken), unfreezes its scoops idle with their workspaces, and selects it. It continues where it stopped.
+- **Delete** removes the frozen entry, marks its scoops gone and deletes their folders. The history stays in the session database, which SLICC can't remove from.
+- **While frozen:**
+  - its scoops aren't listed, and `agent send|wait|stop` on one says it is frozen with its cone;
+  - cron fires, watches and webhooks aimed at the cone or its scoops are skipped, and the active cone gets one `warn` lick per source naming what was skipped;
+  - sprinkles it owned send to the active cone;
+  - it can't be rewound.
+- **The `freezer` command** is the same script as `agent`: `freezer list`, `freezer show <id>` (the chat as Markdown, which replaces v6's `transcript-export`) and `freezer thaw <id>`. The gelatiere's pass reads frozen chats with it.
+- **The panel:** the transcript service adds `frozen`, and `AgentControl` adds `freeze`, `newChat`, `thaw` and `discard`.
 
 ### Sprinkles
 

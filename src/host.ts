@@ -17,6 +17,7 @@ import {
 import type { Agent } from './agent.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
+import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
 import { PortListener } from './listener.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
@@ -120,6 +121,7 @@ export async function hostAgent(
     skills?: SkillsRuntime;
     sprinkles?: SprinklesRuntime;
     memory?: MemoryRuntime;
+    freezer?: FreezerRuntime;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -143,7 +145,8 @@ export async function hostAgent(
       options.scoops,
       options.skills,
       options.sprinkles,
-      options.memory
+      options.memory,
+      options.freezer
     )
   );
   provider.provide(AgentTranscript, {
@@ -155,6 +158,7 @@ export async function hostAgent(
     sprinkles: options.sprinkles?.sprinkles ?? replicatedState<Sprinkle[]>([]),
     memories: options.memory?.memories ?? replicatedState<MemoryEntry[]>([]),
     memoryScopes: options.memory?.scopes ?? replicatedState<MemoryScope[]>([]),
+    frozen: options.freezer?.frozen ?? replicatedState<FrozenCone[]>([]),
   });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
@@ -178,6 +182,7 @@ export async function hostAgent(
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();
+      options.freezer?.close();
       await options.memory?.close(context);
       await options.sprinkles?.close(context);
       await options.skills?.close(context);
