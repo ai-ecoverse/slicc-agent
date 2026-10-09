@@ -148,19 +148,21 @@ async function turnIn(
 async function forkAt(
   harness: Harness,
   conversation: Conversation,
-  found: { turn: Turn; view: ConversationView },
+  found: { turn: Turn },
   context: Context
 ): Promise<Conversation> {
   const ownership = { kind: 'ownerless' } as const;
   if (found.turn.at !== null) return conversation.fork(found.turn.at, { ownership }, context);
-  const agent = found.view.docs['pi.agent'] as AgentChange | undefined;
-  return harness.createConversation(
-    {
-      ownership,
-      agent: { model: agent?.model ?? null, thinkingLevel: agent?.thinkingLevel ?? null },
-    },
-    context
-  );
+  const agent = await conversation.agent(context);
+  const change: AgentChange = {
+    model: agent.model ?? null,
+    thinkingLevel: agent.thinkingLevel,
+    extensions: agent.extensions,
+    tools: agent.tools,
+    instructions: agent.instructions ?? null,
+    cwd: agent.cwd ?? null,
+  };
+  return harness.createConversation({ ownership, agent: change }, context);
 }
 
 async function rewindAgent(
