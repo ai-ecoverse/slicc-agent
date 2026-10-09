@@ -239,14 +239,14 @@ The model can write a short JavaScript program that calls its tools, with the `c
 
 A sprinkle is a small HTML panel next to the chat. pi has nothing for this; it's SLICC's UI, rendered by slicc-spectrum (≥ 1.23) through its `SprinklePort`.
 
-**Files.** Every `.shtml` file in `/home/sprinkles`, as `<name>.shtml` or `<name>/<name>.shtml`, is a sprinkle. `<name>` is 1–64 of `a-z 0-9 . _ -`. Its `<title>` and `<link rel="icon" href="<lucide name>">` give its title and rail icon (default `sparkles`). The worker watches the folder: the transcript service's `sprinkles` lists every one with its HTML, so spectrum gives each a rail button, and editing a file reloads its panel. Deleting the file retires it.
+**Files.** Every `.shtml` file in `/home/sprinkles`, as `<name>.shtml` or `<name>/<name>.shtml`, is a sprinkle. `<name>` is 1–64 of `a-z 0-9 . _ -`, and `welcome` is reserved for the built-in one. Its `<title>` and `<link rel="icon" href="<lucide name>">` give its title and rail icon (default `sparkles`). The worker watches the folder: the transcript service's `sprinkles` lists every one with its HTML, so spectrum gives each a rail button, and editing a file reloads its panel. Deleting the file retires it.
 
-**Owners.** Each sprinkle talks to one agent, its owner. The owner is whoever first showed it, or the agent named with `sprinkle own`, otherwise the active cone. Owners live in the session document `slicc.sprinkles`.
+**Owners.** Each sprinkle talks to one agent, its owner. The owner is whoever first showed it, or the agent named with `sprinkle own`, otherwise the active cone at the time of the send. Owners live in the session document `slicc.sprinkles`.
 
 **Talking back.**
 - **Sends.** `SprinklePort.send(id, { action, data, target })` becomes `AgentControl.sprinkleSend`, then a lick on the `sprinkle` channel for the owner: source `sprinkle:<name>`, the action as its text and the data as JSON in its body. It steers and coalesces per sprinkle like any lick.
 - **Calls.** `SprinklePort.call(id, method, args)` becomes `AgentControl.sprinkleCall`:
-  - `readFile` and `exists` reach only `/home`, with `/shared/…` mapped to `/home/…` so SLICC's own sprinkles run unchanged;
+  - `readFile` and `exists` reach only `/home`, with `/shared/…` mapped to `/home/…` so SLICC's own sprinkles run unchanged. Paths with `.` or `..` segments are refused, and a link is followed only if its target is in `/home` too;
   - `getState` and `setState` keep one JSON value per sprinkle in `slicc.sprinkles`;
   - there's no `exec`: a sprinkle that asks for one gets an error telling it to send the agent a message with `slicc.lick()` instead, so every command goes through an agent and its transcript.
 

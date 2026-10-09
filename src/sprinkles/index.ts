@@ -98,6 +98,7 @@ export function setupSprinkles() {
         const owned = await owners(using);
         const out: Sprinkle[] = [];
         for (const { name, path } of await sprinkleFiles(env, dir, using)) {
+          if (name === WELCOME) continue;
           const read = await env.readTextFile(path, using);
           if (!read.ok) continue;
           out.push({
@@ -119,6 +120,12 @@ export function setupSprinkles() {
           });
         sprinkles.replace(using, out);
       };
+      const inside = async (path: unknown, using: Context) => {
+        const asked = homePath(path);
+        const real = await env.canonicalPath(asked, using);
+        return real.ok ? homePath(real.value) : asked;
+      };
+      const offCone = agents.onCone(() => reload(context).catch(() => undefined));
       const find = (id: string) => sprinkles.value.find((item) => item.id === id);
       const post = async (id: string, agentId: string, using: Context) => {
         const conversation = await agents.conversation(agentId, using);
@@ -195,7 +202,7 @@ export function setupSprinkles() {
               title: sprinkle.title,
               text: payload.action || '(no action)',
               ...(payload.data === null ? {} : { body: JSON.stringify(payload.data, null, 2) }),
-              target: targetOf(sprinkle.agentId),
+              target: targetOf((await owners(using))[id] ?? agents.activeCone()),
             },
             using
           );
@@ -205,12 +212,12 @@ export function setupSprinkles() {
           if (!find(id)) throw new Error(`there is no sprinkle ${id}`);
           const handlers: Record<SprinkleMethod, () => Promise<JsonValue>> = {
             async readFile() {
-              const read = await env.readTextFile(homePath(args[0]), using);
+              const read = await env.readTextFile(await inside(args[0], using), using);
               if (!read.ok) throw new Error(read.error.message);
               return read.value;
             },
             async exists() {
-              const found = await env.exists(homePath(args[0]), using);
+              const found = await env.exists(await inside(args[0], using), using);
               return found.ok && found.value;
             },
             async getState() {
@@ -237,6 +244,7 @@ export function setupSprinkles() {
         },
         reload,
         async close(using) {
+          offCone();
           clearTimeout(timer);
           await watcher?.close(using);
         },
