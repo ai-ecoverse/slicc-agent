@@ -30,6 +30,13 @@ test('licks reach the cone through the production worker: a webhook, a file watc
             .messages()
             .map(({ role, status, text }) => ({ role, status, text })),
           busy: window.agent.busy(window.agent.active()),
+          entries: (window.connection.transcript.value?.entries ?? []).map(
+            ({ id, kind, model }) => [
+              id,
+              kind,
+              JSON.stringify(model?.[0]?.content ?? '').slice(0, 160),
+            ]
+          ),
         }));
         throw new Error(`${error.message}\n${JSON.stringify(state)}`);
       });
