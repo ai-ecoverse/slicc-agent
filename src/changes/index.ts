@@ -147,10 +147,11 @@ function noise(path: string, repos: readonly string[]): boolean {
 
 function rediscovers(paths: readonly string[], repos: readonly string[]): boolean {
   return paths.some((path) => {
-    const at = path.indexOf('/.git');
-    const end = path.charAt(at + 5);
-    if (at < 0 || (end !== '' && end !== '/')) return false;
-    return !repos.includes(path.slice(0, at) || '/');
+    const parts = path.split('/');
+    const git = parts.indexOf('.git');
+    if (git > 0) return !repos.includes(parts.slice(0, git).join('/') || '/');
+    if (parts.some((part) => part && !scanned(part))) return false;
+    return !repos.some((repo) => within(path, repo));
   });
 }
 
