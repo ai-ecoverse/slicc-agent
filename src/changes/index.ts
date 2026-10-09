@@ -31,6 +31,8 @@ export interface ChangesRuntime {
   close(context: Context): Promise<void>;
 }
 
+export const CHANGES_MS = 500;
+
 export interface ChangesOptions {
   env: ExecutionEnv;
   agents: Agents;
@@ -188,9 +190,23 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     view.replace(context, { unavailable: live.length ? null : NO_REPO, changes });
   };
   const refresh = (context: Context) => serial(() => scan(context));
+  let running = false;
+  let again = false;
+  const kick = async (context: Context) => {
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    do {
+      again = false;
+      await refresh(context).catch(() => undefined);
+    } while (again);
+    running = false;
+  };
   const later = (context: Context) => {
     clearTimeout(timer);
-    timer = setTimeout(() => void refresh(context).catch(() => undefined), options.reloadMs);
+    timer = setTimeout(() => void kick(context), options.reloadMs);
   };
   const find = async (path: string, context: Context) => {
     await refresh(context);

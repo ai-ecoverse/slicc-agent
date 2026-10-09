@@ -9,7 +9,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { type Agent, openAgent } from './agent.ts';
-import { attachChanges } from './changes/index.ts';
+import { attachChanges, CHANGES_MS } from './changes/index.ts';
 import {
   codemodeExtension,
   codemodeTool,
@@ -208,7 +208,7 @@ async function start(
     assets: options.assets ?? packageAssets(),
   });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
-  const changes = attachChanges({ agents: agent.agents, env: home, reloadMs: RELOAD_MS });
+  const changes = attachChanges({ agents: agent.agents, env: home, reloadMs: CHANGES_MS });
   return hostAgent(agent, {
     settings: await createAgentSettings(models, credentials, providers),
     licks: { licks: licks.licks, sources },

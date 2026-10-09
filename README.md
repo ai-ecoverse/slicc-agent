@@ -317,7 +317,7 @@ pi has no git integration and no changes list; pi coding-agent leaves that to th
   - the repo of each live agent's cwd (`git rev-parse --show-toplevel`), with the active cone's first;
   - plus a scan of /home and each /mnt/<name>, three levels deep and at most 200 directories per level, skipping node_modules and dot-directories.
   - Repos under /tmp and /var/lib/slicc are left out.
-- **When it scans:** lazily, when the surface first asks, then on file events in /home, /mnt and /scoops (debounced) and when the agents change. Events inside a known repo's .git count only for its index, HEAD and refs. A new .git, or an overflow, rescans for repos.
+- **When it scans:** lazily, when the surface first asks, then on file events in /home, /mnt and /scoops and when the agents change, debounced by 500 ms, with at most one scan running and one trailing scan queued, so an `unzip` or `pnpm install` costs two scans. Events inside a known repo's .git count only for its index, HEAD and refs. A new .git, or an overflow, rescans for repos.
 - **Accept** stages the file (`git add -A -- <path>`), so it leaves the list; committing stays the user's job.
 - **Revert** discards the unstaged change: `git restore -- <path>`, or deleting an untracked file. Spectrum asks first with its negative confirm, because this can't be undone.
 - **Rewind** leaves files alone. When the dropped turn had a write, edit, bash or codemode call, its notice adds "Changed files stay; use Changes or git to revert them."
