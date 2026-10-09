@@ -139,7 +139,10 @@ async function save(host: Host, place: Place, found: Proposal[], context: Contex
   return saved;
 }
 
-export function extractTask(ready: Promise<Host>) {
+export function extractTask(
+  ready: Promise<Host>,
+  settings: (context: Context) => Promise<ExtractSettings>
+) {
   return defineTask<Input, State, ExtractResult>({
     name: EXTRACT_TASK,
     version: 1,
@@ -155,6 +158,7 @@ export function extractTask(ready: Promise<Host>) {
             delete doc.pending[key];
             return { status: 'terminal', outcome: { status: 'completed', result } };
           }, context);
+        if (!(await settings(context)).extract) return done({ saved: 0, skipped: 'turned off' });
         const host = await ready;
         const place = placeOf(host.home, cone);
         const view = await runtime.context(runtime.conversationId, context, tail as EntryId);
@@ -222,7 +226,6 @@ export function scheduler(
   return async (conversation, tail, context) => {
     const host = await ready;
     const chosen = await settings(context);
-    if (!chosen.extract) return false;
     const who = whoIs(host.agents.state(), conversation);
     if (who.kind !== 'cone') return false;
     return host.harness.commit(async (tx) => {

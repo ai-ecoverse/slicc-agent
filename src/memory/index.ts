@@ -27,8 +27,8 @@ export function setupMemory(registry: Registry): MemorySetup {
     connect = resolve;
   });
   const tool = memoryWriteTool(ready);
-  const task = extractTask(ready);
   const settings = settingsReader(ready);
+  const task = extractTask(ready, settings);
   const schedule = scheduler(ready, task, settings);
   const extension = defineExtension({
     name: 'slicc-memory',
