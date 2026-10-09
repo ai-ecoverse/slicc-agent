@@ -19,7 +19,9 @@ test('the production worker entry chats and lists accounts', async (t) => {
     const { agent, settings } = createAgentModel(await owner.connect(), { storage: localStorage });
     await agent.ready();
     await agent.send(agent.active(), 'Are you there?');
-    for (let i = 0; i < 100 && !agent.messages().some((m) => m.role === 'assistant'); i++) {
+    const replied = () =>
+      agent.messages().some((m) => m.role === 'assistant' && m.parts?.[0]?.type === 'text');
+    for (let i = 0; i < 500 && !replied(); i++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     for (let i = 0; i < 100 && settings.accounts().length === 0; i++)

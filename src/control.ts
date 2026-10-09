@@ -16,6 +16,7 @@ import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
 import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
+import type { MemoryRuntime } from './memory/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
 import type { AgentControl, Created, OperationError, SendResponse } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
@@ -44,6 +45,21 @@ function created(run: () => Promise<string>): Promise<Created> {
     (id) => ({ id, error: null }),
     (error: Error) => ({ id: null, error: error.message })
   );
+}
+
+function memoryControl(
+  memory: Pick<MemoryRuntime, 'save' | 'remove'> | undefined
+): Pick<AgentControl, 'memorySave' | 'memoryRemove'> {
+  return {
+    async memorySave(draft, context) {
+      if (!memory) throw new Error('This agent has no memory.');
+      const { id, ...rest } = draft;
+      return memory.save({ ...rest, ...(id ? { id } : {}) }, context);
+    },
+    async memoryRemove(id, context) {
+      return { removed: memory ? await memory.remove(id, context) : false };
+    },
+  };
 }
 
 function sprinkleControl(
@@ -117,7 +133,8 @@ export function createAgentControl(
   licks?: HostLicks,
   scoops?: HostScoops,
   skills?: Pick<SkillsRuntime, 'expand'>,
-  sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>
+  sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>,
+  memory?: Pick<MemoryRuntime, 'save' | 'remove'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -216,6 +233,7 @@ export function createAgentControl(
     },
     withdraw: (id, context) => withdraw(current(), id, context),
     ...sprinkleControl(sprinkles),
+    ...memoryControl(memory),
     async unqueue(agentId, id, context) {
       return withdraw(await conversationFor(agentId, context), id, context);
     },

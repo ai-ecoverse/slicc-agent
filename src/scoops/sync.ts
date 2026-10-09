@@ -282,6 +282,7 @@ export async function runSync(
       ...(chosen.thinking ? { thinking: chosen.thinking as never } : {}),
       ...(chosen.tools ? { tools: chosen.tools } : {}),
       prompts: planned.given,
+      origin: request.cwd,
       fromAgent: who.fromAgent,
       request: request.id,
       limits: found.roles.limits,

@@ -18,6 +18,8 @@ import type { Agent } from './agent.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
 import { PortListener } from './listener.ts';
+import type { MemoryEntry, MemoryScope } from './memory/format.ts';
+import type { MemoryRuntime } from './memory/index.ts';
 import {
   AGENT_SESSION,
   AgentControl,
@@ -117,6 +119,7 @@ export async function hostAgent(
     scoops?: HostScoops;
     skills?: SkillsRuntime;
     sprinkles?: SprinklesRuntime;
+    memory?: MemoryRuntime;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -139,7 +142,8 @@ export async function hostAgent(
       options.licks,
       options.scoops,
       options.skills,
-      options.sprinkles
+      options.sprinkles,
+      options.memory
     )
   );
   provider.provide(AgentTranscript, {
@@ -149,6 +153,8 @@ export async function hostAgent(
     views: mounted.views,
     commands: options.skills?.commands ?? replicatedState<Command[]>([]),
     sprinkles: options.sprinkles?.sprinkles ?? replicatedState<Sprinkle[]>([]),
+    memories: options.memory?.memories ?? replicatedState<MemoryEntry[]>([]),
+    memoryScopes: options.memory?.scopes ?? replicatedState<MemoryScope[]>([]),
   });
   provider.provide(AgentSettings, options.settings ?? noSettings);
   const host: ServerHost = {
@@ -172,6 +178,7 @@ export async function hostAgent(
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();
+      await options.memory?.close(context);
       await options.sprinkles?.close(context);
       await options.skills?.close(context);
       await options.scoops?.runtime.close(context);

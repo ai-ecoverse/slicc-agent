@@ -44,6 +44,7 @@ export interface CliOptions {
   alive?: (pid: number) => Promise<boolean>;
   now?: () => number;
   sprinkle?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
+  memory?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
 }
 
 export type Deps = CliOptions & { now: () => number; sync: SyncState };
@@ -244,6 +245,7 @@ async function spawnAsync(
       ...(chosen.thinking ? { thinking: chosen.thinking as never } : {}),
       ...(chosen.tools ? { tools: chosen.tools } : {}),
       prompts: given,
+      origin: request.cwd,
       fromAgent: who.fromAgent,
       request: request.id,
       limits: found.roles.limits,
@@ -442,6 +444,10 @@ async function dispatch(
     return deps.sprinkle
       ? deps.sprinkle(request.argv, who.id, context)
       : fail('sprinkles are not available in this agent');
+  if (request.as === 'memory')
+    return deps.memory
+      ? deps.memory(request.argv, who.id, context)
+      : fail('memory is not available in this agent');
   const first = request.argv[0] ?? '';
   const verb = VERBS[first];
   if (verb) return verb(deps, request, who, context);

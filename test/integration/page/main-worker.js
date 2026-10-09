@@ -14,6 +14,11 @@ faux.setResponses([
     .map((code) =>
       fauxAssistantMessage([fauxToolCall('codemode', { code })], { stopReason: 'toolUse' })
     ),
+  ...params.getAll('memory').map((args) =>
+    fauxAssistantMessage([fauxToolCall('memory_write', JSON.parse(args))], {
+      stopReason: 'toolUse',
+    })
+  ),
   ...params.getAll('answer').map((answer) => fauxAssistantMessage(answer)),
 ]);
 void runAgentWorker(self, {

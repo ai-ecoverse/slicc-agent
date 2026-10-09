@@ -165,7 +165,7 @@ Each scoop is owned by a background durable task, its **anchor**, so Stop in its
 - `agent --async …` (= `subagent spawn …`) starts a persistent scoop and prints its handle; only cones start them. `list [--agents]`, `status`, `rename`, `send [--follow-up]`, `wait [--timeout <s>] [--notify]` (30 s by default; `--notify` returns at once and brings the answers together in one `scoop-wait` lick) and `stop` manage them. From a scoop, `agent send parent "<note>"` posts a progress note to its cone as a lick, coalesced per scoop.
 - Options: `--name`, `--agent <role>`, `--model <provider/model>`, `--thinking <level>` or `--effort low|medium|high|max`, `--tools <a,b>` (or `auto`/`full`), `--read-only <paths>`, `--system-prompt[-file]`. `--schema-b64`, `--tools output`, `--session`, `--resume`, `--image`, `--no-escalate`, `--minimal` and `--usage` answer "not supported in SLICC yet".
 
-**Roles** are pi agent files: Markdown with a frontmatter subset (`name`, `description`, `tools`, `model`, `thinking`, …) and the role's prompt as the body, added to the scoop's instructions. The built-ins are `scout`, `worker`, `reviewer`, `oracle` and `delegate`. Later sources replace earlier ones by name: built-ins, then packages in the kernel's `node_modules` that name a folder in `pi-subagents.agents` or `pi.subagents.agents`, then `~/.pi/agent/agents/`. A project's `.pi/agents/` will count only in trusted folders, and folders can't be trusted yet. `~/.pi/agent/settings.json` can override roles (`subagents.agentOverrides`) and set the limits `subagents.maxLiveScoops` (16 live scoops per cone) and `subagents.maxPerTurn` (64 scoops started per cone turn), which the worker counts for both kinds.
+**Roles** are pi agent files: Markdown with a frontmatter subset (`name`, `description`, `tools`, `model`, `thinking`, `memory`, `inheritProjectContext`, `inheritGlobalContext`, …) and the role's prompt as the body, added to the scoop's instructions. The built-ins are `scout`, `worker`, `reviewer`, `oracle` and `delegate`. Later sources replace earlier ones by name: built-ins, then packages in the kernel's `node_modules` that name a folder in `pi-subagents.agents` or `pi.subagents.agents`, then `~/.pi/agent/agents/`. A project's `.pi/agents/` will count only in trusted folders, and folders can't be trusted yet. `~/.pi/agent/settings.json` can override roles (`subagents.agentOverrides`) and set the limits `subagents.maxLiveScoops` (16 live scoops per cone) and `subagents.maxPerTurn` (64 scoops started per cone turn), which the worker counts for both kinds.
 
 **Isolation, for now.** The file tools of a scoop write only under its folder and `/tmp`, plus the cwd of a v6-form call, and read those, their cone's working folder (`/home` by default) and `--read-only` paths; paths are normalized, `..` included, before the check. bash isn't confined, and the scoop is told so: the guard is a guardrail, not a boundary. A scoop's commands share one process group (see Bash and files on slicc-kernel), and stopping the scoop signals it, together with any group recorded for the scoop on an older kernel.
 
@@ -209,7 +209,7 @@ The worker watches the roots and reloads on change. A `skills` prompt section, g
 
 **v6 skills.** None of the 29 skills SLICC v6 ships runs here unchanged. They name v6 paths (`/shared`, `/workspace`) or commands this kernel doesn't have. By what they wait for:
 - **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`), `skill-authoring`, `sprinkles` and `welcome`.
-- **Memory (PR 14):** `memory`, `gelatiere`, `wiki` (needs its `wiki` CLI).
+- **Memory:** `memory` is rewritten here (below); its `status`, `log`, `curate` and `dream` and the curation ledger are not ported. `gelatiere` comes in PR 14c; `wiki` needs its `wiki` CLI.
 - **The freezer (PR 15):** `transcript-export`.
 - **The tray hub, upskill or the Install/Update panel:** `upgrade` (`upgrade apply`, bios#70), `handoff`, `slicc`, `ssh`, `cherry`.
 - **A browser and CDP:** `playwright-cli`, `computer`, `v86`.
@@ -237,6 +237,23 @@ The model can write a short JavaScript program that calls its tools, with the `c
 - **Overrides.** `runAgentWorker` takes `codemodeWasm` and `codemodeWorker` to override both, for bundled hosts.
 
 ||||||| parent of d578592 (wip: sprinkles)
+### Memory
+
+pi has no memory store or memory tool; its coding agent loads context files, and [pi-subagents](https://github.com/nicobailon/pi-subagents) gives a role a `MEMORY.md`. Both are ported here over `ExecutionEnv`.
+
+**Context files.** As in pi, `~/.pi/agent/AGENTS.md` and then one file per folder from `/` down to the working directory (the first of `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`) form the `project_context` section, read before every request. Only files inside `/home` (and a scoop's `/scoops` folder) load, after following links: files in mounted folders or other roots are user content from outside SLICC and wait for folder trust, so the section lists them as not loaded and why. A scoop with a role gets project files unless the role says `inheritProjectContext: false`, and the global file only with `inheritGlobalContext: true`, as in pi-subagents.
+
+**Memory files.** One `MEMORY.md` per scope, plain markdown: `## <section>`, `### <title>`, an optional `tag: user|feedback|project` line, then the body. Text outside a `###` is kept and shown as an entry named after its section.
+- `global`, shared: `~/.pi/agent/memory/MEMORY.md`;
+- a cone: `~/.pi/agent/memory/<cone id>/MEMORY.md`;
+- a role with `memory: { scope: user, path: <path> }`: `~/.pi/agent/agent-memory/<path>/MEMORY.md`, pi-subagents' layout, so role files move between the two; with `scope: project`, `<root>/.pi/agent-memory/<path>/MEMORY.md` under the nearest folder with `.pi` or `.git`, inside `/home`.
+
+The `memory` section, read before every request, holds the first 200 lines (at most 16 KB) of each file the agent sees, as reference data rather than instructions: a cone sees global and its own, a scoop global read-only and its role's. Changes show from the next request on.
+
+**`memory_write`** saves, replaces (same section and title) or removes one entry in the caller's own file, or in `global` for cones. Writes to a file are serialized and re-read the file, so edits by hand survive. A file holds 16 KB; a write over that must make it smaller. Anything that looks like a secret (API keys, tokens, `Authorization` values, private keys, `password=`, launch URLs with a `#key`) is redacted before it's written. A role with `memory` and write tools gets `memory_write` in its tool list.
+
+**The panel.** The transcript service adds `memories` and `memoryScopes`, and `AgentControl` `memorySave` and `memoryRemove`; `createAgentModel()` returns a `MemoryAdapter` for spectrum's `MemoryPort`, with `scopes()` (global, cones, roles) for its picker. `memory show [<scope>]` and `memory scopes` in bash print the same files, and the built-in `memory` skill teaches all of it.
+
 ### Sprinkles
 
 A sprinkle is a small HTML panel next to the chat. pi has nothing for this; it's SLICC's UI, rendered by slicc-spectrum (≥ 1.23) through its `SprinklePort`.

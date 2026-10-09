@@ -6,6 +6,7 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { Client, createClientServiceTransport } from '@earendil-works/pi-client';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import {
   AGENT_SESSION,
   AgentControl,
@@ -29,6 +30,8 @@ export interface AgentConnection {
   readonly views?: ReplicatedState<Record<string, ConversationView>>;
   readonly commands?: ReplicatedState<Command[]>;
   readonly sprinkles?: ReplicatedState<Sprinkle[]>;
+  readonly memories?: ReplicatedState<MemoryEntry[]>;
+  readonly memoryScopes?: ReplicatedState<MemoryScope[]>;
   readonly settings: AgentSettings;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
@@ -72,6 +75,8 @@ export async function connectAgent(
     views,
     commands,
     sprinkles,
+    memories,
+    memoryScopes,
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   await session.ready(context);
@@ -84,6 +89,8 @@ export async function connectAgent(
     views,
     commands,
     sprinkles,
+    memories,
+    memoryScopes,
     settings,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);

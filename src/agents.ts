@@ -7,6 +7,7 @@ import {
   type Tx,
 } from '@earendil-works/pi-durable';
 import { ConeDoc } from './cone.ts';
+import type { RoleMemory } from './memory/store.ts';
 
 export const FIRST_CONE = 'cone';
 
@@ -21,6 +22,9 @@ export type ScoopRecord = {
   conversation: number;
   anchor: number;
   role: string | null;
+  memory?: RoleMemory;
+  origin?: string;
+  context?: { project: boolean; global: boolean };
   kind: 'async' | 'sync';
   parent: string;
   depth: number;
