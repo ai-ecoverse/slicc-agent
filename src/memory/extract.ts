@@ -206,7 +206,12 @@ export function extractTask(
   });
 }
 
-export type Schedule = (conversation: number, tail: number, context: Context) => Promise<boolean>;
+export type Schedule = (
+  conversation: number,
+  tail: number,
+  context: Context,
+  cone?: string
+) => Promise<boolean>;
 
 export function compactionHook(schedule: Schedule) {
   return hook(CompactionTask, {
@@ -223,10 +228,12 @@ export function scheduler(
   task: ReturnType<typeof extractTask>,
   settings: (context: Context) => Promise<ExtractSettings>
 ): Schedule {
-  return async (conversation, tail, context) => {
+  return async (conversation, tail, context, cone) => {
     const host = await ready;
     const chosen = await settings(context);
-    const who = whoIs(host.agents.state(), conversation);
+    const who = cone
+      ? { kind: 'cone' as const, id: cone }
+      : whoIs(host.agents.state(), conversation);
     if (who.kind !== 'cone') return false;
     return host.harness.commit(async (tx) => {
       const doc = await tx.doc(ExtractDoc);

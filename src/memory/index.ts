@@ -18,7 +18,7 @@ export const IDLE_CHECK_MS = 60_000;
 export interface MemorySetup {
   extension: Extension;
   tools: readonly ToolRegistration[];
-  extract(conversation: number, tail: number, context: Context): Promise<boolean>;
+  extract(conversation: number, tail: number, context: Context, cone?: string): Promise<boolean>;
   attach(options: MemoryAttach, context: Context): Promise<MemoryRuntime>;
 }
 

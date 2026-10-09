@@ -25,7 +25,12 @@ export interface FreezerAttach {
   agents: Agents;
   env: Pick<ExecutionEnv, 'remove'>;
   title?: (transcript: string, model: string, context: Context) => Promise<string | undefined>;
-  extract?: (conversation: number, tail: number, context: Context) => Promise<unknown>;
+  extract?: (
+    conversation: number,
+    tail: number,
+    context: Context,
+    cone: string
+  ) => Promise<unknown>;
   now?: () => number;
 }
 
@@ -190,10 +195,11 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
   const prepare = async (
     conversation: Conversation,
     entries: readonly EntryRecord[],
+    cone: string,
     context: Context
   ) => {
     const tail = entries.at(-1)?.id ?? 0;
-    await options.extract?.(conversation.id, tail, context).catch(() => undefined);
+    await options.extract?.(conversation.id, tail, context, cone).catch(() => undefined);
   };
   const retitle = (
     id: string,
@@ -244,28 +250,29 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
       const conversation = await conversationOf(agentId, context);
       const { entries, record } = await snapshot(conversation, cone.name, now(), context);
-      await prepare(conversation, entries, context);
-      const scoops = Object.entries(agents.state().scoops)
-        .filter(([, scoop]) => scoop.cone === agentId && live(scoop))
-        .map(([id]) => id);
+      await prepare(conversation, entries, agentId, context);
       await conversation.abort(context, { background: true }).catch(() => undefined);
-      for (const id of scoops)
-        await (await agents.conversation(id, context))?.abort(context).catch(() => undefined);
       const next =
         agents.state().active === agentId ? await replacement(agentId, context) : undefined;
-      const id = await agents.update((_tx, doc) => {
+      const { id, scoops } = await agents.update((_tx, doc) => {
+        if (!doc.cones[agentId]) throw new Error(`There is no cone ${agentId}.`);
         const frozenId = `frozen-${doc.frozenNext ?? 1}`;
+        const owned = Object.entries(doc.scoops)
+          .filter(([, scoop]) => scoop.cone === agentId && live(scoop))
+          .map(([scoop]) => scoop);
         doc.frozenNext = (doc.frozenNext ?? 1) + 1;
         doc.frozen ??= {};
-        doc.frozen[frozenId] = { ...record, cone: agentId, scoops };
+        doc.frozen[frozenId] = { ...record, cone: agentId, scoops: owned };
         delete doc.cones[agentId];
-        for (const scoop of scoops) (doc.scoops[scoop] as { frozen?: string }).frozen = frozenId;
+        for (const scoop of owned) (doc.scoops[scoop] as { frozen?: string }).frozen = frozenId;
         if (next?.conversation) {
           doc.cones[next.id] = { name: record.name, conversation: next.conversation.id };
           doc.next += 1;
         }
-        return frozenId;
+        return { id: frozenId, scoops: owned };
       }, context);
+      for (const scoop of scoops)
+        await (await agents.conversation(scoop, context))?.abort(context).catch(() => undefined);
       if (next) await agents.selectCone(next.id, context);
       retitle(id, record.model, entries, context);
       return id;
@@ -274,10 +281,8 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       const cone = agents.state().cones[agentId];
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
       const conversation = await conversationOf(agentId, context);
-      const { entries, record } = await snapshot(conversation, cone.name, now(), context);
-      if (!entries.some((entry) => entry.kind === 'pi.user')) return null;
-      await prepare(conversation, entries, context);
-      await conversation.abort(context).catch(() => undefined);
+      const before = (await conversation.context(context)).entries;
+      if (!before.some((entry) => entry.kind === 'pi.user')) return null;
       const agent = await conversation.agent(context);
       const fresh = await harness.createConversation(
         {
@@ -293,6 +298,10 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
         },
         context
       );
+      await agents.setConversation(agentId, fresh, context);
+      await conversation.abort(context).catch(() => undefined);
+      const { entries, record } = await snapshot(conversation, cone.name, now(), context);
+      await prepare(conversation, entries, agentId, context);
       const id = await agents.update((_tx, doc) => {
         const frozenId = `frozen-${doc.frozenNext ?? 1}`;
         doc.frozenNext = (doc.frozenNext ?? 1) + 1;
@@ -300,14 +309,13 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
         doc.frozen[frozenId] = { ...record, cone: agentId, scoops: [] };
         return frozenId;
       }, context);
-      await agents.setConversation(agentId, fresh, context);
       retitle(id, record.model, entries, context);
       return id;
     },
     async thaw(id, context) {
-      const record = agents.state().frozen?.[id];
-      if (!record) throw new Error(`There is no frozen chat ${id}.`);
       const coneId = await agents.update((_tx, doc) => {
+        const record = doc.frozen?.[id];
+        if (!record) throw new Error(`There is no frozen chat ${id}.`);
         const reuse = !doc.cones[record.cone];
         const target = reuse ? record.cone : `cone-${doc.next}`;
         if (!reuse) doc.next += 1;
