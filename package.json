@@ -61,6 +61,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
+    "@ai-ecoverse/slicc-kernel": "1.23.0",
     "@ai-ecoverse/slicc-shared-web": "1.10.0",
     "@ai-ecoverse/slicc-spectrum": "1.37.0",
     "@ai-ecoverse/wasm-bash": "5.3.0-8",
@@ -76,7 +77,6 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.26.1",
     "@earendil-works/chord": "1.0.4",
     "@earendil-works/pi-ai": "1.0.4",
     "@earendil-works/pi-client": "1.0.4",
@@ -87,6 +87,7 @@
     "@sqlite.org/sqlite-wasm": "3.53.4-build2"
   },
   "peerDependencies": {
+    "@ai-ecoverse/slicc-kernel": ">=1.23.0 <2",
     "@ai-ecoverse/slicc-spectrum": "^1.34.0"
   },
   "peerDependenciesMeta": {

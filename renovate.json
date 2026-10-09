@@ -7,6 +7,16 @@
       "matchPackageNames": ["@earendil-works/**"],
       "automerge": false,
       "labels": ["patched-dependency"]
+    },
+    {
+      "description": "The kernel, pnpm, slicc-cdp and the wasm command packages move only after the homescoop coordinator certifies them, as in slicc-bios, so Renovate opens their PRs but never merges them.",
+      "matchPackageNames": [
+        "@ai-ecoverse/slicc-cdp",
+        "@ai-ecoverse/slicc-kernel",
+        "@ai-ecoverse/wasi-pnpm",
+        "@ai-ecoverse/wasm-*"
+      ],
+      "automerge": false
     }
   ]
 }

@@ -331,6 +331,10 @@ v6's `open`, `reload`, `close`, `send` and `chat` answer with what to do instead
 
 The built-in `sprinkles` skill teaches the files, the bridge and the command.
 
+## The kernel
+
+`@ai-ecoverse/slicc-kernel` is a peer dependency (`>=1.23.0 <2`): the agent only calls `attachKernel`, the client end of the page kernel's port, so it must match the kernel the page runs. Seven chooses that version: slicc-bios pins the certified kernel next to the agent in `src/packages/agent/package.json`, and pnpm fills the peer from that pin. The devDependency is the lowest certified kernel (1.23.0), and the unit and integration tests run on it, so CI tests the floor of the range. If the port protocol ever breaks within 1.x, a patch release narrows the upper bound. Renovate opens PRs for the kernel, `wasi-pnpm`, the `wasm-*` packages and `slicc-cdp` but never merges them, because they move only after the homescoop coordinator certifies them.
+
 ## Patched dependencies
 
 Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.json) lists each one with its `kind`, `package`, `patchedVersion`, `reason`, `removeWhen` and `verify` command, and an optional `marker` (a file in the package and a string it must contain):
