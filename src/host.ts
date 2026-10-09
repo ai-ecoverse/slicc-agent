@@ -132,6 +132,8 @@ export async function hostAgent(
   const transcript = await follow(agent, context);
   const { state } = transcript;
   const mounted = await agentViews(agent, context);
+  const touch = () => options.freezer?.touch();
+  const untouch = [state.subscribe(touch), mounted.views.subscribe(touch)];
   const provider = new RemoteServiceProvider([
     { service: AgentControl, mode: 'singleton' },
     { service: AgentTranscript, mode: 'singleton' },
@@ -188,6 +190,7 @@ export async function hostAgent(
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();
+      for (const off of untouch) off();
       options.freezer?.close();
       await options.changes?.close(context);
       await options.memory?.close(context);

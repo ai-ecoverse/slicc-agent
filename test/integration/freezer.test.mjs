@@ -20,6 +20,7 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
     const connection = await owner.connect();
     const model = createAgentModel(connection, { storage: localStorage });
     await model.agent.ready();
+    const frozenRows = () => model.agent.frozen().filter((row) => row.id.startsWith('frozen-'));
     const until = async (check) => {
       for (let n = 0; n < 200 && !(await check()); n++)
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -29,24 +30,28 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
     const scoop = await connection.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
     const other = await connection.control.createCone('other', BACKGROUND_CONTEXT);
     const frozen = await connection.control.freeze('cone', BACKGROUND_CONTEXT);
-    await until(() => model.agent.frozen().length === 1);
-    const listed = model.agent
-      .frozen()
-      .map(({ id, name, title, messages }) => ({ id, name, title, messages }));
+    await until(() => frozenRows().length === 1);
+    const listed = frozenRows().map(({ id, name, title, messages }) => ({
+      id,
+      name,
+      title,
+      messages,
+    }));
     const agentsWhileFrozen = connection.agents.value.agents.map((agent) => agent.id);
+    const kinds = model.agent.frozen().map(({ id, kind, live }) => `${id}:${kind}:${live}`);
     const thawed = model.agent.thaw(frozen.id);
     model.agent.select(thawed.id);
     await until(
       () =>
         connection.agents.value.agents.some((agent) => agent.id === 'cone') &&
-        model.agent.frozen().length === 0
+        frozenRows().length === 0
     );
     const answer = await connection.prompt('Still there?');
     const agentsAfterThaw = connection.agents.value.agents.map((agent) => agent.id);
     const second = await connection.control.freeze(other.id, BACKGROUND_CONTEXT);
-    await until(() => model.agent.frozen().length === 1);
+    await until(() => frozenRows().length === 1);
     model.agent.discard(second.id);
-    await until(() => model.agent.frozen().length === 0);
+    await until(() => frozenRows().length === 0);
     await owner.release();
     return {
       scoop: scoop.id,
@@ -55,6 +60,7 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
       agentsWhileFrozen,
       agentsAfterThaw,
       answer,
+      kinds,
     };
   });
   assert.equal(seen.frozen, 'frozen-1');
@@ -66,4 +72,8 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
   assert.deepEqual(seen.agentsWhileFrozen, ['cone-2']);
   assert.deepEqual(seen.agentsAfterThaw.sort(), ['cone', 'cone-2', seen.scoop].sort());
   assert.match(seen.answer, /^Answer \d\.$/);
+  assert.deepEqual(
+    seen.kinds.sort(),
+    ['cone-2:cone:true', 'frozen-1:cone:false', `${seen.scoop}:scoop:false`].sort()
+  );
 });

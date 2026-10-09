@@ -374,6 +374,19 @@ function rewound(id: string, entry: EntryRecord): SystemMessage {
   };
 }
 
+function thawed(id: string, entry: EntryRecord): SystemMessage {
+  const data = (entry.data ?? {}) as { name?: string; kind?: string };
+  const what = data.kind === 'agent' ? 'agent run' : 'scoop';
+  return {
+    id,
+    role: 'system',
+    kind: 'notice',
+    title: `Thawed from ${what} ${data.name ?? ''}`.trim(),
+    text: textOf(entry.model?.[0]?.content ?? ''),
+    createdAt: entry.model?.[0]?.timestamp ?? 0,
+  };
+}
+
 function entryMessage(
   entry: EntryRecord,
   out: Message[],
@@ -384,6 +397,7 @@ function entryMessage(
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
+  if (entry.kind === 'slicc.thawed') out.push(thawed(id, entry));
   else if (entry.kind === SPRINKLE_KIND) out.push(sprinkleMessage(id, entry));
   else if (entry.kind === 'pi.user' && model)
     out.push(
