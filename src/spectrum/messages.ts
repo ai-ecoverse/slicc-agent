@@ -353,7 +353,7 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
 }
 
 function rewound(id: string, entry: EntryRecord): SystemMessage {
-  const data = (entry.data ?? {}) as { stopped?: string[]; restored?: string[] };
+  const data = (entry.data ?? {}) as { stopped?: string[]; restored?: string[]; files?: boolean };
   const notes = [
     'Its prompt is back in the composer.',
     ...(data.stopped?.length
@@ -362,6 +362,7 @@ function rewound(id: string, entry: EntryRecord): SystemMessage {
     ...(data.restored?.length
       ? [`Restored ${data.restored.map((name) => `scoop ${name}`).join(', ')}.`]
       : []),
+    ...(data.files ? ['Changed files stay; use Changes or git to revert them.'] : []),
   ];
   return {
     id,

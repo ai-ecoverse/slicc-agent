@@ -67,13 +67,16 @@ export function systemSection(facts: SystemFacts): string {
     `You are SLICC's agent in seven: slicc-agent ${facts.version}, installed in /opt/agent. Your bash runs on the page's shared slicc-kernel, a WebAssembly sandbox in the user's browser, not on a server or the user's machine.`,
     "Files: / is the browser's private file system (OPFS). Work in /home and /tmp. /os and /opt are the system; change them only when asked.",
     `Commands on PATH: ${facts.commands.join(' ') || 'none found'}.`,
-    'Install command-line tools with `pnpm add -g <package>`. There is no ipk.',
+    "Install command-line tools with `pnpm add -g <package>`. There is no ipk. Tested packages that aren't preinstalled: `@ai-ecoverse/wasm-git` (git), `@ai-ecoverse/wasi-esbuild` (esbuild) and `@ai-ecoverse/wasi-typescript` (tsc, TypeScript 7).",
     `Network: requests go through ${facts.transport}. localhost and 127.0.0.1 are this sandbox's own loopback, not the user's computer.`,
     ...(facts.browser
       ? [
           "Browser: playwright-cli drives the user's own browser through the SLICC extension, with their logins. Read the browser skill before you use it.",
         ]
       : []),
+    facts.commands.includes('git')
+      ? 'Git: local repositories work (init, add, commit, status, diff, restore, branch, checkout, log). Clone, fetch and push over HTTPS need slicc-node or the SLICC extension; through the page alone they fail with a CORS or 502 error.'
+      : 'Git: not installed. When you need it, install it with `pnpm add -g @ai-ecoverse/wasm-git`.',
     `Not here yet: ${[...missing, ...(facts.browser ? [] : ['a browser or CDP tool']), 'GitHub credentials'].join(', ')}.`,
   ].join('\n');
 }

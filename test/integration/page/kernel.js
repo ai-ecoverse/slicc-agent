@@ -14,8 +14,8 @@ async function walk(path) {
   return dir;
 }
 
-export async function bootKernel() {
-  for (const [dir, names] of Object.entries(packages)) {
+export async function bootKernel(extra = {}) {
+  for (const [dir, names] of Object.entries({ ...packages, ...extra })) {
     for (const name of names) {
       const bytes = new Uint8Array(await (await fetch(`/${dir}${name}`)).arrayBuffer());
       const parts = `${dir}${name}`.split('/');

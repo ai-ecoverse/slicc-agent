@@ -1,11 +1,13 @@
 import type { AgentConnection } from '../client.ts';
 import { AgentAdapter } from './agent-port.ts';
+import { ChangesAdapter } from './changes-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { type Login, SettingsAdapter } from './settings-port.ts';
 import { SprinkleAdapter } from './sprinkle-port.ts';
 import { TrayAdapter } from './tray-port.ts';
 
 export { AgentAdapter, CONE } from './agent-port.ts';
+export { ChangesAdapter, type ChangesEvents } from './changes-port.ts';
 export { MemoryAdapter } from './memory-port.ts';
 export {
   assistant,
@@ -32,6 +34,7 @@ export function createAgentModel(
   tray: TrayAdapter;
   sprinkles: SprinkleAdapter;
   memory: MemoryAdapter;
+  changes: ChangesAdapter;
 } {
   const agent = new AgentAdapter(connection);
   return {
@@ -45,5 +48,6 @@ export function createAgentModel(
     tray: new TrayAdapter(connection.settings),
     sprinkles: new SprinkleAdapter(connection),
     memory: new MemoryAdapter(connection),
+    changes: new ChangesAdapter(connection),
   };
 }
