@@ -6,7 +6,8 @@
     "body": "Manage pull requests, issues and workflow runs from chat. Three of Sam's last five sessions opened GitHub by hand.",
     "evidence": "Sam told the welcome card they live in GitHub.",
     "skill": "github",
-    "install": "upskill example/skills --path skills/ --skill github",
+    "source": "https://raw.githubusercontent.com/example/skills/main/github/SKILL.md",
+    "install": "gelatiere install skill-github",
     "cones": ["cone"],
     "createdAt": 1791500000000
   },

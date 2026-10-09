@@ -17,6 +17,7 @@ export interface Suggestion {
   body: string;
   evidence?: string;
   skill?: string;
+  source?: string;
   install?: string;
   prompt?: string;
   url?: string;
@@ -29,7 +30,7 @@ export interface Suggestion {
 
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CONE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const INSTALL = /^upskill(?: [A-Za-z0-9@/._:=-]+)+$/;
+const SOURCE = /^https:\/\/[^\s"'<>]+\/SKILL\.md$/;
 
 function text(value: unknown, limit: number): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -46,10 +47,12 @@ export function validate(candidate: unknown): Suggestion | string {
   const title = text(item.title, 120);
   const body = text(item.body, 600);
   if (!title || !body) return `${id}: needs a title and a body`;
-  const install = typeof item.install === 'string' ? item.install.trim() : undefined;
-  if (install !== undefined && !INSTALL.test(install))
-    return `${id}: install must be an upskill command with plain arguments`;
-  if (item.kind === 'skill' && !install) return `${id}: a skill needs its install command`;
+  const skill = typeof item.skill === 'string' ? item.skill.trim() : undefined;
+  const source = typeof item.source === 'string' ? item.source.trim() : undefined;
+  if (item.kind === 'skill' && (!skill || !ID.test(skill)))
+    return `${id}: a skill needs its name (a-z, 0-9, -)`;
+  if (item.kind === 'skill' && (!source || !SOURCE.test(source)))
+    return `${id}: a skill needs its source, an https URL of its SKILL.md`;
   const url = typeof item.url === 'string' ? item.url.trim() : undefined;
   if (url !== undefined && !/^https:\/\/[^\s"'<>]+$/.test(url)) return `${id}: url must be https`;
   const cones = Array.isArray(item.cones)
@@ -57,16 +60,16 @@ export function validate(candidate: unknown): Suggestion | string {
     : [];
   if (cones.some((cone) => !CONE.test(cone))) return `${id}: cones must be cone ids`;
   const evidence = text(item.evidence, 300);
-  const skill = text(item.skill, 80);
   const prompt = text(item.prompt, 1000);
+  const installs =
+    item.kind === 'skill' ? { skill, source, install: `gelatiere install ${id}` } : {};
   return {
     id,
     kind: item.kind as Kind,
     title,
     body,
     ...(evidence ? { evidence } : {}),
-    ...(skill ? { skill } : {}),
-    ...(install ? { install } : {}),
+    ...installs,
     ...(prompt ? { prompt } : {}),
     ...(url ? { url } : {}),
     cones,
