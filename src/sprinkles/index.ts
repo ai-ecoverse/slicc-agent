@@ -23,6 +23,7 @@ import {
   SUGGESTIONS_STORE,
   sprinkleFiles,
   WELCOME,
+  WELCOME_PROFILE,
   WELCOMED,
 } from './sprinkles.ts';
 
@@ -220,8 +221,15 @@ export function setupSprinkles() {
           const sprinkle = find(id);
           if (!sprinkle) return { delivered: false };
           if (await options.intercept?.(id, payload, using)) return { delivered: true };
-          if (id === WELCOME && payload.action === 'onboarding-complete')
+          if (id === WELCOME && payload.action === 'onboarding-complete') {
             await env.writeFile(WELCOMED, `${new Date().toISOString()}\n`, using);
+            if (payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data))
+              await env.writeFile(
+                WELCOME_PROFILE,
+                `${JSON.stringify(payload.data, null, 2)}\n`,
+                using
+              );
+          }
           await licks.deliver(
             {
               channel: 'sprinkle',

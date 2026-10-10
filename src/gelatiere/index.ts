@@ -5,6 +5,21 @@ import type { Licks } from '../licks/licks.ts';
 import type { Roles } from '../roles/roles.ts';
 import type { Scoops } from '../scoops/service.ts';
 import { skillFromText } from '../skills/skills.ts';
+import {
+  CATALOG_BASE,
+  CATALOG_DIR,
+  type Fetcher,
+  merge,
+  PROFILE,
+  type Profile,
+  parseSkills,
+  parseUseCases,
+  profileOf,
+  type Sheet,
+  score,
+  sheet,
+  slugifyCompany,
+} from './catalog.ts';
 import { fold, open, readStore, STORE, type Suggestion, validate, writeStore } from './store.ts';
 
 export type Answer = { code: number; out: string };
@@ -23,6 +38,8 @@ export interface GelatiereAttach {
   roles: (context: Context) => Promise<Roles>;
   assets?: (path: string) => Promise<string>;
   now?: () => number;
+  fetch?: Fetcher;
+  catalog?: string;
 }
 
 export interface GelatiereRuntime {
@@ -35,6 +52,8 @@ export const USAGE = `usage:
   gelatiere run             ask the gelatiere for a pass now
   gelatiere suggest <file>  fold a JSON array of suggestions into the store
   gelatiere deliver         lick each cone with the suggestions that are new for it
+  gelatiere catalog [--refresh] [--all] [--json]
+                            rank the www.sliccy.com skill and use-case catalog for this user
   gelatiere install <id>    install a suggested skill with upskill into ~/.pi/agent/skills
   gelatiere list [--all] [--json]
   gelatiere dismiss <id>    mark a suggestion as not wanted
@@ -207,23 +226,35 @@ async function deliver(g: G, context: Context): Promise<Answer> {
 
 export const INSTALLER = 'https://raw.githubusercontent.com/ai-ecoverse/gh-upskill/main/install.sh';
 
-export function upskillScript(repo: string, skill: string): string {
+export function upskillScript(
+  repo: string,
+  skill: string | undefined,
+  where: { path?: string; all?: boolean } = {}
+): string {
+  const from = where.path ? ` --path '${where.path}'` : '';
+  const which = where.all ? ' --all' : ` --skill '${skill}'`;
   return [
     'bin="${PNPM_HOME:-$HOME/.local/share/pnpm}/bin"',
     `{ command -v upskill >/dev/null 2>&1 || curl -fsSL ${INSTALLER} | bash -s -- --bin-dir "$bin"; }`,
-    `upskill '${repo}' --skill '${skill}' --dest-path "$HOME/.pi/agent/skills"`,
+    `upskill '${repo}'${from}${which} --dest-path "$HOME/.pi/agent/skills"`,
   ].join(' && ');
 }
 
-async function installed(env: ExecutionEnv, home: string, skill: string, context: Context) {
+async function skillsIn(
+  env: ExecutionEnv,
+  home: string,
+  context: Context
+): Promise<Map<string, string>> {
   const root = `${home}/.pi/agent/skills`;
+  const found = new Map<string, string>();
   const listed = await env.listDir(root, context);
   for (const info of listed.ok ? listed.value : []) {
     const path = `${root}/${info.name}/SKILL.md`;
     const read = await env.readTextFile(path, context);
-    if (read.ok && skillFromText(read.value, path, 'user').skills[0]?.name === skill) return path;
+    const name = read.ok ? skillFromText(read.value, path, 'user').skills[0]?.name : undefined;
+    if (name) found.set(name, path);
   }
-  return undefined;
+  return found;
 }
 
 async function install(g: G, id: string, context: Context): Promise<Answer> {
@@ -231,25 +262,139 @@ async function install(g: G, id: string, context: Context): Promise<Answer> {
   const item = (await g.load(context)).find((entry) => entry.id === id && entry.kind === 'skill');
   const checked = item ? validate(item) : `there is no skill suggestion ${id}`;
   if (typeof checked === 'string') return fail(checked);
-  const { skill, repo } = checked as Required<Pick<Suggestion, 'skill' | 'repo'>>;
-  const before = await installed(env, home, skill, context);
-  if (before) return fail(`${skill} is already installed in ${before}`);
+  const { skill, repo, path, all } = checked as Suggestion & { repo: string };
+  const what = all ? `the skills${path ? ` in ${path}` : ''}` : (skill as string);
+  const before = await skillsIn(env, home, context);
+  const existing = skill ? before.get(skill) : undefined;
+  if (!all && existing) return fail(`${skill} is already installed in ${existing}`);
   const lines: string[] = [];
   const ran = await env.exec(
-    upskillScript(repo, skill),
+    upskillScript(repo, skill, { ...(path ? { path } : {}), ...(all ? { all } : {}) }),
     { cwd: home, onOutput: (text) => void lines.push(text) },
     context
   );
   const output = lines.join('').trim().split('\n').slice(-8).join('\n');
-  const path = await installed(env, home, skill, context);
-  if (!ran.ok || ran.value.exitCode !== 0 || !path)
+  const after = await skillsIn(env, home, context);
+  const added = all
+    ? [...after].filter(([name, at]) => before.get(name) !== at)
+    : [...after].filter(([name]) => name === skill);
+  if (!ran.ok || ran.value.exitCode !== 0 || !added.length)
     return fail(
-      `upskill couldn't install ${skill} from github.com/${repo}${output ? `:\n${output}` : ''}`
+      `upskill couldn't install ${what} from github.com/${repo}${output ? `:\n${output}` : ''}`
     );
   await g.mark(id, 'takenAt', context);
+  const names = added.map(([name]) => name).sort();
   return {
     code: 0,
-    out: `installed ${skill} in ${path}; it is /skill:${skill} once the skills reload\n`,
+    out: all
+      ? `installed ${names.join(', ')} in ${home}/.pi/agent/skills; ${names.map((name) => `/skill:${name}`).join(', ')} once the skills reload\n`
+      : `installed ${skill} in ${added[0]?.[1]}; it is /skill:${skill} once the skills reload\n`,
+  };
+}
+
+interface Candidate {
+  id: string;
+  kind: 'skill' | 'use-case';
+  title: string;
+  body: string;
+  evidence: string;
+  score: number;
+  skill?: string;
+  repo?: string;
+  path?: string;
+  all?: boolean;
+  prompt?: string;
+  skills?: string[];
+}
+
+async function profileFor(g: G, context: Context): Promise<Profile | undefined> {
+  const read = await g.options.env.readTextFile(`${g.options.home}/${PROFILE}`, context);
+  if (!read.ok) return undefined;
+  try {
+    return profileOf(JSON.parse(read.value));
+  } catch {
+    return undefined;
+  }
+}
+
+function sourceLine(label: string, found: Sheet): string {
+  const at = found.fetchedAt ? `, fetched ${new Date(found.fetchedAt).toISOString()}` : '';
+  return `${label}: ${found.state} (${found.url}${at})`;
+}
+
+async function catalog(g: G, argv: readonly string[], context: Context): Promise<Answer> {
+  const { env, home } = g.options;
+  const base = g.options.catalog ?? CATALOG_BASE;
+  const fetcher: Fetcher = g.options.fetch ?? ((url, init) => globalThis.fetch(url, init));
+  const options = { env, fetcher, now: g.now(), refresh: argv.includes('--refresh') };
+  const profile = await profileFor(g, context);
+  const slug = slugifyCompany(profile?.company);
+  const company = slug && !['catalog', 'use-cases'].includes(slug) ? slug : null;
+  const [global, own, cases] = await Promise.all([
+    sheet(options, `${base}catalog.json`, `${CATALOG_DIR}/catalog.json`, context),
+    company
+      ? sheet(options, `${base}${company}.json`, `${CATALOG_DIR}/company-${company}.json`, context)
+      : undefined,
+    sheet(options, `${base}use-cases.json`, `${CATALOG_DIR}/use-cases.json`, context),
+  ]);
+  const store = await g.load(context);
+  const closed = new Set(store.filter((item) => item.dismissedAt || item.takenAt).map((i) => i.id));
+  const have = await skillsIn(env, home, context);
+  const evidence = (reasons: string[]) =>
+    `www.sliccy.com catalog: ${reasons.length ? reasons.join(', ') : 'featured'}`;
+  const skills: Candidate[] = merge(parseSkills(global.rows), parseSkills(own?.rows ?? []))
+    .filter((entry) => !entry.skill || !have.has(entry.skill))
+    .map((entry) => {
+      const ranked = score(entry, profile);
+      return {
+        id: `catalog-${entry.name}`,
+        kind: 'skill',
+        title: entry.title,
+        body: entry.description || entry.title,
+        evidence: evidence(ranked.reasons),
+        score: ranked.score,
+        ...(entry.skill ? { skill: entry.skill } : {}),
+        repo: entry.repo,
+        ...(entry.path ? { path: entry.path } : {}),
+        ...(entry.all ? { all: true } : {}),
+      };
+    });
+  const uses: Candidate[] = parseUseCases(cases.rows).map((entry) => {
+    const ranked = score(entry, profile);
+    return {
+      id: `catalog-use-${entry.name}`,
+      kind: 'use-case',
+      title: entry.title,
+      body: entry.description || entry.title,
+      evidence: evidence(ranked.reasons),
+      score: ranked.score,
+      prompt: entry.prompt,
+      ...(entry.skills.length ? { skills: entry.skills } : {}),
+    };
+  });
+  const all = argv.includes('--all');
+  const ranked = [...skills, ...uses]
+    .filter((item) => !closed.has(item.id) && (all || item.score > 0))
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  const sources = [
+    sourceLine('skills', global),
+    ...(own ? [sourceLine(`company ${company}`, own)] : []),
+    sourceLine('use cases', cases),
+  ];
+  const who = profile
+    ? `profile: ${home}/${PROFILE} (${[profile.role, profile.purpose].filter(Boolean).join(', ') || 'empty'})`
+    : `profile: none (${home}/${PROFILE}); ranked by boost only`;
+  if (argv.includes('--json'))
+    return {
+      code: 0,
+      out: `${JSON.stringify({ sources, profile: Boolean(profile), candidates: ranked }, null, 2)}\n`,
+    };
+  const rows = ranked.map(
+    (item) => `${item.score}\t${item.id}\t${item.kind}\t${item.title}\t${item.evidence}`
+  );
+  return {
+    code: 0,
+    out: `${[...sources, who, ...(rows.length ? rows : ['no catalog entries match'])].join('\n')}\n`,
   };
 }
 
@@ -290,6 +435,7 @@ const VERBS: Record<string, (g: G, argv: readonly string[], context: Context) =>
     suggest: (g, argv, context) => g.serial(() => suggest(g, argv[1], context)),
     deliver: (g, _argv, context) => g.serial(() => deliver(g, context)),
     install: (g, argv, context) => install(g, argv[1] ?? '', context),
+    catalog: (g, argv, context) => catalog(g, argv, context),
     list: (g, argv, context) => list(g, argv, context),
     status: (g, _argv, context) => status(g, context),
     dismiss: (g, argv, context) => dismiss(g, argv[1] ?? '', context),

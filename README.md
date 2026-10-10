@@ -209,7 +209,7 @@ The worker watches the roots and reloads on change. A `skills` prompt section, g
 
 **v6 skills.** None of the 29 skills SLICC v6 ships runs here unchanged. They name v6 paths (`/shared`, `/workspace`) or commands this kernel doesn't have. By what they wait for:
 - **Rewritten here:** `delegation` (now the `agent` skill), `automation` (now `licks`), `skill-authoring`, `sprinkles`, `welcome` and `transcript-export` (now `freezer show`).
-- **Memory:** `memory` is rewritten here (below); its `status`, `log`, `curate` and `dream` and the curation ledger are not ported. `gelatiere` is rewritten here (below), without `use-cases` and the www.sliccy.com catalog; `wiki` needs its `wiki` CLI.
+- **Memory:** `memory` is rewritten here (below); its `status`, `log`, `curate` and `dream` and the curation ledger are not ported. `gelatiere` is rewritten here (below), reading v6's www.sliccy.com catalog; `wiki` needs its `wiki` CLI.
 - **The tray hub, upskill or the Install/Update panel:** `upgrade` (`upgrade apply`, bios#70), `handoff`, `slicc`, `ssh`, `cherry`.
 - **A browser and CDP:** `playwright-cli` is rewritten as the `browser` skill (below); `computer` and `v86` don't apply.
 - **v6's JS realm, `.jsh` and `ipk` (slicc-kernel#68):** `jshd`, `mcp`, `workflows`, `package-execution`, `biome`, `ffmpeg`.
@@ -262,9 +262,16 @@ The `memory` section, read before every request, holds the first 200 lines (at m
   - at most 50 open;
   - dismissed and taken ids are never reopened.
 - `gelatiere deliver` sends each cone named in a suggestion's `cones` (or the first cone) one `sprinkle` lick with the action `gelatiere-suggestions`. The built-in `gelatiere` skill answers it with `sprinkle show suggestions`, and looks ids up in the store before installing or trying anything.
-- `gelatiere install <id>` is what a card's Install leads to. It installs [upskill](https://github.com/ai-ecoverse/gh-upskill) if it's missing (`command -v upskill || curl -fsSL …/install.sh | bash`, into `$PNPM_HOME`), runs `upskill <repo> --skill <name> --dest ~/.pi/agent/skills`, checks that the skill is there for the skills loader, and marks the suggestion taken. It refuses a skill that's already installed. In seven, upskill reaches GitHub through the page's fetch, which `raw.githubusercontent.com` and `api.github.com` allow with CORS; `GITHUB_TOKEN` raises GitHub's rate limit. Before anyone clicks, the card shows where the skill comes from: "Installs github from github.com/example/skills".
+- `gelatiere install <id>` is what a card's Install leads to. It installs [upskill](https://github.com/ai-ecoverse/gh-upskill) if it's missing (`command -v upskill || curl -fsSL …/install.sh | bash`, into `$PNPM_HOME`), runs `upskill <repo> [--path <folder>] (--skill <name> | --all) --dest-path ~/.pi/agent/skills`, checks that the skill (or, with `all`, at least one new skill) is there for the skills loader, and marks the suggestion taken. It refuses a single skill that's already installed. A `skill` suggestion may carry `path` (a folder in the repo) and `all: true` instead of `skill`. In seven, upskill reaches GitHub through the page's fetch, which `raw.githubusercontent.com` and `api.github.com` allow with CORS; `GITHUB_TOKEN` raises GitHub's rate limit. Before anyone clicks, the card shows where the skill comes from: "Installs github from github.com/example/skills".
 - `gelatiere run`, `list [--all] [--json]`, `dismiss <id>` and `status` complete the command.
-- The gelatiere doesn't read the www.sliccy.com skill catalog or use-case pages, and doesn't consolidate other agents' memory, which only cones and the user write.
+- `gelatiere catalog [--refresh] [--all] [--json]` reads v6's catalog: `https://www.sliccy.com/skills/catalog.json`, the company's `<slug>.json` and the optional `use-cases.json`. Each is the Edge Delivery sheet shape `{ data: [rows] }` with string fields.
+  - Skill rows have `name`, `displayName`, `description`, `repo`, `path`, `skill`, `installAll`, the affinity lists `apps`, `tasks`, `role` and `purpose`, and `boost`. Use-case rows have `name`, `displayName`, `description`, `prompt`, `skills`, the same affinity lists and `boost`.
+  - It ranks rows as v6 does (apps ×3, tasks ×2, role +1, purpose +1, all times `boost`; rows that score 0 are dropped unless `--all`) against the welcome profile, which the welcome card's `onboarding-complete` writes to `/home/.welcome.json`. Without a profile the ranking is `boost` alone.
+  - The company slug is v6's `slugifyCompany` of the profile's `company`; company rows replace global ones of the same `name`.
+  - Installed skills and dismissed or taken ids (`catalog-<name>`, `catalog-use-<name>`) are left out. `--json` prints candidates the gelatiere can pass to `gelatiere suggest` as they are.
+  - Each file is cached in `/home/.gelatiere/catalog/` and fetched again after 12 hours or with `--refresh`, through the agent's fetch (the kernel transport). A 404 is cached as empty. Offline or on an error the cached copy is used, and with none the pass goes on without a catalog.
+  - www.sliccy.com must send `Access-Control-Allow-Origin` for `/skills/*.json` for the plain browser transport; the extension, slicc-node and the proxy routes don't need it. `runAgentWorker({ catalog })` changes the base URL.
+- The gelatiere doesn't consolidate other agents' memory, which only cones and the user write.
 
 **The panel.** The transcript service adds `memories` and `memoryScopes`, and `AgentControl` `memorySave` and `memoryRemove`; `createAgentModel()` returns a `MemoryAdapter` for spectrum's `MemoryPort`, with `scopes()` (global, cones, roles) for its picker. `memory show [<scope>]` and `memory scopes` in bash print the same files, and the built-in `memory` skill teaches all of it.
 
@@ -360,7 +367,7 @@ A sprinkle is a small HTML panel next to the chat. pi has nothing for this; it's
 v6's `open`, `reload`, `close`, `send` and `chat` answer with what to do instead.
 
 **Shipped sprinkles.** Only `welcome` and `suggestions`, with slicc-spectrum's reviewed copy.
-- **Welcome.** The worker posts it inline in the first cone's chat once per session. Its `onboarding-complete` send writes `/home/.welcomed`, which the card checks, and the built-in `welcome` skill answers the lick.
+- **Welcome.** The worker posts it inline in the first cone's chat once per session. Its `onboarding-complete` send writes `/home/.welcomed`, which the card checks, and the profile to `/home/.welcome.json` for the gelatiere's catalog ranking, and the built-in `welcome` skill answers the lick.
 - **Suggestions.** It's listed once the gelatiere's store `/home/.gelatiere/suggestions.json` exists, and owned by the active cone. Its `gelatiere-dismiss` send marks the suggestion in the store and never reaches an agent; `gelatiere-install` and `gelatiere-try` mark it taken and go to the owner as licks. Its `exec` for use cases is refused, so it shows its static empty state.
 
 The built-in `sprinkles` skill teaches the files, the bridge and the command.

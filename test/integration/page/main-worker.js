@@ -31,4 +31,7 @@ void runAgentWorker(self, {
   credentials: () => EncryptedCredentialStore.open('integration-credentials'),
   storage: async () => new MemoryStorage(),
   codemodeWorker: new URL('./codemode-worker.js', import.meta.url),
+  ...(params.get('catalog')
+    ? { catalog: new URL(params.get('catalog'), self.location.href).href }
+    : {}),
 });
