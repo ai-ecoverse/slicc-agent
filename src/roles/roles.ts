@@ -43,6 +43,17 @@ const TOOLS: Record<string, string> = {
 
 const WRITERS = new Set(['write', 'edit', 'bash']);
 
+const PASSED = new Set([
+  'codemode',
+  'list_mcp_resources',
+  'list_mcp_resource_templates',
+  'read_mcp_resource',
+]);
+
+function passThrough(name: string): boolean {
+  return PASSED.has(name) || /^mcp__[A-Za-z0-9_*]+$/.test(name);
+}
+
 const THINKING = new Set<string>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 
 const APPLIED = new Set([
@@ -84,7 +95,7 @@ function list(value: FrontmatterValue | undefined): string[] {
 function tools(names: string[], where: string, warnings: string[]): string[] {
   const mapped: string[] = [];
   for (const name of names) {
-    const tool = TOOLS[name];
+    const tool = TOOLS[name] ?? (passThrough(name) ? name : undefined);
     if (tool) {
       if (!mapped.includes(tool)) mapped.push(tool);
     } else warnings.push(`${where}: tool "${name}" isn't available in SLICC; it's left out`);

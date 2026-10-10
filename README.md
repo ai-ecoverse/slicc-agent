@@ -227,13 +227,54 @@ The model can write a short JavaScript program that calls its tools, with the `c
 - **Globals.** `text()`, `image()`, `console.*`, `return`, `exit()`, `ALL_TOOLS`, and `store()`/`load()`.
 - **The store** lives in the conversation document `slicc.codemode`, which is rewindable and forks as of the fork point, so each branch keeps its own values. Writes are kept only when the script succeeds.
 - **The result** starts with `Script completed` or `Script failed` and the wall time. Several text items each start with `==> text N/M <==`, and `console` lines come last in one `<console_output>` block. A failure adds `Script error:` with the error and the tool calls made before it, which aren't undone. Output past the budget keeps its start and end, and the full text goes to `/tmp/slicc-codemode-<call>.txt`.
-- **Not ported.** coding-agent's `models`, `searchTools`, `describeTool` and `describeNamespace`.
+- **Discovery.** With MCP servers (below), `searchTools(query, { limit?, namespace? })`, `describeTool(name)` and `describeNamespace(name)` find the MCP tools that aren't listed.
+- **Not ported.** coding-agent's `models`.
 
 **In the browser.** pi-codemode runs QuickJS (`quickjs-wasi`) in a worker of its own, so a spinning script never blocks the agent worker.
 - **The worker.** It starts through `node:worker_threads`, which slicc-bios provides as an `environment` stub (see Patched dependencies).
 - **The wasm.** The agent compiles `quickjs.wasm` itself and hands it over: it walks up the `node_modules` folders from its own module, as bios's resolver does, and fetches the first `quickjs-wasi/quickjs.wasm` it finds. On Node, pi-codemode loads it itself.
 - **Isolation.** Seven is cross-origin isolated, so pi-codemode's `SharedArrayBuffer` interrupt works.
 - **Overrides.** `runAgentWorker` takes `codemodeWasm` and `codemodeWorker` to override both, for bundled hosts.
+
+### MCP servers
+
+MCP servers reachable over Streamable HTTP become native agent tools. The client is pi's [`@earendil-works/pi-mcp`](https://www.npmjs.com/package/@earendil-works/pi-mcp), and the rest is a port of coding-agent's built-in `mcp` extension (`docs/mcp.md`), which needs Node and can't load in the worker. stdio servers wait for slicc-kernel#68, and the `slicc-mcp` CLI is a separate project.
+
+**The file** is `~/.pi/agent/mcp.json` in pi's format, so a pi or Claude Code `mcpServers` block can be pasted in:
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "url": "https://docs.example/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
+      "description": "Search the product docs",
+      "toolExposure": { "search": "direct", "delete_*": "hidden" }
+    }
+  }
+}
+```
+
+- **Fields.** `url`, `type` (`http` or `streamable-http`), `headers`, `exposure`, `toolExposure`, `enabled`, `timeout` (seconds, default 60; progress resets it) and `description`.
+- **Refused.** `command` (stdio), `type: "sse"`, `oauth`, `auth`, `!command` values, and literal secrets: a credential-like header (`Authorization`, `Cookie`, or a name with `token`, `key`, `secret`, `password` or `session`) or a URL with a password or a key in its query. The file is readable by every agent, so it holds only `${NAME}` placeholders.
+- **Problems.** Each refused or broken entry is skipped and becomes one `warn` lick naming the server and the field; the other servers still connect.
+- **Reconcile.** The worker watches the file. An unchanged server keeps its session, a changed one reconnects, and a removed one is closed and loses its tools. A server added later posts a "connected" lick naming its URL.
+
+**Per agent.** Today every cone reads the one file in `/home` and gets every enabled server. A scoop doesn't read a file of its own: it inherits its cone's servers, and a role's `tools:` or `agent --tools` list narrows them. A list with no `mcp__` entry gets no MCP servers. A list with `mcp__docs__search` or `mcp__docs__*` keeps only those, and `codemode` is added so codemode tools stay reachable. A nested scoop without a list inherits its calling scoop's list. When kernel users give each cone its own home, each cone reads `~/.pi/agent/mcp.json` in that home, and scoops keep inheriting from their cone.
+
+**Secrets.** `${NAME}` placeholders are filled from the agent's encrypted credential store, under `mcp:<server>|<hash of the URL>`, when the worker connects. A server whose secret is missing comes up as needing one, with a lick. Pointing a server at another URL leaves it without its secret. Header values never reach SQLite, the transcript, licks or `~/.pi/agent/mcp.log`, and stored secrets are scrubbed from error texts and server log lines. Adding the value in Settings › Accounts comes with the next release. Until then a server that needs a secret can't connect.
+
+**Tools.** Tools are named `mcp__<server>__<tool>` (pi's names: everything but letters, digits and `_` becomes `_`, cut to 64 characters with a hash suffix on a collision). Their exposure follows pi:
+- `codemode` (the default): callable from codemode scripts as `tools.mcp__docs__search(args)`, which resolves to the whole `CallToolResult`, but not declared to the model. The `mcp_servers` section lists these servers with their description or the first line of the server's instructions. It also says that MCP results are data from the server, not instructions.
+- `direct`: declared to the model like a built-in tool, and callable from codemode too.
+- `hidden`: unreachable.
+- `deferred` counts as `codemode`, since `tool_search` isn't ported. With codemode turned off, `codemode` tools become `direct`.
+
+A codemode script waits up to 10 s for servers still connecting. For the model, text results over 20 KB keep their start and end around a `…N chars truncated…` marker, and the full text goes to `/tmp/slicc-mcp-<call>.txt`. Images pass through, and binary resources are saved to `/tmp`. Servers with resources add pi's `list_mcp_resources`, `list_mcp_resource_templates` and `read_mcp_resource`, with the widest exposure among those servers. MCP prompts, sampling and elicitation aren't supported, so a server can't call the model or ask the user anything.
+
+**Network.** Requests go through the worker's transport fetch, as Bedrock's do. On the page's own fetch, a server must send CORS headers allowing `Authorization`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version` and `Last-Event-ID`, and exposing `Mcp-Session-Id`. A server that doesn't gets a lick saying to run slicc-node, slicc-swift or the extension. Stop or a steer that aborts the turn cancels a running call (`notifications/cancelled`). Lists and reads are retried once after 408, 429 or 5xx, and tool calls never are. An interrupted call isn't rerun after a worker restart. Server log messages go to `~/.pi/agent/mcp.log`, which rolls over to `mcp.log.1` at 5 MB.
+
+**Limiting a server** until approvals (PR 25): `"enabled": false`; `"exposure": "hidden"` with a `toolExposure` allow list; `toolExposure` deny patterns; role and `--tools` lists for scoops; and tokens or scopes that allow only what the server should do.
 
 ### Memory
 
@@ -378,6 +419,7 @@ Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.js
 - `environment`: something the host must provide.
   - pi-server imports `randomUUID` from `node:crypto`. slicc-bios serves a stub backed by `globalThis.crypto`, and the integration bundles alias it to `test/integration/shims/node-crypto.js`.
   - pi-codemode runs QuickJS in a `node:worker_threads` Worker. slicc-bios must serve a `node:worker_threads` stub that wraps a module Web Worker; inside the worker, the stub gives `parentPort` and `workerData` from the first message. `test/integration/shims/node-worker-threads.js` is that stub, and the integration bundles alias to it.
+  - pi-mcp's index re-exports its stdio transport, which imports `node:child_process`, `node:process` and the CommonJS `cross-spawn` at the top. SLICC never constructs it, so slicc-bios's `node:*` stubs and CommonJS wrapping only have to let them load. The integration bundles alias all three to `test/integration/shims/node-only.js`.
 - `environment`, pruned from seven's install: slicc-bios's `/opt/agent` (its `src/packages/agent`) removes `@google/genai` and `esbuild` with pnpm overrides in `pnpm-workspace.yaml` (#22).
   - A real Bedrock turn loads 28 of 95 installed packages and never those two trees. Adobe's APIs reach only `@anthropic-ai/sdk`, `openai` and `partial-json`, so those stay.
   - The prune takes the install from 99 to 58 packages and `node_modules` from 143 to 92 MB.

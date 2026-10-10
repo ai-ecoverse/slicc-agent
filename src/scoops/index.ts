@@ -39,6 +39,7 @@ export interface AttachOptions {
   memory?: CliOptions['memory'];
   gelatiere?: CliOptions['gelatiere'];
   freezer?: CliOptions['freezer'];
+  mcp?: (names: readonly string[]) => ToolRegistration[];
 }
 
 export interface ScoopsRuntime {
@@ -112,6 +113,7 @@ export function setupScoops(
         groups,
         reads: options.reads,
         files: env,
+        ...(options.mcp ? { mcp: options.mcp } : {}),
       });
       const builtin = async () => {
         const out: { path: string; text: string }[] = [];

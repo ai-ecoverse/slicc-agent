@@ -15,6 +15,7 @@ import {
   renderDeclarations,
 } from '@earendil-works/pi-codemode';
 import {
+  type Agent,
   defineDoc,
   defineExtension,
   defineTool,
@@ -47,9 +48,15 @@ export interface Sandbox {
 
 export type SandboxFactory = (options: CodemodeSandboxOptions) => Sandbox;
 
+export interface CodemodeExtra {
+  tools: CodemodeTool[];
+  globals: CodemodeTool[];
+}
+
 export interface CodemodeOptions {
   sandbox: SandboxFactory;
   declared: readonly ToolRegistration[];
+  extra?: (api: ToolExecutionApi, agent: Agent, context: Context) => Promise<CodemodeExtra>;
 }
 
 const INTRO = `Run JavaScript that calls other tools. The input is raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
@@ -62,6 +69,9 @@ const GLOBALS = [
   '- `store(key, value)` and `load(key)` keep JSON values across codemode calls in this conversation.',
   '- `ALL_TOOLS` lists every tool scripts can call.',
 ].join('\n');
+
+const DISCOVERY =
+  '- `await searchTools(query, { limit?, namespace? })`, `await describeTool(name)`, `await describeNamespace(name)`: find unlisted tools, such as MCP tools.';
 
 const BASH_OUTPUT: CodemodeJsonSchema = {
   type: 'object',
@@ -78,11 +88,14 @@ function scriptTool(tool: ToolRegistration): Omit<CodemodeTool, 'execute'> {
   };
 }
 
-export function codemodeDescription(declared: readonly ToolRegistration[]): string {
+export function codemodeDescription(
+  declared: readonly ToolRegistration[],
+  discovery = false
+): string {
   const tools = declared
     .filter((tool) => tool.name !== CODEMODE)
     .map((tool) => ({ ...scriptTool(tool), execute: () => undefined }));
-  const sections = [INTRO, GLOBALS];
+  const sections = [INTRO, discovery ? `${GLOBALS}\n${DISCOVERY}` : GLOBALS];
   if (tools.length) sections.push(`Nested tools:\n${renderDeclarations({ tools })}`);
   return sections.join('\n\n');
 }
@@ -229,7 +242,7 @@ async function saveStore(
 export function codemodeTool(options: CodemodeOptions): ToolRegistration {
   return defineTool({
     name: CODEMODE,
-    description: codemodeDescription(options.declared),
+    description: codemodeDescription(options.declared, options.extra !== undefined),
     parameters: Type.Object({ code: Type.String({ description: 'Raw JavaScript source.' }) }),
     replay: 'unsafe',
     async execute({ code }, api, context) {
@@ -243,9 +256,15 @@ export function codemodeTool(options: CodemodeOptions): ToolRegistration {
         execute: (args, { signal }) =>
           callNested(tool, args, api, withAbortSignal(signal, context), `${api.callId}:${++count}`),
       }));
+      const extra = options.extra
+        ? await options.extra(api, agent, context)
+        : { tools: [], globals: [] };
+      const replaced = new Set(extra.tools.map((tool) => tool.name));
+      const scripted = [...tools.filter((tool) => !replaced.has(tool.name)), ...extra.tools];
       const saved = await api.snapshot(CodemodeDoc, api.conversationId, context);
       const sandbox = options.sandbox({
-        tools,
+        tools: scripted,
+        ...(extra.globals.length ? { globals: extra.globals } : {}),
         timeoutMs: parsed.options.timeoutMs ?? Number.POSITIVE_INFINITY,
         memoryLimitBytes: MEMORY_LIMIT_BYTES,
       });

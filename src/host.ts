@@ -21,6 +21,7 @@ import { createAgentControl, type HostLicks, type HostScoops } from './control.t
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
 import { PortListener } from './listener.ts';
+import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import {
@@ -125,6 +126,7 @@ export async function hostAgent(
     memory?: MemoryRuntime;
     freezer?: FreezerRuntime;
     changes?: ChangesRuntime;
+    mcp?: Pick<McpRuntime, 'close'>;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -196,6 +198,7 @@ export async function hostAgent(
       await options.memory?.close(context);
       await options.sprinkles?.close(context);
       await options.skills?.close(context);
+      await options.mcp?.close(context);
       await options.scoops?.runtime.close(context);
       await options.licks?.sources.close(context);
       await agent.close();

@@ -14,7 +14,7 @@ async function walk(path) {
   return dir;
 }
 
-export async function bootKernel(extra = {}) {
+export async function bootKernel(extra = {}, options = {}) {
   for (const [dir, names] of Object.entries({ ...packages, ...extra })) {
     for (const name of names) {
       const bytes = new Uint8Array(await (await fetch(`/${dir}${name}`)).arrayBuffer());
@@ -27,5 +27,5 @@ export async function bootKernel(extra = {}) {
     }
   }
   const { createKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
-  return createKernel({ root: await navigator.storage.getDirectory() });
+  return createKernel({ root: await navigator.storage.getDirectory(), ...options });
 }

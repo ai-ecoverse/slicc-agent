@@ -28,6 +28,7 @@ import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
 import { setupLicks } from './licks/index.ts';
+import { setupMcp } from './mcp/index.ts';
 import { setupMemory } from './memory/index.ts';
 import { type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
@@ -102,6 +103,7 @@ async function start(
     .readFile(`${HOME}/.pi/agent/settings.json`)
     .catch(() => undefined);
   const coding = CodingTools.tools as readonly ToolRegistration[];
+  const mcp = setupMcp(registry);
   const codemode = disabledBySettings(
     settings === undefined ? undefined : new TextDecoder().decode(settings)
   )
@@ -113,6 +115,7 @@ async function start(
             options.codemodeWasm ?? (() => locateWasm(native, new URL(import.meta.url))),
             options.codemodeWorker
           ),
+          extra: mcp.codemode,
         }),
       ];
   registry.install(codemodeExtension(codemode));
@@ -145,6 +148,20 @@ async function start(
   );
   const skillsRuntime = await skills.attach(
     { env: home, home: HOME, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
+    BACKGROUND_CONTEXT
+  );
+  const mcpRuntime = await mcp.attach(
+    {
+      env: home,
+      home: HOME,
+      credentials,
+      licks: licks.licks,
+      fetch: scope.fetch,
+      version: facts.version,
+      reloadMs: RELOAD_MS,
+      codemode: codemode.length > 0,
+      cors: client.transport.traits?.crossOrigin === 'cors',
+    },
     BACKGROUND_CONTEXT
   );
   const gelatiere = lateGelatiere();
@@ -193,6 +210,7 @@ async function start(
       memory: memoryRuntime.command,
       gelatiere: gelatiere.command,
       freezer: freezer.command,
+      mcp: mcp.direct,
       ...(options.assets ? { assets: options.assets } : {}),
     },
     BACKGROUND_CONTEXT
@@ -218,6 +236,7 @@ async function start(
     memory: memoryRuntime,
     freezer,
     changes,
+    mcp: mcpRuntime,
   });
 }
 
