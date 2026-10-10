@@ -254,6 +254,7 @@ The `memory` section, read before every request, holds the first 200 lines (at m
 
 **The gelatiere.** SLICC's resident advisor, as in v6, is a scoop with the built-in `gelatiere` role. That role has its own memory (`memory: { scope: user, path: gelatiere }`), so it keeps its notes there.
 - `gelatiere init` starts the scoop in the first cone, writes `~/.pi/agent/GELATIERE.md` (its procedure, which the user can edit) unless it exists, and puts one crontab line `0 3 * * * gelatiere scoop:<handle> …` in `~/.slicc/crontab`, replacing an older one.
+- **Procedure updates:** at every boot, an existing GELATIERE.md that is a shipped version (its sha-256 is in `SHIPPED`, or matches `GELATIERE.md.sha256`, written whenever the agent writes the file) is replaced by the built-in one. A file with the user's edits is kept, the new built-in one goes to `~/.pi/agent/GELATIERE.new.md`, and `gelatiere status` says so.
 - On each pass it reads memory, the installed skills, the roles and the lick files, and writes at most three suggestions as JSON. `gelatiere suggest <file>` validates them and folds them into `/home/.gelatiere/suggestions.json` by id:
   - kinds `skill`, `use-case`, `tip`, `skill-idea` and `issue`;
   - a `skill` with its name and its GitHub `repo` (`owner/repo`);

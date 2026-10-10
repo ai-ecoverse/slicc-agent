@@ -1,4 +1,5 @@
 import type { Context } from '@earendil-works/chord';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
 import type { Licks } from '../licks/licks.ts';
@@ -46,6 +47,7 @@ export interface GelatiereAttach {
 export interface GelatiereRuntime {
   command(argv: readonly string[], caller: string | null, context: Context): Promise<Answer>;
   intercept(action: string, data: unknown, context: Context): Promise<boolean>;
+  readonly seeded: Promise<Seeded>;
 }
 
 export const USAGE = `usage:
@@ -91,6 +93,7 @@ type G = {
   now: () => number;
   crontab: string;
   procedure: string;
+  pending: string;
   load: (context: Context) => Promise<Suggestion[]>;
   mark: (id: string, field: 'dismissedAt' | 'takenAt', context: Context) => Promise<boolean>;
 };
@@ -107,17 +110,45 @@ async function schedule(g: G, handle: string, context: Context): Promise<void> {
   await env.writeFile(g.crontab, `${[...kept, line(handle)].join('\n')}\n`, context);
 }
 
-async function seed(g: G, context: Context): Promise<void> {
+export const SHIPPED = [
+  '53bc19daa486dec24116d8cf0558a498d8476dc4e18874f8a3e9ccb9defb15bd',
+  '1c16654b93bc01179a71ec907919f45132b2e9f1a9ac331b213655c66387b4e5',
+  '3bdd8ae18831c37996413cb0277df7141fcd0dff2d056c7b7053c34f0a3beaac',
+  '23a063c8156fda9fb0ffdea20172a7f64c1576d1c009a28456c095e2866fc0e9',
+];
+
+export type Seeded = 'written' | 'updated' | 'current' | 'kept' | 'none';
+
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function seed(g: G, context: Context, create: boolean): Promise<Seeded> {
   const { env, assets } = g.options;
-  const existing = await env.exists(g.procedure, context);
-  if ((existing.ok && existing.value) || !assets) return;
-  const text = await assets(PROCEDURE).catch(() => undefined);
-  if (text !== undefined) await env.writeFile(g.procedure, text, context);
+  const text = assets ? await assets(PROCEDURE).catch(() => undefined) : undefined;
+  if (text === undefined) return 'none';
+  const bundled = await sha256(text);
+  const marker = `${g.procedure}.sha256`;
+  const write = async (state: Seeded): Promise<Seeded> => {
+    await env.writeFile(g.procedure, text, context);
+    await env.writeFile(marker, `${bundled}\n`, context);
+    await env.remove(g.pending, { force: true }, context);
+    return state;
+  };
+  const read = await env.readTextFile(g.procedure, context);
+  if (!read.ok) return create ? write('written') : 'none';
+  const mine = await sha256(read.value);
+  if (mine === bundled) return write('current');
+  const last = await env.readTextFile(marker, context);
+  if ((last.ok && last.value.trim() === mine) || SHIPPED.includes(mine)) return write('updated');
+  await env.writeFile(g.pending, text, context);
+  return 'kept';
 }
 
 async function init(g: G, context: Context): Promise<Answer> {
   const { options } = g;
-  await seed(g, context);
+  await seed(g, context, true);
   let handle = handleOf(options.agents);
   if (!handle) {
     const roles = await options.roles(context);
@@ -418,10 +449,16 @@ async function status(g: G, context: Context): Promise<Answer> {
   const counts = store
     ? `${open(store).length} open, ${store.filter((item) => item.takenAt).length} taken, ${store.filter((item) => item.dismissedAt).length} dismissed`
     : 'none yet';
+  const pending = await env.readTextFile(g.pending, context);
   const lines = [
     `scoop: ${handle ?? 'none (gelatiere init)'}`,
     `schedule: ${scheduled ?? 'none'}`,
     `store: ${counts}`,
+    ...(pending.ok
+      ? [
+          `procedure: ${g.procedure} has your edits, so it was kept; the new built-in one is ${g.pending}`,
+        ]
+      : []),
   ];
   return { code: 0, out: `${lines.join('\n')}\n` };
 }
@@ -461,6 +498,7 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
     now,
     crontab: `${home}/.slicc/crontab`,
     procedure: `${home}/.pi/agent/GELATIERE.md`,
+    pending: `${home}/.pi/agent/GELATIERE.new.md`,
     load,
     mark: (id, field, context) =>
       serial(async () => {
@@ -473,6 +511,7 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
       }),
   };
   return {
+    seeded: seed(g, BACKGROUND_CONTEXT, false).catch((): Seeded => 'none'),
     command(argv, _caller, context) {
       const verb = argv[0] ?? 'help';
       const handler = VERBS[verb];
