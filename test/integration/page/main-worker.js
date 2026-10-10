@@ -34,7 +34,14 @@ faux.setResponses([
   ...params.getAll('answer').map((answer) => fauxAssistantMessage(answer)),
 ]);
 const relayed = params.get('relay');
-const fake = relayed ? createMcpServer({ resources: true, instructions: 'Fake docs.' }) : undefined;
+const fake = relayed
+  ? createMcpServer({
+      resources: true,
+      instructions: 'Fake docs.',
+      sse: params.has('sse'),
+      getStream: true,
+    })
+  : undefined;
 self.mcpRequests = () => fake?.state.requests ?? [];
 async function* chunks(body) {
   if (!body) return;

@@ -66,27 +66,28 @@ async function serve(cors) {
 const script =
   'const echoed = await tools.mcp__docs__structured({}); const found = await searchTools("echo text"); return { echoed, found: found.map((item) => item.name) };';
 
-test('an MCP server behind the relay transport: a codemode script and a direct tool call', async (t) => {
+test('an MCP server behind the relay transport answering with SSE: a codemode script and a direct tool call', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
   const query = [
     'relay=mcp.test',
+    'sse=1',
     `code=${encodeURIComponent(script)}`,
     `tool=${encodeURIComponent(JSON.stringify({ name: 'mcp__docs__echo', args: { text: 'relayed' } }))}`,
     'answer=Done.',
   ].join('&');
-  await page.evaluate(async (q) => {
-    await window.write(
+  await page.evaluate(() =>
+    window.write(
       '/home/.pi/agent/mcp.json',
       JSON.stringify({
         mcpServers: { docs: { url: 'https://mcp.test/mcp', toolExposure: { echo: 'direct' } } },
       })
-    );
-    await window.start(q);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    await window.agent.send(window.agent.active(), 'Use the docs.');
-  }, query);
+    )
+  );
+  await page.evaluate((q) => window.start(q), query);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await page.evaluate(() => window.agent.send(window.agent.active(), 'Use the docs.'));
   await page.within(
     60000,
     () =>
@@ -118,17 +119,16 @@ test('on the page route a server with CORS works and one without CORS is reporte
       .map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`)
       .join('&');
     await page.evaluate(
-      async ({ q, open, closed }) => {
-        await window.write(
+      ({ open, closed }) =>
+        window.write(
           '/home/.pi/agent/mcp.json',
           JSON.stringify({
             mcpServers: { open: { url: open, exposure: 'direct' }, closed: { url: closed } },
           })
-        );
-        await window.start(q, true);
-      },
-      { q: query, open: open.url, closed: closed.url }
+        ),
+      { open: open.url, closed: closed.url }
     );
+    await page.evaluate((q) => window.start(q, true), query);
     await page.within(60000, () => window.licks().some((lick) => /closed/.test(lick.title ?? '')));
     await page.within(60000, () => !window.agent.busy(window.agent.active()));
     await page.evaluate(async () => {

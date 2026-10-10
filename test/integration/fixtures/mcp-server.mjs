@@ -43,8 +43,13 @@ function sse(events, init = {}) {
   let finish;
   const stream = new ReadableStream({
     start(controller) {
-      push = (message) =>
-        controller.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
+      push = (message) => {
+        try {
+          controller.enqueue(
+            encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`)
+          );
+        } catch {}
+      };
       finish = () => {
         try {
           controller.close();

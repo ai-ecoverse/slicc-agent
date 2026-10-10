@@ -1,9 +1,10 @@
 import type { Context } from '@earendil-works/chord';
 import type { CredentialStore } from '@earendil-works/pi-ai';
+import type { Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { StreamableHttpTransport } from '@earendil-works/pi-mcp';
 import type { LickEvent, Licks } from '../licks/licks.ts';
-import type { McpCatalog } from './catalog.ts';
+import { McpCatalog } from './catalog.ts';
 import {
   type McpConfigProblem,
   type McpServerEntry,
@@ -12,6 +13,7 @@ import {
 } from './config.ts';
 import { McpServerConnection } from './connection.ts';
 import { resolveHeaders, scrub } from './credentials.ts';
+import { patchSse } from './sse.ts';
 
 export const MCP_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -238,4 +240,14 @@ export async function attachMcp(
       await log.settled();
     },
   };
+}
+
+export async function startMcp(
+  registry: Registry,
+  options: McpAttach,
+  context: Context
+): Promise<{ catalog: McpCatalog; runtime: McpRuntime }> {
+  patchSse();
+  const catalog = new McpCatalog(registry);
+  return { catalog, runtime: await attachMcp(catalog, options, context) };
 }

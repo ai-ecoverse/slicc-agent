@@ -95,6 +95,9 @@ export class McpServerConnection {
   #client: McpClient | undefined;
   #opening: Promise<McpClient> | undefined;
   readonly #shutdown = new AbortController();
+  readonly #busy = new Map<McpClient, number>();
+  #seen = false;
+  readonly #expired = new Set<McpClient>();
   readonly #options: ConnectionOptions;
 
   constructor(options: ConnectionOptions) {
@@ -108,6 +111,10 @@ export class McpServerConnection {
 
   get timeoutMs(): number {
     return (this.entry.config.timeout ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
+  }
+
+  get live(): boolean {
+    return this.state === 'connected' || (this.state === 'connecting' && this.#seen);
   }
 
   get closed(): boolean {
@@ -169,6 +176,7 @@ export class McpServerConnection {
   async #with<T>(run: (client: McpClient) => Promise<T>, readOnly = false): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       const client = await this.getClient();
+      this.#busy.set(client, (this.#busy.get(client) ?? 0) + 1);
       try {
         return await run(client);
       } catch (error) {
@@ -177,15 +185,28 @@ export class McpServerConnection {
           continue;
         }
         if (error instanceof McpSessionExpiredError && attempt === 1) {
-          if (this.#client === client) this.#client = undefined;
+          if (this.#client === client) {
+            this.#client = undefined;
+            this.#expired.add(client);
+          }
           continue;
         }
         if (!(error instanceof McpAuthRequiredError)) throw error;
         await this.#drop(client);
         this.#mark('needs-auth');
         throw new Error(this.signInMessage());
+      } finally {
+        this.#release(client);
       }
     }
+  }
+
+  #release(client: McpClient): void {
+    const left = (this.#busy.get(client) as number) - 1;
+    this.#busy.set(client, left);
+    if (left > 0 || !this.#expired.delete(client)) return;
+    this.#busy.delete(client);
+    void this.#drop(client);
   }
 
   signInMessage(): string {
@@ -259,6 +280,7 @@ export class McpServerConnection {
       this.resourceTemplates = resources.resourceTemplates;
       this.instructions = client.instructions?.trim() || undefined;
       this.missing = [];
+      this.#seen = true;
       this.state = 'connected';
       this.error = undefined;
       this.#options.onTools(this);

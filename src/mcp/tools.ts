@@ -303,7 +303,12 @@ async function reading(
   return { ...limited, payload: { server: server.name, uri, contents } };
 }
 
-export function resourceTools(servers: () => readonly ResourceServer[]): ToolRegistration[] {
+export type ServersFor = (
+  api: ToolExecutionApi,
+  context: Context
+) => Promise<readonly ResourceServer[]>;
+
+export function resourceTools(servers: ServersFor): ToolRegistration[] {
   const listTool = (name: string, key: Key) =>
     defineTool({
       name,
@@ -311,7 +316,7 @@ export function resourceTools(servers: () => readonly ResourceServer[]): ToolReg
       parameters: LIST_PARAMETERS as never,
       replay: 'safe',
       async execute(args, api, context) {
-        const payload = await listing(servers(), args, signalOf(context), key);
+        const payload = await listing(await servers(api, context), args, signalOf(context), key);
         const limited = await limitContent(
           [{ type: 'text', text: JSON.stringify(payload) }],
           apiSaver(api, '', context)
@@ -328,7 +333,12 @@ export function resourceTools(servers: () => readonly ResourceServer[]): ToolReg
       parameters: READ_PARAMETERS as never,
       replay: 'safe',
       async execute(args, api, context) {
-        const read = await reading(servers(), args, signalOf(context), apiSaver(api, '', context));
+        const read = await reading(
+          await servers(api, context),
+          args,
+          signalOf(context),
+          apiSaver(api, '', context)
+        );
         return { content: read.content };
       },
     }) as ToolRegistration,
