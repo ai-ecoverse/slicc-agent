@@ -23,6 +23,7 @@ jobs:
     env:
       LEFTHOOK: '0'
       NEWEST_CERTIFIED_KERNEL: 1.47.1
+      NEWEST_CERTIFIED_WASM: '@ai-ecoverse/wasm-git@2.55.0-15 @ai-ecoverse/wasm-bash@5.3.0-13 @ai-ecoverse/wasm-coreutils@9.12.0-5'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -33,7 +34,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npm install --no-save "@ai-ecoverse/slicc-kernel@$NEWEST_CERTIFIED_KERNEL"
+      - run: npm install --no-save "@ai-ecoverse/slicc-kernel@$NEWEST_CERTIFIED_KERNEL" $NEWEST_CERTIFIED_WASM
 
       - run: npx playwright-core install-deps chromium
 

@@ -55,6 +55,22 @@ export interface ScoopsSetup {
 
 export const COMMANDS = ['agent', 'subagent', 'sprinkle', 'memory', 'gelatiere', 'freezer'];
 
+export async function pnpmHomeOf(env: ExecutionEnv, context: Context): Promise<string> {
+  let out = '';
+  const ran = await env
+    .exec(
+      'printf %s "$PNPM_HOME"',
+      {
+        onOutput: (text) => {
+          out += text;
+        },
+      },
+      context
+    )
+    .catch(() => undefined);
+  return ran?.ok && ran.value.exitCode === 0 && /^\/\S*$/.test(out) ? out : PNPM_HOME;
+}
+
 async function install(env: ExecutionEnv, script: string, pnpmHome: string, context: Context) {
   await env.createDir(`${pnpmHome}/bin`, { recursive: true }, context);
   for (const name of COMMANDS) {
@@ -143,8 +159,10 @@ export function setupScoops(
       };
       await roles(context).catch(() => cached);
       const script = await assets('bin/agent').catch(() => undefined);
-      if (script)
-        await install(env, script, options.pnpmHome ?? PNPM_HOME, context).catch(() => undefined);
+      if (script) {
+        const pnpmHome = options.pnpmHome ?? (await pnpmHomeOf(env, context));
+        await install(env, script, pnpmHome, context).catch(() => undefined);
+      }
       const cli = createCli({
         env,
         harness,
