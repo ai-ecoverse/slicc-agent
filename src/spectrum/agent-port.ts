@@ -85,6 +85,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   #refresh(): void {
+    this.#active ??= this.#connection.agents?.value?.active ?? null;
     this.emit('agents', this.list());
     for (const summary of this.#summary()) this.#update(summary.id);
     for (const id of [...this.#messages.keys()])
@@ -212,11 +213,12 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
       (candidate) => `e${candidate.id}` === messageId
     );
     const lick = message?.role === 'lick' && entry ? entryLick(entry) : undefined;
-    if (lick) void this.#connection.control.resolveLick(lick.id, state, BACKGROUND_CONTEXT);
+    if (lick)
+      void this.#connection.control.resolveAgentLick(agentId, lick.id, state, BACKGROUND_CONTEXT);
   }
 
-  compact(): void {
-    void this.#connection.control.compact(null, BACKGROUND_CONTEXT);
+  compact(agentId: string = this.active()): void {
+    void this.#connection.control.compactAgent(agentId, null, BACKGROUND_CONTEXT);
   }
 
   clear(agentId: string = this.active()): void {

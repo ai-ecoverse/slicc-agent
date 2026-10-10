@@ -20,7 +20,14 @@ import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
-import type { AgentControl, Created, OperationError, Rewound, SendResponse } from './services.ts';
+import type {
+  AgentControl,
+  Created,
+  LickResolved,
+  OperationError,
+  Rewound,
+  SendResponse,
+} from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 
@@ -304,6 +311,40 @@ export function createAgentControl(
   };
   const rewindIn = (agentId: string | null, messageId: string | null, context: Context) =>
     serial(() => rewindAgent({ harness, agents, cone, scoops }, agentId, messageId, context));
+  const decide = (
+    agentId: string | null,
+    lickId: string,
+    state: 'confirmed' | 'dismissed',
+    context: Context
+  ): Promise<LickResolved> =>
+    serial(async () => {
+      if (!licks) return { done: false, text: null, error: 'this agent has no licks' };
+      const action = state === 'confirmed' ? 'confirm' : 'dismiss';
+      try {
+        const conversation = await conversationFor(agentId, context);
+        const text = await licks.licks.decide(conversation, lickId, action, undefined, context);
+        await conversation.submit(
+          {
+            type: 'write',
+            entry: {
+              kind: LICK_STATE_KIND,
+              data: { lick: lickId, state, by: 'user' },
+              model: [
+                {
+                  role: 'user',
+                  content: `The user ${state} lick ${lickId}: ${text}`,
+                  timestamp: Date.now(),
+                },
+              ],
+            },
+          },
+          context
+        );
+        return { done: true, text, error: null };
+      } catch (error) {
+        return { done: false, text: null, error: (error as Error).message };
+      }
+    });
   return {
     send(request, context) {
       return serial(async () => {
@@ -349,37 +390,13 @@ export function createAgentControl(
     abort: (context) => current().abort(context),
     compact: (instructions, context) =>
       accepted(() => current().compact(instructions ?? undefined, context)),
+    compactAgent: (agentId, instructions, context) =>
+      accepted(async () =>
+        (await conversationFor(agentId, context)).compact(instructions ?? undefined, context)
+      ),
     reset: (handoff, context) => current().reset(handoff ?? undefined, context),
-    resolveLick(lickId, state, context) {
-      return serial(async () => {
-        if (!licks) return { done: false, text: null, error: 'this agent has no licks' };
-        const conversation = current();
-        const action = state === 'confirmed' ? 'confirm' : 'dismiss';
-        try {
-          const text = await licks.licks.decide(conversation, lickId, action, undefined, context);
-          await conversation.submit(
-            {
-              type: 'write',
-              entry: {
-                kind: LICK_STATE_KIND,
-                data: { lick: lickId, state, by: 'user' },
-                model: [
-                  {
-                    role: 'user',
-                    content: `The user ${state} lick ${lickId}: ${text}`,
-                    timestamp: Date.now(),
-                  },
-                ],
-              },
-            },
-            context
-          );
-          return { done: true, text, error: null };
-        } catch (error) {
-          return { done: false, text: null, error: (error as Error).message };
-        }
-      });
-    },
+    resolveLick: (lickId, state, context) => decide(null, lickId, state, context),
+    resolveAgentLick: (agentId, lickId, state, context) => decide(agentId, lickId, state, context),
     async webhook(name, delivery, context) {
       const delivered = licks
         ? await licks.sources.webhook(
