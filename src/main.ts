@@ -208,6 +208,7 @@ async function start(
     roles: runtime.roles,
     assets: options.assets ?? packageAssets(),
     fetch: scope.fetch,
+    skills: skillsRuntime.skills,
     ...(options.catalog ? { catalog: options.catalog } : {}),
   });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
