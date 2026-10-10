@@ -40,6 +40,7 @@ export interface GelatiereAttach {
   now?: () => number;
   fetch?: Fetcher;
   catalog?: string;
+  skills?: () => readonly { name: string }[];
 }
 
 export interface GelatiereRuntime {
@@ -339,7 +340,10 @@ async function catalog(g: G, argv: readonly string[], context: Context): Promise
   ]);
   const store = await g.load(context);
   const closed = new Set(store.filter((item) => item.dismissedAt || item.takenAt).map((i) => i.id));
-  const have = await skillsIn(env, home, context);
+  const have = new Set([
+    ...(await skillsIn(env, home, context)).keys(),
+    ...(g.options.skills?.() ?? []).map((entry) => entry.name),
+  ]);
   const evidence = (reasons: string[]) =>
     `www.sliccy.com catalog: ${reasons.length ? reasons.join(', ') : 'featured'}`;
   const skills: Candidate[] = merge(parseSkills(global.rows), parseSkills(own?.rows ?? []))
