@@ -3,6 +3,8 @@ import { withUnrefTimers } from './wire.ts';
 
 const applied = Symbol.for('slicc.agent.patches');
 
+export const MCP_SSE_PATCH = 'pi-mcp-sse-buffer';
+
 interface Patchable {
   prototype: { accept: (...args: unknown[]) => unknown };
   [applied]?: true;

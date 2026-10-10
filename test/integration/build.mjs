@@ -21,6 +21,9 @@ await build({
     'node:worker_threads': './test/integration/shims/node-worker-threads.js',
     'node:fs/promises': './test/integration/shims/node-only.js',
     'node:module': './test/integration/shims/node-only.js',
+    'node:child_process': './test/integration/shims/node-only.js',
+    'node:process': './test/integration/shims/node-only.js',
+    'cross-spawn': './test/integration/shims/node-only.js',
   },
   plugins: [
     {
@@ -49,6 +52,9 @@ await build({
     'node:worker_threads': './test/integration/shims/node-worker-threads.js',
     'node:fs/promises': './test/integration/shims/node-only.js',
     'node:module': './test/integration/shims/node-only.js',
+    'node:child_process': './test/integration/shims/node-only.js',
+    'node:process': './test/integration/shims/node-only.js',
+    'cross-spawn': './test/integration/shims/node-only.js',
     '@smithy/node-http-handler': './test/integration/shims/node-only.js',
     'http-proxy-agent': './test/integration/shims/node-only.js',
     'https-proxy-agent': './test/integration/shims/node-only.js',

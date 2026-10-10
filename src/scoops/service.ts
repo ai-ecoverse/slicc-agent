@@ -21,8 +21,10 @@ import {
   type ScoopRecord,
   scoopId,
 } from '../agents.ts';
+import { CODEMODE } from '../codemode/index.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
 import type { Licks } from '../licks/licks.ts';
+import { McpAllowDoc, mcpEntries } from '../mcp/index.ts';
 import type { Role } from '../roles/roles.ts';
 import { visible } from './visible.ts';
 
@@ -68,6 +70,7 @@ export interface ScoopsHost {
   tools?: readonly ToolRegistration[];
   reads?: () => readonly string[];
   files?: Pick<ExecutionEnv, 'remove' | 'createDir'>;
+  mcp?: (names: readonly string[]) => ToolRegistration[];
 }
 
 export interface Rewound {
@@ -213,9 +216,18 @@ async function addFeed(core: Core, tx: Tx, parent: number, feed: NewFeed): Promi
   return Number(task);
 }
 
-function selection(tools: readonly ToolRegistration[] | undefined, names: string[] | undefined) {
+function selection(
+  tools: readonly ToolRegistration[] | undefined,
+  names: string[] | undefined,
+  mcp?: (names: readonly string[]) => ToolRegistration[]
+) {
   if (!names || !tools) return undefined;
-  return tools.filter((tool) => names.includes(tool.name));
+  const picked = tools.filter((tool) => names.includes(tool.name));
+  const entries = mcpEntries(names) ?? [];
+  if (!entries.length) return picked;
+  const codemode = tools.find((tool) => tool.name === CODEMODE);
+  if (codemode && !picked.includes(codemode)) picked.push(codemode);
+  return [...picked, ...(mcp?.(entries) ?? [])];
 }
 
 function liveCount(state: Readonly<AgentsState>, cone: string): number {
@@ -242,11 +254,12 @@ function claimTurn(
 function agentChange(
   request: SpawnRequest,
   folder: string,
-  tools: readonly ToolRegistration[] | undefined
+  tools: readonly ToolRegistration[] | undefined,
+  mcp?: (names: readonly string[]) => ToolRegistration[]
 ): AgentChange {
   const model = request.model ?? modelOf(request.role?.model);
   const thinking = request.thinking ?? request.role?.thinking;
-  const chosen = selection(tools, request.tools ?? request.role?.tools);
+  const chosen = selection(tools, request.tools ?? request.role?.tools, mcp);
   const instructions = [request.role?.prompt, request.instructions].filter(Boolean).join('\n\n');
   return {
     cwd: request.cwd ?? workspace(folder),
@@ -257,10 +270,24 @@ function agentChange(
   };
 }
 
+async function narrowMcp(
+  tx: Tx,
+  state: Readonly<AgentsState>,
+  cone: ConversationId,
+  child: ConversationId,
+  request: SpawnRequest
+): Promise<void> {
+  const listed = mcpEntries(request.tools ?? request.role?.tools);
+  const caller = state.scoops[request.parent ?? '']?.conversation as ConversationId | undefined;
+  const inherited = (await tx.doc(McpAllowDoc, caller ?? cone)).allow;
+  if (listed !== null || inherited !== null)
+    (await tx.doc(McpAllowDoc, child)).allow = listed ?? inherited;
+}
+
 async function spawn(core: Core, request: SpawnRequest, context: Context): Promise<Answer> {
   const done = await answered(core, request.request, context);
   if (done) return done;
-  const { agents, tools } = await core.host;
+  const { agents, tools, mcp } = await core.host;
   const parent = await coneOfId(core, request.cone, context);
   const count = liveCount(agents.state(), request.cone);
   if (count >= request.limits.maxLiveScoops)
@@ -282,7 +309,8 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
       background: true,
     });
     const child = await tx.createConversation({ ownership: { kind: 'task', taskId: anchor } });
-    await configure(tx, child.id, agentChange(request, folder, tools));
+    await configure(tx, child.id, agentChange(request, folder, tools, mcp));
+    await narrowMcp(tx, doc, parent.id, child.id, request);
     doc.scoops[id] = {
       name: request.name.trim() || folder,
       folder,

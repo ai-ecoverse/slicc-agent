@@ -70,5 +70,29 @@
     "reason": "The second of pi-ai's two @google/genai importers (see pi-ai-google-genai-lazy): google-vertex.js must also stay behind a lazy dynamic import for the slicc-bios override ('@google/genai': '-') to be safe.",
     "removeWhen": "seven adds a Google provider (drop the bios override first), or pi-ai stops depending on @google/genai.",
     "verify": "npm test"
+  },
+  "pi-mcp-stdio-node-only": {
+    "kind": "environment",
+    "package": "@earendil-works/pi-mcp",
+    "patchedVersion": "1.1.0",
+    "marker": {
+      "file": "dist/index.js",
+      "includes": "export { StdioTransport } from \"./transports/stdio.js\""
+    },
+    "reason": "pi-mcp's index re-exports StdioTransport, whose module imports node:child_process, node:process and the CommonJS cross-spawn at the top. SLICC uses only StreamableHttpTransport and never constructs StdioTransport, so the slicc-bios service worker must let those load: node:* stubs and CommonJS wrapping for cross-spawn and its dependencies (which, isexe, path-key, shebang-command). The integration bundles alias node:child_process, node:process and cross-spawn to test/integration/shims/node-only.js.",
+    "removeWhen": "pi-mcp exports its Streamable HTTP transport without the stdio one (a subpath export or a lazy stdio module), or SLICC runs stdio servers through the kernel after slicc-kernel#68.",
+    "verify": "npm test"
+  },
+  "pi-mcp-sse-buffer": {
+    "kind": "monkeypatch",
+    "package": "@earendil-works/pi-mcp",
+    "patchedVersion": "1.1.0",
+    "marker": {
+      "file": "dist/transports/streamable-http.js",
+      "includes": "Buffer.byteLength(value)"
+    },
+    "reason": "StreamableHttpTransport parses SSE with consumeSseStream, which measures event sizes with Node's Buffer.byteLength, so every SSE response and the GET stream fail in a browser with 'Buffer is not defined'. patchSse() in src/mcp/sse.ts (applied by startMcp before any server connects) replaces StreamableHttpTransport.prototype.consumeSse with the same parser measuring bytes with TextEncoder; it throws, naming this entry, if consumeSse no longer calls consumeSseStream.",
+    "removeWhen": "pi-mcp's SSE parser stops using Buffer.",
+    "verify": "npm test"
   }
 }

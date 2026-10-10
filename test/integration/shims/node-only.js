@@ -7,3 +7,4 @@ export const HttpsProxyAgent = missing;
 export const readFile = missing;
 export const createRequire = missing;
 export default missing;
+export const spawn = missing;
