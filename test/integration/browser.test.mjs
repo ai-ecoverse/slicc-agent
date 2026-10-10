@@ -17,6 +17,17 @@ test('a playwright-cli screenshot read back shows on the tool card, through the 
     const kernel = await bootKernel();
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
     const client = await attachKernel(await kernel.connect());
+    const pnpm = await (async () => {
+      let out = '';
+      const probe = await client.spawn(['bash', '-c', 'printf %s "$PNPM_HOME"'], {
+        cwd: '/',
+        onStdout: (bytes) => {
+          out += new TextDecoder().decode(bytes);
+        },
+      });
+      await probe.exited;
+      return out || '/home/.local/share/pnpm';
+    })();
     const script = [
       '#!/bin/bash',
       'for arg in "$@"; do',
@@ -25,16 +36,15 @@ test('a playwright-cli screenshot read back shows on the tool card, through the 
       'done',
       'echo "Screenshot saved"',
     ].join('\n');
-    await client.fs.mkdir('/home/.local/share/pnpm/bin', { recursive: true });
-    await client.fs.writeFile('/home/.local/share/pnpm/bin/playwright-cli', `${script}\n`);
+    await client.fs.mkdir(`${pnpm}/bin`, { recursive: true });
+    await client.fs.writeFile(`${pnpm}/bin/playwright-cli`, `${script}\n`);
     const params = new URLSearchParams([
       [
         'tool',
         JSON.stringify({
           name: 'bash',
           args: {
-            command:
-              'chmod +x /home/.local/share/pnpm/bin/playwright-cli && playwright-cli screenshot --tab t1 --max-width 1600 --filename /tmp/shot.png',
+            command: `chmod +x ${pnpm}/bin/playwright-cli && playwright-cli screenshot --tab t1 --max-width 1600 --filename /tmp/shot.png`,
           },
         }),
       ],

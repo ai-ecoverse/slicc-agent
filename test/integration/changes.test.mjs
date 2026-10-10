@@ -17,12 +17,23 @@ test('changes from git in the production worker: the empty state, a repo, accept
     const kernel = await bootKernel();
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
     const client = await attachKernel(await kernel.connect());
+    const pnpm = await (async () => {
+      let out = '';
+      const probe = await client.spawn(['bash', '-c', 'printf %s "$PNPM_HOME"'], {
+        cwd: '/',
+        onStdout: (bytes) => {
+          out += new TextDecoder().decode(bytes);
+        },
+      });
+      await probe.exited;
+      return out || '/home/.local/share/pnpm';
+    })();
     const params = new URLSearchParams([
       [
         'tool',
         JSON.stringify({
           name: 'bash',
-          args: { command: 'chmod +x /home/.local/share/pnpm/bin/git' },
+          args: { command: `chmod +x ${pnpm}/bin/git` },
         }),
       ],
       ['answer', 'Done.'],
@@ -50,8 +61,8 @@ test('changes from git in the production worker: the empty state, a repo, accept
     listed();
     await until(() => model.changes.unavailable() !== null);
     const empty = model.changes.unavailable();
-    await client.fs.mkdir('/home/.local/share/pnpm/bin', { recursive: true });
-    await client.fs.writeFile('/home/.local/share/pnpm/bin/git', script);
+    await client.fs.mkdir(`${pnpm}/bin`, { recursive: true });
+    await client.fs.writeFile(`${pnpm}/bin/git`, script);
     await client.fs.mkdir('/home/site/.git/index-files', { recursive: true });
     await client.fs.writeFile('/home/site/.git/index-files/a.txt', 'one\n');
     await client.fs.writeFile('/home/site/a.txt', 'two\n');
@@ -117,7 +128,8 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
   const pinned = JSON.parse(await readFile('package.json', 'utf8')).devDependencies[
     '@ai-ecoverse/wasm-git'
   ];
-  assert.equal(version, pinned);
+  const newest = /@ai-ecoverse\/wasm-git@(\S+)/.exec(process.env.NEWEST_CERTIFIED_WASM ?? '')?.[1];
+  assert.equal(version, newest ?? pinned);
   await page.evaluate(
     async (dir, files) => {
       const { bootKernel } = await import('/kernel.js');
