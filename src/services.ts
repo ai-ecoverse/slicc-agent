@@ -41,11 +41,22 @@ export interface AgentControl {
   ): Promise<{ outcome: 'withdrawn' | 'already_placed' | 'not_found' }>;
   abort(context: Context): Promise<void>;
   compact(instructions: string | null, context: Context): Promise<SendResponse>;
+  compactAgent(
+    agentId: string,
+    instructions: string | null,
+    context: Context
+  ): Promise<SendResponse>;
   reset(handoff: string | null, context: Context): Promise<void>;
   configure(change: AgentSettingsChange, context: Context): Promise<void>;
   rewind(messageId: string | null, context: Context): Promise<Rewound>;
   rewindAgent(agentId: string, messageId: string | null, context: Context): Promise<Rewound>;
   resolveLick(
+    lickId: string,
+    state: 'confirmed' | 'dismissed',
+    context: Context
+  ): Promise<LickResolved>;
+  resolveAgentLick(
+    agentId: string,
     lickId: string,
     state: 'confirmed' | 'dismissed',
     context: Context
