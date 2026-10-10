@@ -37,6 +37,7 @@ export interface AgentConnection {
   readonly frozen?: ReplicatedState<FrozenCone[]>;
   readonly changes?: ReplicatedState<ChangesView>;
   readonly settings: AgentSettings;
+  readonly closed: Promise<Error | undefined>;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
 }
@@ -134,6 +135,13 @@ export async function connectAgent(
     held.push(kept as Lasting<unknown>);
     return kept.state;
   };
+  const freeze = () => {
+    for (const kept of held) kept.freeze();
+  };
+  const closed = channel.ended.then((reason) => {
+    freeze();
+    return reason;
+  });
   return {
     serverId,
     control,
@@ -148,6 +156,7 @@ export async function connectAgent(
     frozen: hold(frozen),
     changes: hold(changes),
     settings: lastingSettings(settings, hold),
+    closed,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
       if (!sent.accepted) throw new Error(`${sent.error.code}: ${sent.error.message}`);
@@ -156,7 +165,7 @@ export async function connectAgent(
       return settled.text;
     },
     async close() {
-      for (const kept of held) kept.freeze();
+      freeze();
       await server.use(AgentSessions).detach(context);
       await session.dispose(context);
       await server.dispose(context);
