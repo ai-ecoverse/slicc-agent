@@ -130,10 +130,13 @@ async function seed(g: G, context: Context, create: boolean): Promise<Seeded> {
   if (text === undefined) return 'none';
   const bundled = await sha256(text);
   const marker = `${g.procedure}.sha256`;
+  const must = (result: { ok: boolean; error?: { message: string } }) => {
+    if (!result.ok) throw new Error(result.error?.message ?? 'write failed');
+  };
   const write = async (state: Seeded): Promise<Seeded> => {
-    await env.writeFile(g.procedure, text, context);
-    await env.writeFile(marker, `${bundled}\n`, context);
-    await env.remove(g.pending, { force: true }, context);
+    must(await env.writeFile(g.procedure, text, context));
+    must(await env.writeFile(marker, `${bundled}\n`, context));
+    must(await env.remove(g.pending, { force: true }, context));
     return state;
   };
   const read = await env.readTextFile(g.procedure, context);
@@ -142,7 +145,7 @@ async function seed(g: G, context: Context, create: boolean): Promise<Seeded> {
   if (mine === bundled) return write('current');
   const last = await env.readTextFile(marker, context);
   if ((last.ok && last.value.trim() === mine) || SHIPPED.includes(mine)) return write('updated');
-  await env.writeFile(g.pending, text, context);
+  must(await env.writeFile(g.pending, text, context));
   return 'kept';
 }
 
@@ -510,13 +513,15 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
         return true;
       }),
   };
+  const seeded = seed(g, BACKGROUND_CONTEXT, false).catch((): Seeded => 'none');
   return {
-    seeded: seed(g, BACKGROUND_CONTEXT, false).catch((): Seeded => 'none'),
-    command(argv, _caller, context) {
+    seeded,
+    async command(argv, _caller, context) {
       const verb = argv[0] ?? 'help';
       const handler = VERBS[verb];
+      await seeded;
       if (handler) return handler(g, argv, context);
-      return Promise.resolve({ code: verb === 'help' || verb === '--help' ? 0 : 2, out: USAGE });
+      return { code: verb === 'help' || verb === '--help' ? 0 : 2, out: USAGE };
     },
     async intercept(action, data, context) {
       const id = String((data as { id?: unknown } | null)?.id ?? '');
