@@ -67,6 +67,7 @@ export interface AgentWorkerOptions {
   assets?: Assets;
   codemodeWasm?: () => Promise<WebAssembly.Module | undefined>;
   codemodeWorker?: string | URL;
+  catalog?: string;
 }
 
 async function start(
@@ -206,6 +207,8 @@ async function start(
     scoops: scoops.scoops,
     roles: runtime.roles,
     assets: options.assets ?? packageAssets(),
+    fetch: scope.fetch,
+    ...(options.catalog ? { catalog: options.catalog } : {}),
   });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
   const changes = attachChanges({ agents: agent.agents, env: home, reloadMs: CHANGES_MS });

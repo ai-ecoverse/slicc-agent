@@ -11,6 +11,7 @@ export const SUGGESTIONS = 'suggestions';
 export const SUGGESTIONS_DIR = '/home/.gelatiere';
 export const SUGGESTIONS_STORE = `${SUGGESTIONS_DIR}/suggestions.json`;
 export const WELCOMED = '/home/.welcomed';
+export const WELCOME_PROFILE = '/home/.welcome.json';
 export const DEFAULT_ICON = 'sparkles';
 
 export type SprinkleMethod = 'readFile' | 'exists' | 'getState' | 'setState';
