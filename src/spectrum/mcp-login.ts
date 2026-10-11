@@ -52,7 +52,7 @@ function answered(channel: Channel, state: string, signal: AbortSignal, timeoutM
     };
     const timer = setTimeout(() => {
       done();
-      reject(new Error('the sign-in window gave no answer; try again'));
+      reject(new Error('The sign-in window gave no answer. Try again.'));
     }, timeoutMs);
     signal.addEventListener('abort', stop, { once: true });
     channel.onmessage = ({ data }) => {
@@ -76,11 +76,11 @@ export function mcpLogin(host: McpLoginHost = browser) {
     try {
       const started = (await signIn()) as McpSignIn | null;
       options.signal.throwIfAborted();
-      if (!started?.url) throw new Error('this MCP server has no sign-in');
+      if (!started?.url) throw new Error('This MCP server has no sign-in.');
       if (!safeAuthorizationUrl(started.url))
-        throw new Error('the authorization server gave a sign-in address that is not https');
+        throw new Error("The authorization server gave a sign-in address that isn't https.");
       if (!popup)
-        throw new Error('the browser blocked the sign-in window; allow pop-ups for SLICC');
+        throw new Error('The browser blocked the sign-in window. Allow pop-ups for SLICC.');
       state = started.state;
       host.remember?.(state, providerId.replace(/^mcp:/, ''));
       popup.location.href = started.url;
