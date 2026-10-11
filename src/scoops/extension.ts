@@ -16,19 +16,28 @@ import { answerText } from '../agent.ts';
 import { AgentsDoc, live, type ScoopRecord } from '../agents.ts';
 import { HOME } from '../kernel/env.ts';
 import { normalize, resolve } from '../kernel/paths.ts';
+import { type Layout, LEGACY } from '../layout.ts';
 import type { LickEvent } from '../licks/licks.ts';
 import { FROM_KIND } from './from.ts';
-import { type Feed, SCOOPS_ROOT, type ScoopsHost, ScoopWorkDoc, workspace } from './service.ts';
+import { type Feed, type ScoopsHost, ScoopWorkDoc } from './service.ts';
 
 export const PREVIEW = 1000;
 
 type Lookup = () => Promise<ScoopsHost>;
 
-export function scoopFacts(record: Pick<ScoopRecord, 'name' | 'folder' | 'role'>): string {
+export function scoopFacts(
+  record: Pick<ScoopRecord, 'name' | 'folder' | 'role'> & { cone?: string },
+  layout: Layout = LEGACY
+): string {
+  const place = layout.workspace(record.folder);
   return [
     `You are the scoop "${record.name}"${record.role ? ` (role: ${record.role})` : ''}, a helper agent working for a cone. Messages come from the cone or from the user at a terminal; your final answer goes back to whoever asked, so end every task with a complete answer.`,
-    `Work in ${workspace(record.folder)}. Your read, write and edit tools only reach ${SCOOPS_ROOT}/${record.folder} and /tmp, and read ${HOME}.`,
-    'Your bash is not confined: it sees the whole file system and every process. Stay in your folder anyway, and change nothing outside it unless the request says so.',
+    layout.users
+      ? `You run as the user ${layout.scoopRoot(record.folder).slice('/home/'.length)}, and your home is ${place}: work there. Your cone can read your home; you can't read your cone's home or another scoop's. /tmp is shared scratch.`
+      : `Work in ${place}. Your read, write and edit tools only reach ${layout.scoopRoot(record.folder)} and /tmp, and read ${HOME}.`,
+    layout.users
+      ? 'Your bash runs as your user too, so the kernel decides what it may read and change. Stay in your home, and change nothing outside it unless the request says so.'
+      : 'Your bash is not confined: it sees the whole file system and every process. Stay in your folder anyway, and change nothing outside it unless the request says so.',
     'You may run `agent` synchronously for a bounded side task (calls nest at most three deep), but you cannot start asynchronous scoops (`agent --async`, `subagent spawn`).',
   ].join('\n');
 }
@@ -262,12 +271,12 @@ export function scoopTasks(lookup: Lookup) {
         }, context);
       },
       async report(task, runtime, context) {
-        const { agents, licks } = await lookup();
+        const { agents, licks, layout = LEGACY } = await lookup();
         const id = task.input.scoop;
         const record = agents.state().scoops[id];
         const { text, failed } = task.state.checkpoint;
         const path =
-          record && text ? `${SCOOPS_ROOT}/${record.folder}/reports/${task.id}.md` : null;
+          record && text ? `${layout.reports(record.folder, record.cone)}/${task.id}.md` : null;
         if (path)
           await (await runtime.env(context))?.writeFile(
             path,
@@ -321,14 +330,17 @@ async function whose(input: PromptInput, context: Context) {
   return { scoop };
 }
 
-export function scoopsExtension(tasks: ReturnType<typeof scoopTasks>): Extension {
+export function scoopsExtension(
+  tasks: ReturnType<typeof scoopTasks>,
+  layout: () => Layout = () => LEGACY
+): Extension {
   return defineExtension({
     name: 'slicc-scoops',
     tasks: [tasks.anchor, tasks.reporter, tasks.wait],
     sections: [
       section('scoop', async (input, context) => {
         const { scoop } = await whose(input, context);
-        return scoop ? scoopFacts(scoop) : undefined;
+        return scoop ? scoopFacts(scoop, layout()) : undefined;
       }),
     ],
   });
@@ -341,9 +353,9 @@ export function allowed(
   coneCwd: string,
   path: string,
   writing: boolean,
-  reads: readonly string[] = []
+  reads: readonly string[] = [],
+  own = LEGACY.scoopRoot(record.folder)
 ): boolean {
-  const own = `${SCOOPS_ROOT}/${record.folder}`;
   const write = [own, '/tmp', ...(record.roots?.write ?? [])];
   const roots = writing ? write : [...write, coneCwd, ...(record.roots?.read ?? []), ...reads];
   return roots.some((root) => path === root || path.startsWith(`${root === '/' ? '' : root}/`));
@@ -360,24 +372,27 @@ export function guardExtension(lookup: Lookup, tools: readonly ToolRegistration[
       wrapTool(tool, (inner) => ({
         ...inner,
         async execute(args, api, context) {
-          const { agents, reads } = await lookup();
+          const { agents, reads, layout = LEGACY, enforced } = await lookup();
           const record = Object.values(agents.state().scoops).find(
             (scoop) => scoop.conversation === api.conversationId
           );
-          if (!record) return inner.execute(args, api, context);
+          if (!record || enforced) return inner.execute(args, api, context);
+          const own = layout.scoopRoot(record.folder);
+          const cone = layout.users ? own : HOME;
           const path = String((args as { path: unknown }).path);
-          const asked = normalize(resolve(workspace(record.folder), path));
+          const asked = normalize(resolve(layout.workspace(record.folder), path));
           const canonical = await api.env?.canonicalPath(asked, context);
           const target = canonical?.ok ? canonical.value : asked;
           const writing = WRITES.has(inner.name);
           const skills = reads?.() ?? [];
           if (
-            allowed(record, HOME, target, writing, skills) ||
-            allowed(record, HOME, asked, writing, skills)
+            allowed(record, cone, target, writing, skills, own) ||
+            allowed(record, cone, asked, writing, skills, own)
           )
             return inner.execute(args, api, context);
+          const reach = layout.users || WRITES.has(inner.name) ? '' : `, and reads ${HOME}`;
           return refusal(
-            `${target} is outside this scoop's folders. ${inner.name} reaches ${SCOOPS_ROOT}/${record.folder} and /tmp${WRITES.has(inner.name) ? '' : `, and reads ${HOME}`}.`
+            `${target} is outside this scoop's folders. ${inner.name} reaches ${own} and /tmp${reach}.`
           );
         },
       }))

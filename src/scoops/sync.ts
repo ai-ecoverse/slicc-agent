@@ -2,6 +2,7 @@ import type { Context } from '@earendil-works/chord';
 import type { ConversationId, EntryRecord, TaskId } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
 import type { ScoopRecord } from '../agents.ts';
+import { quote } from '../kernel/env.ts';
 import { resolve } from '../kernel/paths.ts';
 import {
   type Caller,
@@ -19,9 +20,9 @@ import {
 } from './cli.ts';
 import type { ReportResult } from './extension.ts';
 import type { Request } from './requests.ts';
-import { type Answer, SCOOPS_ROOT } from './service.ts';
+import type { Answer } from './service.ts';
 
-export const SESSIONS = { tmp: '/tmp/agent-sessions', durable: '/home/sessions' };
+export { SESSIONS } from '../layout.ts';
 
 type Ending = 'cancel' | 'detach';
 
@@ -57,6 +58,7 @@ const SYNC_SWITCHES = new Set([
 ]);
 
 type Persist = 'tmp' | 'durable' | 'none';
+type Kept = Exclude<Persist, 'none'>;
 
 function persistOf(switches: Set<string>): Persist {
   if (switches.has('--no-persist-session')) return 'none';
@@ -91,27 +93,38 @@ async function archive(
   deps: Deps,
   record: ScoopRecord,
   persist: Persist,
+  user: string | null,
   context: Context
 ): Promise<string | null> {
   if (persist === 'none') return null;
+  const kept: Kept = persist;
   const conversation = await deps.harness.conversation(
     record.conversation as ConversationId,
     context
   );
   if (!conversation) return null;
   const { entries } = await conversation.context(context);
-  const path = `${SESSIONS[persist]}/${record.folder}.md`;
-  await deps.env.writeFile(path, transcript(record, entries), context);
-  return path;
+  const dir = deps.layout.sessions(kept, user);
+  const path = `${dir}/${record.folder}.md`;
+  if (kept === 'tmp') await deps.layout.ownDir(dir, user, context);
+  const env = (await deps.layout.envFor(user, context)) ?? deps.env;
+  const written = await env.writeFile(path, transcript(record, entries), context);
+  return written.ok ? path : null;
 }
 
-async function finish(deps: Deps, id: string, persist: Persist, context: Context): Promise<void> {
+async function finish(
+  deps: Deps,
+  id: string,
+  persist: Persist,
+  user: string | null,
+  context: Context
+): Promise<void> {
   const record = deps.agents.state().scoops[id];
   if (!record) return;
-  await archive(deps, record, persist, context).catch(() => null);
+  await archive(deps, record, persist, user, context).catch(() => null);
   await deps.scoops.stop(id, false, context);
   await deps.env.remove(
-    `${SCOOPS_ROOT}/${record.folder}`,
+    deps.layout.scoopRoot(record.folder),
     { recursive: true, force: true },
     context
   );
@@ -152,8 +165,59 @@ function watchPid(deps: Deps, pid: number | null, end: (ending: Ending) => void)
   return () => clearInterval(timer);
 }
 
+export type Shared = { path: string; write: boolean };
+
+export function sharesOf(
+  home: string,
+  cwd: string,
+  workdir: string | undefined,
+  readOnly: readonly string[]
+): Shared[] {
+  const inside = (path: string) => path.startsWith(`${home}/`);
+  const out: Shared[] = [];
+  if (workdir && inside(workdir)) out.push({ path: workdir, write: true });
+  for (const path of [...readOnly, ...(workdir ? [] : [cwd])])
+    if (inside(path) && !out.some((shared) => shared.path === path))
+      out.push({ path, write: false });
+  return out;
+}
+
+export function shareScript(home: string, shares: readonly Shared[]): string {
+  const lines: string[] = [];
+  for (const { path, write } of shares) {
+    const at = quote(path);
+    lines.push(`chmod -R ${write ? 'g+rwX' : 'g+rX'} ${at}`);
+    if (write)
+      lines.push(
+        `shopt -s globstar dotglob nullglob; for dir in ${at} ${at}/**/; do chmod g+s "$dir"; done`
+      );
+    const parts = path
+      .slice(home.length + 1)
+      .split('/')
+      .slice(0, -1);
+    for (let depth = 1; depth <= parts.length; depth++)
+      lines.push(`chmod g+x ${quote(`${home}/${parts.slice(0, depth).join('/')}`)}`);
+  }
+  return lines.join('\n');
+}
+
+export function shareNote(shares: readonly Shared[]): string {
+  const listed = shares
+    .map(({ path, write }) => `${path}${write ? ' (you may change files there)' : ' (read only)'}`)
+    .join(', ');
+  return `Your caller shared these with you through its group: ${listed}.`;
+}
+
+async function share(deps: Deps, request: Request, shares: readonly Shared[], context: Context) {
+  const env = await deps.layout.envFor(request.user ?? null, context);
+  if (!env || !shares.length) return;
+  const home = deps.layout.homeOf(request.user ?? null);
+  await env.exec(shareScript(home, shares), undefined, context);
+}
+
 interface Plan {
   given: string[];
+  shares?: Shared[];
   workdir?: string;
   instructions: string;
   readOnly: string[];
@@ -185,12 +249,15 @@ async function plan(
     last(parsed, '--system-prompt') ??
     (systemFile ? await readText(deps, systemFile, request, context) : undefined);
   if (system) notes.push(system);
-  if (workdir) notes.push(`Your working folder is ${workdir}; you may change files there.`);
   const readOnly = (last(parsed, '--read-only') ?? '')
     .split(',')
     .map((path) => path.trim())
     .filter(Boolean)
     .map((path) => resolve(request.cwd, path));
+  const home = deps.layout.homeOf(request.user ?? null);
+  const shares = deps.layout.users ? sharesOf(home, request.cwd, workdir, readOnly) : [];
+  if (shares.length) notes.push(shareNote(shares));
+  if (workdir) notes.push(`Your working folder is ${workdir}; you may change files there.`);
   const result: Plan = {
     given,
     instructions: notes.join('\n\n'),
@@ -198,6 +265,7 @@ async function plan(
     persist: persistOf(parsed.switches),
   };
   if (workdir) result.workdir = workdir;
+  if (shares.length) result.shares = shares;
   return result;
 }
 
@@ -265,6 +333,7 @@ export async function runSync(
   if (isAnswer(chosen)) return chosen;
   const found = await role(deps, parsed);
   if (found.error) return found.error;
+  if (planned.shares) await share(deps, request, planned.shares, context);
   const spawned = await deps.scoops.spawn(
     {
       cone: who.cone,
@@ -302,10 +371,11 @@ export async function runSync(
     const raced = await Promise.race([outcome(deps, tasks, context), ended]);
     if (typeof raced === 'string') {
       const answer = await settle(deps, who, id, tasks, raced, context);
-      if (answer.code === 130) await finish(deps, id, planned.persist, context);
+      if (answer.code === 130)
+        await finish(deps, id, planned.persist, request.user ?? null, context);
       return answer;
     }
-    await finish(deps, id, planned.persist, context);
+    await finish(deps, id, planned.persist, request.user ?? null, context);
     return answerOf(raced);
   } finally {
     unwatch();

@@ -23,12 +23,13 @@ import {
 } from '../agents.ts';
 import { CODEMODE } from '../codemode/index.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
+import { type Layout, LEGACY } from '../layout.ts';
 import type { Licks } from '../licks/licks.ts';
 import { McpAllowDoc, mcpEntries } from '../mcp/index.ts';
 import type { Role } from '../roles/roles.ts';
 import { visible } from './visible.ts';
 
-export const SCOOPS_ROOT = '/scoops';
+export { SCOOPS_ROOT } from '../layout.ts';
 export const LEDGER_SIZE = 512;
 
 export type Feed = {
@@ -71,6 +72,8 @@ export interface ScoopsHost {
   reads?: () => readonly string[];
   files?: Pick<ExecutionEnv, 'remove' | 'createDir'>;
   mcp?: (names: readonly string[]) => ToolRegistration[];
+  layout?: Layout;
+  enforced?: boolean;
 }
 
 export interface Rewound {
@@ -113,8 +116,8 @@ export interface SpawnRequest {
   limits: Limits;
 }
 
-export function workspace(folder: string): string {
-  return `${SCOOPS_ROOT}/${folder}/workspace`;
+export function workspace(folder: string, layout: Layout = LEGACY): string {
+  return layout.workspace(folder);
 }
 
 export async function tail(conversation: Conversation, context: Context): Promise<Mark> {
@@ -254,15 +257,15 @@ function claimTurn(
 function agentChange(
   request: SpawnRequest,
   folder: string,
-  tools: readonly ToolRegistration[] | undefined,
-  mcp?: (names: readonly string[]) => ToolRegistration[]
+  host: Pick<ScoopsHost, 'tools' | 'mcp' | 'layout'>
 ): AgentChange {
+  const { tools, mcp } = host;
   const model = request.model ?? modelOf(request.role?.model);
   const thinking = request.thinking ?? request.role?.thinking;
   const chosen = selection(tools, request.tools ?? request.role?.tools, mcp);
   const instructions = [request.role?.prompt, request.instructions].filter(Boolean).join('\n\n');
   return {
-    cwd: request.cwd ?? workspace(folder),
+    cwd: request.cwd ?? workspace(folder, host.layout),
     ...(instructions ? { instructions } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinkingLevel: thinking as AgentChange['thinkingLevel'] } : {}),
@@ -284,10 +287,38 @@ async function narrowMcp(
     (await tx.doc(McpAllowDoc, child)).allow = listed ?? inherited;
 }
 
+function scoopRecord(
+  request: SpawnRequest,
+  folder: string,
+  conversation: number,
+  anchor: number,
+  created: Mark | null
+): ScoopRecord {
+  return {
+    name: request.name.trim() || folder,
+    folder,
+    cone: request.cone,
+    conversation,
+    anchor,
+    role: request.role?.name ?? null,
+    ...(request.role?.memory ? { memory: request.role.memory } : {}),
+    ...(request.role?.memory && request.origin ? { origin: request.origin } : {}),
+    ...(request.role?.context ? { context: request.role.context } : {}),
+    kind: request.kind ?? 'async',
+    parent: request.parent ?? request.cone,
+    depth: request.depth ?? 1,
+    roots: request.roots ?? null,
+    created,
+    dropped: null,
+    gone: false,
+  };
+}
+
 async function spawn(core: Core, request: SpawnRequest, context: Context): Promise<Answer> {
   const done = await answered(core, request.request, context);
   if (done) return done;
-  const { agents, tools, mcp } = await core.host;
+  const host = await core.host;
+  const { agents } = host;
   const parent = await coneOfId(core, request.cone, context);
   const count = liveCount(agents.state(), request.cone);
   if (count >= request.limits.maxLiveScoops)
@@ -309,26 +340,9 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
       background: true,
     });
     const child = await tx.createConversation({ ownership: { kind: 'task', taskId: anchor } });
-    await configure(tx, child.id, agentChange(request, folder, tools, mcp));
+    await configure(tx, child.id, agentChange(request, folder, host));
     await narrowMcp(tx, doc, parent.id, child.id, request);
-    doc.scoops[id] = {
-      name: request.name.trim() || folder,
-      folder,
-      cone: request.cone,
-      conversation: child.id,
-      anchor,
-      role: request.role?.name ?? null,
-      ...(request.role?.memory ? { memory: request.role.memory } : {}),
-      ...(request.role?.memory && request.origin ? { origin: request.origin } : {}),
-      ...(request.role?.context ? { context: request.role.context } : {}),
-      kind: request.kind ?? 'async',
-      parent: request.parent ?? request.cone,
-      depth: request.depth ?? 1,
-      roots: request.roots ?? null,
-      created,
-      dropped: null,
-      gone: false,
-    };
+    doc.scoops[id] = scoopRecord(request, folder, child.id, Number(anchor), created);
     const target =
       request.target === undefined
         ? request.fromAgent
@@ -432,7 +446,7 @@ async function stopFeeds(
 }
 
 async function stop(core: Core, id: string, fromAgent: boolean, context: Context): Promise<Answer> {
-  const { agents, files } = await core.host;
+  const { agents, files, layout = LEGACY } = await core.host;
   const record = agents.state().scoops[id];
   if (!record || !live(record)) return missing(id);
   await stopFeeds(core, id, async () => false, context);
@@ -443,17 +457,12 @@ async function stop(core: Core, id: string, fromAgent: boolean, context: Context
   await agents.update((_tx, state) => {
     (state.scoops[id] as ScoopRecord).dropped = mark;
   }, context);
-  const removed = await files?.remove(
-    workspace(record.folder),
-    { recursive: true, force: true },
-    context
-  );
-  const folder = removed?.ok
-    ? `removed ${workspace(record.folder)}`
-    : `kept ${workspace(record.folder)}`;
+  const place = layout.workspace(record.folder);
+  const removed = await files?.remove(place, { recursive: true, force: true }, context);
+  const folder = removed?.ok ? `removed ${place}` : `kept ${place}`;
   return {
     code: 0,
-    out: `stopped ${record.folder}; its transcript is kept, ${folder}, and its reports stay in ${SCOOPS_ROOT}/${record.folder}/reports\n`,
+    out: `stopped ${record.folder}; its transcript is kept, ${folder}, and its reports stay in ${layout.reports(record.folder, record.cone)}\n`,
   };
 }
 
@@ -470,14 +479,16 @@ async function rename(core: Core, id: string, name: string, context: Context): P
 }
 
 async function resetWorkspace(
-  files: ScoopsHost['files'],
+  host: Pick<ScoopsHost, 'files' | 'layout'>,
   folder: string,
   context: Context
 ): Promise<boolean> {
+  const { files } = host;
   if (!files) return true;
-  const cleared = await files.remove(workspace(folder), { recursive: true, force: true }, context);
+  const place = workspace(folder, host.layout);
+  const cleared = await files.remove(place, { recursive: true, force: true }, context);
   if (!cleared.ok) return false;
-  return (await files.createDir(workspace(folder), { recursive: true }, context)).ok;
+  return (await files.createDir(place, { recursive: true }, context)).ok;
 }
 
 type Seen = (mark: Mark | null) => Promise<boolean>;
@@ -491,7 +502,8 @@ async function rewindOne(
   result: Rewound,
   context: Context
 ): Promise<Partial<ScoopRecord> | undefined> {
-  const { harness, licks, files } = await core.host;
+  const host = await core.host;
+  const { harness, licks } = host;
   if (!(await seen(record.created))) {
     if (live(record)) {
       await stopFeeds(core, id, async () => false, context);
@@ -502,7 +514,7 @@ async function rewindOne(
   }
   if (record.dropped !== null) {
     if (await seen(record.dropped)) return undefined;
-    const reset = await resetWorkspace(files, record.folder, context);
+    const reset = await resetWorkspace(host, record.folder, context);
     result.restored.push(
       reset ? record.name : `${record.name} (its working folder could not be reset)`
     );

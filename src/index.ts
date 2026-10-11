@@ -35,6 +35,8 @@ export { HOME, type KernelEnvOptions, kernelEnvironment, SliccKernelEnv } from '
 export {
   adminOver,
   type KernelAdmin,
+  type KernelGroup,
+  type KernelGroups,
   type KernelUser,
   type KernelUsers,
   serveAdmin,

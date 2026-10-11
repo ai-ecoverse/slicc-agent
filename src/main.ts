@@ -26,6 +26,7 @@ import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { imageReads } from './images/index.ts';
 import { createActivity } from './kernel/activity.ts';
+import { agentUsers } from './kernel/agent-users.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
@@ -155,11 +156,48 @@ async function secretsFor(home: SliccKernelEnv, vault: Vault) {
   return names;
 }
 
+async function modelsOf(options: AgentWorkerOptions) {
+  const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
+  const providers = options.providers ?? sliccProviders();
+  return { credentials, providers, models: createSliccModels(credentials, providers) };
+}
+
+function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>) {
+  const registry = createRegistry();
+  registry.install(CodingTools);
+  registry.install(sliccPrompt(facts));
+  const read = (CodingTools.tools as readonly ToolRegistration[]).find(
+    (tool) => tool.name === 'read'
+  ) as ToolRegistration;
+  registry.install(imageReads(read));
+  return registry;
+}
+
+async function factsOf(client: KernelClient & { transport: Transport }, native: typeof fetch) {
+  return {
+    version: await agentVersion((url) => native(url)),
+    commands: await commandsOnPath(client),
+    transport: transportName(client.transport),
+    browser: await browserConnected(client),
+  };
+}
+
 function routeFetch(scope: AgentWorkerScope, client: KernelClient & { transport: Transport }) {
   const native = scope.fetch.bind(scope);
   const loopback = client.loopbackFetch?.bind(client);
   scope.fetch = transportFetch(client.transport, scope.location.origin, native, loopback);
   return native;
+}
+
+async function prepare(
+  scope: AgentWorkerScope,
+  kernel: { client: KernelClient & { transport: Transport }; home: SliccKernelEnv; vault: Vault },
+  options: AgentWorkerOptions
+) {
+  const names = await secretsFor(kernel.home, kernel.vault);
+  const native = routeFetch(scope, kernel.client);
+  const facts = await factsOf(kernel.client, native);
+  return { names, native, facts, ...(await modelsOf(options)), registry: baseRegistry(facts) };
 }
 
 async function start(
@@ -171,27 +209,8 @@ async function start(
   const { client, users } = await attached(ports, options);
   const home = new SliccKernelEnv(client, { cwd: HOME });
   await privateStore(home);
-  const names = await secretsFor(home, vault);
-  const native = routeFetch(scope, client);
-  const facts = {
-    version: await agentVersion((url) => native(url)),
-    commands: await commandsOnPath(client),
-    transport: transportName(client.transport),
-    browser: await browserConnected(client),
-  };
-  const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
-  const providers = options.providers ?? sliccProviders();
-  const models = createSliccModels(credentials, providers);
-  const registry = createRegistry();
-  registry.install(CodingTools);
-  registry.install(sliccPrompt(facts));
-  registry.install(
-    imageReads(
-      (CodingTools.tools as readonly ToolRegistration[]).find(
-        (tool) => tool.name === 'read'
-      ) as ToolRegistration
-    )
-  );
+  const ready = await prepare(scope, { client, home, vault }, options);
+  const { names, native, facts, credentials, providers, models, registry } = ready;
   const memory = setupMemory(registry);
   const coding = CodingTools.tools as readonly ToolRegistration[];
   registry.install(browserGuard([scope.location.origin], coding));
@@ -207,15 +226,18 @@ async function start(
   const groups = processGroups(client);
   const model = options.model ?? DEFAULT_MODEL;
   let opened: Agent | undefined;
+  const people = users ? agentUsers(users, client, home, () => opened?.agents) : undefined;
   const environment = kernelEnvironment(client, {
     activity,
     groups,
     identify: identity(() => opened?.agents, model),
     scrub: vault,
     spawn: shellGrants(names),
+    ...(people ? { route: people.route } : {}),
   });
   const agent = await openRepinned(options, { models, model, registry, env: environment });
   opened = agent;
+  await people?.start(agent.agents);
   const sources = licks.attach(agent, { env: home, home: HOME, activity });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
@@ -272,6 +294,7 @@ async function start(
     env: home,
     extract: memory.extract,
     title: titler(models, settingsText(home, HOME)),
+    ...(people ? { layout: people.layout } : {}),
   });
   licks.licks.guard(freezer.frozenTarget);
   const settings = await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime });
@@ -283,6 +306,9 @@ async function start(
       groups,
       env: home,
       home: HOME,
+      ...(people
+        ? { layout: people.layout, spools: people.spools, enforced: people.enforced }
+        : {}),
       alive: alive(client),
       reads: skillsRuntime.dirs,
       memory: memoryRuntime.command,

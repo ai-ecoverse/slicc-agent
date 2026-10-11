@@ -17,12 +17,26 @@ export interface UserSpec {
   groups?: string[];
   umask?: number;
   homeGroup?: string;
+  homeMode?: number;
 }
 
 export interface KernelUsers {
   add(spec: UserSpec): Promise<KernelUser>;
   remove(name: string, options?: { keepHome?: boolean }): Promise<boolean>;
   list(): Promise<KernelUser[]>;
+  mode?: string;
+}
+
+export interface KernelGroup {
+  name: string;
+  gid: number;
+  members: string[];
+}
+
+export interface KernelGroups {
+  list(): Promise<KernelGroup[]>;
+  addMember(group: string, user: string): Promise<unknown>;
+  removeMember(group: string, user: string): Promise<unknown>;
 }
 
 export interface UserConnect {
@@ -33,15 +47,24 @@ export interface UserConnect {
 export interface KernelSource {
   connect(options?: UserConnect): Promise<Transferable>;
   users?: KernelUsers;
+  groups?: KernelGroups;
 }
 
 export interface KernelAdmin {
   connect(options: UserConnect): Promise<MessagePort>;
   users: KernelUsers;
+  groups: KernelGroups;
   close(): void;
 }
 
-type Op = 'connect' | 'users.add' | 'users.remove' | 'users.list';
+type Op =
+  | 'connect'
+  | 'users.add'
+  | 'users.remove'
+  | 'users.list'
+  | 'groups.list'
+  | 'groups.addMember'
+  | 'groups.removeMember';
 type Call = { id: number; op: Op; args: unknown[] };
 type Reply = { id: number; value?: unknown; error?: { message: string; code?: string } };
 
@@ -51,10 +74,22 @@ function failure(error: unknown): { message: string; code?: string } {
   return typeof code === 'string' ? { message, code } : { message };
 }
 
+const missing = (what: string) =>
+  Object.assign(new Error(`this kernel has no ${what}`), { code: 'ENOSYS' });
+
+function grouped(groups: KernelGroups | undefined, call: Call): Promise<unknown> {
+  if (!groups) throw missing('groups');
+  const [group, user] = call.args as [string, string];
+  if (call.op === 'groups.addMember') return groups.addMember(group, user);
+  if (call.op === 'groups.removeMember') return groups.removeMember(group, user);
+  return groups.list();
+}
+
 async function perform(source: KernelSource, call: Call): Promise<unknown> {
   const users = source.users;
   if (call.op === 'connect') return source.connect(call.args[0] as UserConnect);
-  if (!users) throw Object.assign(new Error('this kernel has no users'), { code: 'ENOSYS' });
+  if (call.op.startsWith('groups.')) return grouped(source.groups, call);
+  if (!users) throw missing('users');
   if (call.op === 'users.add') return users.add(call.args[0] as UserSpec);
   if (call.op === 'users.remove')
     return users.remove(call.args[0] as string, call.args[1] as { keepHome?: boolean });
@@ -105,6 +140,11 @@ export function adminOver(port: PortEndpoint): KernelAdmin {
       remove: (name, options) => call<boolean>('users.remove', name, options),
       list: () => call<KernelUser[]>('users.list'),
     },
+    groups: {
+      list: () => call<KernelGroup[]>('groups.list'),
+      addMember: (group, user) => call('groups.addMember', group, user),
+      removeMember: (group, user) => call('groups.removeMember', group, user),
+    },
     close() {
       shut = true;
       for (const waiting of pending.values()) waiting.reject(new Error('the kernel admin closed'));
@@ -121,6 +161,7 @@ export type UserClient = KernelClient & {
 
 export interface UserClients {
   readonly users: KernelUsers;
+  readonly groups: KernelGroups;
   client(agentId: string, user: string): Promise<UserClient>;
   drop(agentId: string): Promise<void>;
   close(): Promise<void>;
@@ -142,6 +183,7 @@ export function userClients(
   };
   return {
     users: admin.users,
+    groups: admin.groups,
     client(agentId, user) {
       const known = held.get(agentId);
       if (known?.user === user) return known.client;
