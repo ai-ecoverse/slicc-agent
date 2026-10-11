@@ -36,6 +36,7 @@ export const TOTAL_MAX = 128;
 export const ZOMBIE_MS = 60000;
 export const STALE_MS = 1800000;
 export const CONTEXT_WARN = 0.8;
+export const DEPTH_MAX = 6;
 const MINUTE = 60000;
 const HOUR = 3600000;
 
@@ -81,6 +82,35 @@ export function count(value: number): string {
   if (value < 1000) return String(value);
   if (value < 1000000) return `${(value / 1000).toFixed(1)}k`;
   return `${(value / 1000000).toFixed(1)}M`;
+}
+
+export function bytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let size = value / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit++;
+  }
+  return `${size.toFixed(size < 10 ? 1 : 0)} ${units[unit]}`;
+}
+
+function memoryVital(processes: readonly MonitorProcess[]): MonitorVital[] {
+  const measured = processes.filter((row) => typeof row.rss === 'number');
+  if (!measured.length) return [];
+  const total = measured.reduce((sum, row) => sum + (row.rss as number), 0);
+  const agents = measured
+    .filter((row) => row.agentId)
+    .reduce((sum, row) => sum + (row.rss as number), 0);
+  return [
+    {
+      id: 'memory',
+      label: 'Process memory',
+      value: bytes(total),
+      unit: `${bytes(agents)} by agents`,
+    },
+  ];
 }
 
 export function taskLabel(task: MonitorTask): string {
@@ -146,7 +176,10 @@ export function taskTree(feed: MonitorFeed): { task: MonitorTask; depth: number 
 function capped(rows: MonitorRow[]): MonitorRow[] {
   if (rows.length <= ROWS_MAX) return rows;
   const shown = rows.slice(0, ROWS_MAX - 1);
-  return [...shown, { name: `+${rows.length - shown.length} more`, meta: '', status: 'idle' }];
+  return [
+    ...shown,
+    { id: 'more', name: `+${rows.length - shown.length} more`, meta: '', status: 'idle' },
+  ];
 }
 
 function contextRatio(agent: MonitorAgent, models: readonly ModelChoice[]): number | null {
@@ -219,6 +252,7 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
         }
       : { id: 'processes', label: 'Processes', value: '—', unit: 'kernel not reachable' }
   );
+  out.push(...memoryVital(feed.processes ?? []));
   const ratios = feed.agents
     .map((agent) => contextRatio(agent, input.models))
     .filter((ratio): ratio is number => ratio !== null);
@@ -392,7 +426,7 @@ function alerts(input: MonitorInput, feed: MonitorFeed): MonitorAlert[] {
   ];
 }
 
-function agentRow(agent: MonitorAgent, models: readonly ModelChoice[]): MonitorRow {
+function agentRow(agent: MonitorAgent, depth: number, models: readonly ModelChoice[]): MonitorRow {
   const ratio = contextRatio(agent, models);
   const word = agent.retry
     ? 'retrying'
@@ -417,9 +451,11 @@ function agentRow(agent: MonitorAgent, models: readonly ModelChoice[]): MonitorR
     ...(agent.retry ? [`retry ${agent.retry.attempt}`] : []),
   ];
   return {
-    name: agent.kind === 'scoop' ? `↳ ${agent.name}` : agent.name,
+    id: agent.id,
+    name: agent.name,
     meta,
     status,
+    depth,
     ...(badges.length ? { badges } : {}),
   };
 }
@@ -442,7 +478,9 @@ function taskRow(
     ...(task.waits ? [`waits on ${task.waits}`] : []),
   ];
   return {
-    name: `${depth ? `${'  '.repeat(depth - 1)}↳ ` : ''}${taskLabel(task)}`,
+    id: task.id,
+    name: taskLabel(task),
+    depth: Math.min(depth, DEPTH_MAX),
     meta: [nameOf(task.agentId), task.phase, age(now - task.since)].filter(Boolean).join(' · '),
     status,
     ...(badges.length ? { badges } : {}),
@@ -461,10 +499,12 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
       ...(process.tty ? ['terminal'] : []),
     ];
     return {
+      id: String(process.pid),
       name: process.command || `[${process.pid}]`,
       meta: [
         `pid ${process.pid}`,
         process.user,
+        typeof process.rss === 'number' ? bytes(process.rss) : null,
         process.started ? age(input.now - process.started) : null,
       ]
         .filter(Boolean)
@@ -477,6 +517,20 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
 
 const PROBLEM_KINDS = { task: 'task failed', retry: 'retry', turn: 'turn failed' } as const;
 
+function depthOf(agents: ReadonlyMap<string, MonitorAgent>, agent: MonitorAgent): number {
+  const visited = new Set<string>();
+  let depth = 0;
+  let current = agent;
+  while (current.parentId && !visited.has(current.id)) {
+    visited.add(current.id);
+    const parent = agents.get(current.parentId);
+    if (!parent) break;
+    depth++;
+    current = parent;
+  }
+  return depth;
+}
+
 function sections(input: MonitorInput, feed: MonitorFeed): MonitorSection[] {
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
   const nameOf = (id: string | null) => (id ? (agents.get(id)?.name ?? id) : 'session');
@@ -484,7 +538,9 @@ function sections(input: MonitorInput, feed: MonitorFeed): MonitorSection[] {
     {
       id: 'agents',
       label: 'Cones and scoops',
-      rows: ordered(feed).map((agent) => agentRow(agent, input.models)),
+      rows: ordered(feed).map((agent) =>
+        agentRow(agent, Math.min(depthOf(agents, agent), DEPTH_MAX), input.models)
+      ),
     },
     {
       id: 'tasks',
@@ -498,6 +554,7 @@ function sections(input: MonitorInput, feed: MonitorFeed): MonitorSection[] {
       id: 'problems',
       label: 'Recent problems',
       rows: feed.problems.map((problem) => ({
+        id: problem.id,
         name: `${nameOf(problem.agentId)} · ${PROBLEM_KINDS[problem.kind]}`,
         meta: problem.message,
         status: problem.kind === 'retry' ? 'warn' : 'error',
@@ -512,6 +569,7 @@ function pageSections(input: MonitorInput): MonitorSection[] {
       id: 'changes',
       label: 'Pending changes',
       rows: input.changes.map((change) => ({
+        id: change.path,
         name: change.path,
         meta: change.status,
         status: 'warn',

@@ -19,8 +19,6 @@ export class TrayAdapter extends Emitter<TrayEvents> implements TrayPort {
       connection: 'offline',
       role: 'none',
       followers: [],
-      spent: 0,
-      rate: 0,
       budget: budget
         ? { percent: budget.percent, window: budget.window, resets: budget.resets }
         : { percent: 0, window: 'weekly', resets: '' },
