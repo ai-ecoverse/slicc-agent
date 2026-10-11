@@ -75,6 +75,7 @@ export function age(ms: number): string {
 }
 
 export function money(value: number): string {
+  if (value > 0 && value < 0.01) return '<$0.01';
   return `$${value.toFixed(2)}`;
 }
 
@@ -442,7 +443,8 @@ function agentRow(agent: MonitorAgent, depth: number, models: readonly ModelChoi
       : agent.failed
         ? 'error'
         : 'idle';
-  const meta = [word, agent.model, ratio === null ? null : `${Math.round(ratio * 100)}% context`]
+  const model = models.find((choice) => choice.id === agent.model)?.label ?? agent.model;
+  const meta = [word, model, ratio === null ? null : `${Math.round(ratio * 100)}% context`]
     .filter(Boolean)
     .join(' · ');
   const badges = [
