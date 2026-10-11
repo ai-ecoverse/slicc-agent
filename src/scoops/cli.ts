@@ -3,9 +3,10 @@ import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState } from '../agents.ts';
 import { resolve } from '../kernel/paths.ts';
+import { agentOfUser, type Layout, LEGACY, ROOT_USER } from '../layout.ts';
 import { findRole, type Roles } from '../roles/roles.ts';
 import type { Request, Runner } from './requests.ts';
-import { type Answer, findScoop, modelOf, SCOOPS_ROOT, type Scoops } from './service.ts';
+import { type Answer, findScoop, modelOf, type Scoops } from './service.ts';
 import { cancelSync, detachSync, runSync, type SyncState } from './sync.ts';
 
 export const DEFAULT_WAIT_S = 30;
@@ -47,6 +48,7 @@ export interface CliOptions {
   gelatiere?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   freezer?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   models?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
+  layout?: Layout;
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
 }
 
@@ -56,7 +58,7 @@ export interface PanelCaller {
   tab: string | null;
 }
 
-export type Deps = CliOptions & { now: () => number; sync: SyncState };
+export type Deps = CliOptions & { now: () => number; sync: SyncState; layout: Layout };
 
 export interface Caller {
   id: string | null;
@@ -96,22 +98,38 @@ export function last(parsed: Flags, flag: string): string | undefined {
   return parsed.values.get(flag)?.at(-1);
 }
 
-export function callerOf(agents: Agents, request: Request): Caller {
+function claimed(agents: Agents, caller: string): Caller | undefined {
   const state = agents.state();
-  if (request.caller.startsWith('cone:') && state.cones[request.caller.slice(5)]) {
-    const cone = request.caller.slice(5);
+  if (caller.startsWith('cone:') && state.cones[caller.slice(5)]) {
+    const cone = caller.slice(5);
     return { id: `cone:${cone}`, cone, fromAgent: true, scoop: null, depth: 0 };
   }
-  const record = request.caller.startsWith('scoop:') ? state.scoops[request.caller] : undefined;
+  const record = caller.startsWith('scoop:') ? state.scoops[caller] : undefined;
   if (record)
-    return {
-      id: request.caller,
-      cone: record.cone,
-      fromAgent: true,
-      scoop: request.caller,
-      depth: record.depth,
-    };
-  return { id: null, cone: agents.activeCone(), fromAgent: false, scoop: null, depth: 0 };
+    return { id: caller, cone: record.cone, fromAgent: true, scoop: caller, depth: record.depth };
+  return undefined;
+}
+
+export class CallerError extends Error {}
+
+export function callerOf(agents: Agents, request: Request): Caller {
+  const user = request.user;
+  if (!user || user === ROOT_USER)
+    return (
+      claimed(agents, request.caller) ?? {
+        id: null,
+        cone: agents.activeCone(),
+        fromAgent: false,
+        scoop: null,
+        depth: 0,
+      }
+    );
+  const own = agentOfUser(agents.state(), user);
+  if (request.caller && request.caller !== own)
+    throw new CallerError(`SLICC_AGENT says ${request.caller}, but you are ${user}`);
+  const found = own ? claimed(agents, own) : undefined;
+  if (!found) throw new CallerError(`${user} is no cone or live scoop`);
+  return found;
 }
 
 export async function readText(
@@ -120,7 +138,8 @@ export async function readText(
   request: Request,
   context: Context
 ): Promise<string> {
-  const read = await deps.env.readTextFile(resolve(request.cwd, value), context);
+  const env = (await deps.layout.envFor(request.user ?? null, context)) ?? deps.env;
+  const read = await env.readTextFile(resolve(request.cwd, value), context);
   if (!read.ok) throw new Error(`can't read ${value}: ${read.error.message}`);
   return read.value;
 }
@@ -306,8 +325,8 @@ async function status(
       `role: ${record.role ?? '-'}`,
       `kind: ${record.kind}`,
       `state: ${busy ? 'working' : 'idle'}`,
-      `folder: ${SCOOPS_ROOT}/${record.folder}`,
-      `reports: ${SCOOPS_ROOT}/${record.folder}/reports`,
+      `folder: ${deps.layout.scoopRoot(record.folder)}`,
+      `reports: ${deps.layout.reports(record.folder, record.cone)}`,
     ].join('\n')}\n`
   );
 }
@@ -345,8 +364,12 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   );
 }
 
-async function latest(deps: Deps, folder: string, context: Context): Promise<string> {
-  const dir = `${SCOOPS_ROOT}/${folder}/reports`;
+async function latest(
+  deps: Deps,
+  record: { folder: string; cone: string },
+  context: Context
+): Promise<string> {
+  const dir = deps.layout.reports(record.folder, record.cone);
   const listed = await deps.env.listDir(dir, context);
   if (!listed.ok || !listed.value.length) return '(no answer yet)';
   const newest = [...listed.value].sort(
@@ -382,7 +405,7 @@ async function block(
     const record = state.scoops[id];
     if (record)
       sections.push(
-        `## ${record.folder}${open.includes(id) ? ' (still working)' : ''}\n${await latest(deps, record.folder, context)}`
+        `## ${record.folder}${open.includes(id) ? ' (still working)' : ''}\n${await latest(deps, record, context)}`
       );
   }
   const body = `${sections.join('\n\n')}\n`;
@@ -513,7 +536,12 @@ const BLOCKING = new Set([
 ]);
 
 export function createCli(options: CliOptions): Runner {
-  const deps: Deps = { ...options, now: options.now ?? Date.now, sync: { pending: new Map() } };
+  const deps: Deps = {
+    ...options,
+    now: options.now ?? Date.now,
+    sync: { pending: new Map() },
+    layout: options.layout ?? LEGACY,
+  };
   return {
     blocking(request) {
       if (request.as === 'panel') return true;

@@ -1,5 +1,6 @@
 #!/bin/bash
 dir=/var/lib/slicc/agent/requests
+if [ -n "${USER:-}" ] && [ -d "$dir/$USER/in" ]; then dir="$dir/$USER"; fi
 as="${0##*/}"
 case "$as" in subagent|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; esac
 [ -d "$dir/in" ] && [ -d "$dir/out" ] || mkdir -p "$dir/in" "$dir/out" 2>/dev/null

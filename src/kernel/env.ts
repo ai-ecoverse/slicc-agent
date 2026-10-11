@@ -417,20 +417,29 @@ export const HOME = '/home';
 
 export type EnvTargetLike = { cwd?: string; conversationId?: number; read?: unknown };
 
+export type EnvRoute = { client: KernelClient; home: string };
+
 export function kernelEnvironment(
   client: KernelClient,
   options: Omit<KernelEnvOptions, 'cwd'> & {
     identify?: (target: EnvTargetLike, context: Context) => Promise<Record<string, string>>;
+    route?: (target: EnvTargetLike) => Promise<EnvRoute | undefined>;
   } = {}
 ): (target: EnvTargetLike, context?: Context) => SliccKernelEnv | Promise<SliccKernelEnv> {
-  const { identify, ...rest } = options;
-  const make = (target: EnvTargetLike, exports?: Record<string, string>) =>
-    new SliccKernelEnv(client, {
+  const { identify, route, ...rest } = options;
+  const make = (target: EnvTargetLike, exports?: Record<string, string>, routed?: EnvRoute) =>
+    new SliccKernelEnv(routed?.client ?? client, {
       ...rest,
-      cwd: target.cwd ?? HOME,
+      cwd: target.cwd ?? routed?.home ?? HOME,
       ...(target.conversationId === undefined ? {} : { owner: target.conversationId }),
       ...(exports ? { exports } : {}),
     });
+  if (route)
+    return async (target, context) => {
+      const routed = await route(target);
+      const exports = identify && context ? await identify(target, context) : undefined;
+      return make(target, exports, routed);
+    };
   return (target, context) =>
     identify && context
       ? identify(target, context).then((exports) => make(target, exports))

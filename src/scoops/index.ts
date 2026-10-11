@@ -3,11 +3,18 @@ import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-dur
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
+import { type Layout, LEGACY } from '../layout.ts';
 import type { Licks } from '../licks/licks.ts';
 import { DEFAULT_LIMITS, loadRoles, packageDirs, type Roles } from '../roles/roles.ts';
 import { type CliOptions, createCli, RUN_DIR } from './cli.ts';
 import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
-import { type ControlPlane, controlPlane, PROTOCOL } from './requests.ts';
+import {
+  CONTROL_DIR,
+  type ControlPlane,
+  controlPlane,
+  type PlaneOptions,
+  PROTOCOL,
+} from './requests.ts';
 import { createScoops, type Scoops, type ScoopsHost } from './service.ts';
 
 export const BUILTIN_ROLES = ['scout', 'worker', 'reviewer', 'oracle', 'delegate', 'gelatiere'];
@@ -42,6 +49,14 @@ export interface AttachOptions {
   models?: CliOptions['models'];
   panel?: CliOptions['panel'];
   mcp?: (names: readonly string[]) => ToolRegistration[];
+  layout?: Layout;
+  enforced?: boolean;
+  spools?: Spools;
+}
+
+export interface Spools {
+  users(): readonly string[];
+  prepare(user: string, dir: string, context: Context): Promise<void>;
 }
 
 export interface ScoopsRuntime {
@@ -164,6 +179,81 @@ function mirror(agents: Agents, env: ExecutionEnv) {
   };
 }
 
+function planeOf(
+  env: ExecutionEnv,
+  cli: ReturnType<typeof createCli>,
+  options: AttachOptions,
+  context: Context
+): ControlPlane {
+  const common: PlaneOptions & { dir: string } = {
+    ...(options.sweepEvery ? { sweepEvery: options.sweepEvery } : {}),
+    mirror: mirror(options.agents, env),
+    dir: options.controlDir ?? CONTROL_DIR,
+  };
+  if (!options.spools) return controlPlane(env, cli, common);
+  return spooled(env, cli, options.spools, options.agents, common, context);
+}
+
+function spooled(
+  env: ExecutionEnv,
+  cli: ReturnType<typeof createCli>,
+  spools: Spools,
+  agents: Agents,
+  options: PlaneOptions & { dir: string },
+  context: Context
+): ControlPlane {
+  const planes = new Map<string, Promise<ControlPlane | undefined>>();
+  let off: () => void = () => undefined;
+  let chain: Promise<unknown> = Promise.resolve();
+  const open = async (user: string): Promise<ControlPlane | undefined> => {
+    const dir = `${options.dir}/${user}`;
+    try {
+      await spools.prepare(user, dir, context);
+      const plane = controlPlane(env, cli, { ...options, dir, user });
+      await plane.start(context);
+      return plane;
+    } catch {
+      planes.delete(user);
+      return undefined;
+    }
+  };
+  const sync = () => {
+    const step = async () => {
+      const wanted = new Set(spools.users());
+      for (const user of wanted)
+        if (!planes.has(user)) {
+          const opened = open(user);
+          planes.set(user, opened);
+          await opened;
+        }
+      for (const [user, plane] of [...planes])
+        if (!wanted.has(user)) {
+          planes.delete(user);
+          await (await plane)?.close(context);
+        }
+    };
+    chain = chain.then(step, step);
+    return chain;
+  };
+  const all = async () =>
+    (await Promise.all(planes.values())).filter((plane): plane is ControlPlane => !!plane);
+  return {
+    async start() {
+      off = agents.onChange(() => void sync());
+      await sync();
+    },
+    async sweep(using) {
+      for (const plane of await all()) await plane.sweep(using);
+    },
+    async close(using) {
+      off();
+      await chain;
+      for (const plane of await all()) await plane.close(using);
+      planes.clear();
+    },
+  };
+}
+
 export function setupScoops(
   registry: Registry,
   licks: Licks,
@@ -177,13 +267,15 @@ export function setupScoops(
   const tasks = scoopTasks(lookup);
   const scoops = createScoops(host, () => tasks);
   let cached: Roles = { roles: [], warnings: [], limits: { ...DEFAULT_LIMITS } };
-  registry.install(scoopsExtension(tasks));
+  let layout = LEGACY;
+  registry.install(scoopsExtension(tasks, () => layout));
   registry.install(guardExtension(lookup, fileTools));
   return {
     scoops,
     async attach(options, context) {
       const { harness, agents, groups, env, home } = options;
       const assets = options.assets ?? packageAssets();
+      layout = options.layout ?? LEGACY;
       bind({
         harness,
         agents,
@@ -192,6 +284,8 @@ export function setupScoops(
         groups,
         reads: options.reads,
         files: env,
+        layout,
+        ...(options.enforced ? { enforced: true } : {}),
         ...(options.mcp ? { mcp: options.mcp } : {}),
       });
       const builtin = async () => {
@@ -237,13 +331,10 @@ export function setupScoops(
         ...(options.gelatiere ? { gelatiere: options.gelatiere } : {}),
         ...(options.freezer ? { freezer: options.freezer } : {}),
         ...(options.models ? { models: options.models } : {}),
+        layout,
         ...(options.panel ? { panel: options.panel } : {}),
       });
-      const plane = controlPlane(env, cli, {
-        ...(options.controlDir ? { dir: options.controlDir } : {}),
-        ...(options.sweepEvery ? { sweepEvery: options.sweepEvery } : {}),
-        mirror: mirror(agents, env),
-      });
+      const plane = planeOf(env, cli, options, context);
       await plane.start(context);
       return { roles, plane, close: (using) => plane.close(using) };
     },

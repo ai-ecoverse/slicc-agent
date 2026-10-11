@@ -16,8 +16,8 @@ import {
   type ScoopRecord,
 } from '../agents.ts';
 import { HOME } from '../kernel/env.ts';
+import { type Layout, LEGACY } from '../layout.ts';
 import type { LickTarget } from '../licks/lick.ts';
-import { SCOOPS_ROOT, workspace } from '../scoops/service.ts';
 import { pinned } from '../secrets/extension.ts';
 
 export type Answer = { code: number; out: string };
@@ -52,6 +52,7 @@ export interface FreezerAttach {
     cone: string
   ) => Promise<unknown>;
   now?: () => number;
+  layout?: Layout;
 }
 
 export interface FreezerRuntime {
@@ -210,13 +211,14 @@ export function thawedNote(
   kind: ConversationKind,
   name: string,
   folder: string,
-  kept: boolean
+  kept: boolean,
+  home = HOME
 ): string {
   const what = kind === 'agent' ? 'agent run' : kind;
   const place = kept
     ? `Its workspace ${folder} is still there.`
     : `Its workspace ${folder} was deleted when it stopped.`;
-  return `This was ${what} ${name}'s conversation, thawed as a cone. ${place} You now work in ${HOME} as a cone, with a cone's tools.`;
+  return `This was ${what} ${name}'s conversation, thawed as a cone. ${place} You now work in ${home} as a cone, with a cone's tools.`;
 }
 
 type Snapshot = { entries: readonly EntryRecord[]; record: Omit<FrozenRecord, 'scoops' | 'cone'> };
@@ -329,6 +331,7 @@ async function thawScoop(
   context: Context
 ): Promise<string> {
   const { harness, agents, env, now } = options;
+  const layout = options.layout ?? LEGACY;
   if (scoop.removed) throw new Error(`There is no conversation ${id}.`);
   if (live(scoop)) throw new Error(`${scoop.name} is still running; open it instead.`);
   const conversation = await harness.conversation(scoop.conversation as ConversationId, context);
@@ -344,13 +347,13 @@ async function thawScoop(
       extensions: cone.extensions,
       tools: cone.tools,
       instructions: cone.instructions ?? null,
-      cwd: HOME,
+      ...(layout.users ? {} : { cwd: HOME }),
     }),
   };
   const fork = last
     ? await conversation.fork(last.id, created, context)
     : await harness.createConversation(created, context);
-  const folder = workspace(scoop.folder);
+  const folder = layout.workspace(scoop.folder);
   const exists = await env.exists(folder, context);
   const kept = exists.ok && exists.value;
   await fork.submit(
@@ -362,7 +365,13 @@ async function thawScoop(
         model: [
           {
             role: 'user',
-            content: thawedNote(kindOf(scoop), scoop.name, folder, kept),
+            content: thawedNote(
+              kindOf(scoop),
+              scoop.name,
+              folder,
+              kept,
+              layout.users ? 'your own home' : HOME
+            ),
             timestamp: now(),
           },
         ],
@@ -395,7 +404,14 @@ async function removeScoop(
     entry.gone = true;
     delete entry.frozen;
   }, context);
-  await env.remove(`${SCOOPS_ROOT}/${scoop.folder}`, { recursive: true, force: true }, context);
+  await env.remove(
+    (options.layout ?? LEGACY).scoopRoot(scoop.folder),
+    {
+      recursive: true,
+      force: true,
+    },
+    context
+  );
 }
 
 function listing(harness: Harness, agents: Agents) {
@@ -465,7 +481,14 @@ async function discardFrozen(options: FreezerAttach, id: string, context: Contex
     delete doc.frozen?.[id];
   }, context);
   for (const folder of folders)
-    await env.remove(`${SCOOPS_ROOT}/${folder}`, { recursive: true, force: true }, context);
+    await env.remove(
+      (options.layout ?? LEGACY).scoopRoot(folder),
+      {
+        recursive: true,
+        force: true,
+      },
+      context
+    );
 }
 
 export function attachFreezer(options: FreezerAttach): FreezerRuntime {

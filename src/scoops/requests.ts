@@ -16,6 +16,7 @@ export interface Request {
   pid: number | null;
   argv: string[];
   stdin: string;
+  user?: string;
 }
 
 const HEADER = 6;
@@ -70,6 +71,7 @@ export interface PlaneOptions {
   now?: () => number;
   sweepEvery?: number;
   mirror?: (context: Context) => Promise<void>;
+  user?: string;
 }
 
 export function controlPlane(
@@ -108,7 +110,8 @@ export function controlPlane(
       const bytes = await env.readBinaryFile(`${requests}/${id}`, context);
       if (!bytes.ok) return;
       await env.writeFile(`${responses}/${id}.ack`, '', context);
-      const request = parseRequest(id, bytes.value);
+      const parsed = parseRequest(id, bytes.value);
+      const request = parsed && options.user ? { ...parsed, user: options.user } : parsed;
       if (!request) {
         await answer(
           id,
