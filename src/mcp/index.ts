@@ -8,6 +8,7 @@ import type {
 import type { CodemodeExtra } from './allow.ts';
 import type { McpCatalog } from './catalog.ts';
 import { parseMcpConfig } from './config.ts';
+import { configPath, shown } from './paths.ts';
 import type { McpAttach, McpRuntime } from './runtime.ts';
 
 export { allows, type CodemodeExtra, McpAllowDoc, mcpEntries, serverAllowed } from './allow.ts';
@@ -41,17 +42,18 @@ const idle: McpRuntime = {
 };
 
 async function unavailable(options: McpAttach, error: unknown, context: Context) {
-  const file = `${options.home}/.pi/agent/mcp.json`;
+  const file = configPath(options.home, options.agentDir);
+  const named = shown(file, options.home);
   const read = await options.env.readTextFile(file, context);
   if (!parseMcpConfig(read.ok ? read.value : undefined).servers.length) return;
   await options.licks
     .deliver(
       {
         channel: 'fswatch',
-        source: 'mcp:~/.pi/agent/mcp.json',
+        source: `mcp:${named}`,
         title: "MCP servers can't start in this SLICC",
         text: error instanceof Error ? error.message : String(error),
-        body: "The MCP client didn't load, so the servers in ~/.pi/agent/mcp.json stay off until SLICC is updated.",
+        body: `The MCP client didn't load, so the servers in ${named} stay off until SLICC is updated.`,
         target: 'cone',
         severity: 'warn',
         eventId: 'mcp\nunavailable',

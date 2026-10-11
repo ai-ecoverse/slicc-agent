@@ -7,6 +7,7 @@ import { quote } from './kernel/env.ts';
 export const SCOOPS_ROOT = '/scoops';
 export const SESSIONS = { tmp: '/tmp/agent-sessions', durable: '/home/sessions' };
 export const ROOT_USER = 'root';
+export const AGENT_DIR = '/etc/slicc/agent';
 
 export type Persist = 'tmp' | 'durable';
 

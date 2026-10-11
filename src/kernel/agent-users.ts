@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Agents } from '../agents.ts';
-import { type Layout, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
+import { AGENT_DIR, type Layout, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
 import type { Spools } from '../scoops/index.ts';
 import { type Accounts, createAccounts, type UsersMode, wanted } from './accounts.ts';
 import type { KernelClient } from './client.ts';
@@ -65,7 +65,7 @@ export function agentUsers(
     },
     async start(opened) {
       await root.exec(
-        `mkdir -p ${SESSIONS.tmp} && chmod 1777 ${SESSIONS.tmp}`,
+        `mkdir -p ${SESSIONS.tmp} ${AGENT_DIR} && chmod 1777 ${SESSIONS.tmp} && chmod 755 ${AGENT_DIR}`,
         undefined,
         BACKGROUND_CONTEXT
       );

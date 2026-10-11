@@ -16,22 +16,18 @@ import {
 import { McpServerConnection } from './connection.ts';
 import { resolveHeaders, scrub, secretNames } from './credentials.ts';
 import { authProvider as oauthAuth, StoredOAuth } from './oauth.ts';
+import { configPath, logPath, shown } from './paths.ts';
 import { patchSse } from './sse.ts';
 
 export const MCP_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
-export function configPath(home: string): string {
-  return `${home}/.pi/agent/mcp.json`;
-}
-
-export function logPath(home: string): string {
-  return `${home}/.pi/agent/mcp.log`;
-}
+export { configPath, logPath, shown } from './paths.ts';
 
 export interface McpAttach {
   licks: Licks;
   env: ExecutionEnv;
   home: string;
+  agentDir?: string;
   credentials: CredentialStore;
   fetch: typeof fetch;
   version: string;
@@ -57,8 +53,8 @@ export interface McpRuntime extends McpAccounts {
   close(context: Context): Promise<void>;
 }
 
-export function problemLick(problem: McpConfigProblem, home: string): LickEvent {
-  const file = `~${configPath(home).slice(home.length)}`;
+export function problemLick(problem: McpConfigProblem, home: string, dir?: string): LickEvent {
+  const file = shown(configPath(home, dir), home);
   const where = problem.server ? `server "${problem.server}"` : file;
   const field = problem.field ? `, field ${problem.field}` : '';
   return {
@@ -139,7 +135,7 @@ export function logLine(
 
 function serverLog(options: McpAttach, context: Context) {
   let logging = Promise.resolve();
-  const path = logPath(options.home);
+  const path = logPath(options.home, options.agentDir);
   const { env } = options;
   return {
     write(connection: McpServerConnection, params: unknown) {
@@ -212,9 +208,10 @@ export async function attachMcp(
     void connection.getClient().catch(() => undefined);
   };
   const reload = async (using: Context) => {
-    const read = await env.readTextFile(configPath(home), using);
+    const read = await env.readTextFile(configPath(home, options.agentDir), using);
     const parsed = parseMcpConfig(read.ok ? read.value : undefined);
-    for (const problem of parsed.problems) await report(problemLick(problem, home), using);
+    for (const problem of parsed.problems)
+      await report(problemLick(problem, home, options.agentDir), using);
     const wanted = new Map(
       parsed.servers
         .filter((entry) => entry.config.enabled !== false)
@@ -240,7 +237,11 @@ export async function attachMcp(
     clearTimeout(timer);
     timer = setTimeout(() => void reload(context).catch(() => undefined), options.reloadMs);
   };
-  const watched = await env.watch([{ path: configPath(home) }], schedule, context);
+  const watched = await env.watch(
+    [{ path: configPath(home, options.agentDir) }],
+    schedule,
+    context
+  );
   const watcher: FileWatcher | undefined = watched.ok ? watched.value : undefined;
   const restart = (connection: McpServerConnection) => {
     open(connection.entry);

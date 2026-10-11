@@ -31,6 +31,7 @@ import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
+import { AGENT_DIR } from './layout.ts';
 import { setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
 import { setupMcp } from './mcp/index.ts';
@@ -114,11 +115,10 @@ async function codemodeTools(
   client: KernelClient,
   options: AgentWorkerOptions,
   native: typeof fetch,
-  extra: Parameters<typeof codemodeTool>[0]['extra']
+  extra: Parameters<typeof codemodeTool>[0]['extra'],
+  dir = `${HOME}/.pi/agent`
 ) {
-  const settings = await client.fs
-    .readFile(`${HOME}/.pi/agent/settings.json`)
-    .catch(() => undefined);
+  const settings = await client.fs.readFile(`${dir}/settings.json`).catch(() => undefined);
   if (disabledBySettings(settings === undefined ? undefined : new TextDecoder().decode(settings)))
     return [];
   const sandbox = sandboxFactory(
@@ -207,6 +207,7 @@ async function start(
   vault: Vault
 ): Promise<AgentHost> {
   const { client, users } = await attached(ports, options);
+  const at = { home: HOME, ...(users ? { agentDir: AGENT_DIR } : {}) };
   const home = new SliccKernelEnv(client, { cwd: HOME });
   await privateStore(home);
   const ready = await prepare(scope, { client, home, vault }, options);
@@ -215,7 +216,7 @@ async function start(
   const coding = CodingTools.tools as readonly ToolRegistration[];
   registry.install(browserGuard([scope.location.origin], coding));
   const mcp = setupMcp(registry);
-  const codemode = await codemodeTools(client, options, native, mcp.codemode);
+  const codemode = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   registry.install(codemodeExtension(codemode));
   const licks = setupLicks(registry);
   licks.licks.triage(lickTriage(models));
@@ -245,13 +246,13 @@ async function start(
     BACKGROUND_CONTEXT
   );
   const skillsRuntime = await skills.attach(
-    { env: home, home: HOME, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
+    { env: home, ...at, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
     BACKGROUND_CONTEXT
   );
   const mcpRuntime = await mcp.attach(
     {
       env: home,
-      home: HOME,
+      ...at,
       credentials,
       licks: licks.licks,
       fetch: scope.fetch,
@@ -282,7 +283,7 @@ async function start(
       harness: agent.harness,
       agents: agent.agents,
       env: home,
-      home: HOME,
+      ...at,
       reloadMs: RELOAD_MS,
       roles: async (using) => roles?.roles(using),
     },
@@ -293,7 +294,7 @@ async function start(
     agents: agent.agents,
     env: home,
     extract: memory.extract,
-    title: titler(models, settingsText(home, HOME)),
+    title: titler(models, settingsText(home, HOME, at.agentDir)),
     ...(people ? { layout: people.layout } : {}),
   });
   licks.licks.guard(freezer.frozenTarget);
@@ -305,7 +306,7 @@ async function start(
       agents: agent.agents,
       groups,
       env: home,
-      home: HOME,
+      ...at,
       ...(people
         ? { layout: people.layout, spools: people.spools, enforced: people.enforced }
         : {}),

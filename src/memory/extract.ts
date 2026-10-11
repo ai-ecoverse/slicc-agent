@@ -257,7 +257,8 @@ export function scheduler(
 export function settingsReader(ready: Promise<Host>) {
   return async (context: Context): Promise<ExtractSettings> => {
     const host = await ready;
-    const read = await host.env.readTextFile(`${host.home}/.pi/agent/settings.json`, context);
+    const dir = host.agentDir ?? `${host.home}/.pi/agent`;
+    const read = await host.env.readTextFile(`${dir}/settings.json`, context);
     return extractSettings(read.ok ? read.value : undefined);
   };
 }

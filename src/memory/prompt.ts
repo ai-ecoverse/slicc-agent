@@ -15,6 +15,7 @@ export type Host = {
   agents: Agents;
   env: ExecutionEnv;
   home: string;
+  agentDir?: string;
   files: MemoryFiles;
   changed: (context: Context) => Promise<void>;
 };
@@ -80,7 +81,11 @@ export function contextSection(ready: Promise<Host>) {
         : { project: true, global: true };
     const loaded = await loadContextFiles(
       host.env,
-      { cwd: input.env?.cwd ?? host.home, agentDir: `${host.home}/.pi/agent`, ...flags },
+      {
+        cwd: input.env?.cwd ?? host.home,
+        agentDir: host.agentDir ?? `${host.home}/.pi/agent`,
+        ...flags,
+      },
       context
     );
     return renderContextFiles(loaded);

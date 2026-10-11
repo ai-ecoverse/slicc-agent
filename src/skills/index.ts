@@ -48,6 +48,7 @@ export interface SkillsRuntime {
 export interface SkillsAttach {
   env: ExecutionEnv;
   home: string;
+  agentDir?: string;
   assets?: (path: string) => Promise<string>;
   reloadMs: number;
 }
@@ -154,6 +155,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
     extension,
     async attach(options, context) {
       const { env, home } = options;
+      const dir = options.agentDir ?? `${home}/.pi/agent`;
       if (options.assets)
         await installBuiltins(env, options.assets, context).catch(() => undefined);
       await env.exec(`mkdir -p ${GLOBAL_DIR} && chmod 755 ${GLOBAL_DIR}`, undefined, context);
@@ -162,7 +164,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       const reported = new Set<string>();
       const reload = async (using: Context) => {
         const roots: SkillRoot[] = [
-          { dir: `${home}/.pi/agent/skills`, source: 'user' },
+          { dir: `${dir}/skills`, source: 'user' },
           { dir: `${home}/.agents/skills`, source: 'user' },
           { dir: GLOBAL_DIR, source: 'global' },
           ...(await packaged(env, 'skills', using)).map((dir) => ({
@@ -174,7 +176,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         const loaded = await loadSkills(env, roots, using);
         const prompts = await loadTemplates(
           env,
-          [`${home}/.pi/agent/prompts`, ...(await packaged(env, 'prompts', using)), PROMPTS_DIR],
+          [`${dir}/prompts`, ...(await packaged(env, 'prompts', using)), PROMPTS_DIR],
           using
         );
         current = loaded.skills;
@@ -195,8 +197,8 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       };
       const watched = await env.watch(
         [
-          { path: `${home}/.pi/agent/skills`, recursive: true },
-          { path: `${home}/.pi/agent/prompts` },
+          { path: `${dir}/skills`, recursive: true },
+          { path: `${dir}/prompts` },
           { path: `${home}/.agents/skills`, recursive: true },
           { path: GLOBAL_DIR, recursive: true },
         ],
