@@ -11,6 +11,8 @@ import {
   adobeUsage,
   type Budget,
 } from './adobe.ts';
+import type { McpAccounts } from './mcp/index.ts';
+import { MCP_ACCOUNT } from './mcp/label.ts';
 import type { AccountState, AgentSettings, ModelChoice, SettingsState } from './services.ts';
 
 export const BEDROCK = 'amazon-bedrock';
@@ -94,15 +96,17 @@ export async function createAgentSettings(
   models: MutableModels,
   credentials: CredentialStore,
   providers = sliccProviders(),
-  options: { usage?: UsageReader; every?: number } = {}
+  options: { usage?: UsageReader; every?: number; mcp?: McpAccounts } = {}
 ): Promise<AgentSettings> {
+  const { mcp } = options;
+  const routed = (providerId: string) => (providerId.startsWith(MCP_ACCOUNT) ? mcp : undefined);
   const endpoint = providers.find((provider) => provider.id === ADOBE)?.baseUrl ?? ADOBE_PROXY;
   const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint }));
   const snapshot = async (): Promise<SettingsState> => {
     const stored = new Set((await credentials.list()).map((info) => info.providerId));
     return {
       models: choices(models, providers, stored),
-      accounts: accounts(stored, providers),
+      accounts: [...accounts(stored, providers), ...((await mcp?.accounts()) ?? [])],
       budget: await budget(credentials, usage),
     };
   };
@@ -130,9 +134,16 @@ export async function createAgentSettings(
     const timer: unknown = setInterval(cycle, options.every ?? BUDGET_EVERY);
     (timer as { unref?: () => void }).unref?.();
   }
+  mcp?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
   return {
     state,
     async connect(providerId, secret, region, context) {
+      const server = routed(providerId);
+      if (server) {
+        await server.connect(providerId, secret);
+        await refresh(context);
+        return;
+      }
       await credentials.modify(providerId, async () => ({
         type: 'api_key',
         key: secret,
@@ -149,7 +160,9 @@ export async function createAgentSettings(
       return { clientId, scopes, imsEnvironment: imsEnvironment || 'prod' };
     },
     async disconnect(providerId, context) {
-      await credentials.delete(providerId);
+      const server = routed(providerId);
+      if (server) await server.disconnect(providerId);
+      else await credentials.delete(providerId);
       await refresh(context);
     },
   };

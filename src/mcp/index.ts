@@ -11,7 +11,7 @@ import { parseMcpConfig } from './config.ts';
 import type { McpAttach, McpRuntime } from './runtime.ts';
 
 export { allows, type CodemodeExtra, McpAllowDoc, mcpEntries, serverAllowed } from './allow.ts';
-export type { McpAttach, McpRuntime, ServerStatus } from './runtime.ts';
+export type { McpAccounts, McpAttach, McpRuntime, ServerStatus } from './runtime.ts';
 
 export type McpLoader = () => Promise<typeof import('./runtime.ts')>;
 
@@ -25,6 +25,12 @@ export interface McpSetup {
 }
 
 const idle: McpRuntime = {
+  accounts: async () => [],
+  connect: async (id) => {
+    throw new Error(`${id} is not an MCP server that takes a token`);
+  },
+  disconnect: async () => undefined,
+  onChange: () => () => undefined,
   status: () => [],
   reload: async () => undefined,
   close: async () => undefined,

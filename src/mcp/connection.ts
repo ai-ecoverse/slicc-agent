@@ -210,7 +210,7 @@ export class McpServerConnection {
   }
 
   signInMessage(): string {
-    return `MCP server "${this.name}" rejected the request as unauthorized (401). Check its token in Settings › Accounts.`;
+    return `MCP server "${this.name}" rejected its token (401). Update it in Settings › MCP servers.`;
   }
 
   #mark(state: ServerState, error?: string): void {
@@ -356,7 +356,7 @@ export class MissingSecret extends Error {
 
   constructor(names: string[]) {
     super(
-      `needs ${names.map((name) => `\${${name}}`).join(', ')}: add the value in Settings › Accounts`
+      `needs ${names.map((name) => `\${${name}}`).join(', ')}: add the value in Settings › MCP servers`
     );
     this.names = names;
   }

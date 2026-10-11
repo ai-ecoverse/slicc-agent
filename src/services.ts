@@ -193,9 +193,11 @@ export interface AccountState {
   id: string;
   provider: string;
   identity: string;
-  status: 'connected' | 'disconnected';
+  status: 'connected' | 'disconnected' | 'expired';
   auth: 'api-key' | 'oauth';
   needs: 'cors-free-transport' | null;
+  group?: 'providers' | 'mcp';
+  secret?: 'api-key' | 'token';
 }
 
 export interface BudgetState {

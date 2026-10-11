@@ -1,5 +1,6 @@
 import type { AgentEvent, EntryRecord } from '@earendil-works/pi-durable';
 import { entryLick } from '../licks/state.ts';
+import { mcpLabel } from '../mcp/label.ts';
 import { redactSecrets } from '../memory/format.ts';
 import type { Delivered } from '../services.ts';
 
@@ -55,7 +56,7 @@ const SUBJECTS = ['command', 'path', 'pattern', 'url', 'query', 'code', 'name'];
 export function toolSummary(name: string, args: Json | undefined): string {
   const subject = SUBJECTS.map((key) => args?.[key]).find((value) => typeof value === 'string');
   const detail = typeof subject === 'string' ? subject : JSON.stringify(args ?? {});
-  return clip(`${name} ${detail}`);
+  return clip(`${mcpLabel(name) ?? name} ${detail}`);
 }
 
 export function resultSummary(message: ModelMessage): string {

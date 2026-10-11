@@ -95,7 +95,7 @@ function checkHeaders(name: string, headers: unknown): McpConfigProblem | undefi
     if (literalSecret(header, value))
       return fail(
         name,
-        `headers.${header} holds a literal secret. mcp.json is readable by every agent: write \${NAME} instead, and add the value in Settings › Accounts`,
+        `headers.${header} holds a literal secret. mcp.json is readable by every agent: write \${NAME} instead, and add the value in Settings › MCP servers`,
         `headers.${header}`
       );
   }
@@ -149,7 +149,7 @@ function checkTransport(
   if (secret)
     return fail(
       name,
-      `${secret} holds a literal secret. Put it in a header as \${NAME} and add the value in Settings › Accounts`,
+      `${secret} holds a literal secret. Put it in a header as \${NAME} and add the value in Settings › MCP servers`,
       'url'
     );
   return undefined;
