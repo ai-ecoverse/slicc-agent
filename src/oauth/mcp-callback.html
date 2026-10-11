@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SLICC sign-in</title>
+    <style>
+    :root {
+      color-scheme: light dark;
+      --background: #ffffff;
+      --text: #222222;
+      --muted: #6d6d6d;
+      --good: #007a4d;
+      --bad: #d31510;
+      font-family: "Adobe Clean", system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    :root[data-theme="dark"] {
+      --background: #1d1d1d;
+      --text: #f2f2f2;
+      --muted: #aeaeae;
+      --good: #2dbf80;
+      --bad: #ff7065;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--background);
+      color: var(--text);
+    }
+    main {
+      max-width: 22rem;
+      padding: 2rem;
+      text-align: center;
+    }
+    .mark {
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 50%;
+      margin: 0 auto 1rem;
+      display: grid;
+      place-items: center;
+      color: var(--background);
+      font-size: 1.25rem;
+      font-weight: 700;
+      background: var(--good);
+    }
+    [data-state="failed"] .mark {
+      background: var(--bad);
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 0.5rem;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    </style>
+  </head>
+  <body>
+    <main data-state="signing-in">
+      <div class="mark" aria-hidden="true">✓</div>
+      <h1>Signing in…</h1>
+      <p>Handing the sign-in back to SLICC.</p>
+    </main>
+    <script type="module">
+    const theme = (() => {
+      try {
+        const color = JSON.parse(localStorage.getItem('slicc-agent.settings') ?? '{}').color;
+        if (color === 'light' || color === 'dark') return color;
+      } catch {}
+      return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    })();
+    document.documentElement.dataset.theme = theme;
+    const params = new URLSearchParams(location.search);
+    const stay = new URLSearchParams(location.hash.slice(1)).has('stay');
+    const answer = {};
+    for (const key of ['code', 'state', 'iss', 'error', 'error_description'])
+      if (params.has(key)) answer[key] = params.get(key);
+    history.replaceState(null, '', location.pathname);
+    const main = document.querySelector('main');
+    const show = (state, title, text, mark) => {
+      main.dataset.state = state;
+      main.querySelector('h1').textContent = title;
+      main.querySelector('p').textContent = text;
+      main.querySelector('.mark').textContent = mark;
+    };
+    if (!answer.state)
+      show(
+        'failed',
+        'Nothing to sign in',
+        'This page only works as the end of a sign-in from SLICC.',
+        '!'
+      );
+    else {
+      new BroadcastChannel('slicc-mcp-oauth').postMessage(answer);
+      if (answer.error)
+        show('failed', 'Sign-in failed', answer.error_description ?? answer.error, '!');
+      else show('done', 'Signed in', 'SLICC has the sign-in. You can close this window.', '✓');
+      if (!stay) setTimeout(() => window.close(), 1500);
+    }
+    </script>
+  </body>
+</html>

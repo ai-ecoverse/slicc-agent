@@ -9,6 +9,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentSettings, SettingsState, SignIn } from '../services.ts';
 import type { AgentAdapter } from './agent-port.ts';
 import { Emitter } from './emitter.ts';
+import { mcpLogin } from './mcp-login.ts';
 
 export const SETTINGS_KEY = 'slicc-agent.settings';
 
@@ -34,6 +35,7 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   readonly #agent: AgentAdapter;
   readonly #storage: Pick<Storage, 'getItem' | 'setItem'> | null;
   readonly #login: Login | null;
+  readonly #mcpLogin: Login;
   readonly #signing = new Map<string, AbortController>();
   #local: Local;
 
@@ -41,9 +43,11 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
     settings: AgentSettings,
     agent: AgentAdapter,
     storage: Pick<Storage, 'getItem' | 'setItem'> | null,
-    login: Login | null = null
+    login: Login | null = null,
+    mcp: Login = mcpLogin() as Login
   ) {
     super();
+    this.#mcpLogin = mcp;
     this.#settings = settings;
     this.#agent = agent;
     this.#storage = storage;
@@ -99,7 +103,8 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
 
   async connect(id: string, secret?: string, options: { region?: string } = {}): Promise<void> {
     const account = this.#state().accounts.find((candidate) => candidate.id === id);
-    const login = account?.auth === 'oauth' ? this.#login : null;
+    const login =
+      account?.auth !== 'oauth' ? null : account.group === 'mcp' ? this.#mcpLogin : this.#login;
     const key = secret ?? (login ? await this.#signIn(id, login) : undefined);
     if (!key)
       throw new Error(`${id} needs ${account?.auth === 'oauth' ? 'a sign-in' : 'an API key'}`);
@@ -114,9 +119,13 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
     this.#signing.set(id, controller);
     this.emit('accounts', this.accounts());
     try {
-      const key = await login(id, () => this.#settings.signIn(id, BACKGROUND_CONTEXT), {
-        signal: controller.signal,
-      });
+      const key = await login(
+        id,
+        () => this.#settings.signIn(id, BACKGROUND_CONTEXT) as Promise<SignIn | null>,
+        {
+          signal: controller.signal,
+        }
+      );
       controller.signal.throwIfAborted();
       return key;
     } finally {

@@ -24,6 +24,7 @@ await build({
     'node:child_process': './test/integration/shims/node-only.js',
     'node:process': './test/integration/shims/node-only.js',
     'cross-spawn': './test/integration/shims/node-only.js',
+    'node:http': './test/integration/shims/node-only.js',
   },
   plugins: [
     {
@@ -55,6 +56,7 @@ await build({
     'node:child_process': './test/integration/shims/node-only.js',
     'node:process': './test/integration/shims/node-only.js',
     'cross-spawn': './test/integration/shims/node-only.js',
+    'node:http': './test/integration/shims/node-only.js',
     '@smithy/node-http-handler': './test/integration/shims/node-only.js',
     'http-proxy-agent': './test/integration/shims/node-only.js',
     'https-proxy-agent': './test/integration/shims/node-only.js',

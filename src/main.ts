@@ -72,6 +72,7 @@ export interface AgentWorkerOptions {
   codemodeWorker?: string | URL;
   catalog?: string;
   users?: boolean;
+  mcpRedirect?: string;
 }
 
 export function usersOf(
@@ -119,6 +120,8 @@ async function codemodeTools(
     codemodeTool({ declared: CodingTools.tools as readonly ToolRegistration[], sandbox, extra }),
   ];
 }
+
+export const MCP_CALLBACK = '/oauth/mcp-callback';
 
 async function start(
   scope: AgentWorkerScope,
@@ -195,6 +198,7 @@ async function start(
       reloadMs: RELOAD_MS,
       codemode: codemode.length > 0,
       cors: client.transport.traits?.crossOrigin === 'cors',
+      redirect: options.mcpRedirect ?? new URL(MCP_CALLBACK, scope.location.origin).href,
     },
     BACKGROUND_CONTEXT
   );

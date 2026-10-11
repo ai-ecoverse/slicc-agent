@@ -153,6 +153,8 @@ export async function createAgentSettings(
       await refresh(context);
     },
     async signIn(providerId) {
+      const server = routed(providerId);
+      if (server) return server.signIn(providerId);
       if (providerId !== ADOBE) return null;
       const { clientId, scopes, imsEnvironment } = await adobeConfig(endpoint, (input, init) =>
         globalThis.fetch(input, init)

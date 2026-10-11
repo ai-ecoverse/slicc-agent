@@ -26,6 +26,9 @@ export interface McpSetup {
 
 const idle: McpRuntime = {
   accounts: async () => [],
+  signIn: async (id) => {
+    throw new Error(`${id} is not an MCP server that signs in`);
+  },
   connect: async (id) => {
     throw new Error(`${id} is not an MCP server that takes a token`);
   },

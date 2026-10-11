@@ -213,6 +213,11 @@ export interface SignIn {
   imsEnvironment: string;
 }
 
+export interface McpSignIn {
+  url: string;
+  state: string;
+}
+
 export interface SettingsState {
   models: ModelChoice[];
   accounts: AccountState[];
@@ -228,7 +233,7 @@ export interface AgentSettings {
     context: Context
   ): Promise<void>;
   disconnect(providerId: string, context: Context): Promise<void>;
-  signIn(providerId: string, context: Context): Promise<SignIn | null>;
+  signIn(providerId: string, context: Context): Promise<SignIn | McpSignIn | null>;
 }
 
 export const AgentSettings = defineService<AgentSettings>('slicc.agent.settings');

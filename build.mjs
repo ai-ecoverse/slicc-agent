@@ -1,4 +1,4 @@
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { build } from 'esbuild';
 
@@ -34,3 +34,5 @@ await Promise.all(
     .filter((file) => file.endsWith('.js'))
     .map(rewrite)
 );
+await mkdir('dist/oauth', { recursive: true });
+await copyFile('src/oauth/mcp-callback.html', 'dist/oauth/mcp-callback.html');
