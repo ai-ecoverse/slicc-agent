@@ -100,12 +100,12 @@ With users, each cone and each scoop is a kernel user, and works as that user:
   | an agent's own skills | `~/.pi/agent/skills` and `~/.agents/skills` in its home; only that agent sees them |
   | memory | `/root/.pi/agent/memory/` and `/root/.pi/agent/agent-memory/` (root; agents use `memory_write` and `memory`) |
   | licks | each cone's `~/.slicc`, whose jobs are named `<cone>:<name>` and whose `cone` target is that cone; root's `/root/.slicc`, whose `cone` is the active cone |
-  | sprinkles | each cone's `~/sprinkles`; a sprinkle's files are read as its owner, inside the owner's home |
+  | sprinkles | each cone's `~/sprinkles`, every cone's in the rail, with the id `<cone>/<name>` (the cone's id, such as `cone-2`) and the cone as `agentId`; `sprinkle show` and `own` take `<cone>/<name>`, or a bare name for the caller's cone. welcome and suggestions keep their plain ids. A sprinkle's files are read as its owner, inside the owner's home |
   | the gelatiere | its procedure and crontab line in the first cone's home, written as that cone; `gelatiere install` and `suggest` run as the caller |
   | scoop reports | the cone's `~/.slicc/reports/<handle>/` |
   | sync transcripts | `/tmp/agent-sessions/<user>/` (`0700`), or `~/sessions/` with `--persist-session` |
   | the suggestions store and catalog cache, the welcome flag and profile | `/var/lib/slicc/agent/shared/` (root, `0700`). The built-in welcome and suggestions sprinkles read it as `/shared/…`, through the worker and only inside that folder; a user's sprinkle reads `/shared/…` as its owner's home |
-- **Old files:** nothing is moved. On the first boot with users, everything else in `/home`, plus `/scoops` and `/workspace`, gets `chmod -R go-rwx`, and the first cone gets a `slicc.homes` notice (spectrum shows it as "Fresh homes") saying where things went and how to move files as root. `/var/lib/slicc/agent/users-v1` marks it done.
+- **No migration:** there's nothing for old installs. Every install starts with this layout.
 - **The scoop guard** stays on until the kernel reports `users: 'enforce'`; then the kernel's permissions decide.
 
 ### The worker seven starts
