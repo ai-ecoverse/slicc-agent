@@ -81,26 +81,54 @@ export async function pnpmHomeOf(env: ExecutionEnv, context: Context): Promise<s
   return ran?.ok && ran.value.exitCode === 0 && /^\/\S*$/.test(out) ? out : PNPM_HOME;
 }
 
-async function install(env: ExecutionEnv, script: string, binDir: string, context: Context) {
-  if (!(await env.createDir(binDir, { recursive: true }, context)).ok) return false;
+export interface Installed {
+  done: boolean;
+  skipped: string[];
+}
+
+async function theirs(env: ExecutionEnv, path: string, context: Context): Promise<boolean> {
+  const read = await env.readTextFile(path, context);
+  return read.ok && !read.value.includes(PROTOCOL);
+}
+
+async function install(
+  env: ExecutionEnv,
+  script: string,
+  binDir: string,
+  context: Context
+): Promise<Installed> {
+  const skipped: string[] = [];
+  if (!(await env.createDir(binDir, { recursive: true }, context)).ok)
+    return { done: false, skipped };
   for (const name of COMMANDS) {
     const path = `${binDir}/${name}`;
-    if (!(await env.writeFile(path, script, context)).ok) return false;
+    if (await theirs(env, path, context)) {
+      skipped.push(name);
+      continue;
+    }
+    if (!(await env.writeFile(path, script, context)).ok) return { done: false, skipped };
     const mode = await env.exec(['chmod', '755', path], undefined, context);
-    if (!mode.ok || mode.value.exitCode !== 0) return false;
+    if (!mode.ok || mode.value.exitCode !== 0) return { done: false, skipped };
   }
-  return true;
+  return { done: true, skipped };
 }
 
 export async function installCommands(
   env: ExecutionEnv,
   script: string,
   binDir: string,
-  context: Context
-): Promise<boolean> {
-  const done = await install(env, script, binDir, context).catch(() => false);
-  if (done) await retire(env, binDir, context).catch(() => undefined);
-  return done;
+  context: Context,
+  warn: (message: string) => void = (message) => console.warn(message)
+): Promise<Installed> {
+  const installed = await install(env, script, binDir, context).catch(
+    (): Installed => ({ done: false, skipped: [] })
+  );
+  if (installed.skipped.length) {
+    const paths = installed.skipped.map((name) => `${binDir}/${name}`).join(', ');
+    warn(`slicc-agent: left ${paths} alone, because it isn't slicc-agent's command`);
+  }
+  if (installed.done) await retire(env, binDir, context).catch(() => undefined);
+  return installed;
 }
 
 export async function retire(env: ExecutionEnv, binDir: string, context: Context) {
