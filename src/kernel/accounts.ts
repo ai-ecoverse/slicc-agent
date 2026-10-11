@@ -69,7 +69,8 @@ export function createAccounts(
   pool: UserClients,
   agents: () => Agents | undefined,
   mode: UsersMode = 'off',
-  groups?: KernelGroups
+  groups?: KernelGroups,
+  warn: (message: string) => void = (message) => console.warn(message)
 ): Accounts {
   const added = new Map<string, { name: string; group: string | null; ready: Promise<void> }>();
   let chain: Promise<void> = Promise.resolve();
@@ -87,6 +88,12 @@ export function createAccounts(
     const parent = want.cone
       ? wanted(state()).find((cone) => cone.agentId === want.cone)
       : undefined;
+    if (want.cone && !parent)
+      return Promise.reject(
+        Object.assign(new Error(`${want.spec.name} has no cone user: there is no cone ${group}`), {
+          code: 'ENOENT',
+        })
+      );
     const before = known?.group && known.group !== group ? moved(want, known.group) : undefined;
     const ready = Promise.all([parent ? ensure(parent) : undefined, before])
       .then(() => pool.users.add(want.spec))
@@ -105,7 +112,10 @@ export function createAccounts(
   const reconcile = async (stale: readonly string[] = []) => {
     const want = wanted(state());
     const names = new Set(want.map((entry) => entry.agentId));
-    for (const entry of want) await ensure(entry).catch(() => undefined);
+    for (const entry of want)
+      await ensure(entry).catch((error: Error) =>
+        warn(`slicc-agent: couldn't add the kernel user ${entry.spec.name}: ${error.message}`)
+      );
     const gone = [...added].filter(([agentId]) => !names.has(agentId));
     const scoopsFirst = gone.sort(
       ([a], [b]) => Number(a.startsWith(CONE_PREFIX)) - Number(b.startsWith(CONE_PREFIX))
