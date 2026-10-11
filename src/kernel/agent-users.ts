@@ -2,7 +2,8 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Agents } from '../agents.ts';
 import { AGENT_DIR, type Layout, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
 import type { Spools } from '../scoops/index.ts';
-import { type Accounts, createAccounts, type UsersMode, wanted } from './accounts.ts';
+import type { SkillPeople } from '../skills/index.ts';
+import { type Accounts, createAccounts, homeOf, type UsersMode, wanted } from './accounts.ts';
 import type { KernelClient } from './client.ts';
 import { type EnvRoute, type EnvTargetLike, quote, SliccKernelEnv } from './env.ts';
 import type { UserClients } from './users.ts';
@@ -12,6 +13,8 @@ export interface AgentUsers {
   readonly layout: Layout;
   readonly spools: Spools;
   readonly enforced: boolean;
+  readonly people: SkillPeople;
+  onHomes(listener: () => void): () => void;
   route(target: EnvTargetLike): Promise<EnvRoute | undefined>;
   start(agents: Agents): Promise<void>;
   close(): void;
@@ -46,10 +49,30 @@ export function agentUsers(
     ready = resolve;
   });
   let off: () => void = () => undefined;
+  const homes = () => wanted(state()).map((entry) => homeOf(entry.spec.name));
+  const listeners = new Set<() => void>();
+  let known = '';
+  const changed = () => {
+    const key = homes().join('\n');
+    if (key === known) return;
+    known = key;
+    for (const listener of listeners) listener();
+  };
   return {
     accounts,
     layout,
     enforced: mode === 'enforce',
+    people: {
+      homes,
+      homeOf(conversationId) {
+        const agentId = accounts.agentOf(conversationId);
+        return agentId ? accounts.home(agentId) : undefined;
+      },
+    },
+    onHomes(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     spools: {
       users: () => [ROOT_USER, ...wanted(state()).map((entry) => entry.spec.name)],
       async prepare(user, dir, context) {
@@ -70,7 +93,11 @@ export function agentUsers(
         BACKGROUND_CONTEXT
       );
       await accounts.boot();
-      off = opened.onChange(() => void accounts.reconcile());
+      known = homes().join('\n');
+      off = opened.onChange(() => {
+        void accounts.reconcile();
+        changed();
+      });
       ready();
     },
     close() {

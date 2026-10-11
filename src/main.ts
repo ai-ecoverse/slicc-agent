@@ -246,9 +246,16 @@ async function start(
     BACKGROUND_CONTEXT
   );
   const skillsRuntime = await skills.attach(
-    { env: home, ...at, assets: options.assets ?? packageAssets(), reloadMs: RELOAD_MS },
+    {
+      env: home,
+      ...at,
+      assets: options.assets ?? packageAssets(),
+      reloadMs: RELOAD_MS,
+      ...(people ? { people: people.people } : {}),
+    },
     BACKGROUND_CONTEXT
   );
+  people?.onHomes(() => void skillsRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined));
   const mcpRuntime = await mcp.attach(
     {
       env: home,
