@@ -24,6 +24,7 @@ import { PortListener } from './listener.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
+import { viewControl, viewRemote, viewSettings } from './readonly.ts';
 import { createRemote } from './remote/host.ts';
 import {
   AGENT_SESSION,
@@ -43,7 +44,7 @@ import type { PortEndpoint } from './wire.ts';
 export interface AgentHost {
   readonly serverId: string;
   readonly agent: Agent;
-  connect(endpoint: PortEndpoint): void;
+  connect(endpoint: PortEndpoint, options?: { readOnly?: boolean }): void;
   close(): Promise<void>;
 }
 
@@ -169,7 +170,7 @@ export async function hostAgent(
     },
   });
   provider.provide(AgentRemoteService, remote);
-  provider.provide(AgentTranscript, {
+  const transcriptService = {
     state,
     deliveries: deliveries.state,
     agents: mounted.agents,
@@ -181,25 +182,45 @@ export async function hostAgent(
     frozen: options.freezer?.frozen ?? replicatedState<FrozenCone[]>([]),
     changes:
       options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
-  });
-  provider.provide(AgentSettings, options.settings ?? noSettings);
-  const host: ServerHost = {
-    serverServices: serverServices(),
-    async resolveSession(sessionId) {
-      if (sessionId !== AGENT_SESSION)
-        throw new SessionNotFoundError(`unknown session ${sessionId}`);
-      return { id: sessionId };
-    },
-    openSession: async () => sessionServices(provider),
   };
-  const listener = new PortListener(serverId);
-  const server = await new Server(host, { serverId, listeners: [listener] }).start();
+  provider.provide(AgentTranscript, transcriptService);
+  const settings = options.settings ?? noSettings;
+  provider.provide(AgentSettings, settings);
+  const viewer = new RemoteServiceProvider([
+    { service: AgentControl, mode: 'singleton' },
+    { service: AgentTranscript, mode: 'singleton' },
+    { service: AgentSettings, mode: 'singleton' },
+    { service: AgentRemoteService, mode: 'singleton' },
+  ]);
+  viewer.provide(AgentControl, viewControl(control));
+  viewer.provide(AgentTranscript, transcriptService);
+  viewer.provide(AgentSettings, viewSettings(settings));
+  viewer.provide(AgentRemoteService, viewRemote(remote));
+  const serve = async (id: string, services: RemoteServiceProvider) => {
+    const host: ServerHost = {
+      serverServices: serverServices(),
+      async resolveSession(sessionId) {
+        if (sessionId !== AGENT_SESSION)
+          throw new SessionNotFoundError(`unknown session ${sessionId}`);
+        return { id: sessionId };
+      },
+      openSession: async () => sessionServices(services),
+    };
+    const listener = new PortListener(id);
+    const server = await new Server(host, { serverId: id, listeners: [listener] }).start();
+    return { listener, server };
+  };
+  const full = await serve(serverId, provider);
+  const view = await serve(crypto.randomUUID(), viewer);
   return {
     serverId,
     agent,
-    connect: (endpoint) => listener.connect(endpoint),
+    connect: (endpoint, connectOptions) =>
+      (connectOptions?.readOnly ? view : full).listener.connect(endpoint),
     async close() {
-      await server.close();
+      await full.server.close();
+      await view.server.close();
+      viewer.dispose();
       await remote.dispose();
       provider.dispose();
       deliveries.dispose();
