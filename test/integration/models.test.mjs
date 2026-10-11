@@ -45,7 +45,12 @@ test("an agent's bash lists models and switches its own model in the production 
         .flatMap((message) => message.parts ?? [])
         .filter((part) => part.type === 'tool')
         .map((part) => part.tool);
-    await until(() => tools().some((tool) => tool.status === 'done' || tool.status === 'error'));
+    await until(() =>
+      tools().some(
+        (tool) =>
+          (tool.status === 'done' || tool.status === 'error') && /exit=\d/.test(String(tool.output))
+      )
+    );
     await until(
       () => agent.list().find((row) => row.id === agent.active())?.model === 'faux/faux-2'
     );
