@@ -22,6 +22,14 @@ type Discovery = NonNullable<McpOAuthState['discovery']>;
 
 export const CLIENT_NAME = 'SLICC';
 
+export function sentence(text: string): string {
+  const trimmed = text.trim();
+  const lowered = /^[A-Z][a-z]/.test(trimmed)
+    ? `${trimmed[0]?.toLowerCase()}${trimmed.slice(1)}`
+    : trimmed;
+  return /[.!?]$/.test(lowered) ? lowered : `${lowered}.`;
+}
+
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 export function secureUrl(url: URL): boolean {
@@ -254,12 +262,12 @@ export async function beginSignIn(
   if (!configured) await provider.saveDiscoveryState(info);
   const metadata = info.authorizationServerMetadata;
   if (metadata && !metadata.response_types_supported.includes('code'))
-    throw new Error('the authorization server does not support authorization codes');
+    throw new Error("The authorization server doesn't support authorization codes.");
   if (
     metadata?.code_challenge_methods_supported &&
     !metadata.code_challenge_methods_supported.includes('S256')
   )
-    throw new Error('the authorization server does not support PKCE S256');
+    throw new Error("The authorization server doesn't support PKCE S256.");
   const scope =
     server.config.oauth?.scope || info.resourceMetadata?.scopes_supported?.join(' ') || undefined;
   let client = await provider.clientInformation();
@@ -278,7 +286,7 @@ export async function beginSignIn(
   const url = new URL(
     metadata?.authorization_endpoint ?? new URL('/authorize', info.authorizationServerUrl)
   );
-  if (!secureUrl(url)) throw new Error('the authorization endpoint is not an https URL');
+  if (!secureUrl(url)) throw new Error("The authorization server's sign-in address isn't https.");
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', client.client_id);
   url.searchParams.set('code_challenge', challenge);
@@ -310,14 +318,14 @@ export async function finishSignIn(
   try {
     callback = JSON.parse(answer) as Callback;
   } catch {
-    throw new Error('the sign-in answer is not a callback');
+    throw new Error("The sign-in answer isn't a callback.");
   }
   const expected = (await provider.load()).oauthState;
   if (!expected || callback.state !== expected)
-    throw new Error('the sign-in answer does not match this sign-in');
+    throw new Error("The sign-in answer doesn't match this sign-in. Try again.");
   if (callback.error)
-    throw new Error(`sign-in failed: ${callback.error_description ?? callback.error}`);
-  if (!callback.code) throw new Error('the sign-in answer has no authorization code');
+    throw new Error(`Sign-in failed: ${sentence(callback.error_description ?? callback.error)}`);
+  if (!callback.code) throw new Error('The sign-in answer has no authorization code.');
   const configured = server.config.oauth?.authServerMetadataUrl;
   await authorizeMcp(provider, {
     serverUrl: server.config.url,
