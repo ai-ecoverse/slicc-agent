@@ -243,9 +243,8 @@ export async function attachMcp(
   const watched = await env.watch([{ path: configPath(home) }], schedule, context);
   const watcher: FileWatcher | undefined = watched.ok ? watched.value : undefined;
   const restart = (connection: McpServerConnection) => {
-    catalog.connections.delete(connection.name);
-    void connection.close();
     open(connection.entry);
+    void connection.close();
     catalog.rebuild();
   };
   return {
