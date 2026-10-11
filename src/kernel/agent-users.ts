@@ -1,14 +1,23 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Agents } from '../agents.ts';
+import { FIRST_CONE } from '../agents.ts';
+import type { GelatiereAttach } from '../gelatiere/index.ts';
 import { AGENT_DIR, type Layout, ROOT_HOME, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
 import type { LickDir } from '../licks/sources.ts';
 import type { Spools } from '../scoops/index.ts';
 import type { SkillPeople } from '../skills/index.ts';
 import type { SprinklePlace } from '../sprinkles/index.ts';
-import { type Accounts, createAccounts, homeOf, type UsersMode, wanted } from './accounts.ts';
+import {
+  type Accounts,
+  CONE_PREFIX,
+  createAccounts,
+  homeOf,
+  type UsersMode,
+  wanted,
+} from './accounts.ts';
 import type { KernelClient } from './client.ts';
-import { type EnvRoute, type EnvTargetLike, quote, SliccKernelEnv } from './env.ts';
+import { type EnvRoute, type EnvTargetLike, HOME, quote, SliccKernelEnv } from './env.ts';
 import type { UserClients } from './users.ts';
 
 export interface AgentUsers {
@@ -26,6 +35,7 @@ export interface AgentUsers {
   lickDirs(): Promise<LickDir[]>;
   sprinklePlaces(): SprinklePlace[];
   envOfAgent(agentId: string): Promise<SliccKernelEnv | undefined>;
+  gelatiere(root: SliccKernelEnv): Promise<Partial<GelatiereAttach>>;
   route(target: EnvTargetLike): Promise<EnvRoute | undefined>;
   start(agents: Agents): Promise<void>;
   close(): void;
@@ -88,6 +98,20 @@ export function agentUsers(
     async envOfAgent(agentId) {
       const home = accounts.home(agentId);
       return home ? envOf(agentId, home).catch(() => undefined) : undefined;
+    },
+    async gelatiere(root) {
+      const first = `${CONE_PREFIX}${FIRST_CONE}`;
+      const files = await this.envOfAgent(first);
+      return {
+        home: homeOf(FIRST_CONE),
+        profile: HOME,
+        ...(files ? { files } : {}),
+        as: async (caller) => {
+          const env = caller ? await this.envOfAgent(caller) : undefined;
+          const home = caller ? accounts.home(caller) : undefined;
+          return env && home ? { env, home } : { env: root, home: ROOT_HOME };
+        },
+      };
     },
     async lickDirs() {
       const cones = wanted(state()).filter((entry) => !entry.cone);

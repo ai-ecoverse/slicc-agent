@@ -42,6 +42,14 @@ export interface GelatiereAttach {
   fetch?: Fetcher;
   catalog?: string;
   skills?: () => readonly { name: string }[];
+  files?: ExecutionEnv;
+  profile?: string;
+  as?: (caller: string | null, context: Context) => Promise<Caller | undefined>;
+}
+
+export interface Caller {
+  env: ExecutionEnv;
+  home: string;
 }
 
 export interface GelatiereRuntime {
@@ -96,12 +104,19 @@ type G = {
   pending: string;
   load: (context: Context) => Promise<Suggestion[]>;
   mark: (id: string, field: 'dismissedAt' | 'takenAt', context: Context) => Promise<boolean>;
+  files: ExecutionEnv;
+  caller: string | null;
 };
+
+async function callerOf(g: G, context: Context): Promise<Caller> {
+  return (await g.options.as?.(g.caller, context)) ?? { env: g.options.env, home: g.options.home };
+}
 
 const fail = (out: string): Answer => ({ code: 1, out: `gelatiere: ${out}\n` });
 
 async function schedule(g: G, handle: string, context: Context): Promise<void> {
-  const { env, home } = g.options;
+  const { home } = g.options;
+  const env = g.files;
   const read = await env.readTextFile(g.crontab, context);
   const kept = (read.ok ? read.value : '')
     .split('\n')
@@ -125,7 +140,8 @@ async function sha256(text: string): Promise<string> {
 }
 
 async function seed(g: G, context: Context, create: boolean): Promise<Seeded> {
-  const { env, assets } = g.options;
+  const { assets } = g.options;
+  const env = g.files;
   const text = assets ? await assets(PROCEDURE).catch(() => undefined) : undefined;
   if (text === undefined) return 'none';
   const bundled = await sha256(text);
@@ -200,7 +216,7 @@ async function run(g: G, context: Context): Promise<Answer> {
 
 async function suggest(g: G, path: string | undefined, context: Context): Promise<Answer> {
   if (!path) return { code: 2, out: USAGE };
-  const read = await g.options.env.readTextFile(path, context);
+  const read = await (await callerOf(g, context)).env.readTextFile(path, context);
   if (!read.ok) return fail(`can't read ${path}`);
   let parsed: unknown;
   try {
@@ -293,7 +309,7 @@ async function skillsIn(
 }
 
 async function install(g: G, id: string, context: Context): Promise<Answer> {
-  const { env, home } = g.options;
+  const { env, home } = await callerOf(g, context);
   const item = (await g.load(context)).find((entry) => entry.id === id && entry.kind === 'skill');
   const checked = item ? validate(item) : `there is no skill suggestion ${id}`;
   if (typeof checked === 'string') return fail(checked);
@@ -343,7 +359,10 @@ interface Candidate {
 }
 
 async function profileFor(g: G, context: Context): Promise<Profile | undefined> {
-  const read = await g.options.env.readTextFile(`${g.options.home}/${PROFILE}`, context);
+  const read = await g.options.env.readTextFile(
+    `${g.options.profile ?? g.options.home}/${PROFILE}`,
+    context
+  );
   if (!read.ok) return undefined;
   try {
     return profileOf(JSON.parse(read.value));
@@ -358,7 +377,9 @@ function sourceLine(label: string, found: Sheet): string {
 }
 
 async function catalog(g: G, argv: readonly string[], context: Context): Promise<Answer> {
-  const { env, home } = g.options;
+  const { env } = g.options;
+  const home = g.options.profile ?? g.options.home;
+  const mine = await callerOf(g, context);
   const base = g.options.catalog ?? CATALOG_BASE;
   const fetcher: Fetcher = g.options.fetch ?? ((url, init) => globalThis.fetch(url, init));
   const options = { env, fetcher, now: g.now(), refresh: argv.includes('--refresh') };
@@ -375,7 +396,7 @@ async function catalog(g: G, argv: readonly string[], context: Context): Promise
   const store = await g.load(context);
   const closed = new Set(store.filter((item) => item.dismissedAt || item.takenAt).map((i) => i.id));
   const have = new Set([
-    ...(await skillsIn(env, home, context)).keys(),
+    ...(await skillsIn(mine.env, mine.home, context)).keys(),
     ...(g.options.skills?.() ?? []).map((entry) => entry.name),
   ]);
   const evidence = (reasons: string[]) =>
@@ -447,12 +468,12 @@ async function status(g: G, context: Context): Promise<Answer> {
   const { env, agents } = g.options;
   const store = await readStore(env, context);
   const handle = handleOf(agents);
-  const read = await env.readTextFile(g.crontab, context);
+  const read = await g.files.readTextFile(g.crontab, context);
   const scheduled = (read.ok ? read.value : '').split('\n').map(scheduleOf).find(Boolean);
   const counts = store
     ? `${open(store).length} open, ${store.filter((item) => item.takenAt).length} taken, ${store.filter((item) => item.dismissedAt).length} dismissed`
     : 'none yet';
-  const pending = await env.readTextFile(g.pending, context);
+  const pending = await g.files.readTextFile(g.pending, context);
   const lines = [
     `scoop: ${handle ?? 'none (gelatiere init)'}`,
     `schedule: ${scheduled ?? 'none'}`,
@@ -502,6 +523,8 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
     crontab: `${home}/.slicc/crontab`,
     procedure: `${home}/.pi/agent/GELATIERE.md`,
     pending: `${home}/.pi/agent/GELATIERE.new.md`,
+    files: options.files ?? env,
+    caller: null,
     load,
     mark: (id, field, context) =>
       serial(async () => {
@@ -516,11 +539,11 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
   const seeded = seed(g, BACKGROUND_CONTEXT, false).catch((): Seeded => 'none');
   return {
     seeded,
-    async command(argv, _caller, context) {
+    async command(argv, caller, context) {
       const verb = argv[0] ?? 'help';
       const handler = VERBS[verb];
       await seeded;
-      if (handler) return handler(g, argv, context);
+      if (handler) return handler({ ...g, caller }, argv, context);
       return { code: verb === 'help' || verb === '--help' ? 0 : 2, out: USAGE };
     },
     async intercept(action, data, context) {

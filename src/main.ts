@@ -342,6 +342,7 @@ async function start(
     licks: licks.licks,
     env: home,
     home: HOME,
+    ...(await people?.gelatiere(home)),
     scoops: scoops.scoops,
     roles: runtime.roles,
     assets: options.assets ?? packageAssets(),
