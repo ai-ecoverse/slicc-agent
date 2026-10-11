@@ -324,7 +324,9 @@ export async function finishSignIn(
   if (!expected || callback.state !== expected)
     throw new Error("The sign-in answer doesn't match this sign-in. Try again.");
   if (callback.error)
-    throw new Error(`Sign-in failed: ${sentence(callback.error_description ?? callback.error)}`);
+    throw new Error(
+      `Sign-in failed: ${sentence(callback.error_description?.trim() || callback.error)}`
+    );
   if (!callback.code) throw new Error('The sign-in answer has no authorization code.');
   const configured = server.config.oauth?.authServerMetadataUrl;
   await authorizeMcp(provider, {
