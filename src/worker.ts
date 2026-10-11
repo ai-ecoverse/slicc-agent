@@ -17,11 +17,22 @@ export function serveConnections(scope: WorkerScope, host: Promise<AgentHost>): 
   });
 }
 
-export function kernelPort(scope: WorkerScope): Promise<MessagePort> {
+export interface KernelPorts {
+  kernel: MessagePort;
+  admin?: MessagePort;
+}
+
+export function kernelPorts(scope: WorkerScope): Promise<KernelPorts> {
   return new Promise((resolve) => {
     scope.addEventListener('message', ({ data }) => {
-      const port = (data as { kernel?: MessagePort } | null)?.kernel;
-      if (port) resolve(port);
+      const message = data as { kernel?: MessagePort; admin?: MessagePort } | null;
+      const kernel = message?.kernel;
+      if (!kernel) return;
+      resolve(message.admin ? { kernel, admin: message.admin } : { kernel });
     });
   });
+}
+
+export function kernelPort(scope: WorkerScope): Promise<MessagePort> {
+  return kernelPorts(scope).then((ports) => ports.kernel);
 }

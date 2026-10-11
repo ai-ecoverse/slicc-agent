@@ -1,4 +1,5 @@
 import { type AgentConnection, connectAgent } from './client.ts';
+import { type KernelSource, serveAdmin } from './kernel/users.ts';
 import { holdLock } from './opfs-pool.ts';
 import type { PortEndpoint } from './wire.ts';
 
@@ -20,9 +21,7 @@ export interface AgentOwner {
   release(): Promise<void>;
 }
 
-export interface KernelSource {
-  connect(): Promise<Transferable>;
-}
+export type { KernelSource } from './kernel/users.ts';
 
 export interface OwnerOptions {
   worker: () => AgentWorker;
@@ -39,16 +38,32 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
   const channel = options.channel ?? (() => new MessageChannel());
   const spawn = async (): Promise<AgentWorker> => {
     const created = options.worker();
+    let admin: (PortEndpoint & Transferable) | undefined;
     try {
       if (options.kernel) {
         const port = await options.kernel.connect();
-        created.postMessage({ kernel: port }, [port]);
+        if (!options.kernel.users) created.postMessage({ kernel: port }, [port]);
+        else {
+          const { port1, port2 } = channel();
+          admin = port1;
+          serveAdmin(port1, options.kernel);
+          created.postMessage({ kernel: port, admin: port2 }, [port, port2]);
+        }
       }
     } catch (error) {
+      admin?.close?.();
       created.terminate();
       throw error;
     }
-    return created;
+    if (!admin) return created;
+    const served = admin;
+    return {
+      postMessage: (message, transfer) => created.postMessage(message, transfer),
+      terminate() {
+        served.close?.();
+        created.terminate();
+      },
+    };
   };
   let worker: Promise<AgentWorker | undefined> = Promise.resolve().then(spawn);
   try {

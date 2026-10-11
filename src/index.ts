@@ -22,6 +22,18 @@ export type {
   SpawnOptions,
 } from './kernel/client.ts';
 export { HOME, type KernelEnvOptions, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
+export {
+  adminOver,
+  type KernelAdmin,
+  type KernelUser,
+  type KernelUsers,
+  serveAdmin,
+  type UserClient,
+  type UserClients,
+  type UserConnect,
+  type UserSpec,
+  userClients,
+} from './kernel/users.ts';
 export { PortListener } from './listener.ts';
 export {
   type AgentWorkerOptions,
@@ -34,6 +46,7 @@ export {
   AGENT_LOCK,
   type AgentOwner,
   type AgentWorker,
+  type KernelSource,
   type OwnerOptions,
   startAgent,
 } from './owner.ts';
@@ -75,4 +88,10 @@ export {
 } from './sqlite.ts';
 export { type SystemFacts, systemSection } from './system.ts';
 export { PortChannel, type PortEndpoint, withUnrefTimers } from './wire.ts';
-export { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
+export {
+  type KernelPorts,
+  kernelPort,
+  kernelPorts,
+  serveConnections,
+  type WorkerScope,
+} from './worker.ts';

@@ -27,6 +27,7 @@ import { createActivity } from './kernel/activity.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
+import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
 import { setupLicks } from './licks/index.ts';
 import { setupMcp } from './mcp/index.ts';
 import { setupMemory } from './memory/index.ts';
@@ -50,7 +51,7 @@ import {
   kernelBoot,
   transportName,
 } from './system.ts';
-import { kernelPort, serveConnections, type WorkerScope } from './worker.ts';
+import { type KernelPorts, kernelPorts, serveConnections, type WorkerScope } from './worker.ts';
 
 export interface AgentWorkerScope extends WorkerScope {
   fetch: typeof fetch;
@@ -69,15 +70,41 @@ export interface AgentWorkerOptions {
   codemodeWasm?: () => Promise<WebAssembly.Module | undefined>;
   codemodeWorker?: string | URL;
   catalog?: string;
+  users?: boolean;
+}
+
+export function usersOf(
+  admin: MessagePort | undefined,
+  wanted: boolean | undefined,
+  attach: KernelAttach
+): UserClients | undefined {
+  if (!admin) return undefined;
+  if (wanted === false) {
+    admin.close();
+    return undefined;
+  }
+  return userClients(adminOver(admin), attach as (port: MessagePort) => Promise<UserClient>);
+}
+
+export const STORE_DIR = '/.slicc';
+
+async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions) {
+  const attach: KernelAttach = options.attach ?? attachKernel;
+  const { kernel, admin } = await ports;
+  const client = await attach(kernel);
+  return { client, users: usersOf(admin, options.users, attach) };
+}
+
+function privateStore(env: SliccKernelEnv): Promise<unknown> {
+  return env.exec(`test -d ${STORE_DIR} && chmod 700 ${STORE_DIR}`, undefined, BACKGROUND_CONTEXT);
 }
 
 async function start(
   scope: AgentWorkerScope,
-  port: Promise<MessagePort>,
+  ports: Promise<KernelPorts>,
   options: AgentWorkerOptions
 ): Promise<AgentHost> {
-  const attach: KernelAttach = options.attach ?? attachKernel;
-  const client = await attach(await port);
+  const { client, users } = await attached(ports, options);
   const native = scope.fetch.bind(scope);
   scope.fetch = transportFetch(client.transport, scope.location.origin, native);
   const facts = {
@@ -141,6 +168,7 @@ async function start(
   });
   opened = agent;
   const home = new SliccKernelEnv(client, { cwd: HOME });
+  await privateStore(home);
   const sources = licks.attach(agent, { env: home, home: HOME, activity });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
@@ -241,6 +269,7 @@ async function start(
     freezer,
     changes,
     mcp: mcpRuntime,
+    ...(users ? { users } : {}),
   });
 }
 
@@ -255,7 +284,7 @@ export function runAgentWorker(
   scope: AgentWorkerScope,
   options: AgentWorkerOptions = {}
 ): Promise<AgentHost> {
-  const host = start(scope, kernelPort(scope), options);
+  const host = start(scope, kernelPorts(scope), options);
   host.catch(() => undefined);
   serveConnections(scope, host);
   return host;
