@@ -82,12 +82,25 @@ export async function pnpmHomeOf(env: ExecutionEnv, context: Context): Promise<s
 }
 
 async function install(env: ExecutionEnv, script: string, binDir: string, context: Context) {
-  await env.createDir(binDir, { recursive: true }, context);
+  if (!(await env.createDir(binDir, { recursive: true }, context)).ok) return false;
   for (const name of COMMANDS) {
     const path = `${binDir}/${name}`;
-    await env.writeFile(path, script, context);
-    await env.exec(['chmod', '755', path], undefined, context);
+    if (!(await env.writeFile(path, script, context)).ok) return false;
+    const mode = await env.exec(['chmod', '755', path], undefined, context);
+    if (!mode.ok || mode.value.exitCode !== 0) return false;
   }
+  return true;
+}
+
+export async function installCommands(
+  env: ExecutionEnv,
+  script: string,
+  binDir: string,
+  context: Context
+): Promise<boolean> {
+  const done = await install(env, script, binDir, context).catch(() => false);
+  if (done) await retire(env, binDir, context).catch(() => undefined);
+  return done;
 }
 
 export async function retire(env: ExecutionEnv, binDir: string, context: Context) {
@@ -181,8 +194,7 @@ export function setupScoops(
       const script = await assets('bin/agent').catch(() => undefined);
       if (script) {
         const binDir = options.binDir ?? BIN_DIR;
-        await install(env, script, binDir, context).catch(() => undefined);
-        await retire(env, binDir, context).catch(() => undefined);
+        await installCommands(env, script, binDir, context);
       }
       const cli = createCli({
         env,
