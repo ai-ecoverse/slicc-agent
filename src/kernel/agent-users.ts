@@ -26,7 +26,6 @@ import {
 } from './accounts.ts';
 import type { KernelClient } from './client.ts';
 import { type EnvRoute, type EnvTargetLike, quote, SliccKernelEnv } from './env.ts';
-import { freshHomes } from './fresh-homes.ts';
 import type { UserClients } from './users.ts';
 
 export interface AgentUsers {
@@ -170,12 +169,6 @@ export function agentUsers(
         BACKGROUND_CONTEXT
       );
       await accounts.boot();
-      await freshHomes(
-        root,
-        wanted(state()).map((entry) => entry.spec.name),
-        { id: FIRST_CONE, conversation: await opened.conversation(FIRST_CONE, BACKGROUND_CONTEXT) },
-        BACKGROUND_CONTEXT
-      ).catch(() => undefined);
       known = homes().join('\n');
       off = opened.onChange(() => {
         void accounts.reconcile();

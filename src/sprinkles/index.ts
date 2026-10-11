@@ -76,8 +76,8 @@ export function ownerOf(agents: Agents, owner: string | undefined): string {
   return scoop && live(scoop) ? (owner as string) : agents.activeCone();
 }
 
-function entry(name: string, html: string, agentId: string): Sprinkle {
-  return { id: name, name, ...describe(name, html), agentId, html };
+function entry(name: string, html: string, agentId: string, id = name): Sprinkle {
+  return { id, name, ...describe(name, html), agentId, html };
 }
 
 function placesOf(options: SprinklesAttach, dir: string): readonly SprinklePlace[] {
@@ -95,10 +95,11 @@ async function filesIn(
   const out: Sprinkle[] = [];
   for (const place of placesOf(options, dir))
     for (const { name, path } of await sprinkleFiles(env, place.dir, using)) {
-      if (reserved.has(name) || out.some((item) => item.id === name)) continue;
+      const id = place.cone ? `${place.cone}/${name}` : name;
+      if (reserved.has(name) || out.some((item) => item.id === id)) continue;
       const read = await env.readTextFile(path, using);
-      const owner = owned[name] ?? (place.cone || undefined);
-      if (read.ok) out.push(entry(name, read.value, ownerOf(agents, owner)));
+      const owner = owned[id] ?? (place.cone || undefined);
+      if (read.ok) out.push(entry(name, read.value, ownerOf(agents, owner), id));
     }
   return out;
 }
