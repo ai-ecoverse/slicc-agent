@@ -414,6 +414,18 @@ v6's `open`, `reload`, `close`, `send` and `chat` answer with what to do instead
 
 The built-in `sprinkles` skill teaches the files, the bridge and the command.
 
+### Remote control
+
+`remoteControl(connection, { agent? })` from `@ai-ecoverse/slicc-agent/page` gives a linked CLI's `slicc prompt`, `slicc watch` and `slicc abort` (the `agent` stream of the slicc link protocol, §5.11) as plain objects the page writes to the link as NDJSON. `agent()` names the agent, by default the cone the worker treats as current.
+
+- **`prompt({ text, whenBusy = 'followUp', thinking = false })`** sends the prompt and resolves `{ delivered, events }`. `delivered` is `run`, `steer` or `follow-up`. A `reject` while busy throws an `Error` with `code: 'EBUSY'`, and any other refusal `EIO`. `events` starts at the prompt's own `user` event and ends with `{ t: 'end', reason, message? }` after the run that holds it. Leaving the loop closes the stream but never aborts the run.
+- **`watch({ since, thinking })`** resolves `{ head, gap?, events }`. Without `since` it follows from the next event; with it, it first replays `since`'s own text or thinking whole, then everything after it, or answers `gap: true` when the transcript no longer holds it.
+- **`abort()`** resolves `{ aborted }`, `false` when nothing was running.
+- **Events** are `user`, `text`, `thinking` (only with `thinking`), `tool`, `tool-result`, `run`, `notice` and `error`. They are mapped in the worker from pi-durable's agent events (`watchEvents`: `run_start`/`run_end` with their inputs, message deltas, tool ends, retries, compactions) and polled by the page over the `slicc.agent.remote` service.
+- **Ids:** entry ids for committed entries, `a<timestamp>.<block>` for an assistant message's blocks (stable from the first delta to the committed entry; `~n` when timestamps collide), and unique ids for transient notices.
+- **What leaves the worker:** tool summaries of at most 200 characters (the tool's name and main argument), result summaries (a line count, or an error's first line), secrets redacted; never tool output.
+- **Bounds:** a stream nobody polls for two minutes is dropped, and one more than 10 000 events behind ends with `{ t: 'end', reason: 'error' }`.
+
 ## The kernel
 
 `@ai-ecoverse/slicc-kernel` is a peer dependency (`>=1.26.3 <2`; older kernels have an IPv6-to-loopback security bug): the agent only calls `attachKernel`, the client end of the page kernel's port, so it must match the kernel the page runs. Seven chooses that version: slicc-bios pins the certified kernel next to the agent in `src/packages/agent/package.json`, and pnpm fills the peer from that pin. The devDependency is the lowest certified kernel the range allows (1.26.3), and the unit and integration tests run on it. A second CI job reruns the integration tests on the newest certified kernel (`NEWEST_CERTIFIED_KERNEL` in `.github/workflows/ci.yml`), with the wasm commands certified for it (`NEWEST_CERTIFIED_WASM`; wasm-git 2.55.0-14 and later need kernel ≥ 1.47.1, so the devDependencies stay on builds the floor runs). Today the floor is 1.26.3 and the newest certified kernel 1.47.1; the second job moves by hand to each newer certified kernel, so both ends of the range are tested. If the port protocol ever breaks within 1.x, a patch release narrows the upper bound. Renovate opens PRs for the kernel, `wasi-pnpm`, the `wasm-*` packages and `slicc-cdp` but never merges them, because they move only after the homescoop coordinator certifies them.

@@ -24,9 +24,11 @@ import { PortListener } from './listener.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
+import { createRemote } from './remote/host.ts';
 import {
   AGENT_SESSION,
   AgentControl,
+  AgentRemoteService,
   AgentSessions,
   AgentSettings,
   AgentTranscript,
@@ -140,23 +142,33 @@ export async function hostAgent(
     { service: AgentControl, mode: 'singleton' },
     { service: AgentTranscript, mode: 'singleton' },
     { service: AgentSettings, mode: 'singleton' },
+    { service: AgentRemoteService, mode: 'singleton' },
   ]);
   const deliveries = trackDeliveries(agent.harness, state, context);
-  provider.provide(
-    AgentControl,
-    createAgentControl(
-      agent.harness,
-      agent,
-      deliveries,
-      options.licks,
-      options.scoops,
-      options.skills,
-      options.sprinkles,
-      options.memory,
-      options.freezer,
-      options.changes
-    )
+  const control = createAgentControl(
+    agent.harness,
+    agent,
+    deliveries,
+    options.licks,
+    options.scoops,
+    options.skills,
+    options.sprinkles,
+    options.memory,
+    options.freezer,
+    options.changes
   );
+  provider.provide(AgentControl, control);
+  const remote = createRemote({
+    harness: agent.harness,
+    send: (request, using) => control.send(request, using),
+    async conversation(agentId, using) {
+      if (!agentId) return agent.cone();
+      const found = await agent.agents.conversation(agentId, using);
+      if (!found) throw new Error(`There is no agent ${agentId}.`);
+      return found;
+    },
+  });
+  provider.provide(AgentRemoteService, remote);
   provider.provide(AgentTranscript, {
     state,
     deliveries: deliveries.state,
@@ -188,6 +200,7 @@ export async function hostAgent(
     connect: (endpoint) => listener.connect(endpoint),
     async close() {
       await server.close();
+      await remote.dispose();
       provider.dispose();
       deliveries.dispose();
       transcript.dispose();
