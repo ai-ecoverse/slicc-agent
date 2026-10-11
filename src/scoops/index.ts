@@ -52,6 +52,7 @@ export interface AttachOptions {
   layout?: Layout;
   enforced?: boolean;
   spools?: Spools;
+  agentDir?: string;
 }
 
 export interface Spools {
@@ -306,9 +307,9 @@ export function setupScoops(
                 source: 'package' as const,
                 dir,
               })),
-              { source: 'user', dir: `${home}/.pi/agent/agents` },
+              { source: 'user', dir: `${options.agentDir ?? `${home}/.pi/agent`}/agents` },
             ],
-            settingsPath: `${home}/.pi/agent/settings.json`,
+            settingsPath: `${options.agentDir ?? `${home}/.pi/agent`}/settings.json`,
           },
           using
         );

@@ -49,6 +49,7 @@ export interface MemoryAttach {
   agents: Agents;
   env: ExecutionEnv;
   home: string;
+  agentDir?: string;
   reloadMs: number;
   idleCheckMs?: number;
   roles?: (context: Context) => Promise<{ roles: readonly Role[] } | undefined>;
@@ -219,7 +220,15 @@ export async function attachMemory(
     memories.replace(using, entries);
   };
   const parts: Parts = { options, files, memories, scopes, reload };
-  connect({ harness: options.harness, agents, env, home, files, changed: reload });
+  connect({
+    harness: options.harness,
+    agents,
+    env,
+    home,
+    ...(options.agentDir ? { agentDir: options.agentDir } : {}),
+    files,
+    changed: reload,
+  });
   await reload(context).catch(() => undefined);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const schedule = () => {

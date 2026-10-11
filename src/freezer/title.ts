@@ -9,10 +9,11 @@ export const TITLE_PROMPT =
 
 export function settingsText(
   env: Pick<ExecutionEnv, 'readTextFile'>,
-  home: string
+  home: string,
+  dir = `${home}/.pi/agent`
 ): (context: Context) => Promise<string | undefined> {
   return async (context) => {
-    const read = await env.readTextFile(`${home}/.pi/agent/settings.json`, context);
+    const read = await env.readTextFile(`${dir}/settings.json`, context);
     return read.ok ? read.value : undefined;
   };
 }
