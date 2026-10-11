@@ -8,6 +8,7 @@ export const SCOOPS_ROOT = '/scoops';
 export const SESSIONS = { tmp: '/tmp/agent-sessions', durable: '/home/sessions' };
 export const ROOT_USER = 'root';
 export const AGENT_DIR = '/etc/slicc/agent';
+export const ROOT_HOME = '/root';
 
 export type Persist = 'tmp' | 'durable';
 
@@ -48,7 +49,8 @@ export function usersLayout(
   envOf: (agentId: string, home: string) => Promise<ExecutionEnv>,
   root: Pick<ExecutionEnv, 'exec'>
 ): Layout {
-  const homeOfUser = (user: string | null) => (user && user !== ROOT_USER ? homeOf(user) : '/root');
+  const homeOfUser = (user: string | null) =>
+    user && user !== ROOT_USER ? homeOf(user) : ROOT_HOME;
   return {
     users: true,
     scoopRoot: (folder) => homeOf(scoopUser(folder)),
