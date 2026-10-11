@@ -1,9 +1,11 @@
+import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Agents } from '../agents.ts';
 import { AGENT_DIR, type Layout, ROOT_HOME, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
 import type { LickDir } from '../licks/sources.ts';
 import type { Spools } from '../scoops/index.ts';
 import type { SkillPeople } from '../skills/index.ts';
+import type { SprinklePlace } from '../sprinkles/index.ts';
 import { type Accounts, createAccounts, homeOf, type UsersMode, wanted } from './accounts.ts';
 import type { KernelClient } from './client.ts';
 import { type EnvRoute, type EnvTargetLike, quote, SliccKernelEnv } from './env.ts';
@@ -15,8 +17,15 @@ export interface AgentUsers {
   readonly spools: Spools;
   readonly enforced: boolean;
   readonly people: SkillPeople;
-  onHomes(listener: () => void): () => void;
+  follow(
+    runtimes: readonly {
+      reload?(context: Context): Promise<void>;
+      reconcile?(context: Context): Promise<void>;
+    }[]
+  ): void;
   lickDirs(): Promise<LickDir[]>;
+  sprinklePlaces(): SprinklePlace[];
+  envOfAgent(agentId: string): Promise<SliccKernelEnv | undefined>;
   route(target: EnvTargetLike): Promise<EnvRoute | undefined>;
   start(agents: Agents): Promise<void>;
   close(): void;
@@ -71,6 +80,15 @@ export function agentUsers(
         return agentId ? accounts.home(agentId) : undefined;
       },
     },
+    sprinklePlaces() {
+      return wanted(state())
+        .filter((entry) => !entry.cone)
+        .map((entry) => ({ dir: `${homeOf(entry.spec.name)}/sprinkles`, cone: entry.spec.name }));
+    },
+    async envOfAgent(agentId) {
+      const home = accounts.home(agentId);
+      return home ? envOf(agentId, home).catch(() => undefined) : undefined;
+    },
     async lickDirs() {
       const cones = wanted(state()).filter((entry) => !entry.cone);
       const out: LickDir[] = [{ dir: `${ROOT_HOME}/.slicc`, home: ROOT_HOME, cone: null }];
@@ -81,9 +99,13 @@ export function agentUsers(
       }
       return out;
     },
-    onHomes(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    follow(runtimes) {
+      listeners.add(() => {
+        for (const runtime of runtimes)
+          void (runtime.reconcile ?? runtime.reload)
+            ?.call(runtime, BACKGROUND_CONTEXT)
+            .catch(() => undefined);
+      });
     },
     spools: {
       users: () => [ROOT_USER, ...wanted(state()).map((entry) => entry.spec.name)],

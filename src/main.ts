@@ -245,7 +245,6 @@ async function start(
     activity,
     ...(people ? { dirs: () => people.lickDirs() } : {}),
   });
-  people?.onHomes(() => void sources.reconcile(BACKGROUND_CONTEXT).catch(() => undefined));
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
     { version: facts.version, boot: await kernelBoot(client) },
@@ -261,7 +260,6 @@ async function start(
     },
     BACKGROUND_CONTEXT
   );
-  people?.onHomes(() => void skillsRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined));
   const mcpRuntime = await mcp.attach(
     {
       env: home,
@@ -287,9 +285,11 @@ async function start(
       env: home,
       assets: options.assets ?? packageAssets(),
       reloadMs: RELOAD_MS,
+      ...(people ? { places: people.sprinklePlaces, envOf: people.envOfAgent } : {}),
     },
     BACKGROUND_CONTEXT
   );
+  people?.follow([sources, skillsRuntime, sprinkles]);
   let roles: ScoopsRuntime | undefined;
   const memoryRuntime = await memory.attach(
     {
