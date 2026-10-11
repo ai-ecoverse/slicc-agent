@@ -15,7 +15,9 @@ import {
   type Resource,
   type ResourceTemplate,
 } from '@earendil-works/pi-mcp';
-import { DEFAULT_TIMEOUT_SECONDS, type McpServerEntry } from './config.ts';
+import { McpOAuthAuthorizationRequiredError } from '@earendil-works/pi-mcp/oauth';
+import { DEFAULT_TIMEOUT_SECONDS, type McpServerEntry, usesOAuth } from './config.ts';
+import { secretNames } from './credentials.ts';
 
 export type ServerState =
   | 'connecting'
@@ -31,6 +33,12 @@ export type TransportFactory = (
 
 export const CONNECT_RETRY_DELAYS_MS = [250, 1_000];
 export const CLIENT_NAME = 'slicc';
+
+export function signInNeeded(error: unknown): boolean {
+  return (
+    error instanceof McpAuthRequiredError || error instanceof McpOAuthAuthorizationRequiredError
+  );
+}
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -191,7 +199,7 @@ export class McpServerConnection {
           }
           continue;
         }
-        if (!(error instanceof McpAuthRequiredError)) throw error;
+        if (!signInNeeded(error)) throw error;
         await this.#drop(client);
         this.#mark('needs-auth');
         throw new Error(this.signInMessage());
@@ -210,7 +218,9 @@ export class McpServerConnection {
   }
 
   signInMessage(): string {
-    return `MCP server "${this.name}" rejected its token (401). Update it in Settings › MCP servers.`;
+    return usesOAuth(this.entry.config) && !secretNames(this.entry.config).length
+      ? `MCP server "${this.name}" needs you to sign in. Sign in under Settings › MCP servers.`
+      : `MCP server "${this.name}" rejected its token (401). Update it in Settings › MCP servers.`;
   }
 
   #mark(state: ServerState, error?: string): void {
@@ -312,7 +322,7 @@ export class McpServerConnection {
       this.#mark('needs-secret');
       return new Error(error.message);
     }
-    if (error instanceof McpAuthRequiredError && !this.closed) {
+    if (signInNeeded(error) && !this.closed) {
       this.#mark('needs-auth');
       return new Error(this.signInMessage());
     }

@@ -70,6 +70,9 @@ const attach = relayed
   : undefined;
 void runAgentWorker(self, {
   ...(attach ? { attach } : {}),
+  ...(params.has('redirect')
+    ? { mcpRedirect: new URL(params.get('redirect'), self.location.origin).href }
+    : {}),
   model: { provider: 'faux', modelId: 'faux-1' },
   providers: [faux.provider],
   credentials: () => EncryptedCredentialStore.open('integration-credentials'),

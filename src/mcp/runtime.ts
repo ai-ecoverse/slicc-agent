@@ -4,17 +4,18 @@ import type { Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { StreamableHttpTransport } from '@earendil-works/pi-mcp';
 import type { LickEvent, Licks } from '../licks/licks.ts';
-import type { AccountState } from '../services.ts';
+import { type McpAccounts, mcpAccounts } from './accounts.ts';
 import { McpCatalog } from './catalog.ts';
 import {
   type McpConfigProblem,
   type McpServerEntry,
   parseMcpConfig,
   sameConfig,
+  usesOAuth,
 } from './config.ts';
 import { McpServerConnection } from './connection.ts';
-import { credentialKey, resolveHeaders, scrub, secretNames } from './credentials.ts';
-import { MCP_ACCOUNT } from './label.ts';
+import { resolveHeaders, scrub, secretNames } from './credentials.ts';
+import { authProvider as oauthAuth, StoredOAuth } from './oauth.ts';
 import { patchSse } from './sse.ts';
 
 export const MCP_LOG_MAX_BYTES = 5 * 1024 * 1024;
@@ -37,6 +38,7 @@ export interface McpAttach {
   reloadMs: number;
   codemode: boolean;
   cors: boolean;
+  redirect: string;
 }
 
 export interface ServerStatus {
@@ -46,12 +48,7 @@ export interface ServerStatus {
   error?: string;
 }
 
-export interface McpAccounts {
-  accounts(): Promise<AccountState[]>;
-  connect(id: string, secret: string): Promise<void>;
-  disconnect(id: string): Promise<void>;
-  onChange(listener: () => void): () => void;
-}
+export type { McpAccounts } from './accounts.ts';
 
 export interface McpRuntime extends McpAccounts {
   status(): ServerStatus[];
@@ -91,7 +88,9 @@ export function stateLick(connection: McpServerConnection, cors: boolean): LickE
   if (connection.state === 'needs-auth')
     return {
       ...base,
-      title: `MCP server "${name}" rejected its token`,
+      title: secretNames(connection.entry.config).length
+        ? `MCP server "${name}" rejected its token`
+        : `MCP server "${name}" needs sign-in`,
       text: connection.signInMessage(),
       severity: 'warn',
       eventId: `${name}\nauth`,
@@ -155,60 +154,6 @@ function serverLog(options: McpAttach, context: Context) {
   };
 }
 
-export function mcpAccounts(
-  catalog: McpCatalog,
-  credentials: CredentialStore,
-  restart: (connection: McpServerConnection) => void,
-  listeners: Set<() => void>
-): McpAccounts {
-  const find = (id: string) => {
-    const connection = catalog.connections.get(id.slice(MCP_ACCOUNT.length));
-    if (!id.startsWith(MCP_ACCOUNT) || !connection || !secretNames(connection.entry.config).length)
-      throw new Error(`${id} is not an MCP server that takes a token`);
-    return connection;
-  };
-  const keyOf = (connection: McpServerConnection) =>
-    credentialKey(connection.name, connection.entry.config.url);
-  return {
-    async accounts() {
-      const rows: AccountState[] = [];
-      for (const connection of catalog.connections.values()) {
-        if (!secretNames(connection.entry.config).length) continue;
-        const stored = (await credentials.read(await keyOf(connection))) !== undefined;
-        rows.push({
-          id: `${MCP_ACCOUNT}${connection.name}`,
-          provider: connection.name,
-          identity: new URL(connection.entry.config.url).host,
-          status:
-            connection.state === 'needs-auth' ? 'expired' : stored ? 'connected' : 'disconnected',
-          auth: 'api-key',
-          needs: null,
-          group: 'mcp',
-          secret: 'token',
-        });
-      }
-      return rows;
-    },
-    async connect(id, secret) {
-      const connection = find(id);
-      await credentials.modify(await keyOf(connection), async () => ({
-        type: 'api_key',
-        key: secret,
-      }));
-      restart(connection);
-    },
-    async disconnect(id) {
-      const connection = find(id);
-      await credentials.delete(await keyOf(connection));
-      restart(connection);
-    },
-    onChange(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-}
-
 export async function attachMcp(
   catalog: McpCatalog,
   options: McpAttach,
@@ -229,16 +174,22 @@ export async function attachMcp(
   let initial: Set<string> = new Set();
   let first = true;
   const log = serverLog(options, context);
-  const make = (url: string, headers: Record<string, string>) =>
-    new StreamableHttpTransport({
-      url,
-      headers,
-      fetch: (input, init) => options.fetch(input, init),
-    });
+  const fetcher = (input: string | URL, init?: RequestInit) => options.fetch(input, init);
+  const oauth = (entry: McpServerEntry) =>
+    new StoredOAuth(entry, options.credentials, options.redirect);
   const transport = async (entry: McpServerEntry) => {
     const resolved = await resolveHeaders(entry.name, entry.config, options.credentials);
     if (!resolved.ok) return { missing: resolved.missing };
-    return { transport: make(entry.config.url, resolved.headers), secrets: resolved.secrets };
+    const authProvider = usesOAuth(entry.config) ? oauthAuth(oauth(entry), entry) : undefined;
+    return {
+      transport: new StreamableHttpTransport({
+        url: entry.config.url,
+        headers: resolved.headers,
+        fetch: fetcher,
+        ...(authProvider ? { authProvider } : {}),
+      }),
+      secrets: resolved.secrets,
+    };
   };
   const open = (entry: McpServerEntry) => {
     const connection = new McpServerConnection({
@@ -291,13 +242,17 @@ export async function attachMcp(
   const watched = await env.watch([{ path: configPath(home) }], schedule, context);
   const watcher: FileWatcher | undefined = watched.ok ? watched.value : undefined;
   const restart = (connection: McpServerConnection) => {
-    catalog.connections.delete(connection.name);
-    void connection.close();
     open(connection.entry);
+    void connection.close();
     catalog.rebuild();
   };
   return {
-    ...mcpAccounts(catalog, options.credentials, restart, listeners),
+    ...mcpAccounts(
+      catalog,
+      { credentials: options.credentials, oauth, fetch: fetcher },
+      restart,
+      listeners
+    ),
     status: () =>
       [...catalog.connections.values()].map((connection) => ({
         name: connection.name,

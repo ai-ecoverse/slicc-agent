@@ -8,3 +8,4 @@ export const readFile = missing;
 export const createRequire = missing;
 export default missing;
 export const spawn = missing;
+export const createServer = missing;

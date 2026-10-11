@@ -71,6 +71,100 @@ function sse(events, init = {}) {
   };
 }
 
+async function challengeOf(verifier) {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(verifier));
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function createAuthorizer(state, settings, cors) {
+  const auth = {
+    codes: new Map(),
+    tokens: new Set(),
+    refresh: new Set(),
+    clients: [],
+    authorizations: [],
+    issued: 0,
+  };
+  state.oauth = auth;
+  const json = (body, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json', ...cors },
+    });
+  const issue = () => {
+    auth.issued++;
+    const access = `access-${auth.issued}`;
+    const refresh = `refresh-${auth.issued}`;
+    auth.tokens.add(access);
+    auth.refresh.add(refresh);
+    return { access_token: access, token_type: 'Bearer', expires_in: 3600, refresh_token: refresh };
+  };
+  return {
+    valid: (header) =>
+      typeof header === 'string' && auth.tokens.has(header.replace(/^Bearer /, '')),
+    revoke() {
+      auth.tokens.clear();
+    },
+    async answer(request) {
+      const url = new URL(request.url);
+      const origin = settings.issuer ?? url.origin;
+      if (url.pathname.startsWith('/.well-known/oauth-protected-resource'))
+        return json({
+          resource: `${url.origin}/mcp`,
+          authorization_servers: [origin],
+          scopes_supported: ['docs.read'],
+        });
+      if (url.pathname.startsWith('/.well-known/oauth-authorization-server'))
+        return json({
+          issuer: origin,
+          authorization_endpoint: `${settings.authorize ?? origin}/authorize`,
+          token_endpoint: `${origin}/token`,
+          registration_endpoint: `${origin}/register`,
+          response_types_supported: ['code'],
+          code_challenge_methods_supported: ['S256'],
+          token_endpoint_auth_methods_supported: ['none'],
+        });
+      if (url.pathname.startsWith('/.well-known/'))
+        return new Response('missing', { status: 404, headers: cors });
+      if (url.pathname === '/register' && request.method === 'POST') {
+        const body = await request.json();
+        auth.clients.push(body);
+        return json({ ...body, client_id: `client-${auth.clients.length}` }, 201);
+      }
+      if (url.pathname === '/authorize') {
+        const params = Object.fromEntries(url.searchParams);
+        auth.authorizations.push(params);
+        const code = `code-${auth.authorizations.length}`;
+        auth.codes.set(code, params);
+        const back = new URL(params.redirect_uri);
+        back.searchParams.set('code', code);
+        back.searchParams.set('state', params.state);
+        back.searchParams.set('iss', origin);
+        if (settings.page) return settings.page(back.href, params);
+        return new Response(null, { status: 302, headers: { location: back.href, ...cors } });
+      }
+      if (url.pathname === '/token' && request.method === 'POST') {
+        const form = new URLSearchParams(await request.text());
+        if (form.get('grant_type') === 'refresh_token') {
+          if (!auth.refresh.delete(form.get('refresh_token') ?? ''))
+            return json({ error: 'invalid_grant' }, 400);
+          return json(issue());
+        }
+        const granted = auth.codes.get(form.get('code') ?? '');
+        if (!granted) return json({ error: 'invalid_grant' }, 400);
+        if ((await challengeOf(form.get('code_verifier') ?? '')) !== granted.code_challenge)
+          return json({ error: 'invalid_grant', error_description: 'PKCE mismatch' }, 400);
+        auth.codes.delete(form.get('code'));
+        return json(issue());
+      }
+      return undefined;
+    },
+  };
+}
+
 export function createMcpServer(options = {}) {
   const state = {
     requests: [],
@@ -172,10 +266,21 @@ export function createMcpServer(options = {}) {
         'access-control-expose-headers': 'mcp-session-id',
       }
     : {};
+  const oauth = options.oauth ? createAuthorizer(state, options.oauth, cors) : undefined;
   const fetch = async (input, init) => {
     const request = new Request(input, init);
     const headers = Object.fromEntries(request.headers);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    const authorized = oauth ? await oauth.answer(request) : undefined;
+    if (authorized) return authorized;
+    if (oauth && !oauth.valid(headers.authorization))
+      return new Response('unauthorized', {
+        status: 401,
+        headers: {
+          'www-authenticate': `Bearer resource_metadata="${new URL(request.url).origin}/.well-known/oauth-protected-resource"`,
+          ...cors,
+        },
+      });
     const body = request.method === 'POST' ? await request.json() : undefined;
     state.requests.push({ method: request.method, url: request.url, headers, body });
     const token = state.token ?? options.token;
@@ -217,6 +322,9 @@ export function createMcpServer(options = {}) {
     },
     finish(id) {
       state.waiting.get(String(id))?.();
+    },
+    revoke() {
+      oauth?.revoke();
     },
   };
 }

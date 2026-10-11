@@ -28,7 +28,8 @@ const helpers = () => {
       worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
-    window.agent = createAgentModel(await owner.connect(), { storage: localStorage }).agent;
+    window.model = createAgentModel(await owner.connect(), { storage: localStorage });
+    window.agent = window.model.agent;
     await window.agent.ready();
   };
   window.tools = () =>
@@ -40,8 +41,8 @@ const helpers = () => {
   window.licks = () => window.agent.messages().filter((message) => message.role === 'lick');
 };
 
-async function serve(cors) {
-  const fake = createMcpServer({ cors });
+async function serve(cors, extra = {}) {
+  const fake = createMcpServer({ cors, ...extra });
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -154,5 +155,66 @@ test('on the page route a server with CORS works and one without CORS is reporte
   } finally {
     open.close();
     closed.close();
+  }
+});
+
+test('an OAuth MCP server signs in through a popup and the callback page, then its tools work', async (t) => {
+  const docs = await serve(true, { oauth: {} });
+  try {
+    const page = await chrome.page(t);
+    await page.init(helpers);
+    await page.goto('/');
+    const query = [
+      'redirect=/dist/oauth/mcp-callback.html',
+      { answer: 'Noted.' },
+      { tool: { name: 'mcp__docs__echo', args: { text: 'signed in' } } },
+      { answer: 'Done.' },
+    ]
+      .map((step) =>
+        typeof step === 'string' ? step : `step=${encodeURIComponent(JSON.stringify(step))}`
+      )
+      .join('&');
+    await page.evaluate(
+      (url) =>
+        window.write(
+          '/home/.pi/agent/mcp.json',
+          JSON.stringify({ mcpServers: { docs: { url, exposure: 'direct' } } })
+        ),
+      docs.url
+    );
+    await page.evaluate((q) => window.start(q, true), query);
+    await page.within(60000, () =>
+      window.model.settings
+        .accounts()
+        .some((account) => account.id === 'mcp:docs' && account.auth === 'oauth')
+    );
+    await page.send('Runtime.evaluate', {
+      expression:
+        "window.signing = window.model.settings.connect('mcp:docs').then(() => 'ok', (error) => String(error))",
+      userGesture: true,
+    });
+    const signed = await page.evaluate(() => window.signing);
+    assert.equal(signed, 'ok');
+    await page.within(60000, () =>
+      window.model.settings
+        .accounts()
+        .some((account) => account.id === 'mcp:docs' && account.status === 'connected')
+    );
+    await page.evaluate(() => window.agent.send(window.agent.active(), 'Call it.'));
+    await page.within(60000, () =>
+      window.tools().some((tool) => tool.status === 'done' || tool.status === 'error')
+    );
+    const tools = await page.evaluate(() =>
+      window.tools().map(({ name, title, output }) => ({ name, title, output }))
+    );
+    assert.deepEqual(tools, [
+      { name: 'mcp__docs__echo', title: 'docs · echo', output: 'echo: signed in' },
+    ]);
+    assert.equal(
+      docs.fake.state.oauth.clients[0].redirect_uris[0].endsWith('/dist/oauth/mcp-callback.html'),
+      true
+    );
+  } finally {
+    docs.close();
   }
 });

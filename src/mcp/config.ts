@@ -10,6 +10,14 @@ export interface McpServerConfig {
   enabled?: boolean;
   timeout?: number;
   description?: string;
+  oauth?: McpOAuthConfig;
+}
+
+export interface McpOAuthConfig {
+  clientId?: string;
+  clientName?: string;
+  scope?: string;
+  authServerMetadataUrl?: string;
 }
 
 export interface McpServerEntry {
@@ -40,7 +48,15 @@ const ACCEPTED = new Set([
   'enabled',
   'timeout',
   'description',
+  'oauth',
 ]);
+const OAUTH_STRINGS = ['clientId', 'clientName', 'scope', 'authServerMetadataUrl'];
+const OAUTH_REFUSED: Record<string, string> = {
+  clientSecret: 'a client secret would have to live in mcp.json; SLICC signs in as a public client',
+  callbackPort: 'SLICC signs in through its own page, not a loopback port',
+  callbackUrl: 'SLICC signs in through its own page, not a loopback URL',
+  clientRegistration: 'SLICC registers dynamically or uses oauth.clientId',
+};
 const SECRET_HEADER = /authorization|cookie|token|key|secret|password|session/i;
 const SECRET_PARAM = /token|key|secret|password|signature|sig|auth|code/i;
 const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
@@ -100,6 +116,39 @@ function checkHeaders(name: string, headers: unknown): McpConfigProblem | undefi
       );
   }
   return undefined;
+}
+
+function checkOAuth(name: string, value: Record<string, unknown>): McpConfigProblem | undefined {
+  const { oauth } = value;
+  if (oauth === undefined) return undefined;
+  if (!isRecord(oauth)) return fail(name, 'oauth must be an object', 'oauth');
+  if (Object.keys(value.headers ?? {}).some((header) => header.toLowerCase() === 'authorization'))
+    return fail(name, 'oauth and an Authorization header exclude each other', 'oauth');
+  for (const [key, entry] of Object.entries(oauth)) {
+    const refused = OAUTH_REFUSED[key];
+    if (refused) return fail(name, `oauth.${key} is not supported: ${refused}`, `oauth.${key}`);
+    if (!OAUTH_STRINGS.includes(key))
+      return fail(name, `oauth.${key} is not a known field`, `oauth.${key}`);
+    if (typeof entry !== 'string' || !entry.trim())
+      return fail(name, `oauth.${key} must be a non-empty string`, `oauth.${key}`);
+  }
+  const metadata = oauth.authServerMetadataUrl as string | undefined;
+  if (
+    metadata !== undefined &&
+    (!URL.canParse(metadata) || new URL(metadata).protocol !== 'https:')
+  )
+    return fail(
+      name,
+      'oauth.authServerMetadataUrl must be an https URL',
+      'oauth.authServerMetadataUrl'
+    );
+  return undefined;
+}
+
+export function usesOAuth(config: McpServerConfig): boolean {
+  return !Object.keys(config.headers ?? {}).some(
+    (header) => header.toLowerCase() === 'authorization'
+  );
 }
 
 function checkExposures(
@@ -165,12 +214,11 @@ export function validateServer(name: string, raw: unknown): Checked {
     value.toolExposure = Object.fromEntries(
       Object.entries(raw.toolExposure).map(([tool, exposure]) => [tool, alias(exposure)])
     );
-  for (const key of Object.keys(value))
-    if (key === 'oauth' || key === 'auth')
-      return fail(name, `${key} is not supported in SLICC yet`, key);
+  if (value.auth !== undefined) return fail(name, 'auth is not supported in SLICC yet', 'auth');
   const problem =
     checkTransport(name, value) ??
     checkHeaders(name, value.headers) ??
+    checkOAuth(name, value) ??
     checkExposures(name, value) ??
     checkFields(name, value);
   if (problem) return problem;

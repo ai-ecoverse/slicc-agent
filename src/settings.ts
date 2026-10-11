@@ -1,4 +1,4 @@
-import { type Context, replicatedState } from '@earendil-works/chord';
+import { type Context, RemoteServiceError, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
 import { createModels, type MutableModels } from '@earendil-works/pi-ai/models';
@@ -83,6 +83,17 @@ function accounts(stored: ReadonlySet<string>, providers: Provider[]): AccountSt
   }));
 }
 
+export async function shown<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw new RemoteServiceError(
+      'service_invalid_value',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
+
 export type UsageReader = (token: string) => Promise<Budget | null>;
 
 async function budget(credentials: CredentialStore, usage: UsageReader) {
@@ -140,7 +151,7 @@ export async function createAgentSettings(
     async connect(providerId, secret, region, context) {
       const server = routed(providerId);
       if (server) {
-        await server.connect(providerId, secret);
+        await shown(() => server.connect(providerId, secret));
         await refresh(context);
         return;
       }
@@ -153,6 +164,8 @@ export async function createAgentSettings(
       await refresh(context);
     },
     async signIn(providerId) {
+      const server = routed(providerId);
+      if (server) return shown(() => server.signIn(providerId));
       if (providerId !== ADOBE) return null;
       const { clientId, scopes, imsEnvironment } = await adobeConfig(endpoint, (input, init) =>
         globalThis.fetch(input, init)
