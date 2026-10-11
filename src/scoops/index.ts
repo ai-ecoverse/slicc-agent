@@ -87,8 +87,11 @@ export interface Installed {
 }
 
 async function theirs(env: ExecutionEnv, path: string, context: Context): Promise<boolean> {
+  const found = await env.fileInfo(path, context);
+  if (!found.ok) return found.error.code !== 'not_found';
+  if (found.value.kind !== 'file') return true;
   const read = await env.readTextFile(path, context);
-  return read.ok && !read.value.includes(PROTOCOL);
+  return !read.ok || !read.value.includes(PROTOCOL);
 }
 
 async function install(
