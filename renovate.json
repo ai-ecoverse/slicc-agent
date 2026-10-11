@@ -23,12 +23,6 @@
       "matchPackageNames": ["@ai-ecoverse/slicc-kernel"],
       "matchDepTypes": ["devDependencies"],
       "enabled": false
-    },
-    {
-      "description": "wasm-git 2.55.0-14 and later need kernel \u2265 1.47.1, and the devDependency must run on the floor kernel (1.26.3). Newer certified builds are tested through NEWEST_CERTIFIED_WASM in ci.yml.",
-      "matchPackageNames": ["@ai-ecoverse/wasm-git"],
-      "matchDepTypes": ["devDependencies"],
-      "allowedVersions": "<=2.55.0-13"
     }
   ]
 }
