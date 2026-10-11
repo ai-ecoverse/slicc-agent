@@ -7,11 +7,12 @@ import type { Licks } from '../licks/licks.ts';
 import { DEFAULT_LIMITS, loadRoles, packageDirs, type Roles } from '../roles/roles.ts';
 import { type CliOptions, createCli, RUN_DIR } from './cli.ts';
 import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
-import { type ControlPlane, controlPlane } from './requests.ts';
+import { type ControlPlane, controlPlane, PROTOCOL } from './requests.ts';
 import { createScoops, type Scoops, type ScoopsHost } from './service.ts';
 
 export const BUILTIN_ROLES = ['scout', 'worker', 'reviewer', 'oracle', 'delegate', 'gelatiere'];
 export const PNPM_HOME = '/home/.local/share/pnpm';
+export const BIN_DIR = '/usr/local/bin';
 
 export type Assets = (path: string) => Promise<string>;
 
@@ -30,7 +31,7 @@ export interface AttachOptions {
   env: ExecutionEnv;
   home: string;
   assets?: Assets;
-  pnpmHome?: string;
+  binDir?: string;
   controlDir?: string;
   sweepEvery?: number;
   alive?: (pid: number) => Promise<boolean>;
@@ -80,12 +81,22 @@ export async function pnpmHomeOf(env: ExecutionEnv, context: Context): Promise<s
   return ran?.ok && ran.value.exitCode === 0 && /^\/\S*$/.test(out) ? out : PNPM_HOME;
 }
 
-async function install(env: ExecutionEnv, script: string, pnpmHome: string, context: Context) {
-  await env.createDir(`${pnpmHome}/bin`, { recursive: true }, context);
+async function install(env: ExecutionEnv, script: string, binDir: string, context: Context) {
+  await env.createDir(binDir, { recursive: true }, context);
   for (const name of COMMANDS) {
-    const path = `${pnpmHome}/bin/${name}`;
+    const path = `${binDir}/${name}`;
     await env.writeFile(path, script, context);
-    await env.exec(['chmod', '+x', path], undefined, context);
+    await env.exec(['chmod', '755', path], undefined, context);
+  }
+}
+
+export async function retire(env: ExecutionEnv, binDir: string, context: Context) {
+  const old = `${await pnpmHomeOf(env, context)}/bin`;
+  if (old === binDir) return;
+  for (const name of COMMANDS) {
+    const path = `${old}/${name}`;
+    const text = await env.readTextFile(path, context);
+    if (text.ok && text.value.includes(PROTOCOL)) await env.remove(path, { force: true }, context);
   }
 }
 
@@ -169,8 +180,9 @@ export function setupScoops(
       await roles(context).catch(() => cached);
       const script = await assets('bin/agent').catch(() => undefined);
       if (script) {
-        const pnpmHome = options.pnpmHome ?? (await pnpmHomeOf(env, context));
-        await install(env, script, pnpmHome, context).catch(() => undefined);
+        const binDir = options.binDir ?? BIN_DIR;
+        await install(env, script, binDir, context).catch(() => undefined);
+        await retire(env, binDir, context).catch(() => undefined);
       }
       const cli = createCli({
         env,

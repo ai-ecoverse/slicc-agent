@@ -22,17 +22,6 @@ test('a terminal runs agent through the production worker: a sync call, an async
     const connection = await owner.connect();
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
     const terminal = await attachKernel(await kernel.connect());
-    const pnpm = await (async () => {
-      let out = '';
-      const probe = await terminal.spawn(['bash', '-c', 'printf %s "$PNPM_HOME"'], {
-        cwd: '/',
-        onStdout: (bytes) => {
-          out += new TextDecoder().decode(bytes);
-        },
-      });
-      await probe.exited;
-      return out || '/home/.local/share/pnpm';
-    })();
     const run = async (command) => {
       const decoder = new TextDecoder();
       let out = '';
@@ -48,7 +37,7 @@ test('a terminal runs agent through the production worker: a sync call, an async
       return { code: await process.exited, out };
     };
     for (let i = 0; i < 600; i++) {
-      if (await terminal.fs.exists(`${pnpm}/bin/agent`)) break;
+      if (await terminal.fs.exists('/usr/local/bin/agent')) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     const sync = await run('agent --name probe --prompt "Say hello"');

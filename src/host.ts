@@ -20,6 +20,7 @@ import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
+import type { UserClients } from './kernel/users.ts';
 import { PortListener } from './listener.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
@@ -44,6 +45,7 @@ import type { PortEndpoint } from './wire.ts';
 export interface AgentHost {
   readonly serverId: string;
   readonly agent: Agent;
+  readonly users?: UserClients;
   connect(endpoint: PortEndpoint, options?: { readOnly?: boolean }): void;
   close(): Promise<void>;
 }
@@ -130,6 +132,7 @@ export async function hostAgent(
     freezer?: FreezerRuntime;
     changes?: ChangesRuntime;
     mcp?: Pick<McpRuntime, 'close'>;
+    users?: UserClients;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -215,6 +218,7 @@ export async function hostAgent(
   return {
     serverId,
     agent,
+    ...(options.users ? { users: options.users } : {}),
     connect: (endpoint, connectOptions) =>
       (connectOptions?.readOnly ? view : full).listener.connect(endpoint),
     async close() {
@@ -236,6 +240,7 @@ export async function hostAgent(
       await options.scoops?.runtime.close(context);
       await options.licks?.sources.close(context);
       await agent.close();
+      await options.users?.close();
     },
   };
 }

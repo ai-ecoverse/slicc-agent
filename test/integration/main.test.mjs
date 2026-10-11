@@ -39,3 +39,43 @@ test('the production worker entry chats and lists accounts', async (t) => {
   assert.deepEqual(seen.accounts, [['faux', 'connected']]);
   assert.equal(seen.model, 'faux/faux-1');
 });
+
+test('with a kernel source that has users, the worker still chats, and a user finds the agent commands', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const connects = [];
+    const owner = await startAgent({
+      worker: () => new Worker('/dist-test/main-worker.js?answer=Ready.', { type: 'module' }),
+      kernel: {
+        connect: (options) => {
+          connects.push(options ?? null);
+          return kernel.connect();
+        },
+        users: kernel.users,
+      },
+    });
+    const { agent } = createAgentModel(await owner.connect(), { storage: localStorage });
+    await agent.ready();
+    await agent.send(agent.active(), 'Are you there?');
+    const replied = () =>
+      agent.messages().some((m) => m.role === 'assistant' && m.parts?.[0]?.type === 'text');
+    for (let i = 0; i < 500 && !replied(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await kernel.users.add({ name: 'cone' });
+    let found = '';
+    for (let i = 0; i < 200 && !found; i++) {
+      found = (await kernel.run(['bash', '-c', 'command -v agent'], { user: 'cone' })).stdout;
+      if (!found) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await owner.release();
+    return { reply: agent.messages().at(-1)?.parts?.[0]?.text, found, connects };
+  });
+  assert.equal(seen.reply, 'Ready.');
+  assert.equal(seen.found, '/usr/local/bin/agent\n');
+  assert.deepEqual(seen.connects, [null]);
+});
