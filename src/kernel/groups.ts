@@ -5,6 +5,7 @@ export const REFUSED = new Set(['ESRCH', 'EPERM', 'ENOSYS']);
 export interface ProcessGroups {
   track(owner: number, process: KernelProcess): void;
   of(owner: number): number[];
+  owned(owner: number): number[];
   shared(owner: number): number | undefined;
   joins(): boolean;
   pending(owner: number): Promise<void> | undefined;
@@ -30,6 +31,13 @@ export function processGroups(client: Pick<KernelClient, 'kill'>): ProcessGroups
       );
     },
     of: (owner) => [...(groups.get(owner) ?? [])],
+    owned: (owner) =>
+      [
+        ...new Set([
+          ...(groups.get(owner) ?? []),
+          ...(shared.has(owner) ? [shared.get(owner)] : []),
+        ]),
+      ] as number[],
     shared: (owner) => (joining ? shared.get(owner) : undefined),
     joins: () => joining,
     pending: (owner) => leading.get(owner),

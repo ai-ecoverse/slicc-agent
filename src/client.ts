@@ -20,6 +20,7 @@ import {
   AgentTranscript,
   type Command,
   type Delivered,
+  type MonitorFeed,
   type SendMode,
 } from './services.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
@@ -38,6 +39,7 @@ export interface AgentConnection {
   readonly memoryScopes?: ReplicatedState<MemoryScope[]>;
   readonly frozen?: ReplicatedState<FrozenCone[]>;
   readonly changes?: ReplicatedState<ChangesView>;
+  readonly monitor?: ReplicatedState<MonitorFeed>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly closed: Promise<Error | undefined>;
@@ -129,6 +131,7 @@ export async function connectAgent(
     memoryScopes,
     frozen,
     changes,
+    monitor,
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   const remote = session.use(AgentRemoteService);
@@ -159,6 +162,7 @@ export async function connectAgent(
     memoryScopes: hold(memoryScopes),
     frozen: hold(frozen),
     changes: hold(changes),
+    monitor: hold(monitor),
     settings: lastingSettings(settings, hold),
     remote,
     closed,

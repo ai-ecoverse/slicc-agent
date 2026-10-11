@@ -25,6 +25,7 @@ import { PortListener } from './listener.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
+import { createMonitor, type MonitorOptions } from './monitor/index.ts';
 import { viewControl, viewRemote, viewSettings } from './readonly.ts';
 import { createRemote } from './remote/host.ts';
 import {
@@ -133,6 +134,7 @@ export async function hostAgent(
     changes?: ChangesRuntime;
     mcp?: Pick<McpRuntime, 'close'>;
     users?: UserClients;
+    monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users' | 'secrets'>;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -149,6 +151,13 @@ export async function hostAgent(
     { service: AgentRemoteService, mode: 'singleton' },
   ]);
   const deliveries = trackDeliveries(agent.harness, state, context);
+  const monitor = createMonitor({
+    ...options.monitor,
+    harness: agent.harness,
+    agents: agent.agents,
+    views: mounted.views,
+    context,
+  });
   const control = createAgentControl(
     agent.harness,
     agent,
@@ -159,7 +168,8 @@ export async function hostAgent(
     options.sprinkles,
     options.memory,
     options.freezer,
-    options.changes
+    options.changes,
+    monitor
   );
   provider.provide(AgentControl, control);
   const remote = createRemote({
@@ -185,6 +195,7 @@ export async function hostAgent(
     frozen: options.freezer?.frozen ?? replicatedState<FrozenCone[]>([]),
     changes:
       options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
+    monitor: monitor.state,
   };
   provider.provide(AgentTranscript, transcriptService);
   const settings = options.settings ?? noSettings;
@@ -196,7 +207,7 @@ export async function hostAgent(
     { service: AgentRemoteService, mode: 'singleton' },
   ]);
   viewer.provide(AgentControl, viewControl(control));
-  viewer.provide(AgentTranscript, transcriptService);
+  viewer.provide(AgentTranscript, { ...transcriptService, monitor: monitor.viewState });
   viewer.provide(AgentSettings, viewSettings(settings));
   viewer.provide(AgentRemoteService, viewRemote(remote));
   const serve = async (id: string, services: RemoteServiceProvider) => {
@@ -225,6 +236,7 @@ export async function hostAgent(
       await full.server.close();
       await view.server.close();
       viewer.dispose();
+      await monitor.dispose();
       await remote.dispose();
       provider.dispose();
       deliveries.dispose();

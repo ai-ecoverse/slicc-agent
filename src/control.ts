@@ -19,6 +19,7 @@ import type { FreezerRuntime } from './freezer/index.ts';
 import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
+import type { Monitor } from './monitor/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
 import type {
   AgentControl,
@@ -283,7 +284,8 @@ export function createAgentControl(
   sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>,
   memory?: Pick<MemoryRuntime, 'save' | 'remove'>,
   freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>,
-  changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>
+  changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>,
+  monitor?: Pick<Monitor, 'open' | 'close'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -384,6 +386,9 @@ export function createAgentControl(
     ...memoryControl(memory),
     ...freezerControl(freezer),
     ...changesControl(changes),
+    monitorOpen: async (lease, resync, context) =>
+      monitor ? monitor.open(lease, resync, context) : { lease: '', ttlMs: 0 },
+    monitorClose: async (lease, context) => monitor?.close(lease, context),
     async unqueue(agentId, id, context) {
       return withdraw(await conversationFor(agentId, context), id, context);
     },
