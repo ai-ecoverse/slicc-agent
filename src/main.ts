@@ -30,6 +30,7 @@ import { processGroups } from './kernel/groups.ts';
 import { setupLicks } from './licks/index.ts';
 import { setupMcp } from './mcp/index.ts';
 import { setupMemory } from './memory/index.ts';
+import { modelsCommand } from './models/index.ts';
 import { type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { identity } from './scoops/identity.ts';
@@ -71,6 +72,26 @@ export interface AgentWorkerOptions {
   catalog?: string;
 }
 
+async function codemodeTools(
+  client: KernelClient,
+  options: AgentWorkerOptions,
+  native: typeof fetch,
+  extra: Parameters<typeof codemodeTool>[0]['extra']
+) {
+  const settings = await client.fs
+    .readFile(`${HOME}/.pi/agent/settings.json`)
+    .catch(() => undefined);
+  if (disabledBySettings(settings === undefined ? undefined : new TextDecoder().decode(settings)))
+    return [];
+  const sandbox = sandboxFactory(
+    options.codemodeWasm ?? (() => locateWasm(native, new URL(import.meta.url))),
+    options.codemodeWorker
+  );
+  return [
+    codemodeTool({ declared: CodingTools.tools as readonly ToolRegistration[], sandbox, extra }),
+  ];
+}
+
 async function start(
   scope: AgentWorkerScope,
   port: Promise<MessagePort>,
@@ -100,25 +121,9 @@ async function start(
     )
   );
   const memory = setupMemory(registry);
-  const settings = await client.fs
-    .readFile(`${HOME}/.pi/agent/settings.json`)
-    .catch(() => undefined);
   const coding = CodingTools.tools as readonly ToolRegistration[];
   const mcp = setupMcp(registry);
-  const codemode = disabledBySettings(
-    settings === undefined ? undefined : new TextDecoder().decode(settings)
-  )
-    ? []
-    : [
-        codemodeTool({
-          declared: coding,
-          sandbox: sandboxFactory(
-            options.codemodeWasm ?? (() => locateWasm(native, new URL(import.meta.url))),
-            options.codemodeWorker
-          ),
-          extra: mcp.codemode,
-        }),
-      ];
+  const codemode = await codemodeTools(client, options, native, mcp.codemode);
   registry.install(codemodeExtension(codemode));
   const licks = setupLicks(registry);
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
@@ -198,6 +203,7 @@ async function start(
     title: titler(models, settingsText(home, HOME)),
   });
   licks.licks.guard(freezer.frozenTarget);
+  const settings = await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime });
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -211,6 +217,7 @@ async function start(
       memory: memoryRuntime.command,
       gelatiere: gelatiere.command,
       freezer: freezer.command,
+      models: modelsCommand({ agents: agent.agents, settings, catalog: models }),
       mcp: mcp.direct,
       ...(options.assets ? { assets: options.assets } : {}),
     },
@@ -232,7 +239,7 @@ async function start(
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
   const changes = attachChanges({ agents: agent.agents, env: home, reloadMs: CHANGES_MS });
   return hostAgent(agent, {
-    settings: await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime }),
+    settings,
     licks: { licks: licks.licks, sources },
     scoops: { scoops: scoops.scoops, runtime },
     skills: skillsRuntime,

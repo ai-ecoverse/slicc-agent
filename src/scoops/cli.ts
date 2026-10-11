@@ -47,6 +47,7 @@ export interface CliOptions {
   memory?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   gelatiere?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   freezer?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
+  models?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
 }
 
 export type Deps = CliOptions & { now: () => number; sync: SyncState };
@@ -472,6 +473,10 @@ async function dispatch(
     return deps.freezer
       ? deps.freezer(request.argv, who.id, context)
       : fail('the freezer is not available in this agent');
+  if (request.as === 'models')
+    return deps.models
+      ? deps.models(request.argv, who.id, context)
+      : fail('models is not available in this agent');
   const first = request.argv[0] ?? '';
   const verb = VERBS[first];
   if (verb) return verb(deps, request, who, context);

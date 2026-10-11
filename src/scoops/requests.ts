@@ -5,11 +5,11 @@ import type { Answer } from './service.ts';
 export const CONTROL_DIR = '/var/lib/slicc/agent/requests';
 export const PROTOCOL = 'slicc-agent/1';
 export const STALE_MS = 10 * 60_000;
-const COMMAND_NAMES = new Set(['subagent', 'sprinkle', 'memory', 'gelatiere', 'freezer']);
+const COMMAND_NAMES = new Set(['subagent', 'sprinkle', 'memory', 'gelatiere', 'freezer', 'models']);
 
 export interface Request {
   id: string;
-  as: 'agent' | 'subagent' | 'sprinkle' | 'memory' | 'gelatiere' | 'freezer';
+  as: 'agent' | 'subagent' | 'sprinkle' | 'memory' | 'gelatiere' | 'freezer' | 'models';
   caller: string;
   cwd: string;
   pid: number | null;
