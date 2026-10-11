@@ -14,6 +14,7 @@ import type {
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
 import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
+import { mcpLabel } from '../mcp/label.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
 import type { Delivered } from '../services.ts';
 import { SPRINKLE_KIND } from '../sprinkles/kind.ts';
@@ -145,7 +146,7 @@ function toolCall(block: Block): ToolCall {
   return {
     id: block.id ?? '',
     name: block.name ?? 'tool',
-    title: title(block.arguments),
+    title: mcpLabel(block.name ?? '') ?? title(block.arguments),
     ...shape(block.name ?? 'tool', args),
     output: '',
     status: 'running',

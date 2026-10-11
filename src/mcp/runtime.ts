@@ -4,6 +4,7 @@ import type { Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { StreamableHttpTransport } from '@earendil-works/pi-mcp';
 import type { LickEvent, Licks } from '../licks/licks.ts';
+import type { AccountState } from '../services.ts';
 import { McpCatalog } from './catalog.ts';
 import {
   type McpConfigProblem,
@@ -12,7 +13,8 @@ import {
   sameConfig,
 } from './config.ts';
 import { McpServerConnection } from './connection.ts';
-import { resolveHeaders, scrub } from './credentials.ts';
+import { credentialKey, resolveHeaders, scrub, secretNames } from './credentials.ts';
+import { MCP_ACCOUNT } from './label.ts';
 import { patchSse } from './sse.ts';
 
 export const MCP_LOG_MAX_BYTES = 5 * 1024 * 1024;
@@ -44,7 +46,14 @@ export interface ServerStatus {
   error?: string;
 }
 
-export interface McpRuntime {
+export interface McpAccounts {
+  accounts(): Promise<AccountState[]>;
+  connect(id: string, secret: string): Promise<void>;
+  disconnect(id: string): Promise<void>;
+  onChange(listener: () => void): () => void;
+}
+
+export interface McpRuntime extends McpAccounts {
   status(): ServerStatus[];
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
@@ -74,15 +83,15 @@ export function stateLick(connection: McpServerConnection, cors: boolean): LickE
   if (connection.state === 'needs-secret')
     return {
       ...base,
-      title: `MCP server "${name}" needs a secret`,
-      text: `Its headers use ${connection.missing.map((item) => `\${${item}}`).join(', ')}. Add the value in Settings › Accounts.`,
+      title: `MCP server "${name}" needs a token`,
+      text: `Its headers use ${connection.missing.map((item) => `\${${item}}`).join(', ')}. Add the value in Settings › MCP servers.`,
       severity: 'warn',
       eventId: `${name}\nsecret\n${connection.missing.join(',')}`,
     };
   if (connection.state === 'needs-auth')
     return {
       ...base,
-      title: `MCP server "${name}" needs sign-in`,
+      title: `MCP server "${name}" rejected its token`,
       text: connection.signInMessage(),
       severity: 'warn',
       eventId: `${name}\nauth`,
@@ -146,6 +155,60 @@ function serverLog(options: McpAttach, context: Context) {
   };
 }
 
+export function mcpAccounts(
+  catalog: McpCatalog,
+  credentials: CredentialStore,
+  restart: (connection: McpServerConnection) => void,
+  listeners: Set<() => void>
+): McpAccounts {
+  const find = (id: string) => {
+    const connection = catalog.connections.get(id.slice(MCP_ACCOUNT.length));
+    if (!id.startsWith(MCP_ACCOUNT) || !connection || !secretNames(connection.entry.config).length)
+      throw new Error(`${id} is not an MCP server that takes a token`);
+    return connection;
+  };
+  const keyOf = (connection: McpServerConnection) =>
+    credentialKey(connection.name, connection.entry.config.url);
+  return {
+    async accounts() {
+      const rows: AccountState[] = [];
+      for (const connection of catalog.connections.values()) {
+        if (!secretNames(connection.entry.config).length) continue;
+        const stored = (await credentials.read(await keyOf(connection))) !== undefined;
+        rows.push({
+          id: `${MCP_ACCOUNT}${connection.name}`,
+          provider: connection.name,
+          identity: new URL(connection.entry.config.url).host,
+          status:
+            connection.state === 'needs-auth' ? 'expired' : stored ? 'connected' : 'disconnected',
+          auth: 'api-key',
+          needs: null,
+          group: 'mcp',
+          secret: 'token',
+        });
+      }
+      return rows;
+    },
+    async connect(id, secret) {
+      const connection = find(id);
+      await credentials.modify(await keyOf(connection), async () => ({
+        type: 'api_key',
+        key: secret,
+      }));
+      restart(connection);
+    },
+    async disconnect(id) {
+      const connection = find(id);
+      await credentials.delete(await keyOf(connection));
+      restart(connection);
+    },
+    onChange(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
 export async function attachMcp(
   catalog: McpCatalog,
   options: McpAttach,
@@ -158,6 +221,10 @@ export async function attachMcp(
     if (!lick?.eventId || reported.has(lick.eventId)) return;
     reported.add(lick.eventId);
     await options.licks.deliver(lick, using).catch(() => undefined);
+  };
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of listeners) listener();
   };
   let initial: Set<string> = new Set();
   let first = true;
@@ -186,6 +253,7 @@ export async function attachMcp(
           void report(connectedLick(changed), context);
         void report(stateLick(changed, options.cors), context);
         if (changed.state !== 'connected') catalog.rebuild();
+        notify();
       },
     });
     catalog.connections.set(entry.name, connection);
@@ -211,6 +279,7 @@ export async function attachMcp(
     first = false;
     for (const [name, entry] of wanted) if (!catalog.connections.has(name)) open(entry);
     catalog.rebuild();
+    notify();
     await Promise.all(closing);
   };
   await reload(context);
@@ -221,7 +290,14 @@ export async function attachMcp(
   };
   const watched = await env.watch([{ path: configPath(home) }], schedule, context);
   const watcher: FileWatcher | undefined = watched.ok ? watched.value : undefined;
+  const restart = (connection: McpServerConnection) => {
+    catalog.connections.delete(connection.name);
+    void connection.close();
+    open(connection.entry);
+    catalog.rebuild();
+  };
   return {
+    ...mcpAccounts(catalog, options.credentials, restart, listeners),
     status: () =>
       [...catalog.connections.values()].map((connection) => ({
         name: connection.name,

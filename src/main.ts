@@ -232,7 +232,7 @@ async function start(
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
   const changes = attachChanges({ agents: agent.agents, env: home, reloadMs: CHANGES_MS });
   return hostAgent(agent, {
-    settings: await createAgentSettings(models, credentials, providers),
+    settings: await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime }),
     licks: { licks: licks.licks, sources },
     scoops: { scoops: scoops.scoops, runtime },
     skills: skillsRuntime,
