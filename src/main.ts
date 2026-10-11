@@ -96,7 +96,7 @@ async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions
 }
 
 function privateStore(env: SliccKernelEnv): Promise<unknown> {
-  return env.exec(`test -d ${STORE_DIR} && chmod 700 ${STORE_DIR}`, undefined, BACKGROUND_CONTEXT);
+  return env.exec(`mkdir -p ${STORE_DIR} && chmod 700 ${STORE_DIR}`, undefined, BACKGROUND_CONTEXT);
 }
 
 async function start(
@@ -105,6 +105,8 @@ async function start(
   options: AgentWorkerOptions
 ): Promise<AgentHost> {
   const { client, users } = await attached(ports, options);
+  const home = new SliccKernelEnv(client, { cwd: HOME });
+  await privateStore(home);
   const native = scope.fetch.bind(scope);
   scope.fetch = transportFetch(client.transport, scope.location.origin, native);
   const facts = {
@@ -167,8 +169,6 @@ async function start(
     env: environment,
   });
   opened = agent;
-  const home = new SliccKernelEnv(client, { cwd: HOME });
-  await privateStore(home);
   const sources = licks.attach(agent, { env: home, home: HOME, activity });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
