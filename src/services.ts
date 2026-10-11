@@ -8,6 +8,7 @@ import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
+import type { AgentRemote } from './remote/host.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 
 export type SendMode = 'steer' | 'followUp' | 'reject';
@@ -173,6 +174,8 @@ export interface AgentSessions {
 }
 
 export const AgentSessions = defineService<AgentSessions>('slicc.agent.sessions');
+
+export const AgentRemoteService = defineService<AgentRemote>('slicc.agent.remote');
 
 export const AGENT_SESSION = 'agent';
 

@@ -7,3 +7,9 @@ export {
   type OwnerOptions,
   startAgent,
 } from './owner.ts';
+export {
+  type RemoteControl,
+  type RemoteEvent,
+  type RemoteOptions,
+  remoteControl,
+} from './remote/client.ts';

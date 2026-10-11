@@ -9,9 +9,11 @@ import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
+import type { AgentRemote } from './remote/host.ts';
 import {
   AGENT_SESSION,
   AgentControl,
+  AgentRemoteService,
   AgentSessions,
   AgentSettings,
   type AgentsSummary,
@@ -37,6 +39,7 @@ export interface AgentConnection {
   readonly frozen?: ReplicatedState<FrozenCone[]>;
   readonly changes?: ReplicatedState<ChangesView>;
   readonly settings: AgentSettings;
+  readonly remote?: AgentRemote;
   readonly closed: Promise<Error | undefined>;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   close(): Promise<void>;
@@ -110,7 +113,7 @@ export async function connectAgent(
   await server.use(AgentSessions).attach(AGENT_SESSION, context);
   await ready;
   const session = createRemoteServiceBinding({
-    services: [AgentControl, AgentTranscript, AgentSettings],
+    services: [AgentControl, AgentTranscript, AgentSettings, AgentRemoteService],
     transport: createClientServiceTransport(client, () => client.attachment),
     bound: true,
   });
@@ -128,6 +131,7 @@ export async function connectAgent(
     changes,
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
+  const remote = session.use(AgentRemoteService);
   await session.ready(context);
   const held: Lasting<unknown>[] = [];
   const hold = <T>(state: ReplicatedState<T>): ReplicatedState<T> => {
@@ -156,6 +160,7 @@ export async function connectAgent(
     frozen: hold(frozen),
     changes: hold(changes),
     settings: lastingSettings(settings, hold),
+    remote,
     closed,
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
