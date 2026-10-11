@@ -45,6 +45,7 @@ export interface RemoteHost {
   send(request: SendRequest, context: Context): Promise<SendResponse>;
   now?: () => number;
   limit?: number;
+  sweepMs?: number;
 }
 
 class Stream {
@@ -195,12 +196,21 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
   const now = host.now ?? Date.now;
   const streams = new Map<string, Stream>();
   let serial = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
   const sweep = () => {
     for (const [id, stream] of streams)
       if (now() - stream.touched > IDLE_MS) {
         streams.delete(id);
         void stream.finish();
       }
+    if (!streams.size && timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+  const track = (id: string, stream: Stream) => {
+    streams.set(id, stream);
+    timer ??= setInterval(sweep, host.sweepMs ?? IDLE_MS / 4);
   };
   const watching = async (agentId: string | null, context: Context) => {
     const conversation = await host.conversation(agentId, context);
@@ -220,7 +230,7 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
         host.limit ?? MAX_QUEUED
       );
       const id = `s${++serial}`;
-      streams.set(id, stream);
+      track(id, stream);
       events.start(async (batch) => onEvents(batch));
       return { id, stream };
     };
@@ -314,6 +324,8 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
       return { aborted: busy };
     },
     async dispose() {
+      clearInterval(timer);
+      timer = undefined;
       const all = [...streams.values()];
       streams.clear();
       await Promise.all(all.map((stream) => stream.finish()));
