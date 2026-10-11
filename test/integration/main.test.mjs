@@ -40,7 +40,7 @@ test('the production worker entry chats and lists accounts', async (t) => {
   assert.equal(seen.model, 'faux/faux-1');
 });
 
-test('with a kernel source that has users, the worker still chats, and a user finds the agent commands', async (t) => {
+test("with a kernel source that has users, the worker chats through the cone's own client, and a user finds the agent commands", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await page.evaluate(async () => {
@@ -77,5 +77,5 @@ test('with a kernel source that has users, the worker still chats, and a user fi
   });
   assert.equal(seen.reply, 'Ready.');
   assert.equal(seen.found, '/usr/local/bin/agent\n');
-  assert.deepEqual(seen.connects, [null]);
+  assert.deepEqual(seen.connects, [null, { user: 'cone', agentId: 'cone:cone' }]);
 });
