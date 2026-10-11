@@ -83,7 +83,6 @@ export class Mapper {
   readonly #emitted = new Map<string, number>();
   readonly #seen = new Set<number>();
   #current: string | undefined;
-  #running = false;
   #previous: string | undefined;
   #ending: readonly number[] = [];
   readonly #stamps = new Map<number, number[]>();
@@ -145,12 +144,12 @@ export class Mapper {
     return out;
   }
 
-  #delivered(): Delivered {
-    if (!this.#running) return 'run';
+  #delivered(entry: EntryRecord): Delivered {
+    if (entry.byTaskId === undefined) return 'run';
     return this.#previous === 'pi.tool-result' ? 'steer' : 'follow-up';
   }
 
-  entry(entry: EntryRecord, delivered: Delivered = this.#delivered()): RemoteEvent[] {
+  entry(entry: EntryRecord, delivered: Delivered = this.#delivered(entry)): RemoteEvent[] {
     if (this.#seen.has(entry.id)) return [];
     this.#seen.add(entry.id);
     this.#previous = entry.kind;
@@ -203,11 +202,9 @@ export class Mapper {
         const ended = this.#ended(this.reason);
         this.reason = 'stop';
         this.error = undefined;
-        this.#running = true;
         return [...ended, { t: 'run', state: 'start' }];
       }
       case 'run_end':
-        this.#running = false;
         this.#ending = event.inputs;
         return [];
       case 'submission':
@@ -265,10 +262,7 @@ export function replayOf(
 ): RemoteEvent[] {
   const mapper = new Mapper(thinking);
   const out: RemoteEvent[] = [];
-  entries.forEach((entry, at) => {
-    const delivered = entries[at - 1]?.kind === 'pi.tool-result' ? 'steer' : 'run';
-    out.push(...mapper.entry(entry, delivered));
-  });
+  for (const entry of entries) out.push(...mapper.entry(entry));
   out.push(...mapper.partial(partial));
   return out;
 }
