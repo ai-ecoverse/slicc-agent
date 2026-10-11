@@ -51,6 +51,30 @@ export interface SkillsAttach {
   agentDir?: string;
   assets?: (path: string) => Promise<string>;
   reloadMs: number;
+  people?: SkillPeople;
+}
+
+export interface SkillPeople {
+  homes(): readonly string[];
+  homeOf(conversationId: number | undefined): string | undefined;
+}
+
+export function userRoots(homes: readonly string[]): SkillRoot[] {
+  return homes.flatMap((home) => [
+    { dir: `${home}/.pi/agent/skills`, source: 'user' as const },
+    { dir: `${home}/.agents/skills`, source: 'user' as const },
+  ]);
+}
+
+export function visibleSkills(
+  skills: readonly Skill[],
+  homes: readonly string[],
+  own: string | undefined
+): Skill[] {
+  return skills.filter((skill) => {
+    const home = homes.find((dir) => skill.baseDir.startsWith(`${dir}/`));
+    return home === undefined || home === own;
+  });
 }
 
 export interface SkillsSetup {
@@ -146,9 +170,17 @@ export function commandsOf(
 
 export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
   let current: Skill[] = [];
+  let people: SkillPeople | undefined;
   const extension = defineExtension({
     name: 'slicc-skills',
-    sections: [section('skills', async () => formatSkillsForPrompt(current) || undefined)],
+    sections: [
+      section('skills', async (input) => {
+        const shown = people
+          ? visibleSkills(current, people.homes(), people.homeOf(input.conversationId))
+          : current;
+        return formatSkillsForPrompt(shown) || undefined;
+      }),
+    ],
   });
   registry.install(extension);
   return {
@@ -156,6 +188,8 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
     async attach(options, context) {
       const { env, home } = options;
       const dir = options.agentDir ?? `${home}/.pi/agent`;
+      people = options.people;
+      const homes = () => options.people?.homes() ?? [];
       if (options.assets)
         await installBuiltins(env, options.assets, context).catch(() => undefined);
       await env.exec(`mkdir -p ${GLOBAL_DIR} && chmod 755 ${GLOBAL_DIR}`, undefined, context);
@@ -164,9 +198,13 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       const reported = new Set<string>();
       const reload = async (using: Context) => {
         const roots: SkillRoot[] = [
-          { dir: `${dir}/skills`, source: 'user' },
-          { dir: `${home}/.agents/skills`, source: 'user' },
-          { dir: GLOBAL_DIR, source: 'global' },
+          ...(options.people
+            ? [...userRoots(homes()), { dir: GLOBAL_DIR, source: 'global' as const }]
+            : [
+                { dir: `${dir}/skills`, source: 'user' as const },
+                { dir: `${home}/.agents/skills`, source: 'user' as const },
+                { dir: GLOBAL_DIR, source: 'global' as const },
+              ]),
           ...(await packaged(env, 'skills', using)).map((dir) => ({
             dir,
             source: 'package' as const,
@@ -195,17 +233,27 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         clearTimeout(timer);
         timer = setTimeout(() => void reload(context).catch(() => undefined), options.reloadMs);
       };
-      const watched = await env.watch(
-        [
-          { path: `${dir}/skills`, recursive: true },
-          { path: `${dir}/prompts` },
-          { path: `${home}/.agents/skills`, recursive: true },
-          { path: GLOBAL_DIR, recursive: true },
-        ],
-        schedule,
-        context
-      );
-      const watcher: FileWatcher | undefined = watched.ok ? watched.value : undefined;
+      let watcher: FileWatcher | undefined;
+      let seen = '';
+      const watch = async (using: Context) => {
+        const extra = options.people
+          ? userRoots(homes()).map((root) => ({ path: root.dir, recursive: true }))
+          : [
+              { path: `${dir}/skills`, recursive: true },
+              { path: `${home}/.agents/skills`, recursive: true },
+            ];
+        const key = JSON.stringify(extra);
+        if (key === seen) return;
+        seen = key;
+        await watcher?.close(using);
+        const watched = await env.watch(
+          [{ path: GLOBAL_DIR, recursive: true }, { path: `${dir}/prompts` }, ...extra],
+          schedule,
+          using
+        );
+        watcher = watched.ok ? watched.value : undefined;
+      };
+      await watch(context);
       return {
         commands,
         skills: () => current,
@@ -215,7 +263,10 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           const expanded = await expandSkillCommand(text, current, env, using);
           return expanded === text ? expandPromptTemplate(text, templates) : expanded;
         },
-        reload,
+        async reload(using) {
+          await watch(using);
+          await reload(using);
+        },
         async close(using) {
           clearTimeout(timer);
           await watcher?.close(using);
