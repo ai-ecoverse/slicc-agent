@@ -9,9 +9,13 @@ export interface AgentWorker {
   terminate(): void;
 }
 
+export interface PortOptions {
+  readOnly?: boolean;
+}
+
 export interface AgentOwner {
-  connect(): Promise<AgentConnection>;
-  port(): Promise<Transferable>;
+  connect(options?: PortOptions): Promise<AgentConnection>;
+  port(options?: PortOptions): Promise<Transferable>;
   restart(): Promise<void>;
   release(): Promise<void>;
 }
@@ -53,16 +57,17 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     release();
     throw error;
   }
-  const open = async (): Promise<PortEndpoint & Transferable> => {
+  const open = async (portOptions: PortOptions = {}): Promise<PortEndpoint & Transferable> => {
     const ready = await worker;
     if (!ready) throw new Error('the agent was released');
     const { port1, port2 } = channel();
-    ready.postMessage({ connect: port2 }, [port2]);
+    const readOnly = portOptions.readOnly === true ? { readOnly: true } : {};
+    ready.postMessage({ connect: port2, ...readOnly }, [port2]);
     return port1;
   };
   return {
-    async connect() {
-      return connectAgent(await open());
+    async connect(portOptions) {
+      return connectAgent(await open(portOptions));
     },
     port: open,
     restart() {
