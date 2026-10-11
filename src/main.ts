@@ -31,7 +31,7 @@ import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
-import { AGENT_DIR } from './layout.ts';
+import { AGENT_DIR, ROOT_HOME } from './layout.ts';
 import { setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
 import { setupMcp } from './mcp/index.ts';
@@ -291,6 +291,7 @@ async function start(
       agents: agent.agents,
       env: home,
       ...at,
+      ...(people ? { home: ROOT_HOME } : {}),
       reloadMs: RELOAD_MS,
       roles: async (using) => roles?.roles(using),
     },
