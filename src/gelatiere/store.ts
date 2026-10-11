@@ -164,11 +164,16 @@ export function open(store: readonly Suggestion[]): Suggestion[] {
   return store.filter((item) => !item.dismissedAt && !item.takenAt);
 }
 
+export function storeOf(shared: string): string {
+  return `${shared}/.gelatiere/suggestions.json`;
+}
+
 export async function readStore(
   env: Pick<ExecutionEnv, 'readTextFile'>,
-  context: Context
+  context: Context,
+  file = STORE
 ): Promise<Suggestion[] | null> {
-  const read = await env.readTextFile(STORE, context);
+  const read = await env.readTextFile(file, context);
   if (!read.ok) return null;
   try {
     const parsed = JSON.parse(read.value) as unknown;
@@ -186,9 +191,10 @@ export async function readStore(
 export async function writeStore(
   env: Pick<ExecutionEnv, 'writeFile' | 'createDir'>,
   store: readonly Suggestion[],
-  context: Context
+  context: Context,
+  file = STORE
 ): Promise<void> {
-  await env.createDir(STORE_DIR, { recursive: true }, context);
-  const written = await env.writeFile(STORE, `${JSON.stringify(store, null, 2)}\n`, context);
+  await env.createDir(file.slice(0, file.lastIndexOf('/')), { recursive: true }, context);
+  const written = await env.writeFile(file, `${JSON.stringify(store, null, 2)}\n`, context);
   if (!written.ok) throw new Error(written.error.message);
 }

@@ -3,11 +3,19 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Agents } from '../agents.ts';
 import { FIRST_CONE } from '../agents.ts';
 import type { GelatiereAttach } from '../gelatiere/index.ts';
-import { AGENT_DIR, type Layout, ROOT_HOME, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
+import {
+  AGENT_DIR,
+  type Layout,
+  ROOT_HOME,
+  ROOT_USER,
+  SESSIONS,
+  SHARED_DIR,
+  usersLayout,
+} from '../layout.ts';
 import type { LickDir } from '../licks/sources.ts';
 import type { Spools } from '../scoops/index.ts';
 import type { SkillPeople } from '../skills/index.ts';
-import type { SprinklePlace } from '../sprinkles/index.ts';
+import type { SprinklePlace, SprinklesAttach } from '../sprinkles/index.ts';
 import {
   type Accounts,
   CONE_PREFIX,
@@ -17,7 +25,7 @@ import {
   wanted,
 } from './accounts.ts';
 import type { KernelClient } from './client.ts';
-import { type EnvRoute, type EnvTargetLike, HOME, quote, SliccKernelEnv } from './env.ts';
+import { type EnvRoute, type EnvTargetLike, quote, SliccKernelEnv } from './env.ts';
 import { freshHomes } from './fresh-homes.ts';
 import type { UserClients } from './users.ts';
 
@@ -35,6 +43,7 @@ export interface AgentUsers {
   ): void;
   lickDirs(): Promise<LickDir[]>;
   sprinklePlaces(): SprinklePlace[];
+  sprinkles(): Partial<SprinklesAttach>;
   envOfAgent(agentId: string): Promise<SliccKernelEnv | undefined>;
   gelatiere(root: SliccKernelEnv): Promise<Partial<GelatiereAttach>>;
   route(target: EnvTargetLike): Promise<EnvRoute | undefined>;
@@ -96,6 +105,14 @@ export function agentUsers(
         .filter((entry) => !entry.cone)
         .map((entry) => ({ dir: `${homeOf(entry.spec.name)}/sprinkles`, cone: entry.spec.name }));
     },
+    sprinkles() {
+      return {
+        places: () => this.sprinklePlaces(),
+        envOf: (agentId: string) => this.envOfAgent(agentId),
+        homeOf: (agentId: string) => accounts.home(agentId),
+        shared: SHARED_DIR,
+      };
+    },
     async envOfAgent(agentId) {
       const home = accounts.home(agentId);
       return home ? envOf(agentId, home).catch(() => undefined) : undefined;
@@ -105,7 +122,8 @@ export function agentUsers(
       const files = await this.envOfAgent(first);
       return {
         home: homeOf(FIRST_CONE),
-        profile: HOME,
+        profile: SHARED_DIR,
+        shared: SHARED_DIR,
         ...(files ? { files } : {}),
         as: async (caller) => {
           const env = caller ? await this.envOfAgent(caller) : undefined;
@@ -147,7 +165,7 @@ export function agentUsers(
     },
     async start(opened) {
       await root.exec(
-        `mkdir -p ${SESSIONS.tmp} ${AGENT_DIR} && chmod 1777 ${SESSIONS.tmp} && chmod 755 ${AGENT_DIR}`,
+        `mkdir -p ${SESSIONS.tmp} ${AGENT_DIR} ${SHARED_DIR} && chmod 1777 ${SESSIONS.tmp} && chmod 755 ${AGENT_DIR} && chmod 700 ${SHARED_DIR}`,
         undefined,
         BACKGROUND_CONTEXT
       );

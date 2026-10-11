@@ -21,7 +21,16 @@ import {
   sheet,
   slugifyCompany,
 } from './catalog.ts';
-import { fold, open, readStore, STORE, type Suggestion, validate, writeStore } from './store.ts';
+import {
+  fold,
+  open,
+  readStore,
+  STORE,
+  type Suggestion,
+  storeOf,
+  validate,
+  writeStore,
+} from './store.ts';
 
 export type Answer = { code: number; out: string };
 
@@ -44,6 +53,7 @@ export interface GelatiereAttach {
   skills?: () => readonly { name: string }[];
   files?: ExecutionEnv;
   profile?: string;
+  shared?: string;
   as?: (caller: string | null, context: Context) => Promise<Caller | undefined>;
 }
 
@@ -106,6 +116,8 @@ type G = {
   mark: (id: string, field: 'dismissedAt' | 'takenAt', context: Context) => Promise<boolean>;
   files: ExecutionEnv;
   caller: string | null;
+  store: string;
+  catalog: string;
 };
 
 async function callerOf(g: G, context: Context): Promise<Caller> {
@@ -225,7 +237,7 @@ async function suggest(g: G, path: string | undefined, context: Context): Promis
     return fail(`${path} is not JSON (${(error as Error).message})`);
   }
   const folded = fold(await g.load(context), parsed, g.now());
-  await writeStore(g.options.env, folded.store, context);
+  await writeStore(g.options.env, folded.store, context, g.store);
   const rejected = folded.rejected.map((reason) => `rejected ${reason}\n`).join('');
   return {
     code: 0,
@@ -253,7 +265,7 @@ async function deliver(g: G, context: Context): Promise<Answer> {
         title,
         body: text,
       })),
-      path: STORE,
+      path: g.store,
     };
     await g.options.licks.deliver(
       {
@@ -268,7 +280,7 @@ async function deliver(g: G, context: Context): Promise<Answer> {
     );
   }
   for (const item of fresh) item.deliveredAt = g.now();
-  if (fresh.length) await writeStore(g.options.env, store, context);
+  if (fresh.length) await writeStore(g.options.env, store, context, g.store);
   return {
     code: 0,
     out: `delivered ${fresh.length} to ${[...byCone.keys()].join(', ') || 'nobody'}\n`,
@@ -387,11 +399,11 @@ async function catalog(g: G, argv: readonly string[], context: Context): Promise
   const slug = slugifyCompany(profile?.company);
   const company = slug && !['catalog', 'use-cases'].includes(slug) ? slug : null;
   const [global, own, cases] = await Promise.all([
-    sheet(options, `${base}catalog.json`, `${CATALOG_DIR}/catalog.json`, context),
+    sheet(options, `${base}catalog.json`, `${g.catalog}/catalog.json`, context),
     company
-      ? sheet(options, `${base}${company}.json`, `${CATALOG_DIR}/company-${company}.json`, context)
+      ? sheet(options, `${base}${company}.json`, `${g.catalog}/company-${company}.json`, context)
       : undefined,
-    sheet(options, `${base}use-cases.json`, `${CATALOG_DIR}/use-cases.json`, context),
+    sheet(options, `${base}use-cases.json`, `${g.catalog}/use-cases.json`, context),
   ]);
   const store = await g.load(context);
   const closed = new Set(store.filter((item) => item.dismissedAt || item.takenAt).map((i) => i.id));
@@ -466,7 +478,7 @@ async function list(g: G, argv: readonly string[], context: Context): Promise<An
 
 async function status(g: G, context: Context): Promise<Answer> {
   const { env, agents } = g.options;
-  const store = await readStore(env, context);
+  const store = await readStore(env, context, g.store);
   const handle = handleOf(agents);
   const read = await g.files.readTextFile(g.crontab, context);
   const scheduled = (read.ok ? read.value : '').split('\n').map(scheduleOf).find(Boolean);
@@ -509,7 +521,8 @@ const VERBS: Record<string, (g: G, argv: readonly string[], context: Context) =>
 export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
   const { env, home } = options;
   const now = options.now ?? Date.now;
-  const load = async (context: Context) => (await readStore(env, context)) ?? [];
+  const storeFile = options.shared ? storeOf(options.shared) : STORE;
+  const load = async (context: Context) => (await readStore(env, context, storeFile)) ?? [];
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(work: () => Promise<T>): Promise<T> => {
     const next = chain.catch(() => undefined).then(work);
@@ -525,6 +538,8 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
     pending: `${home}/.pi/agent/GELATIERE.new.md`,
     files: options.files ?? env,
     caller: null,
+    store: storeFile,
+    catalog: options.shared ? `${options.shared}/.gelatiere/catalog` : CATALOG_DIR,
     load,
     mark: (id, field, context) =>
       serial(async () => {
@@ -532,7 +547,7 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
         const item = store.find((entry) => entry.id === id);
         if (!item) return false;
         item[field] ??= now();
-        await writeStore(env, store, context);
+        await writeStore(env, store, context, storeFile);
         return true;
       }),
   };
