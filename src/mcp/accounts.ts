@@ -37,7 +37,7 @@ function row(connection: McpServerConnection, kind: Kind, stored: boolean): Acco
     status:
       rejected && (kind === 'token' || stored)
         ? 'expired'
-        : stored && !rejected
+        : stored && connection.live
           ? 'connected'
           : 'disconnected',
     auth: kind === 'token' ? 'api-key' : 'oauth',
