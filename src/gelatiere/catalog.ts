@@ -285,7 +285,7 @@ export async function sheet(
       ? { url, rows: kept.rows, state: 'cached', fetchedAt: kept.fetchedAt }
       : { url, rows: [], state: 'unavailable' };
   const rows = got === 'missing' ? [] : got.rows;
-  await env.createDir(CATALOG_DIR, { recursive: true }, context);
+  await env.createDir(file.slice(0, file.lastIndexOf('/')), { recursive: true }, context);
   await env.writeFile(file, `${JSON.stringify({ url, fetchedAt: now, rows })}\n`, context);
   return { url, rows, state: got === 'missing' ? 'missing' : 'fresh', fetchedAt: now };
 }

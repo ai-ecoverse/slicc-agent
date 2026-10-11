@@ -68,16 +68,25 @@ export async function sprinkleFiles(
   return [...out].map(([name, path]) => ({ name, path }));
 }
 
-export function homePath(path: unknown): string {
+export function homePath(path: unknown, shared = '/home', root = '/home'): string {
   if (typeof path !== 'string' || !path) throw new Error('a sprinkle reads files by absolute path');
-  const mapped = path.startsWith('/shared/') ? `/home/${path.slice('/shared/'.length)}` : path;
+  const mapped = path.startsWith('/shared/') ? `${shared}/${path.slice('/shared/'.length)}` : path;
   const segments = mapped.split('/');
   if (segments.includes('.') || segments.includes('..'))
     throw new Error(`a sprinkle reads paths without . or .. segments, not ${path}`);
   const resolved = normalize(mapped);
-  if (resolved !== '/home' && !resolved.startsWith('/home/'))
-    throw new Error(`a sprinkle can only read files in /home, not ${path}`);
+  if (resolved !== root && !resolved.startsWith(`${root}/`))
+    throw new Error(`a sprinkle can only read files in ${root}, not ${path}`);
   return resolved;
+}
+
+export function sharedPaths(shared: string) {
+  return {
+    suggestionsDir: `${shared}/.gelatiere`,
+    suggestions: `${shared}/.gelatiere/suggestions.json`,
+    welcomed: `${shared}/.welcomed`,
+    profile: `${shared}/.welcome.json`,
+  };
 }
 
 export const NO_EXEC =

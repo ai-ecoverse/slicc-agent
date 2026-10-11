@@ -21,6 +21,7 @@ import {
   SUGGESTIONS,
   SUGGESTIONS_DIR,
   SUGGESTIONS_STORE,
+  sharedPaths,
   sprinkleFiles,
   WELCOME,
   WELCOME_PROFILE,
@@ -53,7 +54,11 @@ export interface SprinklesAttach {
   intercept?: (id: string, payload: SprinklePayload, context: Context) => Promise<boolean>;
   places?: () => readonly SprinklePlace[];
   envOf?: (agentId: string, context: Context) => Promise<ExecutionEnv | undefined>;
+  homeOf?: (agentId: string) => string | undefined;
+  shared?: string;
 }
+
+const BUILTIN = new Set([WELCOME, SUGGESTIONS]);
 
 export interface SprinklePlace {
   dir: string;
@@ -109,8 +114,8 @@ function reloader(
   const { welcome, suggestions } = builtins;
   return async (using: Context) => {
     const owned = await owners(using);
-    const stored =
-      suggestions === undefined ? undefined : await env.exists(SUGGESTIONS_STORE, using);
+    const store = options.shared ? sharedPaths(options.shared).suggestions : SUGGESTIONS_STORE;
+    const stored = suggestions === undefined ? undefined : await env.exists(store, using);
     const offered = stored?.ok === true && stored.value;
     const reserved = new Set([WELCOME, ...(offered ? [SUGGESTIONS] : [])]);
     const out = await filesIn(options, dir, reserved, owned, using);
@@ -122,6 +127,25 @@ function reloader(
         inline: true,
       });
     sprinkles.replace(using, out);
+  };
+}
+
+function readerFor(
+  options: SprinklesAttach,
+  owners: (context: Context) => Promise<Record<string, string>>,
+  inside: (path: unknown, context: Context) => Promise<string>
+) {
+  const { env, agents } = options;
+  return async (id: string, path: unknown, using: Context) => {
+    if (options.shared && BUILTIN.has(id))
+      return { files: env, path: homePath(path, options.shared, options.shared) };
+    const owner = ownerOf(agents, (await owners(using))[id]);
+    const agentId = owner.startsWith('scoop:') ? owner : `cone:${owner}`;
+    const home = options.homeOf?.(agentId);
+    return {
+      files: (await options.envOf?.(agentId, using)) ?? env,
+      path: home ? homePath(path, home, home) : await inside(path, using),
+    };
   };
 }
 
@@ -145,11 +169,8 @@ export function setupSprinkles() {
         const real = await env.canonicalPath(asked, using);
         return real.ok ? homePath(real.value) : asked;
       };
-      const reader = async (id: string, using: Context) => {
-        const owner = ownerOf(agents, (await owners(using))[id]);
-        const agentId = owner.startsWith('scoop:') ? owner : `cone:${owner}`;
-        return (await options.envOf?.(agentId, using)) ?? env;
-      };
+      const paths = options.shared ? sharedPaths(options.shared) : undefined;
+      const reader = readerFor(options, owners, inside);
       const offCone = agents.onCone(() => reload(context).catch(() => undefined));
       const find = (id: string) => sprinkles.value.find((item) => item.id === id);
       const post = async (id: string, agentId: string, using: Context) => {
@@ -178,7 +199,10 @@ export function setupSprinkles() {
         seen = key;
         await watcher?.close(using);
         const watched = await env.watch(
-          [...dirs.map((path) => ({ path, recursive: true })), { path: SUGGESTIONS_DIR }],
+          [
+            ...dirs.map((path) => ({ path, recursive: true })),
+            { path: paths?.suggestionsDir ?? SUGGESTIONS_DIR },
+          ],
           () => {
             clearTimeout(timer);
             timer = setTimeout(() => void reload(context).catch(() => undefined), options.reloadMs);
@@ -195,10 +219,14 @@ export function setupSprinkles() {
           if (!sprinkle) return { delivered: false };
           if (await options.intercept?.(id, payload, using)) return { delivered: true };
           if (id === WELCOME && payload.action === 'onboarding-complete') {
-            await env.writeFile(WELCOMED, `${new Date().toISOString()}\n`, using);
+            await env.writeFile(
+              paths?.welcomed ?? WELCOMED,
+              `${new Date().toISOString()}\n`,
+              using
+            );
             if (payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data))
               await env.writeFile(
-                WELCOME_PROFILE,
+                paths?.profile ?? WELCOME_PROFILE,
                 `${JSON.stringify(payload.data, null, 2)}\n`,
                 using
               );
@@ -220,14 +248,14 @@ export function setupSprinkles() {
           if (!find(id)) throw new Error(`there is no sprinkle ${id}`);
           const handlers: Record<SprinkleMethod, () => Promise<JsonValue>> = {
             async readFile() {
-              const files = await reader(id, using);
-              const read = await files.readTextFile(await inside(args[0], using), using);
+              const { files, path } = await reader(id, args[0], using);
+              const read = await files.readTextFile(path, using);
               if (!read.ok) throw new Error(read.error.message);
               return read.value;
             },
             async exists() {
-              const files = await reader(id, using);
-              const found = await files.exists(await inside(args[0], using), using);
+              const { files, path } = await reader(id, args[0], using);
+              const found = await files.exists(path, using);
               return found.ok && found.value;
             },
             async getState() {

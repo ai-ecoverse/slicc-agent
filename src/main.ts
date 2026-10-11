@@ -285,7 +285,7 @@ async function start(
       env: home,
       assets: options.assets ?? packageAssets(),
       reloadMs: RELOAD_MS,
-      ...(people ? { places: people.sprinklePlaces, envOf: people.envOfAgent } : {}),
+      ...(people?.sprinkles() ?? {}),
     },
     BACKGROUND_CONTEXT
   );

@@ -9,6 +9,7 @@ export const SESSIONS = { tmp: '/tmp/agent-sessions', durable: '/home/sessions' 
 export const ROOT_USER = 'root';
 export const AGENT_DIR = '/etc/slicc/agent';
 export const ROOT_HOME = '/root';
+export const SHARED_DIR = '/var/lib/slicc/agent/shared';
 
 export type Persist = 'tmp' | 'durable';
 

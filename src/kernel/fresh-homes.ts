@@ -7,7 +7,6 @@ import { quote } from './env.ts';
 export const HOMES_MARKER = '/var/lib/slicc/agent/users-v1';
 export const HOMES_KIND = 'slicc.homes';
 export const WORKSPACE = '/workspace';
-export const SHARED_STATE = new Set(['.gelatiere', '.welcomed', '.welcome.json']);
 
 export function homesNotice(cone: string, legacy: readonly string[]): string {
   return [
@@ -24,7 +23,7 @@ export async function legacyPaths(
   context: Context
 ): Promise<string[]> {
   const listed = await root.listDir('/home', context);
-  const kept = new Set([...users, ...SHARED_STATE]);
+  const kept = new Set(users);
   const inHome = (listed.ok ? listed.value : [])
     .filter((entry) => !kept.has(entry.name))
     .map((entry) => `/home/${entry.name}`)
