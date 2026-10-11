@@ -88,6 +88,8 @@
       main.querySelector('p').textContent = text;
       main.querySelector('.mark').textContent = mark;
     };
+    const named = answer.state ? localStorage.getItem(`slicc-mcp-oauth:${answer.state}`) : null;
+    const where = named ? ` to ${named}` : '';
     if (!answer.state)
       show(
         'failed',
@@ -98,8 +100,8 @@
     else {
       new BroadcastChannel('slicc-mcp-oauth').postMessage(answer);
       if (answer.error)
-        show('failed', 'Sign-in failed', answer.error_description ?? answer.error, '!');
-      else show('done', 'Signed in', 'SLICC has the sign-in. You can close this window.', '✓');
+        show('failed', `Couldn't sign in${where}`, answer.error_description ?? answer.error, '!');
+      else show('done', `Signed in${where}`, 'You can close this window.', '✓');
       if (!stay) setTimeout(() => window.close(), 1500);
     }
     </script>

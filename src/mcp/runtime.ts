@@ -3,7 +3,6 @@ import type { CredentialStore } from '@earendil-works/pi-ai';
 import type { Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { StreamableHttpTransport } from '@earendil-works/pi-mcp';
-import { adaptOAuthProvider } from '@earendil-works/pi-mcp/oauth';
 import type { LickEvent, Licks } from '../licks/licks.ts';
 import { type McpAccounts, mcpAccounts } from './accounts.ts';
 import { McpCatalog } from './catalog.ts';
@@ -16,7 +15,7 @@ import {
 } from './config.ts';
 import { McpServerConnection } from './connection.ts';
 import { resolveHeaders, scrub, secretNames } from './credentials.ts';
-import { StoredOAuth } from './oauth.ts';
+import { authProvider as oauthAuth, StoredOAuth } from './oauth.ts';
 import { patchSse } from './sse.ts';
 
 export const MCP_LOG_MAX_BYTES = 5 * 1024 * 1024;
@@ -181,7 +180,7 @@ export async function attachMcp(
   const transport = async (entry: McpServerEntry) => {
     const resolved = await resolveHeaders(entry.name, entry.config, options.credentials);
     if (!resolved.ok) return { missing: resolved.missing };
-    const authProvider = usesOAuth(entry.config) ? adaptOAuthProvider(oauth(entry)) : undefined;
+    const authProvider = usesOAuth(entry.config) ? oauthAuth(oauth(entry), entry) : undefined;
     return {
       transport: new StreamableHttpTransport({
         url: entry.config.url,

@@ -1,12 +1,15 @@
 import type { CredentialStore } from '@earendil-works/pi-ai';
-import type { McpFetch } from '@earendil-works/pi-mcp';
+import type { AuthProvider, McpFetch, UnauthorizedContext } from '@earendil-works/pi-mcp';
 import {
   authorizeMcp,
   discoverOAuthServerInfo,
   McpOAuthAuthorizationRequiredError,
   type McpOAuthState,
+  type OAuthChallenge,
+  parseWwwAuthenticate,
   registerClient,
   selectResource,
+  stepUpScope,
 } from '@earendil-works/pi-mcp/oauth';
 import type { McpSignIn } from '../services.ts';
 import type { McpServerConfig } from './config.ts';
@@ -18,6 +21,62 @@ type Client = Awaited<ReturnType<Provider['clientInformation']>>;
 type Discovery = NonNullable<McpOAuthState['discovery']>;
 
 export const CLIENT_NAME = 'SLICC';
+
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+export function secureUrl(url: URL): boolean {
+  return url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK.has(url.hostname));
+}
+
+export function signInRequired(cause?: unknown): McpOAuthAuthorizationRequiredError {
+  const error = new McpOAuthAuthorizationRequiredError();
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
+export function authProvider(provider: StoredOAuth, server: OAuthServer): AuthProvider {
+  const configured = server.config.oauth?.authServerMetadataUrl;
+  let inFlight: Promise<void> | undefined;
+  const authorize = async (
+    context: UnauthorizedContext,
+    step: boolean,
+    challenge: OAuthChallenge
+  ) => {
+    const granted = step ? await provider.tokens() : undefined;
+    try {
+      await authorizeMcp(provider, {
+        serverUrl: context.serverUrl,
+        ...(challenge.resourceMetadataUrl
+          ? { resourceMetadataUrl: challenge.resourceMetadataUrl }
+          : {}),
+        ...(step
+          ? { scope: stepUpScope(granted?.scope, challenge.scope), skipRefresh: true }
+          : challenge.scope
+            ? { scope: challenge.scope }
+            : {}),
+        ...(configured ? { authorizationServerMetadataUrl: new URL(configured) } : {}),
+        fetch: context.fetch,
+      });
+    } catch (error) {
+      throw error instanceof McpOAuthAuthorizationRequiredError ? error : signInRequired(error);
+    }
+  };
+  return {
+    token: async () => (await provider.tokens())?.access_token,
+    async onUnauthorized(context) {
+      const challenge = parseWwwAuthenticate(context.response.headers.get('www-authenticate'));
+      const step = challenge.error === 'insufficient_scope';
+      if (!step && !inFlight && context.token !== undefined) {
+        const current = (await provider.tokens())?.access_token;
+        if (current !== undefined && current !== context.token) return;
+      }
+      inFlight ??= authorize(context, step, challenge).finally(() => {
+        inFlight = undefined;
+      });
+      await inFlight;
+    },
+  };
+}
 
 const bytesToBase64Url = (bytes: Uint8Array) =>
   btoa(String.fromCharCode(...bytes))
@@ -219,6 +278,7 @@ export async function beginSignIn(
   const url = new URL(
     metadata?.authorization_endpoint ?? new URL('/authorize', info.authorizationServerUrl)
   );
+  if (!secureUrl(url)) throw new Error('the authorization endpoint is not an https URL');
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', client.client_id);
   url.searchParams.set('code_challenge', challenge);
@@ -252,11 +312,11 @@ export async function finishSignIn(
   } catch {
     throw new Error('the sign-in answer is not a callback');
   }
-  if (callback.error)
-    throw new Error(`sign-in failed: ${callback.error_description ?? callback.error}`);
   const expected = (await provider.load()).oauthState;
   if (!expected || callback.state !== expected)
     throw new Error('the sign-in answer does not match this sign-in');
+  if (callback.error)
+    throw new Error(`sign-in failed: ${callback.error_description ?? callback.error}`);
   if (!callback.code) throw new Error('the sign-in answer has no authorization code');
   const configured = server.config.oauth?.authServerMetadataUrl;
   await authorizeMcp(provider, {
