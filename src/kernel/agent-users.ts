@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Agents } from '../agents.ts';
-import { AGENT_DIR, type Layout, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
+import { AGENT_DIR, type Layout, ROOT_HOME, ROOT_USER, SESSIONS, usersLayout } from '../layout.ts';
+import type { LickDir } from '../licks/sources.ts';
 import type { Spools } from '../scoops/index.ts';
 import type { SkillPeople } from '../skills/index.ts';
 import { type Accounts, createAccounts, homeOf, type UsersMode, wanted } from './accounts.ts';
@@ -15,6 +16,7 @@ export interface AgentUsers {
   readonly enforced: boolean;
   readonly people: SkillPeople;
   onHomes(listener: () => void): () => void;
+  lickDirs(): Promise<LickDir[]>;
   route(target: EnvTargetLike): Promise<EnvRoute | undefined>;
   start(agents: Agents): Promise<void>;
   close(): void;
@@ -68,6 +70,16 @@ export function agentUsers(
         const agentId = accounts.agentOf(conversationId);
         return agentId ? accounts.home(agentId) : undefined;
       },
+    },
+    async lickDirs() {
+      const cones = wanted(state()).filter((entry) => !entry.cone);
+      const out: LickDir[] = [{ dir: `${ROOT_HOME}/.slicc`, home: ROOT_HOME, cone: null }];
+      for (const entry of cones) {
+        const home = homeOf(entry.spec.name);
+        const env = await envOf(entry.agentId, home).catch(() => undefined);
+        out.push({ dir: `${home}/.slicc`, home, cone: entry.spec.name, ...(env ? { env } : {}) });
+      }
+      return out;
     },
     onHomes(listener) {
       listeners.add(listener);

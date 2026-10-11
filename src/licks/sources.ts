@@ -3,10 +3,16 @@ import type { Conversation, Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Activity } from '../kernel/activity.ts';
 import { type BootFacts, bootLicks } from './boot.ts';
-import { type ConfigError, parseCrontab, parseWebhook, type WebhookEntry } from './config.ts';
+import {
+  type ConfigError,
+  type CronEntry,
+  parseCrontab,
+  parseWebhook,
+  type WebhookEntry,
+} from './config.ts';
 import type { cronTask } from './extension.ts';
 import { type ConfigFiles, configFiles, Watches } from './fswatch.ts';
-import type { LickChannel } from './lick.ts';
+import type { LickChannel, LickTarget } from './lick.ts';
 import type { LickEvent, Licks } from './licks.ts';
 import { reconcileCron } from './schedules.ts';
 
@@ -23,6 +29,26 @@ export interface LickSourcesOptions {
   now?: () => number;
   flushEvery?: number;
   activity?: Activity;
+  dirs?: () => readonly LickDir[] | Promise<readonly LickDir[]>;
+}
+
+export interface LickDir {
+  dir: string;
+  home: string;
+  cone: string | null;
+  env?: ExecutionEnv;
+}
+
+export function scopedTarget(target: LickTarget, cone: string | null): LickTarget {
+  return cone && target === 'cone' ? (`cone:${cone}` as LickTarget) : target;
+}
+
+export function scopedName(name: string, cone: string | null): string {
+  return cone ? `${cone}:${name}` : name;
+}
+
+function scoped<T extends { name: string; target: LickTarget }>(entry: T, cone: string | null): T {
+  return { ...entry, name: scopedName(entry.name, cone), target: scopedTarget(entry.target, cone) };
 }
 
 export interface WebhookDelivery {
@@ -49,7 +75,11 @@ export function shortPath(path: string, home: string): string {
   return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
-export function configLick(error: ConfigError, home: string): LickEvent {
+export function configLick(
+  error: ConfigError,
+  home: string,
+  cone: string | null = null
+): LickEvent {
   const file = shortPath(error.file, home);
   const channel: LickChannel = error.file.includes('/watches/')
     ? 'fswatch'
@@ -63,7 +93,7 @@ export function configLick(error: ConfigError, home: string): LickEvent {
     title: `Invalid ${file}`,
     text,
     body: 'Ignored until the file is fixed.\nThe formats are in the slicc-agent README.',
-    target: 'cone',
+    target: scopedTarget('cone', cone),
     severity: 'error',
     eventId: hash(`${file}\n${text}`),
   };
@@ -115,13 +145,24 @@ async function webhooksIn(
 
 export function createLickSources(options: LickSourcesOptions): LickSources {
   const { harness, env, licks, home } = options;
-  const dir = `${home}/${SLICC_DIR}`;
   const now = options.now ?? Date.now;
   const files = configFiles(env);
   const deliver = (event: LickEvent, context: Context) => licks.deliver(event, context);
-  const watches = new Watches(env, deliver, home, options.activity);
+  const dirsOf = options.dirs ?? (() => [{ dir: `${home}/${SLICC_DIR}`, home, cone: null }]);
+  const watching = new Map<string, Watches>();
+  const watchesOf = (place: LickDir) => {
+    let found = watching.get(place.dir);
+    if (!found) {
+      const retarget = (event: LickEvent, context: Context) =>
+        deliver({ ...event, target: scopedTarget(event.target, place.cone) }, context);
+      found = new Watches(place.env ?? env, retarget, place.home, options.activity);
+      watching.set(place.dir, found);
+    }
+    return found;
+  };
   let webhooks = new Map<string, WebhookEntry>();
   let control: FileWatcher | undefined;
+  let controlled = '';
   let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   let flushTimer: ReturnType<typeof setInterval> | undefined;
   let closed = false;
@@ -134,14 +175,46 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
 
   async function reconcileNow(context: Context): Promise<void> {
     if (closed) return;
-    const crontabFile = `${dir}/crontab`;
-    const crontab = parseCrontab(crontabFile, (await files.read(crontabFile, context)) ?? '');
-    await reconcileCron({ ...options, now }, crontab.entries, context);
-    const watchErrors = await watches.reconcile(`${dir}/watches`, context);
-    const found = await webhooksIn(files, `${dir}/webhooks`, context);
-    webhooks = found.entries;
-    const errors = [...crontab.errors, ...watchErrors, ...found.errors];
-    for (const error of errors) await deliver(configLick(error, home), context);
+    const places = await dirsOf();
+    const entries: CronEntry[] = [];
+    const errors: { error: ConfigError; place: LickDir }[] = [];
+    const hooks = new Map<string, WebhookEntry>();
+    for (const place of places) {
+      const crontabFile = `${place.dir}/crontab`;
+      const crontab = parseCrontab(crontabFile, (await files.read(crontabFile, context)) ?? '');
+      entries.push(...crontab.entries.map((entry) => scoped(entry, place.cone)));
+      const watchErrors = await watchesOf(place).reconcile(`${place.dir}/watches`, context);
+      const found = await webhooksIn(files, `${place.dir}/webhooks`, context);
+      for (const entry of found.entries.values()) {
+        const named = scoped(entry, place.cone);
+        hooks.set(named.name, named);
+      }
+      for (const error of [...crontab.errors, ...watchErrors, ...found.errors])
+        errors.push({ error, place });
+    }
+    for (const [dir, watches] of [...watching])
+      if (!places.some((place) => place.dir === dir)) {
+        watching.delete(dir);
+        await watches.close(context);
+      }
+    await reconcileCron({ ...options, now }, entries, context);
+    webhooks = hooks;
+    for (const { error, place } of errors)
+      await deliver(configLick(error, place.home, place.cone), context);
+    await watchControl(places, context);
+  }
+
+  async function watchControl(places: readonly LickDir[], context: Context): Promise<void> {
+    const key = places.map((place) => place.dir).join('\n');
+    if (key === controlled || closed) return;
+    controlled = key;
+    await control?.close(context);
+    const result = await env.watch(
+      places.map((place) => ({ path: place.dir, recursive: true })),
+      () => scheduleReconcile(context),
+      context
+    );
+    control = result.ok ? result.value : undefined;
   }
 
   const reconcile = (context: Context) => serial(() => reconcileNow(context));
@@ -161,12 +234,6 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     async start(context) {
       await licks.flush(context);
       await reconcile(context);
-      const result = await env.watch(
-        [{ path: dir, recursive: true }],
-        () => scheduleReconcile(context),
-        context
-      );
-      if (result.ok) control = result.value;
       flushTimer = setInterval(() => {
         void flushIfWaiting(context).catch(() => undefined);
       }, options.flushEvery ?? 2000);
@@ -184,7 +251,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
       clearTimeout(reconcileTimer);
       clearInterval(flushTimer);
       await control?.close(context);
-      await watches.close(context);
+      for (const watches of watching.values()) await watches.close(context);
     },
   };
 }
