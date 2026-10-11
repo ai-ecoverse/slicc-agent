@@ -17,10 +17,10 @@ export {
   type PortOptions,
   startAgent,
 } from './owner.ts';
-export { VIEW_ONLY } from './readonly.ts';
 export {
   type RemoteControl,
   type RemoteEvent,
   type RemoteOptions,
   remoteControl,
 } from './remote/client.ts';
+export { VIEW_ONLY } from './view-only.ts';
