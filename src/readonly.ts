@@ -1,8 +1,9 @@
 import { ServerError } from '@earendil-works/pi-server';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentControl, AgentSettings } from './services.ts';
+import { VIEW_ONLY } from './view-only.ts';
 
-export const VIEW_ONLY = 'this follower can watch, but not send, steer or abort';
+export { VIEW_ONLY };
 
 const READS = new Set<keyof AgentControl>(['wait', 'changesOpen']);
 
