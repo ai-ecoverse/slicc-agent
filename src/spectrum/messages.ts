@@ -480,6 +480,17 @@ function secrets(id: string, entry: EntryRecord): SystemMessage {
   };
 }
 
+function homes(id: string, entry: EntryRecord): SystemMessage {
+  return {
+    id,
+    role: 'system',
+    kind: 'notice',
+    title: 'Fresh homes',
+    text: textOf(entry.model?.[0]?.content ?? ''),
+    createdAt: entry.model?.[0]?.timestamp ?? 0,
+  };
+}
+
 function entryMessage(
   entry: EntryRecord,
   out: Message[],
@@ -492,6 +503,7 @@ function entryMessage(
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   if (entry.kind === 'slicc.thawed') out.push(thawed(id, entry));
   else if (entry.kind === SECRETS_KIND) out.push(secrets(id, entry));
+  else if (entry.kind === 'slicc.homes') out.push(homes(id, entry));
   else if (entry.kind === SPRINKLE_KIND) out.push(sprinkleMessage(id, entry));
   else if (entry.kind === 'pi.user' && model)
     out.push(
