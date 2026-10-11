@@ -65,7 +65,7 @@ const agent = await openAgent({ models, model, storage, registry, env: kernelEnv
 
 A conversation without a `cwd` works in `/home`.
 
-**Kernel users.** A `KernelSource` may also have `users` (`add`, `remove`, `list`, as `kernel.users`), and its `connect` takes `{ user, agentId }` for a client bound to that user. The page builds the kernel's `connect({ user, tag })` from them, and so decides what the tag looks like. With `users`, the worker gets a second port next to the kernel's, for these calls (`kernelPorts(self)` resolves `{ kernel, admin? }`), and the `AgentHost` has `users`, a pool of one bound client per agent (`userClients`), which the agent doesn't use for conversations yet. Without `users` (or with `runAgentWorker(self, { users: false })`), nothing changes:
+**Kernel users.** A `KernelSource` may also have `users` (`add`, `remove`, `list`, as `kernel.users`), and its `connect` takes `{ user, agentId }` for a client bound to that user. The page builds the kernel's `connect({ user, tag })` from them, and so decides what the tag looks like. It may also have `groups` (`list`, `addMember`, `removeMember`, as `kernel.groups`). With `users`, the worker gets a second port next to the kernel's, for these calls (`kernelPorts(self)` resolves `{ kernel, admin? }`), and the `AgentHost` has `users`, a pool of one bound client per agent (`userClients`). Without `users` (or with `runAgentWorker(self, { users: false })`), nothing changes, and everything below about users doesn't apply:
 
 ```js
 const owner = await startAgent({
@@ -81,6 +81,32 @@ const owner = await startAgent({
 ```
 
 At boot, the worker sets `/.slicc`, where the session database lives in OPFS, to `0700`, so that only root can read it through the kernel.
+
+With users, each cone and each scoop is a kernel user, and works as that user:
+- **Users and groups:**
+  - a cone `cone` or `cone-<n>` is the user of the same name, in `sudo`, with home `/home/<cone>` (`0710`) and umask `077`;
+  - a scoop is `scoop-<handle>`, a member of its cone's group, with home `/home/scoop-<handle>` (`2750`, the cone's group) and umask `027`.
+  - So a cone reads its scoops' work, and a scoop reads only what its cone shares with `chmod g+r` (and `g+x` on the folders on the way).
+  - The worker adds every user at boot, and on every change to `slicc.agents`. Stopping, dropping or removing a scoop removes its user and its home; scoops go before their cone.
+- **Clients:** a conversation's bash, file tools and codemode, and its background tasks, use its agent's bound client. Its cwd defaults to its home, and the kernel sets `HOME`, `USER` and `PATH`. The client carries the page's tag for its agentId, so a `sudo` prompt names the agent.
+- **The `agent` command:** each user has its own request spool, `/var/lib/slicc/agent/requests/<user>/` (`0700`). The spool's owner is the caller, so a `SLICC_AGENT` that names someone else is refused. `--file` and `--system-prompt-file` are read as the caller.
+- **Sharing in a sync run:** when the caller's cwd, or a `--read-only` path, is inside the caller's home, the run first shares it with the scoop: `chmod -R g+rX` on it and `g+x` on the folders above it. The v6 form's working folder gets `g+rwX`, plus `g+s` on its folders. The modes stay afterwards.
+- **Where things are:**
+
+  | | |
+  |---|---|
+  | settings, MCP servers, `AGENTS.md`, prompts, roles | `/etc/slicc/agent/` (root); `mcp.json` is the worker's alone |
+  | skills for every agent | `/usr/share/skills/` (root, `0755`), as without users |
+  | an agent's own skills | `~/.pi/agent/skills` and `~/.agents/skills` in its home; only that agent sees them |
+  | memory | `/root/.pi/agent/memory/` and `/root/.pi/agent/agent-memory/` (root; agents use `memory_write` and `memory`) |
+  | licks | each cone's `~/.slicc`, whose jobs are named `<cone>:<name>` and whose `cone` target is that cone; root's `/root/.slicc`, whose `cone` is the active cone |
+  | sprinkles | each cone's `~/sprinkles`; a sprinkle's files are read as its owner |
+  | the gelatiere | its procedure and crontab line in the first cone's home, written as that cone; `gelatiere install` and `suggest` run as the caller |
+  | scoop reports | the cone's `~/.slicc/reports/<handle>/` |
+  | sync transcripts | `/tmp/agent-sessions/<user>/` (`0700`), or `~/sessions/` with `--persist-session` |
+  | the suggestions store, the welcome profile | still `/home/.gelatiere`, `/home/.welcomed` and `/home/.welcome.json` (root), which the shipped sprinkles read as `/shared/…` |
+- **Old files:** nothing is moved. On the first boot with users, everything else in `/home`, plus `/scoops` and `/workspace`, gets `chmod -R go-rwx`, and the first cone gets a `slicc.homes` notice (spectrum shows it as "Fresh homes") saying where things went and how to move files as root. `/var/lib/slicc/agent/users-v1` marks it done.
+- **The scoop guard** stays on until the kernel reports `users: 'enforce'`; then the kernel's permissions decide.
 
 ### The worker seven starts
 
