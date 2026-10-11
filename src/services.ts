@@ -145,6 +145,7 @@ export interface MonitorProcess {
   started: number;
   zombie: number | null;
   tty: boolean;
+  rss: number | null;
 }
 
 export interface MonitorProblem {

@@ -46,7 +46,7 @@ test('the live monitor through the production worker: it runs only while the pan
     const shown = await wait(() => {
       const snapshot = model.monitor.snapshot();
       const processes = snapshot.sections.find((section) => section.id === 'processes');
-      return processes?.rows.some((row) => row.name.includes('sleep')) && snapshot;
+      return processes?.rows.some((row) => row.name.includes('--token=[redacted]')) && snapshot;
     });
     const full = connection.monitor.value;
     const viewed = await wait(
@@ -73,16 +73,19 @@ test('the live monitor through the production worker: it runs only while the pan
   assert.equal(seen.idle.processes, null);
   assert.ok(seen.vitals.includes('agents'));
   assert.ok(seen.vitals.includes('processes'));
-  const sleeper = seen.rows.find((row) => row.name.includes('sleep'));
+  const sleeper = seen.rows.find((row) => row.name.includes('--token=[redacted]'));
   assert.ok(sleeper);
   assert.ok(!sleeper.name.includes('sekrit123'));
   assert.ok(sleeper.badges?.includes('sliccy'));
   assert.equal(seen.agents[0].name, 'sliccy');
   assert.ok(
-    seen.full.some((command) =>
-      command.startsWith("bash -c bash -c 'sleep 30; true' x --token=[redacted]")
+    seen.full.some(
+      (command) =>
+        command.includes("sleep 30; true' x --token=[redacted]") ||
+        command.includes('sleep 30; true x --token=[redacted]')
     )
   );
+  assert.ok(!seen.full.some((command) => command.includes('sekrit123')));
   assert.ok(!seen.full.some((command) => command.includes('SLICC_AGENT')));
   assert.ok(seen.viewed.includes('bash'));
   assert.ok(seen.viewed.every((command) => !command.includes(' ')));

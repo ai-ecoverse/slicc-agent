@@ -35,6 +35,7 @@ export interface PsEntry {
   started?: number;
   state?: string;
   uid?: number;
+  rss?: number;
 }
 
 export interface Timers {
@@ -455,6 +456,7 @@ class Session {
       started: entry.started ?? 0,
       zombie: zombie ? this.#since(`zombie:${entry.pid}`) : null,
       tty: Boolean(entry.tty),
+      rss: typeof entry.rss === 'number' ? entry.rss : null,
     };
   }
 

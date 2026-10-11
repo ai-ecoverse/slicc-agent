@@ -448,7 +448,7 @@ The process table is the worker's root client's `ps()`. Each process is named af
 - **Users mode:** the human's panel is root's, so it sees every process. A cone's bound client would see only its own, by the kernel's hidepid.
 
 **The port.** `createAgentModel()` returns a `MonitorAdapter`. Its first `snapshot` listener opens the lease (with a resync), and its last one closes it.
-- **Vitals:** the Adobe budget, spend (or tokens when every model is free) with its hourly rate, active agents, running tools and tasks, processes and the fullest context.
+- **Vitals:** the Adobe budget, spend (or tokens when every model is free) with its hourly rate, active agents, running tools and tasks, processes, process memory and the fullest context.
 - **Alerts:**
 
   | Alert | Warn | Error |
@@ -464,10 +464,10 @@ The process table is the worker's root client's `ps()`. Each process is named af
   | Context | 80% | |
   | A paused scheduler | always | |
 
-- **Sections:** cones and scoops, tasks as a tree per cone, processes, recent problems, pending changes and sprinkles.
+- **Sections:** cones and scoops, tasks as a tree per cone, processes, recent problems, pending changes and sprinkles. Each row has an `id`, and agents and tasks have a `depth` (at most 6), which spectrum (≥ 1.57.0) draws as indentation.
 - **More sections:** `createAgentModel(connection, { monitor: { extra } })` adds the page's own sections, such as terminals, browser tabs and tray followers.
 
-Memory is left out. `ps()` has no memory figures, and only processes can read the kernel's `/proc`, whose `MemTotal`, CPU times and load are placeholders. The tray chip's `spent` and `rate` stay 0.
+**Memory.** From slicc-kernel 1.61.0, `ps()` entries carry `rss`, each process's wasm memory. When they do, the monitor shows a Process memory vital and each process row's size. On older kernels, both are left out. `/proc/meminfo`'s `MemTotal`, CPU times and load are placeholders, so the runaway alerts count processes and their age instead of measuring CPU. The tray chip gets no `spent` or `rate`, so spectrum (≥ 1.57.0) shows only what's known.
 
 ### Sprinkles
 
