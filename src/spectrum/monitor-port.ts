@@ -647,6 +647,8 @@ export class MonitorAdapter implements MonitorPort {
     this.#now = options.now ?? Date.now;
     connection.monitor?.subscribe(() => this.#update());
     connection.settings.state.subscribe(() => this.#update());
+    connection.changes?.subscribe(() => this.#update());
+    connection.sprinkles?.subscribe(() => this.#update());
   }
 
   on<K extends keyof MonitorEvents>(
@@ -693,6 +695,7 @@ export class MonitorAdapter implements MonitorPort {
   #start(): void {
     const control = this.#connection.control;
     this.#history = [];
+    void control.changesOpen(BACKGROUND_CONTEXT).catch(() => undefined);
     const lease = control.monitorOpen(null, true, BACKGROUND_CONTEXT).then(
       (opened) => opened.lease || null,
       () => null
