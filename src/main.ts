@@ -281,6 +281,12 @@ async function start(
     changes,
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
+    monitor: {
+      kernel: client,
+      groups,
+      ...(users ? { users: () => users.users.list() } : {}),
+      secrets: () => mcpRuntime.secrets(),
+    },
   });
 }
 

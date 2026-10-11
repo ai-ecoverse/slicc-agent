@@ -311,6 +311,14 @@ const SECRETS: [RegExp, (match: string, ...groups: string[]) => string][] = [
     (_match, name) => `${name}${REDACTED}`,
   ],
   [
+    /\b([A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIALS?|SESSION)[A-Z0-9_]*)=("[^"]*"|'[^']*'|[^\s"']+)/g,
+    (_match, name) => `${name}=${REDACTED}`,
+  ],
+  [
+    /(--?(?:token|password|passwd|secret|api-key|apikey|auth|key)(?:=|\s+))("[^"]*"|'[^']*'|[^\s"'-][^\s"']*)/gi,
+    (_match, flag) => `${flag}${REDACTED}`,
+  ],
+  [
     /\b((?:api|access|secret|private|client)[_-]?(?:key|token|secret)|token|password|passwd|secret)\s*([:=])\s*["']?[^\s"',;]{6,}["']?/gi,
     named,
   ],

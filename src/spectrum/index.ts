@@ -1,7 +1,9 @@
+import type { MonitorSection } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { AgentConnection } from '../client.ts';
 import { AgentAdapter } from './agent-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
+import { MonitorAdapter } from './monitor-port.ts';
 import { type Login, SettingsAdapter } from './settings-port.ts';
 import { SprinkleAdapter } from './sprinkle-port.ts';
 import { TrayAdapter } from './tray-port.ts';
@@ -18,6 +20,12 @@ export {
   textOf,
   toMessages,
 } from './messages.ts';
+export {
+  MonitorAdapter,
+  type MonitorAdapterOptions,
+  type MonitorInput,
+  monitorSnapshot,
+} from './monitor-port.ts';
 export { type Login, SETTINGS_KEY, SettingsAdapter } from './settings-port.ts';
 export { SprinkleAdapter } from './sprinkle-port.ts';
 export { TrayAdapter } from './tray-port.ts';
@@ -27,6 +35,7 @@ export function createAgentModel(
   options: {
     storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
     login?: Login;
+    monitor?: { extra?: () => readonly MonitorSection[] };
   } = {}
 ): {
   agent: AgentAdapter;
@@ -35,6 +44,7 @@ export function createAgentModel(
   sprinkles: SprinkleAdapter;
   memory: MemoryAdapter;
   changes: ChangesAdapter;
+  monitor: MonitorAdapter;
 } {
   const agent = new AgentAdapter(connection);
   return {
@@ -49,5 +59,9 @@ export function createAgentModel(
     sprinkles: new SprinkleAdapter(connection),
     memory: new MemoryAdapter(connection),
     changes: new ChangesAdapter(connection),
+    monitor: new MonitorAdapter(
+      connection,
+      options.monitor?.extra ? { extra: options.monitor.extra } : {}
+    ),
   };
 }

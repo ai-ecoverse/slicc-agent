@@ -97,6 +97,73 @@ export interface AgentControl {
   changesOpen(context: Context): Promise<void>;
   changeAccept(path: string, context: Context): Promise<Created>;
   changeRevert(path: string, context: Context): Promise<Created>;
+  monitorOpen(lease: string | null, resync: boolean, context: Context): Promise<MonitorLease>;
+  monitorClose(lease: string, context: Context): Promise<void>;
+}
+
+export interface MonitorLease {
+  lease: string;
+  ttlMs: number;
+}
+
+export interface MonitorAgent {
+  id: string;
+  name: string;
+  kind: 'cone' | 'scoop';
+  parentId: string | null;
+  model: string | null;
+  running: boolean;
+  queued: number;
+  tool: string | null;
+  retry: { attempt: number; since: number; error: string } | null;
+  failed: string | null;
+  context: number | null;
+}
+
+export interface MonitorTask {
+  id: string;
+  kind: string;
+  detail: string | null;
+  agentId: string | null;
+  owner: string | null;
+  status: 'pending' | 'running' | 'waiting' | 'completing';
+  phase: string;
+  background: boolean;
+  aborting: number | null;
+  since: number;
+  waits: number;
+}
+
+export interface MonitorProcess {
+  pid: number;
+  ppid: number;
+  pgid: number;
+  user: string | null;
+  agentId: string | null;
+  command: string;
+  state: 'S' | 'Z';
+  started: number;
+  zombie: number | null;
+  tty: boolean;
+}
+
+export interface MonitorProblem {
+  id: string;
+  at: number;
+  agentId: string | null;
+  kind: 'task' | 'retry' | 'turn';
+  message: string;
+}
+
+export interface MonitorFeed {
+  open: boolean;
+  at: number;
+  usage: { tokens: number; cost: number; free: boolean } | null;
+  agents: MonitorAgent[];
+  tasks: MonitorTask[];
+  processes: MonitorProcess[] | null;
+  problems: MonitorProblem[];
+  paused: boolean;
 }
 
 export interface MemoryDraft {
@@ -158,6 +225,7 @@ export interface AgentTranscript {
   readonly memoryScopes: ReplicatedState<MemoryScope[]>;
   readonly frozen: ReplicatedState<FrozenCone[]>;
   readonly changes: ReplicatedState<ChangesView>;
+  readonly monitor: ReplicatedState<MonitorFeed>;
 }
 
 export interface Command {

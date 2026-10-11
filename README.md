@@ -126,7 +126,7 @@ const agent = await owner.connect();
 app.model = { ...createKernelModel({ kernel, root }), ...createAgentModel(agent, { storage: localStorage }) };
 ```
 
-`createAgentModel()` returns the `agent`, `settings`, `tray`, `sprinkles`, `memory` and `changes` ports. Settings keeps the UI preferences in `storage`; model and thinking belong to the conversation, and accounts and models come from the worker.
+`createAgentModel()` returns the `agent`, `settings`, `tray`, `sprinkles`, `memory`, `changes` and `monitor` ports. Settings keeps the UI preferences in `storage`; model and thinking belong to the conversation, and accounts and models come from the worker.
 
 The adapter keeps the replicated transcript and maps it on every update. User, assistant and compaction entries become messages; tool results fill in the tool calls they answer; the generation in flight shows as a streaming message; retries and running compactions show as system messages. A failed generation ends in an error card whose action fits the error: credential errors (an invalid or missing key, 401/403, not authorized) open settings, a model the account can't use offers the model picker, and anything else offers Retry. A content-filter stop is different: every later request resends the content that tripped the filter, so Retry, and any new message, would be stopped again. Content-filter stops are Bedrock's `content_filtered` and `guardrail_intervened`, Anthropic's `sensitive` and refusals, and OpenAI's `content_filter`. Their card leads with "The model's content filter stopped this reply." and offers **Drop the last turn** (spectrum ≥ 1.12.0). `AgentControl.rewind(messageId)` finds the user turn before that message and forks the cone's conversation at the entry before it (`Conversation.fork`, so `pi.agent` comes back as it was there). It points the cone at the fork and returns the turn's prompt, which spectrum puts back into the composer. Forking the very first turn creates a fresh conversation with the same model and thinking level. The filtered branch stays in storage, off the active path. The fork starts with a `slicc.rewound` entry that shows as a "Rewound 1 turn" notice, and clicking the card of an earlier filtered turn rewinds that turn.
 
@@ -414,6 +414,60 @@ pi has no git integration and no changes list; pi coding-agent leaves that to th
 - **Revert** discards the unstaged change: `git restore -- <path>`, or deleting an untracked file. Spectrum asks first with its negative confirm, because this can't be undone.
 - **Rewind** leaves files alone. When the dropped turn had a write, edit, bash or codemode call, its notice adds "Changed files stay; use Changes or git to revert them."
 - **The port:** the transcript service adds `changes` (`{ unavailable, changes }`), and `AgentControl` adds `changesOpen`, `changeAccept` and `changeRevert`. `createAgentModel()` returns `changes`, spectrum's `ChangesPort`, with `repo` on each change.
+
+### The live monitor
+
+Spectrum's Monitor panel (`MonitorPort`, opened from the Budget chip) shows the agent's task graph, its usage and the kernel's process table. Most of it comes from pi durable as is:
+- **Tasks:** `harness.watchTaskGraph()` gives every live task with its kind, owner, conversation, state and abort mark.
+- **Usage:** `harness.usage()` gives the session's tokens and cost. The cost is pi-ai's, recorded with each response.
+- **Failures, retries and usage changes:** one `subscribeCommits` listener catches them, the way `watchEvents` derives `task_failed`.
+- **Agent state:** each agent's `pi.live`, `pi.inbox` and `pi.agent` come from the views the host already mounts. `inspect()` runs only on a resync.
+
+The process table is the worker's root client's `ps()`. Each process is named after the agent whose process group it's in.
+
+**Cost.** Nothing runs while no panel is open.
+- **Opening and closing:** `AgentControl.monitorOpen(lease, resync)` opens a lease of 30 s. The adapter renews it every 10 s while spectrum listens, and `monitorClose` ends it. A tab that dies lets its lease expire.
+- **While any lease is live:**
+  - the task graph watch and the commit listener run;
+  - `ps()` is polled every 2 s;
+  - usage is re-read at most every 2 s after a commit touched `pi.usage`;
+  - the feed is rebuilt at most once a second, and only a changed feed goes out.
+- **When the last lease ends,** all of that stops, and the feed keeps its last value with `open: false`.
+
+**The feed.** The transcript service adds `monitor`, a `MonitorFeed` with these parts:
+- `usage`;
+- `agents`, each with running, queued, tool, retry, last error, model and context tokens;
+- `tasks`;
+- `processes`;
+- `problems`, the newest 50 failed tasks, retries and failed turns since the panel opened;
+- `paused`.
+
+**What the feed never holds:** environment variables, tool arguments, task inputs and credentials.
+- **Command lines** lose the `export …;` prefix the kernel environment adds to agent commands, are joined, scrubbed of the MCP servers' stored secrets, run through the memory redaction (which also catches `NAME=value` for secret-like names, and `--token x`), and cut to 160 characters. Error texts get the same treatment.
+- **View-only connections** get their own state from the worker, in which each command is only its program name, so the arguments never cross the link.
+- **Users mode:** the human's panel is root's, so it sees every process. A cone's bound client would see only its own, by the kernel's hidepid.
+
+**The port.** `createAgentModel()` returns a `MonitorAdapter`. Its first `snapshot` listener opens the lease (with a resync), and its last one closes it.
+- **Vitals:** the Adobe budget, spend (or tokens when every model is free) with its hourly rate, active agents, running tools and tasks, processes and the fullest context.
+- **Alerts:**
+
+  | Alert | Warn | Error |
+  |---|---|---|
+  | Budget | 80% | 95% |
+  | Retries | from the third attempt, or after 2 min | from the sixth |
+  | Failed tasks and failed last turns | | always |
+  | A Stop still waiting | after 30 s | |
+  | Processes in one agent's group | over 32 | over 64 |
+  | Processes in the kernel | over 128 | over 256 |
+  | A zombie | after 60 s | |
+  | A background process of an agent | after 30 min | after an hour |
+  | Context | 80% | |
+  | A paused scheduler | always | |
+
+- **Sections:** cones and scoops, tasks as a tree per cone, processes, recent problems, pending changes and sprinkles.
+- **More sections:** `createAgentModel(connection, { monitor: { extra } })` adds the page's own sections, such as terminals, browser tabs and tray followers.
+
+Memory is left out. `ps()` has no memory figures, and only processes can read the kernel's `/proc`, whose `MemTotal`, CPU times and load are placeholders. The tray chip's `spent` and `rate` stay 0.
 
 ### Sprinkles
 

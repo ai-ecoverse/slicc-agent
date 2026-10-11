@@ -5,7 +5,7 @@ import { VIEW_ONLY } from './view-only.ts';
 
 export { VIEW_ONLY };
 
-const READS = new Set<keyof AgentControl>(['wait', 'changesOpen']);
+const READS = new Set<keyof AgentControl>(['wait', 'changesOpen', 'monitorOpen', 'monitorClose']);
 
 function refuse(): Promise<never> {
   return Promise.reject(new ServerError('EACCES' as never, VIEW_ONLY));

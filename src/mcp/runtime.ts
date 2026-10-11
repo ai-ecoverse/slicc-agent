@@ -52,6 +52,7 @@ export type { McpAccounts } from './accounts.ts';
 
 export interface McpRuntime extends McpAccounts {
   status(): ServerStatus[];
+  secrets(): string[];
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
 }
@@ -260,6 +261,7 @@ export async function attachMcp(
         tools: connection.tools.length,
         ...(connection.error ? { error: scrub(connection.error, connection.secrets) } : {}),
       })),
+    secrets: () => [...catalog.connections.values()].flatMap((connection) => connection.secrets),
     reload,
     async close(using) {
       clearTimeout(timer);
