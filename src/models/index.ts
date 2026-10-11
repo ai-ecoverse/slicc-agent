@@ -101,6 +101,16 @@ function rows(state: SettingsState, current: Current) {
   }));
 }
 
+function missing(state: SettingsState, id: string): string {
+  const providerId = id.slice(0, id.indexOf('/'));
+  const connected = state.accounts.some(
+    (entry) => entry.id === providerId && entry.status === 'connected'
+  );
+  return connected
+    ? `current: ${id}, which its account no longer offers`
+    : `current: ${id}, whose account is not connected`;
+}
+
 function list(state: SettingsState, current: Current, json: boolean): Answer {
   const listed = rows(state, current);
   if (json) return ok(`${JSON.stringify(listed, null, 2)}\n`);
@@ -108,8 +118,7 @@ function list(state: SettingsState, current: Current, json: boolean): Answer {
     (row) => `${row.current ? '*' : ' '} ${row.id}\t${row.label}\t${row.account}`
   );
   if (!listed.length) lines.push('no models: connect an account in Settings');
-  if (current.id && !listed.some((row) => row.current))
-    lines.push(`current: ${current.id}, whose account is not connected`);
+  if (current.id && !listed.some((row) => row.current)) lines.push(missing(state, current.id));
   return ok(`${lines.join('\n')}\n`);
 }
 
