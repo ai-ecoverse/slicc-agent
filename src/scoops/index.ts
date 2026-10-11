@@ -39,6 +39,7 @@ export interface AttachOptions {
   memory?: CliOptions['memory'];
   gelatiere?: CliOptions['gelatiere'];
   freezer?: CliOptions['freezer'];
+  models?: CliOptions['models'];
   mcp?: (names: readonly string[]) => ToolRegistration[];
 }
 
@@ -53,7 +54,15 @@ export interface ScoopsSetup {
   attach(options: AttachOptions, context: Context): Promise<ScoopsRuntime>;
 }
 
-export const COMMANDS = ['agent', 'subagent', 'sprinkle', 'memory', 'gelatiere', 'freezer'];
+export const COMMANDS = [
+  'agent',
+  'subagent',
+  'sprinkle',
+  'memory',
+  'gelatiere',
+  'freezer',
+  'models',
+];
 
 export async function pnpmHomeOf(env: ExecutionEnv, context: Context): Promise<string> {
   let out = '';
@@ -174,6 +183,7 @@ export function setupScoops(
         ...(options.memory ? { memory: options.memory } : {}),
         ...(options.gelatiere ? { gelatiere: options.gelatiere } : {}),
         ...(options.freezer ? { freezer: options.freezer } : {}),
+        ...(options.models ? { models: options.models } : {}),
       });
       const plane = controlPlane(env, cli, {
         ...(options.controlDir ? { dir: options.controlDir } : {}),

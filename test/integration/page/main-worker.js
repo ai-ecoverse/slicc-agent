@@ -8,8 +8,9 @@ import { MemoryStorage } from '@earendil-works/pi-durable';
 import { EncryptedCredentialStore, runAgentWorker } from '../../../src/index.ts';
 import { createMcpServer } from '../fixtures/mcp-server.mjs';
 
-const faux = fauxProvider();
 const params = new URL(self.location.href).searchParams;
+const fauxModels = params.getAll('model').map((id) => ({ id }));
+const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
 faux.setResponses([
   ...params.getAll('step').map((spec) => {
     const { tool, answer } = JSON.parse(spec);

@@ -44,6 +44,8 @@ It returns at once, and one `scoop-wait` lick brings all their answers together.
 
 A scoop starts with your provider, model and thinking level. Use `--model provider/model`, `--thinking` or `--effort` only when you mean to choose differently. Never pass `$PI_PROVIDER`, `$PI_MODEL` or `$PI_REASONING_LEVEL` back explicitly.
 
+`models` lists the models you can use, `models current` prints yours, and `models use <provider/model> [--thinking <level>]` switches your own model, as the Settings picker does.
+
 Without `--tools`, a scoop gets read, write, edit and bash; `--tools read,bash` is an allowlist. grep, find and ls map to bash, and bash can change files, so no tool list is truly read-only. A scoop's read, write and edit tools reach only its folder, /tmp and its working folder, and read /home; its bash is not confined, and the scoop is told so.
 
 ## Inspect, talk, stop
