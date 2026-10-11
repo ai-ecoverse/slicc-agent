@@ -32,27 +32,55 @@ export function encodeFrame(frame: Frame): Uint8Array {
 }
 
 export class FrameReader {
-  #buffer = new Uint8Array();
+  readonly #chunks: Uint8Array[] = [];
+  #size = 0;
+
+  #take(count: number): Uint8Array {
+    const out = new Uint8Array(count);
+    let filled = 0;
+    while (filled < count) {
+      const head = this.#chunks[0] as Uint8Array;
+      const used = Math.min(head.length, count - filled);
+      out.set(head.subarray(0, used), filled);
+      filled += used;
+      if (used === head.length) this.#chunks.shift();
+      else this.#chunks[0] = head.subarray(used);
+    }
+    this.#size -= count;
+    return out;
+  }
+
+  #peek(): number {
+    const header = new Uint8Array(4);
+    let filled = 0;
+    for (const chunk of this.#chunks) {
+      const used = Math.min(chunk.length, 4 - filled);
+      header.set(chunk.subarray(0, used), filled);
+      filled += used;
+      if (filled === 4) break;
+    }
+    return new DataView(header.buffer).getUint32(0);
+  }
 
   push(chunk: Uint8Array): Frame[] {
-    const joined = new Uint8Array(this.#buffer.length + chunk.length);
-    joined.set(this.#buffer);
-    joined.set(chunk, this.#buffer.length);
+    if (chunk.length) {
+      this.#chunks.push(chunk);
+      this.#size += chunk.length;
+    }
     const frames: Frame[] = [];
-    let at = 0;
-    while (joined.length - at >= 4) {
-      const length = new DataView(joined.buffer, joined.byteOffset + at).getUint32(0);
+    while (this.#size >= 4) {
+      const length = this.#peek();
       if (length < 1 || length > MAX_FRAME) throw new Error(`agent link frame of ${length} bytes`);
-      if (joined.length - at - 4 < length) break;
-      const tag = joined[at + 4];
-      const body = joined.slice(at + 5, at + 4 + length);
-      at += 4 + length;
-      if (tag === DATA) frames.push(body);
+      if (this.#size - 4 < length) break;
+      this.#take(4);
+      const frame = this.#take(length);
+      const tag = frame[0];
+      const body = frame.subarray(1);
+      if (tag === DATA) frames.push(body.slice());
       else if (tag === HELLO) frames.push({ hello: new TextDecoder().decode(body) });
       else if (tag === CLOSE) frames.push({ close: true });
       else throw new Error(`agent link frame tag ${tag}`);
     }
-    this.#buffer = joined.slice(at);
     return frames;
   }
 }

@@ -229,7 +229,7 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
         now(),
         host.limit ?? MAX_QUEUED
       );
-      const id = `s${++serial}`;
+      const id = `s${++serial}-${crypto.randomUUID()}`;
       track(id, stream);
       events.start(async (batch) => onEvents(batch));
       return { id, stream };

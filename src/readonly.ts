@@ -38,11 +38,24 @@ export function viewSettings(settings: AgentSettings): AgentSettings {
 }
 
 export function viewRemote(remote: AgentRemote): AgentRemote {
+  const mine = new Set<string>();
   return {
     prompt: async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY }),
-    watch: (request, context) => remote.watch(request, context),
-    next: (stream, waitMs, context) => remote.next(stream, waitMs, context),
-    close: (stream, context) => remote.close(stream, context),
+    async watch(request, context) {
+      const opened = await remote.watch(request, context);
+      if (opened.ok) mine.add(opened.stream);
+      return opened;
+    },
+    async next(stream, waitMs, context) {
+      if (!mine.has(stream)) return { events: [], done: true };
+      const batch = await remote.next(stream, waitMs, context);
+      if (batch.done) mine.delete(stream);
+      return batch;
+    },
+    async close(stream, context) {
+      if (!mine.delete(stream)) return;
+      await remote.close(stream, context);
+    },
     abort: refuse,
   };
 }

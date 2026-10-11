@@ -15,7 +15,7 @@ export interface PortOptions {
 
 export interface AgentOwner {
   connect(options?: PortOptions): Promise<AgentConnection>;
-  port(options?: PortOptions): Promise<Transferable>;
+  port(options?: PortOptions): Promise<PortEndpoint & Transferable>;
   restart(): Promise<void>;
   release(): Promise<void>;
 }
