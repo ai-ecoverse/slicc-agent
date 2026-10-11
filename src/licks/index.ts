@@ -6,7 +6,7 @@ import type { Activity } from '../kernel/activity.ts';
 import { cronTask, licksExtension } from './extension.ts';
 import type { LickChannel, LickTarget } from './lick.ts';
 import { createLicks, type Licks, type LicksHost } from './licks.ts';
-import { createLickSources, type LickSources } from './sources.ts';
+import { createLickSources, type LickDir, type LickSources } from './sources.ts';
 
 export interface LicksAgent {
   harness: Harness;
@@ -40,6 +40,7 @@ export interface LicksSetup {
       now?: () => number;
       flushEvery?: number;
       activity?: Activity;
+      dirs?: () => Promise<readonly LickDir[]>;
     }
   ): LickSources;
 }

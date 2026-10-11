@@ -104,7 +104,10 @@ async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions
   const attach: KernelAttach = options.attach ?? attachKernel;
   const { kernel, admin } = await ports;
   const client = await attach(kernel);
-  return { client, users: usersOf(admin, options.users, attach) };
+  const users = usersOf(admin, options.users, attach);
+  const home = new SliccKernelEnv(client, { cwd: HOME });
+  await privateStore(home);
+  return { client, users, home, at: { home: HOME, ...(users ? { agentDir: AGENT_DIR } : {}) } };
 }
 
 function privateStore(env: SliccKernelEnv): Promise<unknown> {
@@ -206,10 +209,7 @@ async function start(
   options: AgentWorkerOptions,
   vault: Vault
 ): Promise<AgentHost> {
-  const { client, users } = await attached(ports, options);
-  const at = { home: HOME, ...(users ? { agentDir: AGENT_DIR } : {}) };
-  const home = new SliccKernelEnv(client, { cwd: HOME });
-  await privateStore(home);
+  const { client, users, home, at } = await attached(ports, options);
   const ready = await prepare(scope, { client, home, vault }, options);
   const { names, native, facts, credentials, providers, models, registry } = ready;
   const memory = setupMemory(registry);
@@ -239,7 +239,13 @@ async function start(
   const agent = await openRepinned(options, { models, model, registry, env: environment });
   opened = agent;
   await people?.start(agent.agents);
-  const sources = licks.attach(agent, { env: home, home: HOME, activity });
+  const sources = licks.attach(agent, {
+    env: home,
+    home: HOME,
+    activity,
+    ...(people ? { dirs: () => people.lickDirs() } : {}),
+  });
+  people?.onHomes(() => void sources.reconcile(BACKGROUND_CONTEXT).catch(() => undefined));
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
     { version: facts.version, boot: await kernelBoot(client) },
