@@ -25,6 +25,7 @@ const result = await build({
   format: 'esm',
   platform: 'neutral',
   target: 'es2024',
+  supported: { 'import-attributes': true },
   sourcemap: 'linked',
   metafile: true,
   logLevel: 'warning',
