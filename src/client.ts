@@ -10,9 +10,11 @@ import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { AgentRemote } from './remote/host.ts';
+import type { AgentPages } from './remote/pages.ts';
 import {
   AGENT_SESSION,
   AgentControl,
+  AgentPagesService,
   AgentRemoteService,
   AgentSessions,
   AgentSettings,
@@ -42,6 +44,7 @@ export interface AgentConnection {
   readonly monitor?: ReplicatedState<MonitorFeed>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
+  readonly pages?: AgentPages;
   readonly closed: Promise<Error | undefined>;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   webhook(
@@ -119,7 +122,7 @@ export async function connectAgent(
   await server.use(AgentSessions).attach(AGENT_SESSION, context);
   await ready;
   const session = createRemoteServiceBinding({
-    services: [AgentControl, AgentTranscript, AgentSettings, AgentRemoteService],
+    services: [AgentControl, AgentTranscript, AgentSettings, AgentRemoteService, AgentPagesService],
     transport: createClientServiceTransport(client, () => client.attachment),
     bound: true,
   });
@@ -139,6 +142,7 @@ export async function connectAgent(
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   const remote = session.use(AgentRemoteService);
+  const pages = session.use(AgentPagesService);
   await session.ready(context);
   const held: Lasting<unknown>[] = [];
   const hold = <T>(state: ReplicatedState<T>): ReplicatedState<T> => {
@@ -169,6 +173,7 @@ export async function connectAgent(
     monitor: hold(monitor),
     settings: lastingSettings(settings, hold),
     remote,
+    pages,
     closed,
     webhook(name, delivery) {
       return control.webhook(

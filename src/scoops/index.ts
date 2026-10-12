@@ -41,6 +41,7 @@ export interface AttachOptions {
   gelatiere?: CliOptions['gelatiere'];
   freezer?: CliOptions['freezer'];
   models?: CliOptions['models'];
+  panel?: CliOptions['panel'];
   mcp?: (names: readonly string[]) => ToolRegistration[];
 }
 
@@ -63,6 +64,7 @@ export const COMMANDS = [
   'gelatiere',
   'freezer',
   'models',
+  'panel',
 ];
 
 export async function pnpmHomeOf(env: ExecutionEnv, context: Context): Promise<string> {
@@ -239,6 +241,7 @@ export function setupScoops(
         ...(options.gelatiere ? { gelatiere: options.gelatiere } : {}),
         ...(options.freezer ? { freezer: options.freezer } : {}),
         ...(options.models ? { models: options.models } : {}),
+        ...(options.panel ? { panel: options.panel } : {}),
       });
       const plane = controlPlane(env, cli, {
         ...(options.controlDir ? { dir: options.controlDir } : {}),

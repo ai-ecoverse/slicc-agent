@@ -5,12 +5,21 @@ import type { Answer } from './service.ts';
 export const CONTROL_DIR = '/var/lib/slicc/agent/requests';
 export const PROTOCOL = 'slicc-agent/1';
 export const STALE_MS = 10 * 60_000;
-const COMMAND_NAMES = new Set(['subagent', 'sprinkle', 'memory', 'gelatiere', 'freezer', 'models']);
+const COMMAND_NAMES = new Set([
+  'subagent',
+  'sprinkle',
+  'memory',
+  'gelatiere',
+  'freezer',
+  'models',
+  'panel',
+]);
 
 export interface Request {
   id: string;
-  as: 'agent' | 'subagent' | 'sprinkle' | 'memory' | 'gelatiere' | 'freezer' | 'models';
+  as: 'agent' | 'subagent' | 'sprinkle' | 'memory' | 'gelatiere' | 'freezer' | 'models' | 'panel';
   caller: string;
+  tab?: string | null;
   cwd: string;
   pid: number | null;
   argv: string[];
@@ -40,10 +49,12 @@ export function parseRequest(id: string, bytes: Uint8Array): Request | undefined
     at = end + 1;
   }
   const process = Number(pid);
+  const tab = (caller as string).startsWith('tab:') ? (caller as string).slice(4) : null;
   return {
     id,
     as: COMMAND_NAMES.has(as as string) ? (as as Request['as']) : 'agent',
-    caller: caller as string,
+    caller: tab === null ? (caller as string) : '',
+    ...(tab ? { tab } : {}),
     cwd: cwd || '/',
     pid: Number.isInteger(process) && process > 0 ? process : null,
     argv,
@@ -90,6 +101,8 @@ export function controlPlane(
 
   async function answer(id: string, result: Answer, context: Context) {
     await env.writeFile(`${responses}/${id}.out`, result.out, context);
+    if (result.err !== undefined)
+      await env.writeFile(`${responses}/${id}.err`, result.err, context);
     await env.writeFile(`${responses}/${id}.code`, String(result.code), context);
     await env.remove(`${requests}/${id}`, { force: true }, context);
     await env.remove(`${responses}/${id}.ack`, { force: true }, context);

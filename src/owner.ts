@@ -12,6 +12,7 @@ export interface AgentWorker {
 
 export interface PortOptions {
   readOnly?: boolean;
+  pages?: boolean;
 }
 
 export interface AgentOwner {
@@ -77,7 +78,8 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     if (!ready) throw new Error('the agent was released');
     const { port1, port2 } = channel();
     const readOnly = portOptions.readOnly === true ? { readOnly: true } : {};
-    ready.postMessage({ connect: port2, ...readOnly }, [port2]);
+    const pages = portOptions.pages === false ? { pages: false } : {};
+    ready.postMessage({ connect: port2, ...readOnly, ...pages }, [port2]);
     return port1;
   };
   return {

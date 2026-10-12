@@ -55,4 +55,4 @@ sprinkle show <name>           # show it in your chat, inline
 sprinkle own <name> [<agent>]  # send its licks to an agent: cone, cone-<n> or a scoop's handle
 ```
 
-To retire a sprinkle, delete its file. v6's `sprinkle open`, `reload`, `send`, `close` and `chat` don't exist here; the command says what to do instead.
+To retire a sprinkle, delete its file. `sprinkle open <name>` and `sprinkle close <name>` are `panel open sprinkle:<name>` and `panel close sprinkle:<name>`. v6's `reload`, `send` and `chat` don't exist here; the command says what to do instead.

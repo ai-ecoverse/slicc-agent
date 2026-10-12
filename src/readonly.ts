@@ -1,5 +1,6 @@
 import { ServerError } from '@earendil-works/pi-server';
 import type { AgentRemote } from './remote/host.ts';
+import type { AgentPages } from './remote/pages.ts';
 import type { AgentControl, AgentSettings } from './services.ts';
 import { VIEW_ONLY } from './view-only.ts';
 
@@ -35,6 +36,16 @@ export function viewControl(control: AgentControl): AgentControl {
 
 export function viewSettings(settings: AgentSettings): AgentSettings {
   return { state: settings.state, connect: refuse, disconnect: refuse, signIn: refuse };
+}
+
+export function viewPages(): AgentPages {
+  return {
+    open: async () => ({ error: VIEW_ONLY }),
+    report: async () => {},
+    next: async () => ({ requests: [], done: true }),
+    answer: async () => {},
+    close: async () => {},
+  };
 }
 
 export function viewRemote(remote: AgentRemote): AgentRemote {

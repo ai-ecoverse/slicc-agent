@@ -26,11 +26,13 @@ import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import { createMonitor, type MonitorOptions } from './monitor/index.ts';
-import { viewControl, viewRemote, viewSettings } from './readonly.ts';
+import { viewControl, viewPages, viewRemote, viewSettings } from './readonly.ts';
 import { createRemote } from './remote/host.ts';
+import { type AgentPages, createPages, ownedPages, type Pages } from './remote/pages.ts';
 import {
   AGENT_SESSION,
   AgentControl,
+  AgentPagesService,
   AgentRemoteService,
   AgentSessions,
   AgentSettings,
@@ -43,11 +45,17 @@ import type { Sprinkle } from './sprinkles/kind.ts';
 import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
 
+export interface ConnectOptions {
+  readOnly?: boolean;
+  pages?: boolean;
+}
+
 export interface AgentHost {
   readonly serverId: string;
   readonly agent: Agent;
   readonly users?: UserClients;
-  connect(endpoint: PortEndpoint, options?: { readOnly?: boolean }): void;
+  readonly pages: Pages;
+  connect(endpoint: PortEndpoint, options?: ConnectOptions): void;
   close(): Promise<void>;
 }
 
@@ -60,9 +68,21 @@ function endpointFor(provider: RemoteServiceProvider): RoutedSessionAttachment {
   };
 }
 
-function sessionServices(provider: RemoteServiceProvider): RoutedSessionHandle {
+type Attached = { provider: RemoteServiceProvider; release(): void };
+
+function sessionServices(attach: () => Attached): RoutedSessionHandle {
   return {
-    attachClient: () => endpointFor(provider),
+    attachClient() {
+      const attached = attach();
+      const endpoint = endpointFor(attached.provider);
+      return {
+        invokeService: endpoint.invokeService,
+        release(context) {
+          endpoint.release(context);
+          attached.release();
+        },
+      };
+    },
     close: async () => {},
   };
 }
@@ -135,6 +155,7 @@ export async function hostAgent(
     mcp?: Pick<McpRuntime, 'close'>;
     users?: UserClients;
     monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users' | 'secrets'>;
+    pages?: Pages;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -144,12 +165,15 @@ export async function hostAgent(
   const mounted = await agentViews(agent, context);
   const touch = () => options.freezer?.touch();
   const untouch = [state.subscribe(touch), mounted.views.subscribe(touch)];
-  const provider = new RemoteServiceProvider([
-    { service: AgentControl, mode: 'singleton' },
-    { service: AgentTranscript, mode: 'singleton' },
-    { service: AgentSettings, mode: 'singleton' },
-    { service: AgentRemoteService, mode: 'singleton' },
-  ]);
+  const catalogue = () =>
+    new RemoteServiceProvider([
+      { service: AgentControl, mode: 'singleton' },
+      { service: AgentTranscript, mode: 'singleton' },
+      { service: AgentSettings, mode: 'singleton' },
+      { service: AgentRemoteService, mode: 'singleton' },
+      { service: AgentPagesService, mode: 'singleton' },
+    ]);
+  const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
   const monitor = createMonitor({
     ...options.monitor,
@@ -171,7 +195,6 @@ export async function hostAgent(
     options.changes,
     monitor
   );
-  provider.provide(AgentControl, control);
   const remote = createRemote({
     harness: agent.harness,
     send: (request, using) => control.send(request, using),
@@ -182,7 +205,6 @@ export async function hostAgent(
       return found;
     },
   });
-  provider.provide(AgentRemoteService, remote);
   const transcriptService = {
     state,
     deliveries: deliveries.state,
@@ -197,20 +219,39 @@ export async function hostAgent(
       options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
     monitor: monitor.state,
   };
-  provider.provide(AgentTranscript, transcriptService);
   const settings = options.settings ?? noSettings;
-  provider.provide(AgentSettings, settings);
-  const viewer = new RemoteServiceProvider([
-    { service: AgentControl, mode: 'singleton' },
-    { service: AgentTranscript, mode: 'singleton' },
-    { service: AgentSettings, mode: 'singleton' },
-    { service: AgentRemoteService, mode: 'singleton' },
-  ]);
+  const served = (served: AgentPages) => {
+    const made = catalogue();
+    made.provide(AgentControl, control);
+    made.provide(AgentTranscript, transcriptService);
+    made.provide(AgentSettings, settings);
+    made.provide(AgentRemoteService, remote);
+    made.provide(AgentPagesService, served);
+    return made;
+  };
+  const owned = (): Attached => {
+    const mine = ownedPages(pages);
+    const made = served(mine);
+    return {
+      provider: made,
+      release() {
+        made.dispose();
+        mine.release();
+      },
+    };
+  };
+  const follower = served(viewPages());
+  const viewer = catalogue();
   viewer.provide(AgentControl, viewControl(control));
   viewer.provide(AgentTranscript, { ...transcriptService, monitor: monitor.viewState });
   viewer.provide(AgentSettings, viewSettings(settings));
   viewer.provide(AgentRemoteService, viewRemote(remote));
-  const serve = async (id: string, services: RemoteServiceProvider) => {
+  viewer.provide(AgentPagesService, viewPages());
+  const shared = (services: RemoteServiceProvider) => () => ({
+    provider: services,
+    release: () => undefined,
+  });
+  const serve = async (id: string, attach: () => Attached) => {
     const host: ServerHost = {
       serverServices: serverServices(),
       async resolveSession(sessionId) {
@@ -218,27 +259,37 @@ export async function hostAgent(
           throw new SessionNotFoundError(`unknown session ${sessionId}`);
         return { id: sessionId };
       },
-      openSession: async () => sessionServices(services),
+      openSession: async () => sessionServices(attach),
     };
     const listener = new PortListener(id);
     const server = await new Server(host, { serverId: id, listeners: [listener] }).start();
     return { listener, server };
   };
-  const full = await serve(serverId, provider);
-  const view = await serve(crypto.randomUUID(), viewer);
+  const full = await serve(serverId, owned);
+  const view = await serve(crypto.randomUUID(), shared(viewer));
+  const linked = await serve(crypto.randomUUID(), shared(follower));
   return {
     serverId,
     agent,
+    pages,
     ...(options.users ? { users: options.users } : {}),
-    connect: (endpoint, connectOptions) =>
-      (connectOptions?.readOnly ? view : full).listener.connect(endpoint),
+    connect(endpoint, connectOptions) {
+      const chosen = connectOptions?.readOnly
+        ? view
+        : connectOptions?.pages === false
+          ? linked
+          : full;
+      chosen.listener.connect(endpoint);
+    },
     async close() {
       await full.server.close();
       await view.server.close();
+      await linked.server.close();
       viewer.dispose();
+      follower.dispose();
+      await pages.dispose();
       await monitor.dispose();
       await remote.dispose();
-      provider.dispose();
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();

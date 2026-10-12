@@ -35,6 +35,7 @@ import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
 import { type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
+import { createPages } from './remote/pages.ts';
 import { identity } from './scoops/identity.ts';
 import { type Assets, packageAssets, type ScoopsRuntime, setupScoops } from './scoops/index.ts';
 import {
@@ -238,6 +239,7 @@ async function start(
   });
   licks.licks.guard(freezer.frozenTarget);
   const settings = await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime });
+  const pages = createPages();
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -252,6 +254,7 @@ async function start(
       gelatiere: gelatiere.command,
       freezer: freezer.command,
       models: modelsCommand({ agents: agent.agents, settings, catalog: models }),
+      panel: pages.command,
       mcp: mcp.direct,
       ...(options.assets ? { assets: options.assets } : {}),
     },
@@ -281,6 +284,7 @@ async function start(
     memory: memoryRuntime,
     freezer,
     changes,
+    pages,
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
     monitor: {
