@@ -8,7 +8,7 @@ import {
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
-import { type Agent, openAgent } from './agent.ts';
+import { type Agent, type AgentOptions, openAgent } from './agent.ts';
 import { browserGuard } from './browser/guard.ts';
 import { attachChanges, CHANGES_MS } from './changes/index.ts';
 import {
@@ -130,6 +130,18 @@ async function codemodeTools(
 
 export const MCP_CALLBACK = '/oauth/mcp-callback';
 
+async function openRepinned(
+  options: AgentWorkerOptions,
+  base: Omit<AgentOptions, 'storage' | 'beforeResume'>
+): Promise<Agent> {
+  const storage = await (options.storage ?? (() => openOpfsSqliteStorage()))();
+  return openAgent({
+    ...base,
+    storage,
+    beforeResume: (harness, using) => repin(harness, storage, using),
+  });
+}
+
 async function secretsFor(home: SliccKernelEnv, vault: Vault) {
   scrubWith(vault);
   const names = secretNames(home, vault);
@@ -190,10 +202,8 @@ async function start(
     scrub: vault,
     spawn: shellGrants(names),
   });
-  const storage = await (options.storage ?? (() => openOpfsSqliteStorage()))();
-  const agent = await openAgent({ models, model, storage, registry, env: environment });
+  const agent = await openRepinned(options, { models, model, registry, env: environment });
   opened = agent;
-  await repin(agent.harness, storage, BACKGROUND_CONTEXT);
   const sources = licks.attach(agent, { env: home, home: HOME, activity });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(

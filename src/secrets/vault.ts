@@ -74,14 +74,15 @@ export class Vault implements Scrub {
       this.#port = port;
       port.onmessage = (event) => this.#answer(event.data as Answer);
       port.start?.();
+      const resend = [...this.#pending.values()];
       const opening = new Set(
-        [...this.#pending.values()]
+        resend
           .filter((item) => item.message.op === 'redactStream')
           .map((item) => item.message.stream)
       );
       for (const stream of this.#streams)
         if (!opening.has(stream)) void this.#call('redactStream', { stream });
-      for (const item of this.#pending.values()) port.postMessage(item.message);
+      for (const item of resend) port.postMessage(item.message);
     }
     this.#refresh();
   }
