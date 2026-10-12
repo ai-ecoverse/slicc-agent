@@ -61,6 +61,8 @@ interface Pending {
   agentId: string;
   message: UserMessage;
   dropped: boolean;
+  release(): void;
+  released: Promise<void>;
 }
 
 export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPort {
@@ -80,6 +82,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       const next = this.hold();
       if (sameHold(next, this.#hold)) return;
       this.#hold = next;
+      if (!next) for (const pending of this.#outbox.values()) pending.release();
       this.emit('hold', next);
       this.emit('agents', this.list());
     });
@@ -198,6 +201,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const target = this.#creating.has(agentId) ? await this.#creating.get(agentId) : agentId;
     if (target === null) throw new Error('The scoop could not be created.');
     const pending = target && this.#held(target) ? this.#pending(target, outgoing) : undefined;
+    if (pending) await pending.released;
+    if (pending?.dropped) return this.#settle(pending);
     const sent = await this.#connection.control
       .send(
         {
@@ -224,7 +229,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       queued: true,
       mode: outgoing.mode === 'queue' ? 'queue' : 'steer',
     };
-    const pending = { agentId, message, dropped: false };
+    const { promise: released, resolve: release } = Promise.withResolvers<void>();
+    const pending = { agentId, message, dropped: false, release, released };
     this.#outbox.set(id, pending);
     this.emit('messages', agentId);
     return pending;
@@ -271,6 +277,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const pending = this.#outbox.get(messageId);
     if (pending) {
       pending.dropped = true;
+      pending.release();
       this.emit('messages', pending.agentId);
       return;
     }

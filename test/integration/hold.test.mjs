@@ -129,6 +129,27 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
     return item?.textContent.includes('Then this, later.') && item.textContent.trim();
   });
   assert.match(shown, /Then this, later\./);
+  const dropped = await page.evaluate(async () => {
+    const { model } = globalThis.holdTest;
+    globalThis.holdTest.third = model.agent.send('cone', { text: 'Drop this one.', mode: 'queue' });
+    const composer = globalThis.deep('slicc-composer').shadowRoot;
+    for (let n = 0; n < 100; n++) {
+      const item = [...composer.querySelectorAll('.queue li.queued')].find((li) =>
+        li.textContent.includes('Drop this one.')
+      );
+      if (item) {
+        item.querySelector('[data-action="unqueue"]').click();
+        await globalThis.holdTest.third;
+        return [...composer.querySelectorAll('.queue li.queued')].map((li) =>
+          li.textContent.trim()
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return null;
+  });
+  assert.equal(dropped.length, 1);
+  assert.match(dropped[0], /Then this, later\./);
   await page.evaluate(() => globalThis.holdTest.lock('passkey'));
   const locked = await page.until(() => {
     const line = globalThis.deep('slicc-composer')?.shadowRoot?.querySelector('.hold');
@@ -175,4 +196,5 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
   assert.ok(cleared.reasons.includes('locked'));
   assert.ok(cleared.texts.includes('Then this, later.'));
   assert.ok(cleared.texts.includes('Later done.'));
+  assert.ok(!cleared.texts.includes('Drop this one.'));
 });
