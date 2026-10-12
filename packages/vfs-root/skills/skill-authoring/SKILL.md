@@ -41,9 +41,8 @@ In this order; when two skills share a name, the first one found wins and the ot
 1. `~/.pi/agent/skills/`
 2. `~/.agents/skills/`
 3. `/usr/share/skills/`, global skills every cone and scoop sees; it's root's, so write there as root
-4. `/workspace/skills/`, for skills copied from SLICC v6
-5. packages under `/node_modules` whose `package.json` lists folders in `pi.skills`
-6. SLICC's built-in skills in `/var/lib/slicc/agent/skills/` (rewritten on every start; don't edit them there)
+4. packages under `/node_modules` whose `package.json` lists folders in `pi.skills`
+5. SLICC's built-in skills in `/var/lib/slicc/agent/skills/` (rewritten on every start; don't edit them there)
 
 Folders containing `SKILL.md` are found at any depth; a plain `.md` file with a `description` directly in one of these folders counts as a skill too. Folders starting with `.` and `node_modules` are skipped. A project's `.pi/skills` or `.agents/skills` folder is read only once the folder is trusted, which SLICC doesn't support yet.
 
