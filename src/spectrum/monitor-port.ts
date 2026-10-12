@@ -251,7 +251,9 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
           value: String(feed.processes.length),
           unit: `${feed.processes.filter((row) => row.agentId).length} by agents`,
         }
-      : { id: 'processes', label: 'Processes', value: '—', unit: 'kernel not reachable' }
+      : feed.kernel === 'checking'
+        ? { id: 'processes', label: 'Processes', value: '…', unit: 'checking' }
+        : { id: 'processes', label: 'Processes', value: '—', unit: 'kernel not reachable' }
   );
   out.push(...memoryVital(feed.processes ?? []));
   const ratios = feed.agents
