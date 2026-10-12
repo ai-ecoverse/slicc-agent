@@ -33,7 +33,6 @@ export const BUILTIN_PROMPTS = ['parallel-review', 'review-loop'];
 export const SKILLS_DIR = '/var/lib/slicc/agent/skills';
 export const PROMPTS_DIR = '/var/lib/slicc/agent/prompts';
 export const GLOBAL_DIR = '/usr/share/skills';
-export const COMPAT_DIR = '/workspace/skills';
 export const RELOAD_MS = 300;
 
 export interface SkillsRuntime {
@@ -159,7 +158,6 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           { dir: `${home}/.pi/agent/skills`, source: 'user' },
           { dir: `${home}/.agents/skills`, source: 'user' },
           { dir: GLOBAL_DIR, source: 'global' },
-          { dir: COMPAT_DIR, source: 'compat' },
           ...(await packaged(env, 'skills', using)).map((dir) => ({
             dir,
             source: 'package' as const,
@@ -194,7 +192,6 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           { path: `${home}/.pi/agent/prompts` },
           { path: `${home}/.agents/skills`, recursive: true },
           { path: GLOBAL_DIR, recursive: true },
-          { path: COMPAT_DIR, recursive: true },
         ],
         schedule,
         context
