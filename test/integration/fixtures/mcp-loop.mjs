@@ -1,6 +1,5 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const SESSION = 'loop-session';
 const LOOPBACK = /^(?:localhost|127\.0\.0\.1|\[::1\]|.+\.localhost)$/i;
 
 const tools = [
@@ -70,15 +69,11 @@ async function answer(request, writer, seen) {
   if (origin && !LOOPBACK.test(new URL(origin).hostname))
     return plain(writer, 403, 'Forbidden', `origin ${origin} is not loopback`);
   if (request.target !== '/mcp') return plain(writer, 404, 'Not Found');
-  if (request.method === 'GET') return plain(writer, 405, 'Method Not Allowed');
-  if (request.method === 'DELETE') return plain(writer, 200, 'OK');
   if (request.method !== 'POST') return plain(writer, 405, 'Method Not Allowed');
   const message = JSON.parse(request.body);
-  if (message.method !== 'initialize' && request.headers['mcp-session-id'] !== SESSION)
-    return plain(writer, 400, 'Bad Request', 'no session');
   if (message.id === undefined) return plain(writer, 202, 'Accepted');
   const reply = (result) => ({ jsonrpc: '2.0', id: message.id, result });
-  const json = { 'content-type': 'application/json', 'mcp-session-id': SESSION };
+  const json = { 'content-type': 'application/json' };
   if (message.method === 'initialize')
     return plain(
       writer,
@@ -100,7 +95,6 @@ async function answer(request, writer, seen) {
       head(200, 'OK', {
         'content-type': 'text/event-stream',
         'transfer-encoding': 'chunked',
-        'mcp-session-id': SESSION,
       })
     );
     await writer.write(

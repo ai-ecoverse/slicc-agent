@@ -1,3 +1,5 @@
+import { FACADE_PORT, kernelHost, ownKernelServer } from './kernel/loopback.ts';
+
 export interface TransportResponse {
   status: number;
   statusText?: string;
@@ -22,11 +24,15 @@ export type Loopback = (
 ) => Promise<Response>;
 
 const empty = new Set([101, 103, 204, 205, 304]);
-const KERNEL_HOST = /^(\d{1,5})\.kernel\.localhost$/i;
 
 export function kernelPort(url: string): number | undefined {
-  const port = Number(KERNEL_HOST.exec(new URL(url).hostname)?.[1]);
-  return port > 0 && port < 65536 ? port : undefined;
+  const host = new URL(url).hostname.replace(/\.+$/, '');
+  if (!kernelHost(host)) return undefined;
+  if (!ownKernelServer(host))
+    throw new TypeError(
+      `${host} isn't a kernel server SLICC may reach: use <port>.kernel.localhost with a port from 1 to 65535 other than ${FACADE_PORT}, the CDP facade`
+    );
+  return Number(host.split('.')[0]);
 }
 
 function stream(body: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
@@ -51,7 +57,7 @@ export function transportFetch(
 ): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
-    const port = loopback && kernelPort(request.url);
+    const port = kernelPort(request.url);
     if (loopback && port) return loopback(request, { port, signal: request.signal });
     if (new URL(request.url).origin === origin || transport.traits?.crossOrigin === 'cors') {
       return native(request);

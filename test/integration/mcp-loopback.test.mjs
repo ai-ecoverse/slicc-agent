@@ -123,3 +123,34 @@ for (const route of ['page', 'relay']) {
     );
   });
 }
+
+test("an MCP entry on the CDP facade's 9222.kernel.localhost is refused before anything is sent", async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await page.evaluate((files) => window.boot('page', files), {
+    '/node_modules/mcp-loop/package.json': manifest,
+    '/node_modules/mcp-loop/server.mjs': program,
+    '/home/.pi/agent/mcp.json': JSON.stringify({
+      mcpServers: { facade: { url: 'http://9222.kernel.localhost/mcp' } },
+    }),
+  });
+  await page.evaluate(() => window.start('answer=Noted.&answer=Noted.'));
+  await page.within(60000, () =>
+    window.agent
+      .messages()
+      .some((message) => message.role === 'lick' && /facade/.test(message.title ?? ''))
+  );
+  const lick = await page.evaluate(() =>
+    window.agent
+      .messages()
+      .filter((message) => message.role === 'lick')
+      .map(({ title, text }) => ({ title, text }))
+      .find((message) => /facade/.test(message.title))
+  );
+  assert.equal(lick.title, 'MCP server "facade" can\'t connect');
+  assert.match(
+    lick.text,
+    /9222\.kernel\.localhost isn't a kernel server SLICC may reach: use <port>\.kernel\.localhost with a port from 1 to 65535 other than 9222, the CDP facade/
+  );
+});
