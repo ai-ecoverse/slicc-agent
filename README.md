@@ -85,7 +85,7 @@ At boot, the worker sets `/.slicc`, where the session database lives in OPFS, to
 ### The worker seven starts
 
 `@ai-ecoverse/slicc-agent/agent-worker` is a complete agent worker. It waits for the page kernel's port, then:
-- attaches to the kernel and routes its cross-origin `fetch` through the kernel's transport when that transport isn't bound by CORS (slicc-node, slicc-swift or slicc-extension);
+- attaches to the kernel and routes its cross-origin `fetch` through the kernel's transport when that transport isn't bound by CORS (slicc-node, slicc-swift or slicc-extension), and every `<port>.kernel.localhost` request to the kernel's loopback (`loopbackFetch`);
 - opens the encrypted credential store, the AWS Bedrock provider and the session in OPFS SQLite;
 - installs durable's coding tools and SLICC's system prompt, and serves the agent.
 
@@ -307,6 +307,8 @@ MCP servers reachable over Streamable HTTP become native agent tools. The client
 A codemode script waits up to 10 s for servers still connecting. For the model, text results over 20 KB keep their start and end around a `…N chars truncated…` marker, and the full text goes to `/tmp/slicc-mcp-<call>.txt`. Images pass through, and binary resources are saved to `/tmp`. Servers with resources add pi's `list_mcp_resources`, `list_mcp_resource_templates` and `read_mcp_resource`, with the widest exposure among those servers. They skip servers whose exposure is `hidden`. MCP prompts, sampling and elicitation aren't supported, so a server can't call the model or ask the user anything.
 
 **Network.** Requests go through the worker's transport fetch, as Bedrock's do. On the page's own fetch, a server must send CORS headers allowing `Authorization`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version` and `Last-Event-ID`, and exposing `Mcp-Session-Id`. A server that doesn't gets a lick saying to run slicc-node, slicc-swift or the extension. Stop or a steer that aborts the turn cancels a running call (`notifications/cancelled`). Lists and reads are retried once after 408, 429 or 5xx, and tool calls never are. An interrupted call isn't rerun after a worker restart. Server log messages go to `~/.pi/agent/mcp.log`, which rolls over to `mcp.log.1` at 5 MB.
+
+**Kernel servers.** A server a kernel program serves with `ctx.net.listen` on the kernel's loopback works as `"url": "http://<port>.kernel.localhost/mcp"`, as for [mcpcat](https://github.com/ai-ecoverse/mcpcat)'s `mcpcat serve --proxy <name> --http <port>`, which bridges a stdio server to HTTP. The worker's fetch hands every `<port>.kernel.localhost` request to the kernel client's `loopbackFetch` on that port, whatever the transport, so it needs no CORS headers, no service worker and no open `/os/` tab, SSE streams have no idle limit, and the request carries no `Origin`. The URL's own port is ignored, as slicc-bios ignores it. `test/integration/mcp-loopback.test.mjs` runs a JS kernel program as the server and calls its tool on the page and relay routes, with a JSON-RPC answer streamed as SSE.
 
 **Limiting a server** until approvals (PR 25): `"enabled": false`; `"exposure": "hidden"` with a `toolExposure` allow list; `toolExposure` deny patterns; role and `--tools` lists for scoops; and tokens or scopes that allow only what the server should do.
 

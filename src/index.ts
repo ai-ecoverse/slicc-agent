@@ -42,7 +42,12 @@ export {
   type KernelAttach,
   runAgentWorker,
 } from './main.ts';
-export { type Transport, type TransportResponse, transportFetch } from './net.ts';
+export {
+  type Loopback,
+  type Transport,
+  type TransportResponse,
+  transportFetch,
+} from './net.ts';
 export {
   AGENT_LOCK,
   type AgentOwner,
