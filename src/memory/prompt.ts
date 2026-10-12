@@ -3,6 +3,7 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type Harness, section } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState, ScoopRecord } from '../agents.ts';
+import { scrubTexts } from '../secrets/scrub.ts';
 import { loadContextFiles, renderContextFiles } from './context.ts';
 import { excerpt, MAX_BYTES, MAX_LINES } from './format.ts';
 import { GLOBAL, type MemoryFiles, type Place, placeOf, rolePlace, type Written } from './store.ts';
@@ -124,8 +125,8 @@ export function memorySection(ready: Promise<Host>) {
       input.env?.cwd ?? host.home,
       context
     );
-    const rendered = await Promise.all(
-      blocks.map((block) => renderBlock(host.files, block, context))
+    const rendered = await scrubTexts(
+      await Promise.all(blocks.map((block) => renderBlock(host.files, block, context)))
     );
     return [
       PREFACE,

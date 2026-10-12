@@ -24,6 +24,7 @@ export interface AgentOptions {
   settings?: HarnessOptions['settings'];
   env?: HarnessOptions['env'];
   context?: Context;
+  beforeResume?: (harness: Harness, context: Context) => Promise<unknown>;
 }
 
 export interface Agent extends Cones {
@@ -72,6 +73,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   );
   const root = await harness.root(context, { agent: { model: options.model } });
   const agents = await openAgents(harness, root, context);
+  await options.beforeResume?.(harness, context);
   harness.resume();
   return {
     harness,
