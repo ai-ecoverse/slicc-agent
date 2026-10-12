@@ -165,6 +165,7 @@ export interface MonitorFeed {
   agents: MonitorAgent[];
   tasks: MonitorTask[];
   processes: MonitorProcess[] | null;
+  kernel: 'checking' | 'ok' | 'unreachable';
   problems: MonitorProblem[];
   paused: boolean;
 }

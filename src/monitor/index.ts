@@ -55,6 +55,7 @@ export interface MonitorOptions {
   timers?: Timers;
   ttlMs?: number;
   psMs?: number;
+  psTimeoutMs?: number;
   throttleMs?: number;
   usageMs?: number;
   context?: Context;
@@ -71,6 +72,7 @@ export interface Monitor {
 
 export const TTL_MS = 30000;
 export const PS_MS = 2000;
+export const PS_TIMEOUT_MS = 5000;
 export const THROTTLE_MS = 1000;
 export const USAGE_MS = 2000;
 export const PROBLEMS_MAX = 50;
@@ -88,6 +90,7 @@ export function emptyFeed(): MonitorFeed {
     agents: [],
     tasks: [],
     processes: null,
+    kernel: 'checking',
     problems: [],
     paused: false,
   };
@@ -178,6 +181,7 @@ interface Settings {
   timers: Timers;
   context: Context;
   psMs: number;
+  psTimeoutMs: number;
   throttleMs: number;
   usageMs: number;
   secrets: () => readonly string[];
@@ -196,6 +200,7 @@ class Session {
   #graph: TaskGraph = { tasks: {} };
   #usage: UsageState | null = null;
   #processes: readonly PsEntry[] | null = null;
+  #kernel: MonitorFeed['kernel'];
   #users = new Map<number, string>();
   #paused = false;
   #problems: MonitorProblem[] = [];
@@ -214,6 +219,7 @@ class Session {
     this.#options = options;
     this.#settings = settings;
     this.#publish = publish;
+    this.#kernel = options.kernel?.ps ? 'checking' : 'unreachable';
   }
 
   start(): void {
@@ -234,7 +240,7 @@ class Session {
       },
       () => undefined
     );
-    void this.#poll();
+    this.#poll();
     this.refresh();
   }
 
@@ -301,23 +307,22 @@ class Session {
     );
   }
 
-  #poll(): Promise<void> {
+  #poll(): void {
     const kernel = this.#options.kernel;
-    if (!kernel?.ps) return Promise.resolve();
-    return kernel
-      .ps()
-      .then(
-        (entries) => {
-          this.#processes = entries;
-        },
-        () => {
-          this.#processes = null;
-        }
-      )
-      .then(() => {
-        this.schedule();
-        this.#later(() => void this.#poll(), this.#settings.psMs);
-      });
+    if (!kernel?.ps) return;
+    let settled = false;
+    const settle = (entries: readonly PsEntry[] | null) => {
+      if (settled || this.stopped) return;
+      settled = true;
+      this.#settings.timers.clear(timeout);
+      this.#handles.delete(timeout);
+      this.#processes = entries;
+      this.#kernel = entries ? 'ok' : 'unreachable';
+      this.schedule();
+      this.#later(() => this.#poll(), this.#settings.psMs);
+    };
+    const timeout = this.#later(() => settle(null), this.#settings.psTimeoutMs);
+    kernel.ps().then(settle, () => settle(null));
   }
 
   #problem(entry: MonitorProblem): void {
@@ -491,6 +496,7 @@ class Session {
       agents: rows,
       tasks,
       processes,
+      kernel: this.#kernel,
       problems: [...this.#problems],
       paused: this.#paused,
     };
@@ -507,6 +513,7 @@ export function createMonitor(options: MonitorOptions): Monitor {
     timers: options.timers ?? globalTimers,
     context: options.context ?? BACKGROUND_CONTEXT,
     psMs: options.psMs ?? PS_MS,
+    psTimeoutMs: options.psTimeoutMs ?? PS_TIMEOUT_MS,
     throttleMs: options.throttleMs ?? THROTTLE_MS,
     usageMs: options.usageMs ?? USAGE_MS,
     secrets: () => options.secrets?.() ?? [],
