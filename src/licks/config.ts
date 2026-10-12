@@ -15,12 +15,14 @@ export interface WatchEntry {
   target: LickTarget;
   message: string;
   debounce: number;
+  triage?: string;
 }
 
 export interface WebhookEntry {
   name: string;
   target: LickTarget;
   message: string;
+  triage?: string;
 }
 
 export interface ConfigError {
@@ -37,6 +39,7 @@ export interface Parsed<T> {
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TARGET = /^(?:cone|scoop:[a-z0-9][a-z0-9._-]{0,63})$/;
 const DEBOUNCE = { min: 100, max: 60_000, default: 500 };
+const TRIAGE_MAX = 1000;
 
 export function isName(value: string): boolean {
   return NAME.test(value);
@@ -151,9 +154,19 @@ function debounce(value: unknown): number {
   return value;
 }
 
+function triage(value: unknown): { triage?: string } {
+  if (value === undefined) return {};
+  const sentence = typeof value === 'string' ? value.trim() : '';
+  if (!sentence || sentence.length > TRIAGE_MAX)
+    throw new Error(
+      `"triage" must be a sentence of 1–${TRIAGE_MAX} characters saying which events the agent should see`
+    );
+  return { triage: sentence };
+}
+
 export function parseWatch(file: string, source: string, home: string): WatchEntry {
   const name = nameOf(file);
-  const json = object(source, ['path', 'glob', 'target', 'message', 'debounce']);
+  const json = object(source, ['path', 'glob', 'target', 'message', 'debounce', 'triage']);
   const glob = text(json.glob, 'glob', '**');
   if (glob === '' || glob.startsWith('/'))
     throw new Error('"glob" must be relative to "path", such as "**/*.md"');
@@ -164,11 +177,17 @@ export function parseWatch(file: string, source: string, home: string): WatchEnt
     target: target(json.target),
     message: text(json.message, 'message', ''),
     debounce: debounce(json.debounce),
+    ...triage(json.triage),
   };
 }
 
 export function parseWebhook(file: string, source: string): WebhookEntry {
   const name = nameOf(file);
-  const json = object(source, ['target', 'message']);
-  return { name, target: target(json.target), message: text(json.message, 'message', '') };
+  const json = object(source, ['target', 'message', 'triage']);
+  return {
+    name,
+    target: target(json.target),
+    message: text(json.message, 'message', ''),
+    ...triage(json.triage),
+  };
 }

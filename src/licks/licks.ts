@@ -15,6 +15,7 @@ import {
   lickId,
 } from './lick.ts';
 import { entryLick, LICK_STATE_KIND, type LickDecision, lickDecisions } from './state.ts';
+import { skipEntry, skips, type Triage, type Verdict } from './triage.ts';
 
 export interface LickEvent {
   channel: LickChannel;
@@ -29,6 +30,7 @@ export interface LickEvent {
   severity?: LickSeverity;
   eventId?: string;
   at?: number;
+  triage?: string;
 }
 
 type Pending = {
@@ -79,6 +81,7 @@ export interface Licks {
   pending(context: Context): Promise<number>;
   forget(target: LickTarget, channel: LickChannel, source: string, context: Context): Promise<void>;
   guard(check: (target: LickTarget) => Blocked | undefined): void;
+  triage(judge: Triage): void;
 }
 
 export type Blocked = { id: string; name: string; at: number };
@@ -251,14 +254,30 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     return { lick, decision: lickDecisions(entries).get(id) };
   }
 
+  async function judged(event: LickEvent, context: Context): Promise<Verdict | undefined> {
+    if (!judge || !event.triage) return undefined;
+    return judge(event, context).catch(() => undefined);
+  }
+
+  async function record(event: LickEvent, verdict: Verdict, now: number, context: Context) {
+    const conversation = await (await host).resolve(event.target, event.channel, context);
+    await conversation.submit(skipEntry(event, verdict, now), context);
+  }
+
   let check: ((target: LickTarget) => Blocked | undefined) | undefined;
+  let judge: Triage | undefined;
   return {
     guard(next) {
       check = next;
     },
-    deliver(incoming, context) {
+    triage(next) {
+      judge = next;
+    },
+    async deliver(incoming, context) {
       const blocked = check?.(incoming.target);
       const event = blocked ? frozenNotice(incoming, blocked) : incoming;
+      const verdict = await judged(event, context);
+      const skipped = skips(verdict);
       return serial(async () => {
         const { harness } = await host;
         const key = keyOf(event);
@@ -272,6 +291,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
             if (seen.includes(event.eventId)) return false;
             doc.events[stream] = [...seen, event.eventId].slice(-MAX_EVENTS);
           }
+          if (skipped) return true;
           const queue = doc.queues[key] ?? { submission: null, pending: null };
           queue.pending = queue.pending
             ? merge(queue.pending, event, now)
@@ -279,7 +299,9 @@ export function createLicks(host: Promise<LicksHost>): Licks {
           doc.queues[key] = queue;
           return true;
         }, context);
-        if (accepted) await flushKey(key, context);
+        if (!accepted) return;
+        if (skipped) await record(event, verdict, now, context);
+        else await flushKey(key, context);
       });
     },
     flush: (context) => serial(() => flushAll(context)),

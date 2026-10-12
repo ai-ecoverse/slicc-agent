@@ -29,6 +29,7 @@ import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
 import { setupLicks } from './licks/index.ts';
+import { lickTriage } from './licks/triage.ts';
 import { setupMcp } from './mcp/index.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
@@ -235,6 +236,7 @@ async function start(
     title: titler(models, settingsText(home, HOME)),
   });
   licks.licks.guard(freezer.frozenTarget);
+  licks.licks.triage(lickTriage(models));
   const settings = await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime });
   const runtime = await scoops.attach(
     {
