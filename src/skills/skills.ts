@@ -7,7 +7,7 @@ export const MAX_DESCRIPTION_LENGTH = 1024;
 
 export type SkillFiles = Pick<ExecutionEnv, 'readTextFile' | 'listDir' | 'canonicalPath'>;
 
-export type SkillSource = 'user' | 'compat' | 'package' | 'builtin';
+export type SkillSource = 'user' | 'global' | 'compat' | 'package' | 'builtin';
 
 export interface Skill {
   name: string;

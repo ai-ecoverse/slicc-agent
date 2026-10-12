@@ -32,6 +32,7 @@ export const BUILTIN_SKILLS = [
 export const BUILTIN_PROMPTS = ['parallel-review', 'review-loop'];
 export const SKILLS_DIR = '/var/lib/slicc/agent/skills';
 export const PROMPTS_DIR = '/var/lib/slicc/agent/prompts';
+export const GLOBAL_DIR = '/usr/share/skills';
 export const COMPAT_DIR = '/workspace/skills';
 export const RELOAD_MS = 300;
 
@@ -149,6 +150,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       const { env, home } = options;
       if (options.assets)
         await installBuiltins(env, options.assets, context).catch(() => undefined);
+      await env.exec(`mkdir -p ${GLOBAL_DIR} && chmod 755 ${GLOBAL_DIR}`, undefined, context);
       let templates: PromptTemplate[] = [];
       const commands = replicatedState<Command[]>([]);
       const reported = new Set<string>();
@@ -156,6 +158,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         const roots: SkillRoot[] = [
           { dir: `${home}/.pi/agent/skills`, source: 'user' },
           { dir: `${home}/.agents/skills`, source: 'user' },
+          { dir: GLOBAL_DIR, source: 'global' },
           { dir: COMPAT_DIR, source: 'compat' },
           ...(await packaged(env, 'skills', using)).map((dir) => ({
             dir,
@@ -190,6 +193,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           { path: `${home}/.pi/agent/skills`, recursive: true },
           { path: `${home}/.pi/agent/prompts` },
           { path: `${home}/.agents/skills`, recursive: true },
+          { path: GLOBAL_DIR, recursive: true },
           { path: COMPAT_DIR, recursive: true },
         ],
         schedule,
