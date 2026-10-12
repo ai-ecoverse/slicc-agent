@@ -59,15 +59,14 @@ export const USAGE = `usage:
   sprinkle list                 every sprinkle in /home/sprinkles, with its owner
   sprinkle show <name>          show a sprinkle in your chat
   sprinkle own <name> [<agent>] send its messages to <agent> (cone, cone-<n> or a scoop's handle)
+  sprinkle open|close <name>    the same as panel open|close sprinkle:<name>
 
 A sprinkle is an .shtml file in /home/sprinkles, as <name>.shtml or <name>/<name>.shtml.
 Every one of them has a button in the rail; edit the file and the open panel reloads.
 `;
 
 const RETIRED: Record<string, string> = {
-  open: 'every sprinkle in /home/sprinkles already has a button in the rail; sprinkle show <name> shows one in the chat',
   reload: 'editing the .shtml file reloads the sprinkle',
-  close: 'delete the .shtml file to retire a sprinkle; the user closes panels',
   send: 'a sprinkle reads data with slicc.readFile() or keeps it with slicc.setState(); write the file it reads',
   chat: 'show the sprinkle with sprinkle show <name> and wait for its lick',
 };

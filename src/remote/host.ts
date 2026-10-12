@@ -48,26 +48,28 @@ export interface RemoteHost {
   sweepMs?: number;
 }
 
-class Stream {
-  readonly queue: RemoteEvent[] = [];
+export class Stream<T = RemoteEvent> {
+  readonly queue: T[] = [];
   done = false;
   touched: number;
   #wake: (() => void) | undefined;
   readonly #stop: () => Promise<unknown>;
   readonly #limit: number;
+  readonly #overflow: readonly T[];
 
-  constructor(stop: () => Promise<unknown>, now: number, limit: number) {
+  constructor(stop: () => Promise<unknown>, now: number, limit: number, overflow: readonly T[]) {
     this.#stop = stop;
     this.touched = now;
     this.#limit = limit;
+    this.#overflow = overflow;
   }
 
-  push(events: readonly RemoteEvent[]): void {
+  push(events: readonly T[]): void {
     if (this.done || !events.length) return;
     this.queue.push(...events);
     if (this.queue.length > this.#limit) {
       this.queue.length = 0;
-      this.queue.push({ t: 'end', reason: 'error', message: 'the stream fell too far behind' });
+      this.queue.push(...this.#overflow);
       void this.finish();
     }
     this.#wake?.();
@@ -80,12 +82,14 @@ class Stream {
     await this.#stop().catch(() => undefined);
   }
 
-  wait(ms: number): Promise<void> {
+  wait(ms: number, signal?: AbortSignal): Promise<void> {
     if (this.queue.length || this.done) return Promise.resolve();
     return new Promise((resolve) => {
       const timer = setTimeout(done, ms);
+      signal?.addEventListener('abort', done, { once: true });
       function done() {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
         resolve();
       }
       this.#wake = () => {
@@ -221,13 +225,14 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
       cancel.context
     );
     const open = (onEvents: (batch: readonly AgentEvent[]) => void) => {
-      const stream = new Stream(
+      const stream = new Stream<RemoteEvent>(
         async () => {
           await events.stop();
           cancel.cancel();
         },
         now(),
-        host.limit ?? MAX_QUEUED
+        host.limit ?? MAX_QUEUED,
+        [{ t: 'end', reason: 'error', message: 'the stream fell too far behind' }]
       );
       const id = `s${++serial}-${crypto.randomUUID()}`;
       track(id, stream);

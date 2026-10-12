@@ -14,7 +14,7 @@ export { type Agent, type AgentOptions, answerText, openAgent } from './agent.ts
 export { type AgentConnection, connectAgent } from './client.ts';
 export { createAgentControl } from './control.ts';
 export { CREDENTIALS_DATABASE, EncryptedCredentialStore } from './credentials.ts';
-export { type AgentHost, hostAgent } from './host.ts';
+export { type AgentHost, type ConnectOptions, hostAgent } from './host.ts';
 export type {
   KernelClient,
   KernelFs,
@@ -54,9 +54,21 @@ export {
 export { applyPatches, patchServerAccept } from './patches.ts';
 export { SliccPrompt, sliccPrompt } from './prompt.ts';
 export {
+  type AgentPages,
+  createPages,
+  type PageBatch,
+  type PageCaller,
+  type PageRequest,
+  type PageResult,
+  type Pages,
+  type PagesOpened,
+  type PageTab,
+} from './remote/pages.ts';
+export {
   type AccountState,
   AGENT_SESSION,
   AgentControl,
+  AgentPagesService,
   AgentSessions,
   AgentSettings,
   type AgentSettingsChange,

@@ -7,11 +7,12 @@ export interface WorkerScope {
 
 export function serveConnections(scope: WorkerScope, host: Promise<AgentHost>): void {
   scope.addEventListener('message', ({ data }) => {
-    const message = data as { connect?: PortEndpoint; readOnly?: boolean } | null;
+    const message = data as { connect?: PortEndpoint; readOnly?: boolean; pages?: boolean } | null;
     const port = message?.connect;
     if (!port) return;
+    const pages = message?.pages === false ? { pages: false } : {};
     host.then(
-      (ready) => ready.connect(port, { readOnly: message?.readOnly === true }),
+      (ready) => ready.connect(port, { readOnly: message?.readOnly === true, ...pages }),
       () => port.close?.()
     );
   });

@@ -41,7 +41,7 @@ export type Feed = {
   agent?: boolean;
 };
 type Wait = { scoops: string[]; done: Record<string, string>; cone: string };
-export type Answer = { code: number; out: string; tasks?: number[] };
+export type Answer = { code: number; out: string; err?: string; tasks?: number[] };
 type WorkState = {
   feeds: Record<string, Feed>;
   waits: Record<string, Wait>;

@@ -1,15 +1,17 @@
 #!/bin/bash
 dir=/var/lib/slicc/agent/requests
 as=$(basename "$0")
-case "$as" in subagent|sprinkle|memory|gelatiere|freezer|models) ;; *) as=agent ;; esac
+case "$as" in subagent|sprinkle|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; esac
 mkdir -p "$dir/in" "$dir/out" 2>/dev/null
+who="${SLICC_AGENT:-}"
+if [ -z "$who" ] && [ -n "${SLICC_TAB:-}" ]; then who="tab:$SLICC_TAB"; fi
 
 submit() {
   local id="$1"
   shift
   local tmp="$dir/in/.tmp-$id"
   {
-    printf '%s\0' "slicc-agent/1" "$as" "${SLICC_AGENT:-}" "$PWD" "$$" "$#"
+    printf '%s\0' "slicc-agent/1" "$as" "$who" "$PWD" "$$" "$#"
     if [ $# -gt 0 ]; then printf '%s\0' "$@"; fi
     if [ "$stdin" = 1 ]; then cat; fi
   } > "$tmp" && mv "$tmp" "$dir/in/$id"
@@ -67,10 +69,13 @@ while [ ! -f "$dir/out/$id.code" ]; do
   fi
 done
 code=$(cat "$dir/out/$id.code")
-if [ "$code" = 0 ]; then
+if [ -f "$dir/out/$id.err" ]; then
+  cat "$dir/out/$id.out"
+  cat "$dir/out/$id.err" >&2
+elif [ "$code" = 0 ]; then
   cat "$dir/out/$id.out"
 else
   cat "$dir/out/$id.out" >&2
 fi
-rm -f "$dir/out/$id.out" "$dir/out/$id.code" "$dir/out/$id.ack"
+rm -f "$dir/out/$id.out" "$dir/out/$id.err" "$dir/out/$id.code" "$dir/out/$id.ack"
 exit "$code"

@@ -4,6 +4,7 @@ import { AgentAdapter } from './agent-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { MonitorAdapter } from './monitor-port.ts';
+import { PageAdapter, type PageOptions } from './page-port.ts';
 import { type Login, SettingsAdapter } from './settings-port.ts';
 import { SprinkleAdapter } from './sprinkle-port.ts';
 import { TrayAdapter } from './tray-port.ts';
@@ -26,6 +27,13 @@ export {
   type MonitorInput,
   monitorSnapshot,
 } from './monitor-port.ts';
+export {
+  PageAdapter,
+  type PageDocument,
+  type PageOptions,
+  type PageRun,
+  type PageTarget,
+} from './page-port.ts';
 export { type Login, SETTINGS_KEY, SettingsAdapter } from './settings-port.ts';
 export { SprinkleAdapter } from './sprinkle-port.ts';
 export { TrayAdapter } from './tray-port.ts';
@@ -36,6 +44,7 @@ export function createAgentModel(
     storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
     login?: Login;
     monitor?: { extra?: () => readonly MonitorSection[] };
+    page?: PageOptions;
   } = {}
 ): {
   agent: AgentAdapter;
@@ -45,10 +54,13 @@ export function createAgentModel(
   memory: MemoryAdapter;
   changes: ChangesAdapter;
   monitor: MonitorAdapter;
+  page: PageAdapter | null;
 } {
   const agent = new AgentAdapter(connection);
+  const run = options.page?.run;
   return {
     agent,
+    page: options.page && run ? new PageAdapter(connection, agent, { ...options.page, run }) : null,
     settings: new SettingsAdapter(
       connection.settings,
       agent,
