@@ -159,6 +159,7 @@ async function start(
   const codemode = await codemodeTools(client, options, native, mcp.codemode);
   registry.install(codemodeExtension(codemode));
   const licks = setupLicks(registry);
+  licks.licks.triage(lickTriage(models));
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
   const skills = setupSkills(registry, licks.licks);
   const activity = createActivity();
@@ -236,7 +237,6 @@ async function start(
     title: titler(models, settingsText(home, HOME)),
   });
   licks.licks.guard(freezer.frozenTarget);
-  licks.licks.triage(lickTriage(models));
   const settings = await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime });
   const runtime = await scoops.attach(
     {

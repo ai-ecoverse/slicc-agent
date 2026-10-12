@@ -75,9 +75,10 @@ export function lickTriage(models: Pick<Models, 'getModelOfType' | 'classify'>):
 
 export function skipEntry(event: LickEvent, verdict: Verdict, now: number) {
   const id = lickId();
+  const delivery = event.eventId ? `${event.channel}|${event.source}|${event.eventId}` : id;
   return {
     type: 'write' as const,
-    requestId: `lick-triage:${id}`,
+    requestId: `lick-triage:${delivery}`,
     entry: {
       kind: TRIAGE_KIND,
       data: {
