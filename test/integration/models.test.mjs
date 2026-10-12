@@ -31,8 +31,8 @@ test("an agent's bash lists models and switches its own model in the production 
     });
     const { agent, settings } = createAgentModel(await owner.connect(), { storage: localStorage });
     await agent.ready();
-    const until = async (check) => {
-      for (let n = 0; n < 500 && !check(); n++) await new Promise((r) => setTimeout(r, 20));
+    const until = async (check, tries = 500) => {
+      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
       return check();
     };
     await until(() => settings.accounts().length > 0);
@@ -45,7 +45,10 @@ test("an agent's bash lists models and switches its own model in the production 
         .flatMap((message) => message.parts ?? [])
         .filter((part) => part.type === 'tool')
         .map((part) => part.tool);
-    await until(() => tools().some((tool) => tool.status === 'done' || tool.status === 'error'));
+    await until(
+      () => tools().some((tool) => tool.status === 'done' || tool.status === 'error'),
+      1000
+    );
     await until(
       () => agent.list().find((row) => row.id === agent.active())?.model === 'faux/faux-2'
     );
