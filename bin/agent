@@ -1,8 +1,8 @@
 #!/bin/bash
 dir=/var/lib/slicc/agent/requests
-as=$(basename "$0")
+as="${0##*/}"
 case "$as" in subagent|sprinkle|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; esac
-mkdir -p "$dir/in" "$dir/out" 2>/dev/null
+[ -d "$dir/in" ] && [ -d "$dir/out" ] || mkdir -p "$dir/in" "$dir/out" 2>/dev/null
 who="${SLICC_AGENT:-}"
 if [ -z "$who" ] && [ -n "${SLICC_TAB:-}" ]; then who="tab:$SLICC_TAB"; fi
 
@@ -22,7 +22,7 @@ for arg in "$@"; do
   if [ "$arg" = "-" ]; then stdin=1; fi
 done
 
-id="$(date +%s%N)-$$-$RANDOM"
+id="${EPOCHREALTIME/[.,]/}-$$-$RANDOM"
 submit "$id" "$@" || exit 1
 stdin=0
 
@@ -33,7 +33,7 @@ case "${1:-}" in
 esac
 
 cancel() {
-  submit "$(date +%s%N)-$$-$RANDOM" __cancel "$id"
+  submit "${EPOCHREALTIME/[.,]/}-$$-$RANDOM" __cancel "$id"
   exit 130
 }
 if [ $sync = 1 ]; then trap cancel TERM INT HUP; fi
@@ -64,11 +64,11 @@ while [ ! -f "$dir/out/$id.code" ]; do
     exit 1
   fi
   if [ -n "$after" ] && [ $count -ge $((after * 10)) ]; then
-    submit "$(date +%s%N)-$$-$RANDOM" __detach "$id"
+    submit "${EPOCHREALTIME/[.,]/}-$$-$RANDOM" __detach "$id"
     after=""
   fi
 done
-code=$(cat "$dir/out/$id.code")
+read -r code < "$dir/out/$id.code"
 if [ -f "$dir/out/$id.err" ]; then
   cat "$dir/out/$id.out"
   cat "$dir/out/$id.err" >&2

@@ -45,24 +45,22 @@ test("an agent's bash lists models and switches its own model in the production 
         .flatMap((message) => message.parts ?? [])
         .filter((part) => part.type === 'tool')
         .map((part) => part.tool);
-    await until(() =>
-      tools().some(
-        (tool) =>
-          (tool.status === 'done' || tool.status === 'error') && /exit=\d/.test(String(tool.output))
-      )
-    );
+    await until(() => tools().some((tool) => tool.status === 'done' || tool.status === 'error'));
     await until(
       () => agent.list().find((row) => row.id === agent.active())?.model === 'faux/faux-2'
     );
     const row = agent.list().find((entry) => entry.id === agent.active());
     const output = tools()[0]?.output;
+    const status = tools()[0]?.status;
     await owner.release();
     return {
       output: typeof output === 'string' ? output : JSON.stringify(output),
+      status,
       model: row?.model,
       thinking: row?.thinking,
     };
   }, query);
+  assert.equal(seen.status, 'done');
   assert.match(seen.output, /now using faux\/faux-2 \(.*\), thinking high/);
   assert.match(seen.output, / {2}faux\/faux-1\t/);
   assert.match(seen.output, /\* faux\/faux-2\t/);
