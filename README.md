@@ -100,7 +100,7 @@ With users, each cone and each scoop is a kernel user, and works as that user:
   | an agent's own skills | `~/.pi/agent/skills` and `~/.agents/skills` in its home; only that agent sees them |
   | memory | `/root/.pi/agent/memory/` and `/root/.pi/agent/agent-memory/` (root; agents use `memory_write` and `memory`) |
   | licks | each cone's `~/.slicc`, whose jobs are named `<cone>:<name>` and whose `cone` target is that cone; root's `/root/.slicc`, whose `cone` is the active cone |
-  | sprinkles | each cone's `~/sprinkles`, every cone's in the rail, with the id `<cone>/<name>` (the cone's id, such as `cone-2`) and the cone as `agentId`; `sprinkle show` and `own` take `<cone>/<name>`, or a bare name for the caller's cone. welcome and suggestions keep their plain ids. spectrum ≥ 1.56.0 groups the rail by cone, with the selected cone first; an older spectrum lists them ungrouped. A sprinkle's files are read as its owner, inside the owner's home |
+  | sprinkles | each cone's `~/sprinkles`, every cone's in the rail, with the id `<cone>/<name>` (the cone's id, such as `cone-2`) and the cone as `agentId`; `panel open sprinkle:<cone>/<name>` opens one, and spectrum scopes the rest by cone. welcome and suggestions keep their plain ids. spectrum ≥ 1.56.0 groups the rail by cone, with the selected cone first; an older spectrum lists them ungrouped. A sprinkle's files are read as its owner, inside the owner's home |
   | the gelatiere | its procedure and crontab line in the first cone's home, written as that cone; `gelatiere install` and `suggest` run as the caller |
   | scoop reports | the cone's `~/.slicc/reports/<handle>/` |
   | sync transcripts | `/tmp/agent-sessions/<user>/` (`0700`), or `~/sessions/` with `--persist-session` |
