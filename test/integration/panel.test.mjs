@@ -7,7 +7,7 @@ after(() => chrome.close());
 
 const script = 'panel open files --left chat; echo "exit=$?"';
 
-test('panel reaches only the tab showing the caller cone, through the production worker', async (t) => {
+test("panel runs spectrum's panelCommand in the tab showing the caller cone, through the production worker", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const query = [
@@ -37,8 +37,23 @@ test('panel reaches only the tab showing the caller cone, through the production
       }
       return { stdout: `${name} ran ${argv.join(' ')}\n`, stderr: `${name} note\n`, code: 0 };
     };
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    const { panelCommand } = await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    const app = document.createElement('slicc-app');
+    app.style.cssText = 'display:block;width:1400px;height:900px';
+    document.body.append(app);
+    const real = async (argv, caller) => {
+      runs.A.push({ argv, caller });
+      if (argv[0] !== 'hang') return panelCommand(app, argv, caller);
+      hang.started = true;
+      return new Promise(() => undefined);
+    };
     const first = await owner.connect();
-    const a = createAgentModel(first, { page: { tab: 'A', run: runner('A') } });
+    const a = createAgentModel(first, { storage: localStorage, page: { tab: 'A', run: real } });
+    app.model = { ...createDummyModel({ storage: localStorage }), ...a };
+    await customElements.whenDefined('slicc-app');
+    await until(() => app.panels);
     const b = createAgentModel(await owner.connect(), { page: { tab: 'B', run: runner('B') } });
     const viewer = createAgentModel(await owner.connect({ readOnly: true }), {
       page: { tab: 'viewer', run: runner('viewer') },
@@ -71,6 +86,7 @@ test('panel reaches only the tab showing the caller cone, through the production
     };
     await until(() => terminal.fs.exists('/usr/local/bin/panel'));
     const answer = await first.prompt('Open the files.');
+    const files = app.panels.find('files');
     const tools = a.agent
       .messages('cone')
       .flatMap((message) => message.parts ?? [])
@@ -78,6 +94,7 @@ test('panel reaches only the tab showing the caller cone, through the production
       .map((part) => part.tool.output);
     const scoop = await first.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
     const fromScoop = await run(`SLICC_AGENT=${scoop.id} panel list --json`);
+    const missing = await run(`SLICC_AGENT=${scoop.id} panel open chat:${other.id}`);
     const fromTab = await run('SLICC_TAB=B panel list');
     const pending = run('panel hang');
     await until(() => hang.started);
@@ -94,27 +111,41 @@ test('panel reaches only the tab showing the caller cone, through the production
       scoop: scoop.id,
       other: other.id,
       fromScoop,
+      missing,
+      files: files && { open: files.open, visible: files.visible },
       fromTab,
       hung,
       none,
     };
   }, query);
   assert.equal(seen.answer, 'Opened.');
-  assert.match(seen.tool, /A ran open files --left chat/);
-  assert.match(seen.tool, /A note/);
-  assert.match(seen.tool, /exit=0/);
+  assert.equal(seen.tool, 'opened files\nexit=0\n');
+  assert.deepEqual(seen.files, { open: true, visible: true });
   assert.deepEqual(seen.runs.viewer, []);
-  assert.deepEqual(seen.runs.A.slice(0, 2), [
+  assert.deepEqual(seen.runs.A.slice(0, 3), [
     {
       argv: ['open', 'files', '--left', 'chat'],
       caller: { agentId: 'cone', cone: 'cone', readOnly: false },
     },
     { argv: ['list', '--json'], caller: { agentId: seen.scoop, cone: 'cone', readOnly: false } },
+    {
+      argv: ['open', `chat:${seen.other}`],
+      caller: { agentId: seen.scoop, cone: 'cone', readOnly: false },
+    },
   ]);
   assert.deepEqual(seen.runs.B, [
     { argv: ['list'], caller: { agentId: null, cone: seen.other, readOnly: false } },
   ]);
-  assert.deepEqual(seen.fromScoop, { code: 0, out: 'A ran list --json\n', err: 'A note\n' });
+  assert.equal(seen.fromScoop.code, 0);
+  const listed = JSON.parse(seen.fromScoop.out).map((panel) => panel.id);
+  assert.ok(listed.includes('files'));
+  assert.ok(listed.includes('chat:cone'));
+  assert.ok(!listed.includes(`chat:${seen.other}`));
+  assert.deepEqual(seen.missing, {
+    code: 1,
+    out: '',
+    err: `panel: no panel called chat:${seen.other}; panel list shows the ids you can use\n`,
+  });
   assert.deepEqual(seen.fromTab, { code: 0, out: 'B ran list\n', err: 'B note\n' });
   assert.equal(seen.hung.code, 4);
   assert.match(seen.hung.err, /panel: the tab showing cone cone didn't answer; try again/);
