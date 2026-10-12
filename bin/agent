@@ -1,7 +1,7 @@
 #!/bin/bash
 dir=/var/lib/slicc/agent/requests
 as="${0##*/}"
-case "$as" in subagent|sprinkle|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; esac
+case "$as" in subagent|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; esac
 [ -d "$dir/in" ] && [ -d "$dir/out" ] || mkdir -p "$dir/in" "$dir/out" 2>/dev/null
 who="${SLICC_AGENT:-}"
 if [ -z "$who" ] && [ -n "${SLICC_TAB:-}" ]; then who="tab:$SLICC_TAB"; fi

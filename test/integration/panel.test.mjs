@@ -104,7 +104,17 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
     const fromScoop = await run(`SLICC_AGENT=${scoop.id} panel list --json`);
     const missing = await run(`SLICC_AGENT=${scoop.id} panel open chat:${other.id}`);
     const fromTab = await run('SLICC_TAB=B panel list');
+    const tabs = await run('panel tabs --json');
+    const pinned = await run('SLICC_TAB=A panel list --tab B');
+    const fenced = await run(`SLICC_AGENT=${scoop.id} panel list --tab B`);
+    const scoopTabs = await run(`SLICC_AGENT=${scoop.id} panel tabs`);
+    const sprinkle = await run('command -v sprinkle');
     return {
+      tabs,
+      pinned,
+      fenced,
+      scoopTabs,
+      sprinkle,
       answer,
       tool: typeof tools[0] === 'string' ? tools[0] : JSON.stringify(tools[0]),
       scoop: scoop.id,
@@ -147,7 +157,28 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
   ]);
   assert.deepEqual(runs.B, [
     { argv: ['list'], caller: { agentId: null, cone: other, readOnly: false } },
+    { argv: ['list'], caller: { agentId: null, cone: other, readOnly: false } },
   ]);
+  assert.equal(seen.tabs.code, 0);
+  assert.deepEqual(
+    JSON.parse(seen.tabs.out)
+      .map((row) => [row.tab, row.cone])
+      .sort(),
+    [
+      ['A', 'cone'],
+      ['B', other],
+    ]
+  );
+  assert.deepEqual(seen.pinned, { code: 0, out: 'B ran list\n', err: 'B note\n' });
+  assert.deepEqual(seen.fenced, {
+    code: 3,
+    out: '',
+    err: 'panel: no open SLICC tab B shows cone cone; panel tabs lists the ones that do\n',
+  });
+  assert.equal(seen.scoopTabs.code, 0);
+  assert.match(seen.scoopTabs.out, /^A\tcone\t/);
+  assert.equal(seen.scoopTabs.out.split('\n').length, 2);
+  assert.equal(seen.sprinkle.code, 1);
   assert.equal(seen.fromScoop.code, 0);
   const listed = JSON.parse(seen.fromScoop.out).map((panel) => panel.id);
   assert.ok(listed.includes('files'));

@@ -27,8 +27,6 @@ import {
   WELCOMED,
 } from './sprinkles.ts';
 
-export type Answer = { code: number; out: string };
-
 export interface SprinklePayload {
   action: string;
   data: JsonValue | null;
@@ -39,7 +37,7 @@ export interface SprinklesRuntime {
   readonly sprinkles: ReplicatedState<Sprinkle[]>;
   send(id: string, payload: SprinklePayload, context: Context): Promise<{ delivered: boolean }>;
   call(id: string, method: string, args: readonly unknown[], context: Context): Promise<JsonValue>;
-  command(argv: readonly string[], caller: string | null, context: Context): Promise<Answer>;
+  claim(id: string, cone: string, context: Context): Promise<void>;
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
 }
@@ -55,36 +53,8 @@ export interface SprinklesAttach {
   intercept?: (id: string, payload: SprinklePayload, context: Context) => Promise<boolean>;
 }
 
-export const USAGE = `usage:
-  sprinkle list                 every sprinkle in /home/sprinkles, with its owner
-  sprinkle show <name>          show a sprinkle in your chat
-  sprinkle own <name> [<agent>] send its messages to <agent> (cone, cone-<n> or a scoop's handle)
-  sprinkle open|close <name>    the same as panel open|close sprinkle:<name>
-
-A sprinkle is an .shtml file in /home/sprinkles, as <name>.shtml or <name>/<name>.shtml.
-Every one of them has a button in the rail; edit the file and the open panel reloads.
-`;
-
-const RETIRED: Record<string, string> = {
-  reload: 'editing the .shtml file reloads the sprinkle',
-  send: 'a sprinkle reads data with slicc.readFile() or keeps it with slicc.setState(); write the file it reads',
-  chat: 'show the sprinkle with sprinkle show <name> and wait for its lick',
-};
-
 function targetOf(agentId: string): LickTarget {
   return agentId.startsWith('scoop:') ? (agentId as LickTarget) : `cone:${agentId}`;
-}
-
-function agentOf(caller: string | null, agents: Agents): string {
-  if (caller?.startsWith('cone:')) return caller.slice('cone:'.length);
-  return caller ?? agents.activeCone();
-}
-
-function named(agents: Agents, value: string): string | undefined {
-  const state = agents.state();
-  if (value in state.cones) return value;
-  const id = value.startsWith('scoop:') ? value : `scoop:${value}`;
-  return id in state.scoops ? id : undefined;
 }
 
 export function ownerOf(agents: Agents, owner: string | undefined): string {
@@ -184,36 +154,6 @@ export function setupSprinkles() {
         context
       );
       const watcher: FileWatcher | undefined = watched.ok ? watched.value : undefined;
-      const commands: Record<
-        string,
-        (argv: readonly string[], caller: string | null, using: Context) => Promise<Answer>
-      > = {
-        async list(_argv, _caller, using) {
-          await reload(using);
-          const rows = sprinkles.value
-            .filter((item) => !item.inline)
-            .map((item) => `${item.name}\t${item.title}\t${item.agentId}`);
-          return { code: 0, out: rows.length ? `${rows.join('\n')}\n` : 'no sprinkles\n' };
-        },
-        async show(argv, caller, using) {
-          await reload(using);
-          const name = argv[1] ?? '';
-          if (!find(name)) return { code: 1, out: `sprinkle: there is no sprinkle ${name}\n` };
-          const agentId = agentOf(caller, agents);
-          await post(name, agentId, using);
-          if (name !== SUGGESTIONS && !(await owners(using))[name])
-            await setOwner(name, agentId, using);
-          return { code: 0, out: `showed ${name} in the chat of ${agentId}\n` };
-        },
-        async own(argv, caller, using) {
-          const name = argv[1] ?? '';
-          if (!find(name)) return { code: 1, out: `sprinkle: there is no sprinkle ${name}\n` };
-          const agentId = argv[2] ? named(agents, argv[2]) : agentOf(caller, agents);
-          if (!agentId) return { code: 1, out: `sprinkle: there is no agent ${argv[2]}\n` };
-          await setOwner(name, agentId, using);
-          return { code: 0, out: `${name} now talks to ${agentId}\n` };
-        },
-      };
       return {
         sprinkles,
         async send(id, payload, using) {
@@ -268,13 +208,10 @@ export function setupSprinkles() {
           if (!handler) throw new Error(NO_EXEC);
           return handler();
         },
-        async command(argv, caller, using) {
-          const verb = argv[0] ?? 'help';
-          const run = commands[verb];
-          if (run) return run(argv, caller, using);
-          if (verb in RETIRED)
-            return { code: 2, out: `sprinkle ${verb} isn't in SLICC: ${RETIRED[verb]}\n` };
-          return { code: verb === 'help' || verb === '--help' ? 0 : 2, out: USAGE };
+        async claim(id, cone, using) {
+          await reload(using);
+          if (id === SUGGESTIONS || !find(id) || (await owners(using))[id]) return;
+          await setOwner(id, cone, using);
         },
         reload,
         async close(using) {

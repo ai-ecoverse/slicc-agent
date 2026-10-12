@@ -43,7 +43,6 @@ export interface CliOptions {
   roles: () => Promise<Roles>;
   alive?: (pid: number) => Promise<boolean>;
   now?: () => number;
-  sprinkle?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   memory?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   gelatiere?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   freezer?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
@@ -463,31 +462,16 @@ export function panelCaller(request: Request, who: Caller): PanelCaller {
   return { agentId, cone: who.cone, tab: agentId === null ? (request.tab ?? null) : null };
 }
 
-const ALIASES = new Set(['open', 'close']);
-
-function panelArgv(request: Request): readonly string[] | undefined {
-  if (request.as === 'panel') return request.argv;
-  const [verb, name, ...rest] = request.argv;
-  if (request.as !== 'sprinkle' || !ALIASES.has(verb ?? '')) return undefined;
-  if (!name) return [verb as string];
-  return [verb as string, name.startsWith('sprinkle:') ? name : `sprinkle:${name}`, ...rest];
-}
-
 async function dispatch(
   deps: Deps,
   request: Request,
   who: Caller,
   context: Context
 ): Promise<Answer> {
-  const forwarded = panelArgv(request);
-  if (forwarded)
+  if (request.as === 'panel')
     return deps.panel
-      ? deps.panel(forwarded, panelCaller(request, who), context)
+      ? deps.panel(request.argv, panelCaller(request, who), context)
       : { code: 1, out: 'panel: panels are not available in this agent\n' };
-  if (request.as === 'sprinkle')
-    return deps.sprinkle
-      ? deps.sprinkle(request.argv, who.id, context)
-      : fail('sprinkles are not available in this agent');
   if (request.as === 'memory')
     return deps.memory
       ? deps.memory(request.argv, who.id, context)
@@ -532,7 +516,7 @@ export function createCli(options: CliOptions): Runner {
   const deps: Deps = { ...options, now: options.now ?? Date.now, sync: { pending: new Map() } };
   return {
     blocking(request) {
-      if (panelArgv(request)) return true;
+      if (request.as === 'panel') return true;
       const first = request.argv[0] ?? '';
       if (BLOCKING.has(first)) return true;
       return request.as === 'agent' && !VERBS[first] && !request.argv.includes('--async');

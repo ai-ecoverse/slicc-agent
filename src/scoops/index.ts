@@ -36,7 +36,6 @@ export interface AttachOptions {
   sweepEvery?: number;
   alive?: (pid: number) => Promise<boolean>;
   reads: () => readonly string[];
-  sprinkle?: CliOptions['sprinkle'];
   memory?: CliOptions['memory'];
   gelatiere?: CliOptions['gelatiere'];
   freezer?: CliOptions['freezer'];
@@ -56,16 +55,9 @@ export interface ScoopsSetup {
   attach(options: AttachOptions, context: Context): Promise<ScoopsRuntime>;
 }
 
-export const COMMANDS = [
-  'agent',
-  'subagent',
-  'sprinkle',
-  'memory',
-  'gelatiere',
-  'freezer',
-  'models',
-  'panel',
-];
+export const COMMANDS = ['agent', 'subagent', 'memory', 'gelatiere', 'freezer', 'models', 'panel'];
+
+export const RETIRED_COMMANDS = ['sprinkle'];
 
 export async function pnpmHomeOf(env: ExecutionEnv, context: Context): Promise<string> {
   let out = '';
@@ -115,6 +107,11 @@ async function install(
     const mode = await env.exec(['chmod', '755', path], undefined, context);
     if (!mode.ok || mode.value.exitCode !== 0) return { done: false, skipped };
   }
+  for (const name of RETIRED_COMMANDS) {
+    const text = await env.readTextFile(`${binDir}/${name}`, context);
+    if (text.ok && text.value.includes(PROTOCOL))
+      await env.remove(`${binDir}/${name}`, { force: true }, context);
+  }
   return { done: true, skipped };
 }
 
@@ -139,7 +136,7 @@ export async function installCommands(
 export async function retire(env: ExecutionEnv, binDir: string, context: Context) {
   const old = `${await pnpmHomeOf(env, context)}/bin`;
   if (old === binDir) return;
-  for (const name of COMMANDS) {
+  for (const name of [...COMMANDS, ...RETIRED_COMMANDS]) {
     const path = `${old}/${name}`;
     const text = await env.readTextFile(path, context);
     if (text.ok && text.value.includes(PROTOCOL)) await env.remove(path, { force: true }, context);
@@ -236,7 +233,6 @@ export function setupScoops(
         scoops,
         roles: () => roles(context),
         ...(options.alive ? { alive: options.alive } : {}),
-        ...(options.sprinkle ? { sprinkle: options.sprinkle } : {}),
         ...(options.memory ? { memory: options.memory } : {}),
         ...(options.gelatiere ? { gelatiere: options.gelatiere } : {}),
         ...(options.freezer ? { freezer: options.freezer } : {}),
