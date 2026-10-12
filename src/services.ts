@@ -10,6 +10,7 @@ import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
+import type { VaultState } from './secrets/vault.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 
 export type SendMode = 'steer' | 'followUp' | 'reject';
@@ -228,12 +229,13 @@ export interface AgentTranscript {
   readonly frozen: ReplicatedState<FrozenCone[]>;
   readonly changes: ReplicatedState<ChangesView>;
   readonly monitor: ReplicatedState<MonitorFeed>;
+  readonly vault: ReplicatedState<VaultState>;
 }
 
 export interface Command {
   name: string;
   description: string;
-  kind: 'prompt' | 'skill';
+  kind: 'prompt' | 'skill' | 'action';
 }
 
 export const AgentTranscript = defineService<AgentTranscript>('slicc.agent.transcript');

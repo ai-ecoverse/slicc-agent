@@ -21,6 +21,9 @@ import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import type { Monitor } from './monitor/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
+import { pinned, SECRETS_COMMAND, secretsEntry } from './secrets/extension.ts';
+import type { SecretName } from './secrets/names.ts';
+import { scrubText } from './secrets/scrub.ts';
 import type {
   AgentControl,
   Created,
@@ -237,7 +240,7 @@ async function forkAt(
     instructions: agent.instructions ?? null,
     cwd: agent.cwd ?? null,
   };
-  return harness.createConversation({ ownership, agent: change }, context);
+  return harness.createConversation({ ownership, agent: pinned(change) }, context);
 }
 
 async function rewindAgent(
@@ -285,7 +288,8 @@ export function createAgentControl(
   memory?: Pick<MemoryRuntime, 'save' | 'remove'>,
   freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>,
   changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>,
-  monitor?: Pick<Monitor, 'open' | 'close'>
+  monitor?: Pick<Monitor, 'open' | 'close'>,
+  secrets?: () => readonly SecretName[]
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -350,7 +354,15 @@ export function createAgentControl(
   return {
     send(request, context) {
       return serial(async () => {
-        const text = skills ? await skills.expand(request.text, context) : request.text;
+        if (secrets && request.text.trim() === SECRETS_COMMAND)
+          return accepted(async () =>
+            (await conversationFor(request.agentId, context)).submit(
+              { type: 'write', entry: secretsEntry(secrets()) },
+              context
+            )
+          );
+        const expanded = skills ? await skills.expand(request.text, context) : request.text;
+        const text = await scrubText(expanded);
         const response = await accepted(async () =>
           (await conversationFor(request.agentId, context)).submit(
             {

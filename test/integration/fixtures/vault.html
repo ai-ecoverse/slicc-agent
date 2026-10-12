@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<script type="module">
+import { serveVault } from './fake-vault.mjs';
+
+const vectors = await (await fetch('./scrub-vectors.json')).json();
+addEventListener('message', ({ data, ports, source }) => {
+  if (data?.role !== 'agent' || !ports[0]) return;
+  window.vault = serveVault(ports[0], vectors.values);
+  source.postMessage({ ready: true, pair: window.vault.pair }, '*');
+});
+parent.postMessage({ loaded: true }, '*');
+</script>

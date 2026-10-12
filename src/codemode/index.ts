@@ -23,6 +23,7 @@ import {
   type ToolExecutionApi,
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
+import { scrubItems } from '../secrets/scrub.ts';
 
 export const CODEMODE = 'codemode';
 export const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
@@ -288,7 +289,7 @@ export function codemodeTool(options: CodemodeOptions): ToolRegistration {
           text: `Script error:\n${formatError(result.error, result.calls)}`,
         });
       const cut = truncate(
-        joinText(items),
+        await scrubItems(joinText(items)),
         parsed.options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
       );
       const path = cut.full === null ? '' : await spill(api, cut.full, context);

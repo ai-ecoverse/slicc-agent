@@ -18,6 +18,7 @@ import {
 import { HOME } from '../kernel/env.ts';
 import type { LickTarget } from '../licks/lick.ts';
 import { SCOOPS_ROOT, workspace } from '../scoops/service.ts';
+import { pinned } from '../secrets/extension.ts';
 
 export type Answer = { code: number; out: string };
 
@@ -302,14 +303,14 @@ async function freshLike(
   return harness.createConversation(
     {
       ownership: { kind: 'ownerless' },
-      agent: {
+      agent: pinned({
         model: agent.model,
         thinkingLevel: agent.thinkingLevel,
         extensions: agent.extensions,
         tools: agent.tools,
         instructions: agent.instructions ?? null,
         cwd: agent.cwd ?? null,
-      },
+      }),
     },
     context
   );
@@ -337,14 +338,14 @@ async function thawScoop(
   const cone = await (await activeCone(agents, context)).agent(context);
   const created = {
     ownership: { kind: 'ownerless' as const },
-    agent: {
+    agent: pinned({
       model: agent.model as NonNullable<typeof agent.model>,
       thinkingLevel: agent.thinkingLevel,
       extensions: cone.extensions,
       tools: cone.tools,
       instructions: cone.instructions ?? null,
       cwd: HOME,
-    },
+    }),
   };
   const fork = last
     ? await conversation.fork(last.id, created, context)

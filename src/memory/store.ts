@@ -1,5 +1,6 @@
 import type { Context } from '@earendil-works/chord';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { scrubTexts } from '../secrets/scrub.ts';
 import { trusted } from './context.ts';
 import {
   applyChange,
@@ -169,13 +170,15 @@ export class MemoryFiles {
       redacted += result.count;
       return result.text;
     };
+    const [section = '', title = '', body = ''] =
+      change.kind === 'save' ? await scrubTexts([change.section, change.title, change.body]) : [];
     const safe: Change =
       change.kind === 'save'
         ? {
             ...change,
-            section: oneLine(clean(change.section)) || 'Notes',
-            title: oneLine(clean(change.title)) || 'Untitled',
-            body: clean(change.body),
+            section: oneLine(clean(section)) || 'Notes',
+            title: oneLine(clean(title)) || 'Untitled',
+            body: clean(body),
           }
         : change;
     const { doc, found } = applyChange(parseMemory(before), place.scope, safe);

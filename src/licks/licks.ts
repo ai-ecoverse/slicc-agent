@@ -5,6 +5,7 @@ import {
   type Harness,
   type SubmissionId,
 } from '@earendil-works/pi-durable';
+import { scrubTexts } from '../secrets/scrub.ts';
 import {
   formatLick,
   type Lick,
@@ -172,6 +173,20 @@ function keyOf(event: LickEvent): string {
   return event.coalesce === false ? `${base}|${event.eventId ?? lickId()}` : base;
 }
 
+export async function scrubbedLick(event: LickEvent): Promise<LickEvent> {
+  const fields = (['title', 'text', 'body', 'triage'] as const).filter(
+    (key) => event[key] !== undefined
+  );
+  const items = event.items ?? [];
+  const scrubbed = await scrubTexts([...fields.map((key) => event[key] as string), ...items]);
+  const out: LickEvent = { ...event };
+  fields.forEach((key, at) => {
+    out[key] = scrubbed[at] as string;
+  });
+  if (event.items) out.items = scrubbed.slice(fields.length);
+  return out;
+}
+
 export function createLicks(host: Promise<LicksHost>): Licks {
   const handlers = new Map<LickChannel, LickHandler>();
   let lock: Promise<unknown> = Promise.resolve();
@@ -280,7 +295,8 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     triage(next) {
       judge = next;
     },
-    async deliver(incoming, context) {
+    async deliver(raw, context) {
+      const incoming = await scrubbedLick(raw);
       const blocked = check?.(incoming.target);
       const event = blocked ? frozenNotice(incoming, blocked) : incoming;
       if (judge && event.triage && (await seenBefore(event, context))) return;

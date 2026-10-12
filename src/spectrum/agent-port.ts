@@ -14,7 +14,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
 import { entryLick } from '../licks/state.ts';
-import type { AgentSettingsChange, AgentSummary } from '../services.ts';
+import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
 
@@ -42,6 +42,10 @@ function status(view: ConversationView | undefined, messages: readonly Message[]
   }
   const last = messages.at(-1);
   return last?.role === 'assistant' && last.status === 'error' ? 'error' : 'idle';
+}
+
+export function slashCommand({ kind, ...command }: Command): SlashCommand {
+  return kind === 'action' ? command : { ...command, kind };
 }
 
 export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
@@ -257,7 +261,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   commands(): readonly SlashCommand[] {
-    return (this.#connection.commands?.value ?? []).map((command) => ({ ...command }));
+    return (this.#connection.commands?.value ?? []).map(slashCommand);
   }
 
   createScoop(parentId: string, name: string): Agent {

@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context, ReplicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context';
 import {
   type AgentEvent,
@@ -10,8 +10,28 @@ import {
   type SubmissionId,
   watchEvents,
 } from '@earendil-works/pi-durable';
+import { holdText, type VaultState } from '../secrets/vault.ts';
 import type { Delivered, SendMode, SendRequest, SendResponse } from '../services.ts';
 import { type EndReason, idOf, Mapper, type RemoteEvent, replayOf } from './events.ts';
+
+export const VAULT_BACK = 'the vault is answering again';
+
+export function vaultNotices(
+  vault: ReplicatedState<VaultState> | undefined,
+  push: (events: RemoteEvent[]) => void
+): () => void {
+  if (!vault) return () => undefined;
+  let shown = vault.value ? holdText(vault.value) : undefined;
+  let serial = 0;
+  const notice = (text: string) => push([{ t: 'notice', id: `vault-${++serial}`, text }]);
+  if (shown) notice(shown);
+  return vault.subscribe((value) => {
+    const next = holdText(value);
+    if (next === shown) return;
+    shown = next;
+    notice(next ?? VAULT_BACK);
+  });
+}
 
 export const MAX_QUEUED = 10000;
 export const IDLE_MS = 120000;
@@ -43,6 +63,7 @@ export interface RemoteHost {
   harness: Harness;
   conversation(agentId: string | null, context: Context): Promise<Conversation>;
   send(request: SendRequest, context: Context): Promise<SendResponse>;
+  vault?: ReplicatedState<VaultState>;
   now?: () => number;
   limit?: number;
   sweepMs?: number;
@@ -225,8 +246,10 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
       cancel.context
     );
     const open = (onEvents: (batch: readonly AgentEvent[]) => void) => {
+      let off = () => undefined as void;
       const stream = new Stream<RemoteEvent>(
         async () => {
+          off();
           await events.stop();
           cancel.cancel();
         },
@@ -236,6 +259,7 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
       );
       const id = `s${++serial}-${crypto.randomUUID()}`;
       track(id, stream);
+      off = vaultNotices(host.vault, (notices) => stream.push(notices));
       events.start(async (batch) => onEvents(batch));
       return { id, stream };
     };

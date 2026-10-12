@@ -11,7 +11,13 @@ import { createMcpServer } from '../fixtures/mcp-server.mjs';
 const params = new URL(self.location.href).searchParams;
 const fauxModels = params.getAll('model').map((id) => ({ id }));
 const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
-faux.setResponses([
+const requests = [];
+const recorded = (message) => (context) => {
+  requests.push(JSON.stringify(context));
+  return message;
+};
+self.addEventListener('message', ({ data }) => data?.requests?.postMessage(requests));
+const steps = [
   ...params.getAll('step').map((spec) => {
     const { tool, answer } = JSON.parse(spec);
     return tool
@@ -33,7 +39,8 @@ faux.setResponses([
     })
   ),
   ...params.getAll('answer').map((answer) => fauxAssistantMessage(answer)),
-]);
+];
+faux.setResponses(steps.map(recorded));
 const relayed = params.get('relay');
 const fake = relayed
   ? createMcpServer({

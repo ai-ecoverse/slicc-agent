@@ -1,6 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai';
 import { type CallToolResult, type ContentBlock, toLlmContent } from '@earendil-works/pi-mcp';
+import { scrubItems } from '../secrets/scrub.ts';
 
 export const MCP_OUTPUT_MAX_BYTES = 20 * 1024;
 export const READ_MCP_RESOURCE = 'read_mcp_resource';
@@ -53,9 +54,10 @@ function textOf(content: readonly Content[]): string {
 }
 
 export async function limitContent(
-  content: Content[],
+  raw: Content[],
   save: Saver
 ): Promise<{ content: Content[]; fullOutputPath?: string }> {
+  const content = await scrubItems(raw);
   const combined = textOf(content);
   const cut = truncateMiddle(combined, MCP_OUTPUT_MAX_BYTES);
   if (!cut.truncated) return { content };

@@ -39,6 +39,10 @@ import { sliccPrompt } from './prompt.ts';
 import { createPages } from './remote/pages.ts';
 import { identity } from './scoops/identity.ts';
 import { type Assets, packageAssets, type ScoopsRuntime, setupScoops } from './scoops/index.ts';
+import { repin, secretsExtension, shellGrants } from './secrets/extension.ts';
+import { secretNames } from './secrets/names.ts';
+import { scrubWith } from './secrets/scrub.ts';
+import { listenVault, Vault } from './secrets/vault.ts';
 import {
   createAgentSettings,
   createSliccModels,
@@ -126,14 +130,23 @@ async function codemodeTools(
 
 export const MCP_CALLBACK = '/oauth/mcp-callback';
 
+async function secretsFor(home: SliccKernelEnv, vault: Vault) {
+  scrubWith(vault);
+  const names = secretNames(home, vault);
+  await names.refresh(BACKGROUND_CONTEXT);
+  return names;
+}
+
 async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
-  options: AgentWorkerOptions
+  options: AgentWorkerOptions,
+  vault: Vault
 ): Promise<AgentHost> {
   const { client, users } = await attached(ports, options);
   const home = new SliccKernelEnv(client, { cwd: HOME });
   await privateStore(home);
+  const names = await secretsFor(home, vault);
   const native = scope.fetch.bind(scope);
   scope.fetch = transportFetch(client.transport, scope.location.origin, native);
   const facts = {
@@ -165,6 +178,7 @@ async function start(
   licks.licks.triage(lickTriage(models));
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
   const skills = setupSkills(registry, licks.licks);
+  registry.install(secretsExtension({ names, vault }));
   const activity = createActivity();
   const groups = processGroups(client);
   const model = options.model ?? DEFAULT_MODEL;
@@ -173,15 +187,13 @@ async function start(
     activity,
     groups,
     identify: identity(() => opened?.agents, model),
+    scrub: vault,
+    spawn: shellGrants(names),
   });
-  const agent = await openAgent({
-    models,
-    model,
-    storage: await (options.storage ?? (() => openOpfsSqliteStorage()))(),
-    registry,
-    env: environment,
-  });
+  const storage = await (options.storage ?? (() => openOpfsSqliteStorage()))();
+  const agent = await openAgent({ models, model, storage, registry, env: environment });
   opened = agent;
+  await repin(agent.harness, storage, BACKGROUND_CONTEXT);
   const sources = licks.attach(agent, { env: home, home: HOME, activity });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(
@@ -288,6 +300,7 @@ async function start(
     pages,
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
+    secrets: { vault: vault.state, list: () => names.state.value, close: names.close },
     monitor: {
       kernel: client,
       groups,
@@ -308,7 +321,9 @@ export function runAgentWorker(
   scope: AgentWorkerScope,
   options: AgentWorkerOptions = {}
 ): Promise<AgentHost> {
-  const host = start(scope, kernelPorts(scope), options);
+  const vault = new Vault();
+  listenVault(scope, vault);
+  const host = start(scope, kernelPorts(scope), options, vault);
   host.catch(() => undefined);
   serveConnections(scope, host);
   return host;
