@@ -259,6 +259,13 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     return judge(event, context).catch(() => undefined);
   }
 
+  async function seenBefore(event: LickEvent, context: Context): Promise<boolean> {
+    if (event.eventId === undefined) return false;
+    const { harness } = await host;
+    const events = (await harness.snapshot(LicksOutbox, context))?.events ?? {};
+    return (events[`${event.channel}|${event.source}`] ?? []).includes(event.eventId);
+  }
+
   async function record(event: LickEvent, verdict: Verdict, now: number, context: Context) {
     const conversation = await (await host).resolve(event.target, event.channel, context);
     await conversation.submit(skipEntry(event, verdict, now), context);
@@ -276,6 +283,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     async deliver(incoming, context) {
       const blocked = check?.(incoming.target);
       const event = blocked ? frozenNotice(incoming, blocked) : incoming;
+      if (judge && event.triage && (await seenBefore(event, context))) return;
       const verdict = await judged(event, context);
       const skipped = skips(verdict);
       return serial(async () => {
@@ -284,6 +292,10 @@ export function createLicks(host: Promise<LicksHost>): Licks {
         await settled(key, context);
         const stream = `${event.channel}|${event.source}`;
         const now = event.at ?? Date.now();
+        if (skipped) {
+          if (await seenBefore(event, context)) return;
+          await record(event, verdict, now, context);
+        }
         const accepted = await harness.commit(async (tx) => {
           const doc = await tx.doc(LicksOutbox);
           const seen = doc.events[stream] ?? [];
@@ -291,7 +303,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
             if (seen.includes(event.eventId)) return false;
             doc.events[stream] = [...seen, event.eventId].slice(-MAX_EVENTS);
           }
-          if (skipped) return true;
+          if (skipped) return false;
           const queue = doc.queues[key] ?? { submission: null, pending: null };
           queue.pending = queue.pending
             ? merge(queue.pending, event, now)
@@ -299,9 +311,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
           doc.queues[key] = queue;
           return true;
         }, context);
-        if (!accepted) return;
-        if (skipped) await record(event, verdict, now, context);
-        else await flushKey(key, context);
+        if (accepted) await flushKey(key, context);
       });
     },
     flush: (context) => serial(() => flushAll(context)),
