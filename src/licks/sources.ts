@@ -88,6 +88,7 @@ export function webhookLick(
     target: entry.target,
     coalesce: false,
     ...(delivery.id ? { eventId: delivery.id } : {}),
+    ...(entry.triage ? { triage: entry.triage } : {}),
   };
 }
 

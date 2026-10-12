@@ -92,6 +92,7 @@ export class Watches {
         ...(entry.message ? { body: entry.message } : {}),
         items,
         target: entry.target,
+        ...(entry.triage ? { triage: entry.triage } : {}),
       },
       context
     );
