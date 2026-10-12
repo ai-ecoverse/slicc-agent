@@ -1,5 +1,6 @@
-import type { Provider } from '@earendil-works/pi-ai';
+import type { ClassifierModel, Provider, ProviderClassifier } from '@earendil-works/pi-ai';
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy';
+import { cloudflareWorkersAISystemOneApi } from '@earendil-works/pi-ai/api/cloudflare-workers-ai-system-one.lazy';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { createProvider } from '@earendil-works/pi-ai/models';
 
@@ -34,6 +35,51 @@ export interface Budget {
 type Fetch = typeof fetch;
 
 const free = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+export const CLASSIFIER_API = 'cloudflare-workers-ai-system-one';
+const WORKERS_AI = '@cf/cloudflare/';
+
+const CLEF = [
+  { id: 'clef', name: 'Clef', input: 0.24 },
+  { id: 'clef-flash', name: 'Clef Flash', input: 0.09 },
+];
+
+export function adobeClassifiers(endpoint: string): ClassifierModel<typeof CLASSIFIER_API>[] {
+  return CLEF.map(({ id, name, input }) => ({
+    type: 'classifier',
+    id,
+    name,
+    provider: ADOBE,
+    api: CLASSIFIER_API,
+    baseUrl: `${endpoint}/v1/ai`,
+    input: ['text'],
+    cost: { ...free, input },
+    contextWindow: 65536,
+  }));
+}
+
+function bearer(headers: Record<string, string | null> = {}): string | undefined {
+  const value = Object.entries(headers).find(
+    ([name]) => name.toLowerCase() === 'authorization'
+  )?.[1];
+  return value?.replace(/^Bearer\s+/i, '');
+}
+
+function clef(fetcher: Fetch): ProviderClassifier {
+  const transport = cloudflareWorkersAISystemOneApi();
+  return {
+    classify: (model, context, options = {}) =>
+      transport.classify(model, context, {
+        ...options,
+        fetch: options.fetch ?? fetcher,
+        apiKey: bearer(options.headers) ?? options.apiKey,
+        onPayload: async (payload, sent) => {
+          const wire = { ...(payload as object), model: `${WORKERS_AI}${model.id}` };
+          return (await options.onPayload?.(wire, sent)) ?? wire;
+        },
+      }),
+  };
+}
 
 export function adobeModel(info: AdobeModelInfo, endpoint: string) {
   const openai = info.api === 'openai';
@@ -107,7 +153,7 @@ export function adobeProvider({
         },
       },
     },
-    models: [],
+    models: adobeClassifiers(endpoint),
     fetchModels: async () =>
       (await adobeConfig(endpoint, fetcher)).models
         .filter((info) => !info.hidden)
@@ -116,5 +162,6 @@ export function adobeProvider({
       'anthropic-messages': anthropicMessagesApi(),
       'openai-completions': openAICompletionsApi(),
     },
+    classifiers: { [CLASSIFIER_API]: clef(fetcher) },
   }) as Provider;
 }
