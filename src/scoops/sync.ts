@@ -117,10 +117,14 @@ async function finish(
   id: string,
   persist: Persist,
   user: string | null,
+  shares: readonly Shared[],
   context: Context
 ): Promise<void> {
   const record = deps.agents.state().scoops[id];
   if (!record) return;
+  const written = shares.filter((shared) => shared.write).map((shared) => quote(shared.path));
+  if (written.length)
+    await deps.env.exec(`chmod -R g+rwX ${written.join(' ')}`, undefined, context);
   await archive(deps, record, persist, user, context).catch(() => null);
   await deps.scoops.stop(id, false, context);
   await deps.env.remove(
@@ -217,7 +221,7 @@ async function share(deps: Deps, request: Request, shares: readonly Shared[], co
 
 interface Plan {
   given: string[];
-  shares?: Shared[];
+  shares: Shared[];
   workdir?: string;
   instructions: string;
   readOnly: string[];
@@ -263,9 +267,9 @@ async function plan(
     instructions: notes.join('\n\n'),
     readOnly,
     persist: persistOf(parsed.switches),
+    shares,
   };
   if (workdir) result.workdir = workdir;
-  if (shares.length) result.shares = shares;
   return result;
 }
 
@@ -333,7 +337,7 @@ export async function runSync(
   if (isAnswer(chosen)) return chosen;
   const found = await role(deps, parsed);
   if (found.error) return found.error;
-  if (planned.shares) await share(deps, request, planned.shares, context);
+  await share(deps, request, planned.shares, context);
   const spawned = await deps.scoops.spawn(
     {
       cone: who.cone,
@@ -372,10 +376,10 @@ export async function runSync(
     if (typeof raced === 'string') {
       const answer = await settle(deps, who, id, tasks, raced, context);
       if (answer.code === 130)
-        await finish(deps, id, planned.persist, request.user ?? null, context);
+        await finish(deps, id, planned.persist, request.user ?? null, planned.shares, context);
       return answer;
     }
-    await finish(deps, id, planned.persist, request.user ?? null, context);
+    await finish(deps, id, planned.persist, request.user ?? null, planned.shares, context);
     return answerOf(raced);
   } finally {
     unwatch();
