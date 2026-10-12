@@ -15,9 +15,11 @@ import {
 import type { Names, SecretName } from './names.ts';
 import type { Scrub } from './scrub.ts';
 import type { Vault } from './vault.ts';
+import { listedLine, SECRETS_KIND } from './view.ts';
+
+export { listedLine, SECRETS_KIND };
 
 export const SECRETS = 'slicc-secrets';
-export const SECRETS_KIND = 'slicc.secrets';
 export const SECRETS_COMMAND = '/secrets';
 export const SHELL_GRANTS = ['fnox', 'exec', '--shell-grants', '--'] as const;
 
@@ -106,10 +108,6 @@ export function renderSecrets(names: readonly SecretName[]): string | undefined 
   if (!names.length) return undefined;
   const lines = names.map((name) => `- ${name.name} = ${name.placeholder}${where(name)}`);
   return [MODEL_LINE, '', ...lines].join('\n');
-}
-
-export function listedLine(names: readonly SecretName[]): string {
-  return `The user listed secrets: ${names.length ? names.map((name) => name.name).join(', ') : 'none'}.`;
 }
 
 export function secretsEntry(names: readonly SecretName[]) {
