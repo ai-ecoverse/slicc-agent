@@ -156,6 +156,9 @@ class Scanner {
       const quoted = ansi(this.source, this.#index + 2);
       this.#append(quoted.text);
       this.#index = quoted.end;
+    } else if (char === '$' && this.#at(1) === '"') {
+      this.#index++;
+      this.#double();
     } else return false;
     return true;
   }
