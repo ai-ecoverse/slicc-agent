@@ -1,7 +1,6 @@
-import type { PanelCaller, PanelOutput } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
-import type { PageRequest, PageResult, PageTab } from '../remote/pages.ts';
+import type { PageCaller, PageRequest, PageResult, PageTab } from '../remote/pages.ts';
 import type { AgentAdapter } from './agent-port.ts';
 
 export const REPORT_MS = 250;
@@ -9,8 +8,8 @@ export const POLL_MS = 10000;
 
 export type PageRun = (
   argv: readonly string[],
-  caller: PanelCaller
-) => PanelOutput | Promise<PanelOutput>;
+  caller: PageCaller
+) => PageResult | Promise<PageResult>;
 
 export interface PageTarget {
   addEventListener(type: string, listener: () => void, options?: boolean): void;

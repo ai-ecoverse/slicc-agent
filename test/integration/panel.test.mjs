@@ -14,7 +14,13 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
     `step=${encodeURIComponent(JSON.stringify({ tool: { name: 'bash', args: { command: script } } }))}`,
     `step=${encodeURIComponent(JSON.stringify({ answer: 'Opened.' }))}`,
   ].join('&');
-  const seen = await page.evaluate(async (q) => {
+  await page.evaluate(async () => {
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    const { panelCommand } = await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    globalThis.spectrum = { panelCommand, createDummyModel };
+  });
+  await page.evaluate(async (q) => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
@@ -37,9 +43,7 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
       }
       return { stdout: `${name} ran ${argv.join(' ')}\n`, stderr: `${name} note\n`, code: 0 };
     };
-    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
-    const { panelCommand } = await import(`${spectrum}/slicc-ui.js`);
-    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    const { panelCommand, createDummyModel } = globalThis.spectrum;
     const app = document.createElement('slicc-app');
     app.style.cssText = 'display:block;width:1400px;height:900px';
     document.body.append(app);
@@ -85,6 +89,10 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
       return { code: await process.exited, out, err };
     };
     await until(() => terminal.fs.exists('/usr/local/bin/panel'));
+    globalThis.panelTest = { owner, first, a, b, app, run, other, hang, runs, until };
+  }, query);
+  const seen = await page.evaluate(async () => {
+    const { first, a, app, run, other } = globalThis.panelTest;
     const answer = await first.prompt('Open the files.');
     const files = app.panels.find('files');
     const tools = a.agent
@@ -96,6 +104,19 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
     const fromScoop = await run(`SLICC_AGENT=${scoop.id} panel list --json`);
     const missing = await run(`SLICC_AGENT=${scoop.id} panel open chat:${other.id}`);
     const fromTab = await run('SLICC_TAB=B panel list');
+    return {
+      answer,
+      tool: typeof tools[0] === 'string' ? tools[0] : JSON.stringify(tools[0]),
+      scoop: scoop.id,
+      fromScoop,
+      missing,
+      files: files && { open: files.open, visible: files.visible },
+      fromTab,
+    };
+  });
+  const ended = await page.evaluate(async () => {
+    const { panelTest } = globalThis;
+    const { owner, first, a, b, run, hang, runs, until } = panelTest;
     const pending = run('panel hang');
     await until(() => hang.started);
     await first.close();
@@ -104,51 +125,42 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
     await b.page.dispose();
     const none = await run('panel list');
     await owner.release();
-    return {
-      answer,
-      tool: typeof tools[0] === 'string' ? tools[0] : JSON.stringify(tools[0]),
-      runs,
-      scoop: scoop.id,
-      other: other.id,
-      fromScoop,
-      missing,
-      files: files && { open: files.open, visible: files.visible },
-      fromTab,
-      hung,
-      none,
-    };
-  }, query);
+    return { runs, other: panelTest.other.id, hung, none };
+  });
+  const scoop = seen.scoop;
+  const other = ended.other;
+  const runs = ended.runs;
   assert.equal(seen.answer, 'Opened.');
   assert.equal(seen.tool, 'opened files\nexit=0\n');
   assert.deepEqual(seen.files, { open: true, visible: true });
-  assert.deepEqual(seen.runs.viewer, []);
-  assert.deepEqual(seen.runs.A.slice(0, 3), [
+  assert.deepEqual(runs.viewer, []);
+  assert.deepEqual(runs.A.slice(0, 3), [
     {
       argv: ['open', 'files', '--left', 'chat'],
       caller: { agentId: 'cone', cone: 'cone', readOnly: false },
     },
-    { argv: ['list', '--json'], caller: { agentId: seen.scoop, cone: 'cone', readOnly: false } },
+    { argv: ['list', '--json'], caller: { agentId: scoop, cone: 'cone', readOnly: false } },
     {
-      argv: ['open', `chat:${seen.other}`],
-      caller: { agentId: seen.scoop, cone: 'cone', readOnly: false },
+      argv: ['open', `chat:${other}`],
+      caller: { agentId: scoop, cone: 'cone', readOnly: false },
     },
   ]);
-  assert.deepEqual(seen.runs.B, [
-    { argv: ['list'], caller: { agentId: null, cone: seen.other, readOnly: false } },
+  assert.deepEqual(runs.B, [
+    { argv: ['list'], caller: { agentId: null, cone: other, readOnly: false } },
   ]);
   assert.equal(seen.fromScoop.code, 0);
   const listed = JSON.parse(seen.fromScoop.out).map((panel) => panel.id);
   assert.ok(listed.includes('files'));
   assert.ok(listed.includes('chat:cone'));
-  assert.ok(!listed.includes(`chat:${seen.other}`));
+  assert.ok(!listed.includes(`chat:${other}`));
   assert.deepEqual(seen.missing, {
     code: 1,
     out: '',
-    err: `panel: no panel called chat:${seen.other}; panel list shows the ids you can use\n`,
+    err: `panel: no panel called chat:${other}; panel list shows the ids you can use\n`,
   });
   assert.deepEqual(seen.fromTab, { code: 0, out: 'B ran list\n', err: 'B note\n' });
-  assert.equal(seen.hung.code, 4);
-  assert.match(seen.hung.err, /panel: the tab showing cone cone didn't answer; try again/);
-  assert.equal(seen.none.code, 3);
-  assert.match(seen.none.err, /panel: no open SLICC tab shows cone cone/);
+  assert.equal(ended.hung.code, 4);
+  assert.match(ended.hung.err, /panel: the tab showing cone cone didn't answer; try again/);
+  assert.equal(ended.none.code, 3);
+  assert.match(ended.none.err, /panel: no open SLICC tab shows cone cone/);
 });
