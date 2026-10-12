@@ -209,11 +209,13 @@ Skills and prompt templates work as in pi's coding-agent. pi's loaders read with
 - **Where skills are found.** These roots are scanned in this order:
   1. `~/.pi/agent/skills`;
   2. `~/.agents/skills`;
-  3. `/workspace/skills`, read-only, for skills copied from SLICC v6;
-  4. packages in the kernel's `/node_modules` whose `package.json` lists folders in `pi.skills`;
-  5. the built-ins, which the worker writes to `/var/lib/slicc/agent/skills` on every start.
+  3. `/usr/share/skills`, the global skills every cone and scoop sees, such as those imported from SLICC 6;
+  4. `/workspace/skills`, read-only, for skills copied from SLICC v6;
+  5. packages in the kernel's `/node_modules` whose `package.json` lists folders in `pi.skills`;
+  6. the built-ins, which the worker writes to `/var/lib/slicc/agent/skills` on every start.
 
-  On a name collision the first skill found wins.
+  On a name collision the first skill found wins: an agent's own skills shadow the global ones, and a global skill shadows a v6 copy, a package's and a built-in. A missing root is skipped.
+- **The global folder.** On every start the worker, as root, creates `/usr/share/skills` if it's missing and sets it to 0755, so it's root's and readable by everyone; once kernel users give each cone its own user and the kernel checks file modes, only root (the worker, sudo or the human) writes there, and every cone and scoop reads it. Each skill's `source` is `user`, `global`, `compat`, `package` or `builtin`.
 - **Inside a root.** Folders with `SKILL.md` are found at any depth, and a `SKILL.md` ends its branch. A `.md` file with a description directly in a root counts too. Folders starting with `.` and `node_modules` are skipped. Symbolic links are followed, but each folder is read once by its real path, so a link back up a tree can't loop. Scoops may `read` the folders of the loaded skills, even outside their own folders.
 - **Problems.** A problem (a missing description, a bad name, a collision, a line the frontmatter parser can't read) becomes one lick with `severity="warn"` per distinct problem. A skill without a description is skipped; any other problem only warns.
 - **Untrusted folders.** A project's `.pi/skills` and `.agents/skills` are read only in trusted folders, which come with PR 21.
