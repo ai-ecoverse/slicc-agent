@@ -9,7 +9,7 @@ The gelatiere is a scoop with the `gelatiere` role. Each night, and whenever som
 
 ## A `gelatiere-suggestions` lick arrived
 
-Its body lists the new suggestions for your cone. Reply with one short sentence: how many arrived, and the gist of the best one. Then run `sprinkle show suggestions` so the user can act with a click. Don't repeat the list, don't install anything, and don't edit memory files.
+Its body lists the new suggestions for your cone. Reply with one short sentence: how many arrived, and the gist of the best one. Then run `panel open sprinkle:suggestions` so the user can act with a click. Don't repeat the list, don't install anything, and don't edit memory files.
 
 ## A card button was clicked
 

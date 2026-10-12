@@ -76,6 +76,7 @@ export interface PagesOptions {
   sweepMs?: number;
   pickMs?: number;
   answerMs?: number;
+  claim?: (sprinkle: string, cone: string, context: Context) => Promise<void>;
 }
 
 interface Pending {
@@ -130,6 +131,58 @@ export function noAnswer(cone: string): PageResult {
     stderr: `panel: the tab showing cone ${cone} didn't answer; try again\n`,
     code: 4,
   };
+}
+
+export function noSuchTab(tab: string, cone: string | null): Answer {
+  const err =
+    cone === null
+      ? `panel: there is no open SLICC tab ${tab}; panel tabs lists them\n`
+      : `panel: no open SLICC tab ${tab} shows cone ${cone}; panel tabs lists the ones that do\n`;
+  return { code: 3, out: '', err };
+}
+
+const usage = (err: string): Answer => ({ code: 2, out: '', err: `panel: ${err}\n` });
+
+export function tabFlag(argv: readonly string[]): { argv: string[]; tab?: string } | Answer {
+  const rest: string[] = [];
+  let tab: string | undefined;
+  for (let at = 0; at < argv.length; at++) {
+    const arg = argv[at] as string;
+    if (arg === '--tab') {
+      const value = argv[++at];
+      if (!value) return usage('--tab needs a tab id; panel tabs lists them');
+      tab = value;
+    } else if (arg.startsWith('--tab=')) {
+      if (arg === '--tab=') return usage('--tab needs a tab id; panel tabs lists them');
+      tab = arg.slice('--tab='.length);
+    } else rest.push(arg);
+  }
+  return tab === undefined ? { argv: rest } : { argv: rest, tab };
+}
+
+function ago(lastActive: number, now: number): string {
+  return lastActive ? `${Math.max(0, Math.round((now - lastActive) / 1000))}s ago` : 'never';
+}
+
+function tabsOf(argv: readonly string[], reachable: Entry[], now: number): Answer {
+  const json = argv.includes('--json');
+  if (argv.some((arg) => arg !== '--json')) return usage('usage: panel tabs [--json]');
+  const rows = reachable
+    .sort((a, b) => rank(b) - rank(a) || b.tab.lastActive - a.tab.lastActive || b.serial - a.serial)
+    .map(({ tab }) => ({
+      tab: tab.tab,
+      cone: tab.cone,
+      visible: tab.visible,
+      focused: tab.focused,
+      lastActive: tab.lastActive,
+    }));
+  if (json) return { code: 0, out: `${JSON.stringify(rows, null, 2)}\n` };
+  if (!rows.length) return { code: 0, out: 'no tabs\n' };
+  const lines = rows.map(
+    (row) =>
+      `${row.tab}\t${row.cone ?? '-'}\t${row.visible ? 'visible' : 'hidden'}\t${row.focused ? 'focused' : '-'}\t${ago(row.lastActive, now)}`
+  );
+  return { code: 0, out: `${lines.join('\n')}\n` };
 }
 
 export function ownedPages(pages: AgentPages): AgentPages & { release(): void } {
@@ -286,8 +339,28 @@ export function createPages(options: PagesOptions = {}): Pages {
       drop(id);
     },
     request,
-    async command(argv, caller) {
-      const result = await request({ kind: 'panel', argv, ...caller });
+    async command(argv, caller, context) {
+      const parsed = tabFlag(argv);
+      if ('code' in parsed) return parsed;
+      sweep();
+      const reachable = [...entries.values()].filter(
+        (entry) =>
+          entry.tab.kinds.includes('panel') &&
+          (caller.agentId === null || entry.tab.cone === caller.cone)
+      );
+      if (parsed.argv[0] === 'tabs') return tabsOf(parsed.argv.slice(1), reachable, now());
+      if (parsed.tab !== undefined && !reachable.some((entry) => entry.tab.tab === parsed.tab))
+        return noSuchTab(parsed.tab, caller.agentId === null ? null : caller.cone);
+      const [verb, id] = parsed.argv;
+      if (caller.agentId !== null && verb === 'open' && id?.startsWith('sprinkle:'))
+        await options.claim?.(id.slice('sprinkle:'.length), caller.cone, context);
+      const result = await request({
+        kind: 'panel',
+        argv: parsed.argv,
+        agentId: caller.agentId,
+        cone: caller.cone,
+        tab: parsed.tab ?? caller.tab,
+      });
       return { code: result.code, out: result.stdout, err: result.stderr };
     },
     tabs: () => [...entries.values()].map((entry) => ({ ...entry.tab })),

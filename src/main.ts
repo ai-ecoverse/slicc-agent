@@ -241,7 +241,7 @@ async function start(
   });
   licks.licks.guard(freezer.frozenTarget);
   const settings = await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime });
-  const pages = createPages();
+  const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(
     {
       harness: agent.harness,
@@ -251,7 +251,6 @@ async function start(
       home: HOME,
       alive: alive(client),
       reads: skillsRuntime.dirs,
-      sprinkle: sprinkles.command,
       memory: memoryRuntime.command,
       gelatiere: gelatiere.command,
       freezer: freezer.command,
