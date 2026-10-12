@@ -1,6 +1,7 @@
 import { type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Scrub, Scrubbable, ScrubStream } from './scrub.ts';
+import { vaultHold } from './view.ts';
 
 export type ScrubPair = { needed: boolean; version: number };
 export type Locked = 'no' | 'scrubbing' | 'passkey';
@@ -191,9 +192,9 @@ export class Vault implements Scrub {
 }
 
 export function holdText(state: VaultState): string | undefined {
-  if (!state.needed) return undefined;
-  if (state.locked === 'passkey') return 'unlock the vault to continue';
-  return state.port === 'ready' ? undefined : WAITING;
+  const hold = vaultHold(state);
+  if (!hold) return undefined;
+  return hold.reason === 'locked' ? 'unlock the vault to continue' : WAITING;
 }
 
 export function listenVault(

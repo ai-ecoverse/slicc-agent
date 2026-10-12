@@ -16,6 +16,8 @@ import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import { mcpLabel } from '../mcp/label.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
+import type { SecretName } from '../secrets/names.ts';
+import { listedLine, SECRETS_KIND } from '../secrets/view.ts';
 import type { Delivered } from '../services.ts';
 import { SPRINKLE_KIND } from '../sprinkles/kind.ts';
 
@@ -388,6 +390,18 @@ function thawed(id: string, entry: EntryRecord): SystemMessage {
   };
 }
 
+function secrets(id: string, entry: EntryRecord): SystemMessage {
+  const data = (entry.data ?? {}) as { names?: SecretName[] };
+  return {
+    id,
+    role: 'system',
+    kind: 'notice',
+    title: 'Secrets listed',
+    text: listedLine(data.names ?? []),
+    createdAt: entry.model?.[0]?.timestamp ?? 0,
+  };
+}
+
 function entryMessage(
   entry: EntryRecord,
   out: Message[],
@@ -399,6 +413,7 @@ function entryMessage(
   const model = entry.model?.[0] as ModelMessage | undefined;
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   if (entry.kind === 'slicc.thawed') out.push(thawed(id, entry));
+  else if (entry.kind === SECRETS_KIND) out.push(secrets(id, entry));
   else if (entry.kind === SPRINKLE_KIND) out.push(sprinkleMessage(id, entry));
   else if (entry.kind === 'pi.user' && model)
     out.push(

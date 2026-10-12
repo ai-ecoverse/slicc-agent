@@ -14,6 +14,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
 import { entryLick } from '../licks/state.ts';
+import { type VaultHold, vaultHold } from '../secrets/view.ts';
 import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
@@ -48,16 +49,40 @@ export function slashCommand({ kind, ...command }: Command): SlashCommand {
   return kind === 'action' ? command : { ...command, kind };
 }
 
-export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
+export type AgentHold = VaultHold;
+
+export type AgentAdapterEvents = AgentEvents & { hold: AgentHold | null };
+
+function sameHold(a: AgentHold | null, b: AgentHold | null): boolean {
+  return a === b || (a !== null && b !== null && a.reason === b.reason && a.held === b.held);
+}
+
+interface Pending {
+  agentId: string;
+  message: UserMessage;
+  dropped: boolean;
+}
+
+export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPort {
   readonly #connection: AgentConnection;
   readonly #ready: Promise<void>;
   readonly #messages = new Map<string, Message[]>();
   #active: string | null = null;
   #creating = new Map<string, Promise<string | null>>();
+  #hold: AgentHold | null = null;
+  readonly #outbox = new Map<string, Pending>();
 
   constructor(connection: AgentConnection) {
     super();
     this.#connection = connection;
+    this.#hold = this.hold();
+    connection.vault?.subscribe(() => {
+      const next = this.hold();
+      if (sameHold(next, this.#hold)) return;
+      this.#hold = next;
+      this.emit('hold', next);
+      this.emit('agents', this.list());
+    });
     connection.frozen?.subscribe(() => {
       this.emit('frozen', this.frozen());
       this.emit('agents', this.list());
@@ -117,6 +142,10 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     return this.#ready;
   }
 
+  hold(): AgentHold | null {
+    return vaultHold(this.#connection.vault?.value);
+  }
+
   list(): readonly Agent[] {
     const rows = this.#connection.frozen?.value ?? [];
     return this.#summary().map((summary) => {
@@ -129,7 +158,7 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
         name: summary.role ? `${summary.name} · ${summary.role}` : summary.name,
         kind: summary.kind,
         parentId: summary.parentId,
-        status: status(view, this.#messages.get(summary.id) ?? []),
+        status: this.#status(summary.id, status(view, this.#messages.get(summary.id) ?? [])),
         model: doc?.model ? `${doc.model.provider}/${doc.model.modelId}` : '',
         contextFill: 0,
         unread: 0,
@@ -168,16 +197,42 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
     const outgoing = typeof input === 'string' ? { text: input } : input;
     const target = this.#creating.has(agentId) ? await this.#creating.get(agentId) : agentId;
     if (target === null) throw new Error('The scoop could not be created.');
-    const sent = await this.#connection.control.send(
-      {
-        text: outgoing.text,
-        whenBusy: outgoing.mode === 'queue' ? 'followUp' : 'steer',
-        requestId: crypto.randomUUID(),
-        agentId: target || null,
-      },
-      BACKGROUND_CONTEXT
-    );
+    const pending = target && this.#held(target) ? this.#pending(target, outgoing) : undefined;
+    const sent = await this.#connection.control
+      .send(
+        {
+          text: outgoing.text,
+          whenBusy: outgoing.mode === 'queue' ? 'followUp' : 'steer',
+          requestId: crypto.randomUUID(),
+          agentId: target || null,
+        },
+        BACKGROUND_CONTEXT
+      )
+      .finally(() => pending && this.#settle(pending));
     if (!sent.accepted) throw new Error(sent.error.message);
+    if (pending?.dropped)
+      void this.#connection.control.unqueue(pending.agentId, sent.submissionId, BACKGROUND_CONTEXT);
+  }
+
+  #pending(agentId: string, outgoing: Outgoing): Pending {
+    const id = `p${crypto.randomUUID()}`;
+    const message: UserMessage = {
+      id,
+      role: 'user',
+      text: outgoing.text,
+      createdAt: Date.now(),
+      queued: true,
+      mode: outgoing.mode === 'queue' ? 'queue' : 'steer',
+    };
+    const pending = { agentId, message, dropped: false };
+    this.#outbox.set(id, pending);
+    this.emit('messages', agentId);
+    return pending;
+  }
+
+  #settle(pending: Pending): void {
+    this.#outbox.delete(pending.message.id);
+    this.emit('messages', pending.agentId);
   }
 
   async rewind(agentId: string, messageId: string): Promise<Outgoing | null> {
@@ -194,14 +249,31 @@ export class AgentAdapter extends Emitter<AgentEvents> implements AgentPort {
   }
 
   busy(agentId: string = this.active()): boolean {
-    return isBusy(this.#view(agentId));
+    return isBusy(this.#view(agentId)) || this.#held(agentId);
+  }
+
+  #status(agentId: string, shown: AgentStatus): AgentStatus {
+    return shown === 'idle' && this.#held(agentId) ? 'working' : shown;
+  }
+
+  #held(agentId: string): boolean {
+    return this.#hold !== null && agentId === (this.#connection.agents?.value?.active ?? CONE);
   }
 
   queue(agentId: string = this.active()): readonly UserMessage[] {
-    return queued(this.#view(agentId));
+    const pending = [...this.#outbox.values()]
+      .filter((item) => item.agentId === agentId && !item.dropped)
+      .map((item) => item.message);
+    return [...queued(this.#view(agentId)), ...pending];
   }
 
   unqueue(agentId: string, messageId: string): void {
+    const pending = this.#outbox.get(messageId);
+    if (pending) {
+      pending.dropped = true;
+      this.emit('messages', pending.agentId);
+      return;
+    }
     void this.#connection.control.unqueue(agentId, messageId.replace(/^q/, ''), BACKGROUND_CONTEXT);
   }
 
