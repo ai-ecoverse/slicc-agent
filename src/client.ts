@@ -44,6 +44,10 @@ export interface AgentConnection {
   readonly remote?: AgentRemote;
   readonly closed: Promise<Error | undefined>;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
+  webhook(
+    name: string,
+    delivery: { id?: string | null; headers?: Record<string, string>; body: string }
+  ): Promise<{ delivered: boolean }>;
   close(): Promise<void>;
 }
 
@@ -166,6 +170,13 @@ export async function connectAgent(
     settings: lastingSettings(settings, hold),
     remote,
     closed,
+    webhook(name, delivery) {
+      return control.webhook(
+        name,
+        { id: delivery.id ?? null, headers: delivery.headers ?? {}, body: delivery.body },
+        context
+      );
+    },
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
       if (!sent.accepted) throw new Error(`${sent.error.code}: ${sent.error.message}`);
