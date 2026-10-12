@@ -130,12 +130,6 @@ export function setupSprinkles() {
           using
         );
       };
-      const setOwner = async (name: string, agentId: string, using: Context) => {
-        await harness.commit(async (tx) => {
-          (await tx.doc(SprinklesDoc)).owners[name] = agentId;
-        }, using);
-        await reload(using);
-      };
       await reload(context);
       const state = await harness.snapshot(SprinklesDoc, context);
       if (welcome !== undefined && !state?.welcomed) {
@@ -211,7 +205,11 @@ export function setupSprinkles() {
         async claim(id, cone, using) {
           await reload(using);
           if (id === SUGGESTIONS || !find(id) || (await owners(using))[id]) return;
-          await setOwner(id, cone, using);
+          await harness.commit(async (tx) => {
+            const doc = await tx.doc(SprinklesDoc);
+            doc.owners[id] ??= cone;
+          }, using);
+          await reload(using);
         },
         reload,
         async close(using) {

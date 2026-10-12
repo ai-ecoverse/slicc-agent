@@ -245,7 +245,12 @@ export function createPages(options: PagesOptions = {}): Pages {
   const choose = (ask: PageAsk): Entry | undefined => {
     const live = [...entries.values()].filter((entry) => entry.tab.kinds.includes(ask.kind));
     const named = ask.tab
-      ? live.filter((entry) => entry.tab.tab === ask.tab).sort((a, b) => b.serial - a.serial)[0]
+      ? live
+          .filter(
+            (entry) =>
+              entry.tab.tab === ask.tab && (ask.agentId === null || entry.tab.cone === ask.cone)
+          )
+          .sort((a, b) => b.serial - a.serial)[0]
       : undefined;
     if (named) return named;
     return live
