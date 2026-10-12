@@ -149,6 +149,13 @@ async function secretsFor(home: SliccKernelEnv, vault: Vault) {
   return names;
 }
 
+function routeFetch(scope: AgentWorkerScope, client: KernelClient & { transport: Transport }) {
+  const native = scope.fetch.bind(scope);
+  const loopback = client.loopbackFetch?.bind(client);
+  scope.fetch = transportFetch(client.transport, scope.location.origin, native, loopback);
+  return native;
+}
+
 async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
@@ -159,8 +166,7 @@ async function start(
   const home = new SliccKernelEnv(client, { cwd: HOME });
   await privateStore(home);
   const names = await secretsFor(home, vault);
-  const native = scope.fetch.bind(scope);
-  scope.fetch = transportFetch(client.transport, scope.location.origin, native);
+  const native = routeFetch(scope, client);
   const facts = {
     version: await agentVersion((url) => native(url)),
     commands: await commandsOnPath(client),
