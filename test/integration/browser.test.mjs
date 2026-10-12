@@ -77,3 +77,59 @@ test('a playwright-cli screenshot read back shows on the tool card, through the 
   assert.equal(seen.tools[1].name, 'read');
   assert.match(seen.tools[1].image, /^data:image\/png;base64,iVBORw0KGgo/);
 });
+
+test("bash refuses to point playwright-cli at SLICC's own pages, through the production worker", async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const client = await attachKernel(await kernel.connect());
+    let pnpm = '';
+    const probe = await client.spawn(['bash', '-c', 'printf %s "$PNPM_HOME"'], {
+      cwd: '/',
+      onStdout: (bytes) => {
+        pnpm += new TextDecoder().decode(bytes);
+      },
+    });
+    await probe.exited;
+    const bin = `${pnpm || '/home/.local/share/pnpm'}/bin`;
+    await client.fs.mkdir(bin, { recursive: true });
+    await client.fs.writeFile(`${bin}/playwright-cli`, '#!/bin/bash\necho "opened $*"\n');
+    const bash = (command) => ['tool', JSON.stringify({ name: 'bash', args: { command } })];
+    const code = [
+      'try { await tools.bash({ command: "playwright-cli open https://SEVEN.sliccy.ai./x" }); }',
+      'catch (error) { text(error.message); }',
+    ].join('\n');
+    const params = new URLSearchParams([
+      ['code', code],
+      bash(
+        `chmod +x ${bin}/playwright-cli && playwright-cli open https://seven.sliccy.ai/home/x.html`
+      ),
+      bash(`playwright-cli open ${location.origin}/home/x.html`),
+      bash(`chmod +x ${bin}/playwright-cli && playwright-cli open https://example.com/`),
+      ['answer', 'Refused.'],
+    ]);
+    const owner = await startAgent({
+      worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const answer = await connection.prompt('Open seven.');
+    const results = connection.transcript.value.entries
+      .filter((entry) => entry.kind === 'pi.tool-result')
+      .map((entry) => entry.model[0].content.map((part) => part.text ?? '').join(''));
+    await owner.release();
+    return { answer, results };
+  });
+  const refusal = /SLICC's own pages can't be opened or driven from the browser tools\./;
+  assert.equal(seen.answer, 'Refused.');
+  assert.equal(seen.results.length, 4);
+  assert.match(seen.results[0], refusal);
+  assert.match(seen.results[1], refusal);
+  assert.doesNotMatch(seen.results[1], /opened open/);
+  assert.match(seen.results[2], refusal);
+  assert.match(seen.results[3], /opened open https:\/\/example\.com\//);
+});
