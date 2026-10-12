@@ -9,6 +9,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { type Agent, openAgent } from './agent.ts';
+import { browserGuard } from './browser/guard.ts';
 import { attachChanges, CHANGES_MS } from './changes/index.ts';
 import {
   codemodeExtension,
@@ -156,6 +157,7 @@ async function start(
   );
   const memory = setupMemory(registry);
   const coding = CodingTools.tools as readonly ToolRegistration[];
+  registry.install(browserGuard([scope.location.origin], coding));
   const mcp = setupMcp(registry);
   const codemode = await codemodeTools(client, options, native, mcp.codemode);
   registry.install(codemodeExtension(codemode));
