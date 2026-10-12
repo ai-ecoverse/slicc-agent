@@ -3,6 +3,7 @@ export {
   ADOBE_PROXY,
   type AdobeConfig,
   type AdobeModelInfo,
+  adobeClassifiers,
   adobeConfig,
   adobeModel,
   adobeProvider,
