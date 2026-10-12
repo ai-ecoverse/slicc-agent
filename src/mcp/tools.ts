@@ -11,6 +11,7 @@ import {
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
 import type { McpRequestOptions, Tool as McpTool } from '@earendil-works/pi-mcp';
+import { scrubbedOutput } from '../secrets/scrub.ts';
 import type { McpExposure } from './config.ts';
 import { errorMessage, type McpServerConnection } from './connection.ts';
 import {
@@ -102,7 +103,7 @@ export function directTool(entry: McpToolEntry, readable: () => boolean): ToolRe
       const save = apiSaver(api, '', context);
       const options: McpRequestOptions = {
         timeoutMs: entry.connection.timeoutMs,
-        onProgress: (progress) => api.output(`${progressText(progress)}\n`),
+        onProgress: (progress) => void scrubbedOutput(api, `${progressText(progress)}\n`),
       };
       const signal = signalOf(context);
       if (signal) options.signal = signal;

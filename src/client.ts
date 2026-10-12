@@ -11,6 +11,7 @@ import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
+import type { VaultState } from './secrets/vault.ts';
 import {
   AGENT_SESSION,
   AgentControl,
@@ -42,6 +43,7 @@ export interface AgentConnection {
   readonly frozen?: ReplicatedState<FrozenCone[]>;
   readonly changes?: ReplicatedState<ChangesView>;
   readonly monitor?: ReplicatedState<MonitorFeed>;
+  readonly vault?: ReplicatedState<VaultState>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
@@ -139,6 +141,7 @@ export async function connectAgent(
     frozen,
     changes,
     monitor,
+    vault,
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   const remote = session.use(AgentRemoteService);
@@ -171,6 +174,7 @@ export async function connectAgent(
     frozen: hold(frozen),
     changes: hold(changes),
     monitor: hold(monitor),
+    vault: hold(vault),
     settings: lastingSettings(settings, hold),
     remote,
     pages,

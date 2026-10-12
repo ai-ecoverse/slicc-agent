@@ -2,6 +2,7 @@ import {
   type Context,
   createRemoteServiceEndpoint,
   RemoteServiceProvider,
+  type ReplicatedState,
   replicatedState,
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
@@ -29,6 +30,8 @@ import { createMonitor, type MonitorOptions } from './monitor/index.ts';
 import { viewControl, viewPages, viewRemote, viewSettings } from './readonly.ts';
 import { createRemote } from './remote/host.ts';
 import { type AgentPages, createPages, ownedPages, type Pages } from './remote/pages.ts';
+import type { SecretName } from './secrets/names.ts';
+import type { VaultState } from './secrets/vault.ts';
 import {
   AGENT_SESSION,
   AgentControl,
@@ -139,6 +142,20 @@ async function follow(agent: Agent, context: Context) {
   };
 }
 
+export interface HostSecrets {
+  vault: ReplicatedState<VaultState>;
+  list(): readonly SecretName[];
+  close?(): void;
+}
+
+const idleVault = replicatedState<VaultState>({
+  port: 'none',
+  needed: false,
+  version: 0,
+  locked: 'no',
+  held: 0,
+});
+
 export async function hostAgent(
   agent: Agent,
   options: {
@@ -156,6 +173,7 @@ export async function hostAgent(
     users?: UserClients;
     monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users' | 'secrets'>;
     pages?: Pages;
+    secrets?: HostSecrets;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -193,11 +211,13 @@ export async function hostAgent(
     options.memory,
     options.freezer,
     options.changes,
-    monitor
+    monitor,
+    options.secrets?.list
   );
   const remote = createRemote({
     harness: agent.harness,
     send: (request, using) => control.send(request, using),
+    vault: options.secrets?.vault ?? idleVault,
     async conversation(agentId, using) {
       if (!agentId) return agent.cone();
       const found = await agent.agents.conversation(agentId, using);
@@ -218,6 +238,7 @@ export async function hostAgent(
     changes:
       options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
     monitor: monitor.state,
+    vault: options.secrets?.vault ?? idleVault,
   };
   const settings = options.settings ?? noSettings;
   const served = (served: AgentPages) => {
@@ -295,6 +316,7 @@ export async function hostAgent(
       mounted.dispose();
       for (const off of untouch) off();
       options.freezer?.close();
+      options.secrets?.close?.();
       await options.changes?.close(context);
       await options.memory?.close(context);
       await options.sprinkles?.close(context);

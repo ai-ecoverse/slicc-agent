@@ -118,6 +118,12 @@ export function problemLick(problem: Diagnostic, home: string) {
   };
 }
 
+export const SECRETS_ACTION: Command = {
+  name: 'secrets',
+  description: 'List the secrets the agent can use, and where each works',
+  kind: 'action',
+};
+
 export function commandsOf(
   skills: readonly Skill[],
   templates: readonly PromptTemplate[]
@@ -133,6 +139,7 @@ export function commandsOf(
       description: skill.description,
       kind: 'skill' as const,
     })),
+    SECRETS_ACTION,
   ];
 }
 

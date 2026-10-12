@@ -16,9 +16,11 @@ import {
   type WatchChange,
   type WatchTarget,
 } from '@earendil-works/pi-durable/env';
+import { mimeOf } from '../images/index.ts';
+import type { Scrub } from '../secrets/scrub.ts';
 import type { Activity } from './activity.ts';
 import type { KernelClient, KernelProcess } from './client.ts';
-import { execute } from './exec.ts';
+import { type ExecHooks, execute } from './exec.ts';
 import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from './files.ts';
 import type { ProcessGroups } from './groups.ts';
 import { dirname, normalize, resolve } from './paths.ts';
@@ -32,6 +34,28 @@ export interface KernelEnvOptions {
   groups?: ProcessGroups;
   owner?: number;
   exports?: Readonly<Record<string, string>>;
+  scrub?: Scrub;
+  spawn?: (argv: readonly string[]) => readonly string[];
+}
+
+export const STREAMED_READ = 8 * 1024 * 1024;
+export const READ_CHUNK = 1024 * 1024;
+
+export async function scrubbedFile(scrub: Scrub, bytes: Uint8Array): Promise<Uint8Array> {
+  if (mimeOf(bytes)) return bytes;
+  if (bytes.length <= STREAMED_READ) return (await scrub.texts([bytes]))[0] as Uint8Array;
+  const stream = scrub.stream();
+  const parts: Uint8Array[] = [];
+  for (let at = 0; at < bytes.length; at += READ_CHUNK)
+    parts.push(await stream.push(bytes.subarray(at, at + READ_CHUNK)));
+  parts.push(await stream.end());
+  const all = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    all.set(part, offset);
+    offset += part.length;
+  }
+  return all;
 }
 
 export function quote(value: string): string {
@@ -59,6 +83,8 @@ export class SliccKernelEnv implements ExecutionEnv {
   readonly #groups: ProcessGroups | undefined;
   readonly #owner: number | undefined;
   readonly #exports: Readonly<Record<string, string>> | undefined;
+  readonly #hooks: ExecHooks;
+  readonly #scrub: Scrub | undefined;
 
   constructor(client: KernelClient, options: KernelEnvOptions) {
     this.#client = client;
@@ -69,6 +95,12 @@ export class SliccKernelEnv implements ExecutionEnv {
     this.#groups = options.groups;
     this.#owner = options.owner;
     this.#exports = options.exports;
+    this.#scrub = options.scrub;
+    const scrub = options.scrub;
+    this.#hooks = {
+      ...(scrub ? { scrub: () => scrub.stream() } : {}),
+      ...(options.spawn ? { spawn: options.spawn } : {}),
+    };
   }
 
   #path(path: string): string {
@@ -142,7 +174,10 @@ export class SliccKernelEnv implements ExecutionEnv {
       const stat = await this.#fs.stat(resolved);
       if (stat.isDirectory) throw new FileError('is_directory', 'Is a directory', resolved);
       if (!stat.isFile) throw new FileError('invalid', 'Not a regular file', resolved);
-      return new SnapshotReader(await this.#fs.readFile(resolved), info(resolved, stat));
+      const bytes = await this.#fs.readFile(resolved);
+      if (!this.#scrub) return new SnapshotReader(bytes, info(resolved, stat));
+      const shown = await scrubbedFile(this.#scrub, bytes);
+      return new SnapshotReader(shown, { ...info(resolved, stat), size: shown.length });
     });
   }
 
@@ -327,7 +362,16 @@ export class SliccKernelEnv implements ExecutionEnv {
     const groups = this.#groups;
     const owner = this.#owner;
     if (!groups || owner === undefined)
-      return execute(this.#client, this.cwd, line, options, context).finally(ended);
+      return execute(
+        this.#client,
+        this.cwd,
+        line,
+        options,
+        context,
+        undefined,
+        undefined,
+        this.#hooks
+      ).finally(ended);
     return this.#grouped(groups, owner, line, options, context).finally(ended);
   }
 
@@ -351,7 +395,16 @@ export class SliccKernelEnv implements ExecutionEnv {
           refused: (code: string) => groups.refused(owner, code),
         }
       : undefined;
-    return execute(this.#client, this.cwd, line, options, context, spawned, join).finally(release);
+    return execute(
+      this.#client,
+      this.cwd,
+      line,
+      options,
+      context,
+      spawned,
+      join,
+      this.#hooks
+    ).finally(release);
   }
 
   async cleanup(context: Context): Promise<void> {

@@ -1,0 +1,251 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { extname } from 'node:path';
+import { after, afterEach, test } from 'node:test';
+import { launch } from './chrome.mjs';
+import { compile } from './fixtures/scrub.mjs';
+
+const vectors = JSON.parse(
+  await readFile(new URL('./fixtures/scrub-vectors.json', import.meta.url), 'utf8')
+);
+const scrubber = compile(vectors.values);
+const leaks = (text) => scrubber.text(text).hits;
+const [alpha, beta, gamma] = vectors.values.map((item) => item.value);
+const split = (value) => `'${value.slice(0, 12)}''${value.slice(12, 24)}''${value.slice(24)}'`;
+
+const types = { '.html': 'text/html', '.mjs': 'text/javascript', '.json': 'application/json' };
+const vaultServer = createServer(async (request, response) => {
+  const name = new URL(request.url, 'http://vault').pathname.slice(1);
+  const body = await readFile(new URL(`./fixtures/${name}`, import.meta.url)).catch(() => null);
+  if (!body || !/^(vault\.html|fake-vault\.mjs|scrub\.mjs|scrub-vectors\.json)$/.test(name))
+    return response.writeHead(404).end();
+  response
+    .writeHead(200, {
+      'content-type': types[extname(name)],
+      'cross-origin-embedder-policy': 'require-corp',
+      'cross-origin-resource-policy': 'cross-origin',
+      'access-control-allow-origin': '*',
+    })
+    .end(body);
+});
+await new Promise((resolve) => vaultServer.listen(0, '127.0.0.1', resolve));
+const vaultOrigin = `http://localhost:${vaultServer.address().port}`;
+
+const chrome = await launch();
+after(async () => {
+  await chrome.close();
+  await new Promise((resolve) => vaultServer.close(resolve));
+});
+
+const captured = [];
+afterEach(() => {
+  assert.ok(captured.length > 0);
+  for (const { what, text } of captured) assert.deepEqual(leaks(text), [], what);
+});
+
+const helpers = () => {
+  window.write = async (path, text) => {
+    let handle = await navigator.storage.getDirectory();
+    const parts = path.split('/').filter(Boolean);
+    const name = parts.pop();
+    for (const part of parts) handle = await handle.getDirectoryHandle(part, { create: true });
+    const writable = await (await handle.getFileHandle(name, { create: true })).createWritable();
+    await writable.write(text);
+    await writable.close();
+  };
+  window.read = async (path) => {
+    let handle = await navigator.storage.getDirectory();
+    const parts = path.split('/').filter(Boolean);
+    const name = parts.pop();
+    for (const part of parts) handle = await handle.getDirectoryHandle(part);
+    return (await (await handle.getFileHandle(name)).getFile()).text();
+  };
+  window.withVault = async (origin, steps) => {
+    const frame = document.createElement('iframe');
+    frame.src = `${origin}/vault.html`;
+    const loaded = new Promise((resolve) => {
+      addEventListener('message', function onLoaded({ data }) {
+        if (!data?.loaded) return;
+        removeEventListener('message', onLoaded);
+        resolve();
+      });
+    });
+    document.body.append(frame);
+    await loaded;
+    const { port1, port2 } = new MessageChannel();
+    const ready = new Promise((resolve) => {
+      addEventListener('message', function onReady({ data }) {
+        if (!data?.ready) return;
+        removeEventListener('message', onReady);
+        resolve(data.pair);
+      });
+    });
+    frame.contentWindow.postMessage({ role: 'agent' }, origin, [port2]);
+    const pair = await ready;
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
+    let worker;
+    const owner = await startAgent({
+      worker: () => {
+        worker = new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' });
+        worker.postMessage({ vault: port1, scrub: pair }, [port1]);
+        return worker;
+      },
+      kernel: { connect: () => kernel.connect() },
+    });
+    const requests = async () => {
+      const channel = new MessageChannel();
+      const answer = new Promise((resolve) => {
+        channel.port1.onmessage = ({ data }) => resolve(data);
+      });
+      worker.postMessage({ requests: channel.port2 }, [channel.port2]);
+      return answer;
+    };
+    return { owner, connection: await owner.connect(), requests };
+  };
+};
+
+test('secrets: bash, read, codemode, a user send, memory, a lick and compaction all reach the model scrubbed', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seeded = `${alpha}\n${beta}\n${gamma}\n`;
+  const command = `cat /home/seeded.txt; base64 /home/seeded.txt; printf '%s' ${split(beta)} | basenc --base16 -w 0; echo; printf '%s' ${split(alpha)}`;
+  const steps = [
+    { tool: { name: 'bash', args: { command } } },
+    { tool: { name: 'read', args: { path: '/home/seeded.txt' } } },
+    {
+      tool: {
+        name: 'codemode',
+        args: {
+          code: 'const out = await tools.bash({ command: "cat /home/seeded.txt" });\ntext(out.output);',
+        },
+      },
+    },
+    { answer: 'Done.' },
+    { answer: 'Lick seen.' },
+    { answer: 'Summary.' },
+    { answer: 'Spare.' },
+    { answer: 'Spare.' },
+  ];
+  const seen = await page.evaluate(
+    async ({ origin, steps, seeded, alpha, beta }) => {
+      await window.write('/home/seeded.txt', seeded);
+      await window.write('/home/.slicc/webhooks/build.json', '{"message":"The build finished"}');
+      const { owner, connection, requests } = await window.withVault(origin, steps);
+      const answer = await connection.prompt(`Look at the seeded file; my key is ${alpha}.`);
+      await connection.control.memorySave(
+        {
+          id: null,
+          scope: 'cone',
+          section: 'Keys',
+          title: 'beta',
+          body: `remember ${beta}`,
+          tag: 'project',
+        },
+        BACKGROUND_CONTEXT
+      );
+      await connection.control.webhook(
+        'build',
+        { id: 'w1', headers: { 'x-event': 'done' }, body: JSON.stringify({ token: alpha }) },
+        BACKGROUND_CONTEXT
+      );
+      const until = async (check) => {
+        for (let n = 0; n < 300 && !check(); n++)
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        return check();
+      };
+      await until(
+        () =>
+          connection.transcript.value.entries.filter((entry) => entry.kind === 'pi.assistant')
+            .length >= 5
+      );
+      await connection.control.compact(null, BACKGROUND_CONTEXT);
+      await until(() =>
+        connection.transcript.value.entries.some((entry) => entry.kind === 'pi.compaction')
+      );
+      const memory = await window.read('/home/.pi/agent/memory/cone/MEMORY.md');
+      const result = {
+        answer,
+        vault: connection.vault.value,
+        entries: JSON.stringify(connection.transcript.value.entries),
+        docs: JSON.stringify(connection.transcript.value.docs),
+        memory,
+        requests: await requests(),
+      };
+      await owner.release();
+      return result;
+    },
+    { origin: vaultOrigin, steps, seeded, alpha, beta }
+  );
+  captured.push(
+    ...seen.requests.map((text, at) => ({ what: `request ${at}`, text })),
+    { what: 'entries', text: seen.entries },
+    { what: 'live slots and documents', text: seen.docs },
+    { what: 'memory', text: seen.memory }
+  );
+  assert.equal(seen.answer, 'Done.');
+  assert.deepEqual(seen.vault, { port: 'ready', needed: true, version: 1, locked: 'no', held: 0 });
+  for (const shown of [
+    'fnox_proxy_alpha',
+    'fnox_proxy_beta',
+    '[redacted:BETA_KEY]',
+    '[redacted:ALPHA_TOKEN]',
+  ])
+    assert.ok(seen.entries.includes(shown), shown);
+  assert.ok(seen.memory.includes('remember fnox_proxy_beta'));
+  assert.ok(seen.requests.length >= 5);
+});
+
+test('secrets: with no vault the agent is unchanged, and /secrets answers locally', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const params = new URLSearchParams([['answer', 'Plain.']]);
+    let worker;
+    const owner = await startAgent({
+      worker: () =>
+        (worker = new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' })),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const answer = await connection.prompt('Say something.');
+    await connection.control.send(
+      { text: '/secrets', whenBusy: 'steer', requestId: null },
+      BACKGROUND_CONTEXT
+    );
+    for (
+      let n = 0;
+      n < 100 &&
+      !connection.transcript.value.entries.some((entry) => entry.kind === 'slicc.secrets');
+      n++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    const listed = connection.transcript.value.entries.find(
+      (entry) => entry.kind === 'slicc.secrets'
+    );
+    const channel = new MessageChannel();
+    const requests = new Promise((resolve) => {
+      channel.port1.onmessage = ({ data }) => resolve(data);
+    });
+    worker.postMessage({ requests: channel.port2 }, [channel.port2]);
+    const result = {
+      answer,
+      vault: connection.vault.value,
+      listed: listed?.model[0].content,
+      requests: await requests,
+    };
+    await owner.release();
+    return result;
+  });
+  captured.push(...seen.requests.map((text, at) => ({ what: `plain request ${at}`, text })));
+  assert.equal(seen.answer, 'Plain.');
+  assert.deepEqual(seen.vault, { port: 'none', needed: false, version: 0, locked: 'no', held: 0 });
+  assert.equal(seen.listed, 'The user listed secrets: none.');
+});
