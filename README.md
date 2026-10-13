@@ -459,7 +459,7 @@ The process table is the worker's root client's `ps()`. Each process is named af
 - **Users mode:** the human's panel is root's, so it sees every process. A cone's bound client would see only its own, by the kernel's hidepid.
 
 **The port.** `createAgentModel()` returns a `MonitorAdapter`. Its first `snapshot` listener opens the lease (with a resync), and its last one closes it.
-- **Vitals:** the Adobe budget, spend (or tokens when every model is free) with its hourly rate, active agents, running tools and tasks, processes, process memory and the fullest context.
+- **Vitals:** the Adobe budget, spend (or tokens when every model is free) with its hourly rate, active agents, running tools and tasks, processes, process memory, CPU and the fullest context.
 - **Alerts:**
 
   | Alert | Warn | Error |
@@ -479,7 +479,7 @@ The process table is the worker's root client's `ps()`. Each process is named af
 - **Sections:** cones and scoops, tasks as a tree per cone, processes, recent problems, pending changes and sprinkles. Each row has an `id`, and agents and tasks have a `depth` (at most 6), which spectrum (≥ 1.57.0) draws as indentation.
 - **More sections:** `createAgentModel(connection, { monitor: { extra } })` adds the page's own sections, such as terminals, browser tabs and tray followers.
 
-**CPU.** From slicc-kernel 1.67.1, `ps()` entries carry `utime` and `stime`, each process's CPU time in milliseconds. The feed passes them on, and each process's `cpu` is its share of one core between the last two polls: `null` on the first poll, or when a pid is restarted or reused. An agent's `cpu` sums its processes. The adapter remembers since when each agent's process group has been at 90% of a core or more, and raises `runaway-cpu-<pgid>`, "research is using a lot of CPU", once that has lasted 2 min. With CPU times, an idle long-running process raises no alert. On older kernels, none of these fields appear, and the age alert stays.
+**CPU.** From slicc-kernel 1.67.1, `ps()` entries carry `utime` and `stime`, each process's CPU time in milliseconds. The feed passes them on, and each process's `cpu` is its share of one core between the last two polls: `null` on the first poll, or when a pid is restarted or reused. An agent's `cpu` sums its processes. The adapter remembers since when each agent's process group has been at 90% of a core or more, and raises `runaway-cpu-<pgid>`, "research is using a lot of CPU", once that has lasted 2 min. Process rows and agent rows end their meta with the share, rounded like top (`97% CPU`, `140% CPU`), unless it's unknown or under 1%. The CPU vital is the agents' summed share in percent, with the last 30 feeds as its series and no meter, since a share of one core has no ceiling. With CPU times, an idle long-running process raises no alert. On older kernels, none of these fields appear, and the age alert stays.
 
 **Memory.** From slicc-kernel 1.61.0, `ps()` entries carry `rss`, each process's wasm memory. When they do, the monitor shows a Process memory vital and each process row's size. On older kernels, both are left out. `/proc/meminfo`'s `MemTotal` is a placeholder. The tray chip gets no `spent` or `rate`, so spectrum (≥ 1.57.0) shows only what's known.
 
