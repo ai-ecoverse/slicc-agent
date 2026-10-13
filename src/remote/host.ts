@@ -10,6 +10,7 @@ import {
   type SubmissionId,
   watchEvents,
 } from '@earendil-works/pi-durable';
+import type { SendAttachment } from '../attachments.ts';
 import { holdText, type VaultState } from '../secrets/vault.ts';
 import type { Delivered, SendMode, SendRequest, SendResponse } from '../services.ts';
 import { type EndReason, idOf, Mapper, type RemoteEvent, replayOf } from './events.ts';
@@ -47,7 +48,13 @@ export interface RemoteBatch {
 
 export interface AgentRemote {
   prompt(
-    request: { agentId: string | null; text: string; whenBusy: SendMode; thinking: boolean },
+    request: {
+      agentId: string | null;
+      text: string;
+      whenBusy: SendMode;
+      thinking: boolean;
+      attachments?: SendAttachment[];
+    },
     context: Context
   ): Promise<RemoteOpened>;
   watch(
@@ -275,6 +282,7 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
           text: request.text,
           whenBusy: request.whenBusy,
           requestId: null,
+          ...(request.attachments?.length ? { attachments: request.attachments } : {}),
           ...(request.agentId ? { agentId: request.agentId } : {}),
         },
         context

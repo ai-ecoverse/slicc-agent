@@ -1,6 +1,7 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
+import type { Models } from '@earendil-works/pi-ai/models';
 import {
   createRegistry,
   type ModelRef,
@@ -126,6 +127,11 @@ async function codemodeTools(
   return [
     codemodeTool({ declared: CodingTools.tools as readonly ToolRegistration[], sandbox, extra }),
   ];
+}
+
+export function seesImages(models: Pick<Models, 'getModel'>, ref: ModelRef | undefined): boolean {
+  const found = ref && models.getModel(ref.provider, ref.modelId);
+  return found ? found.input.includes('image') : true;
 }
 
 export const MCP_CALLBACK = '/oauth/mcp-callback';
@@ -317,6 +323,10 @@ async function start(
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
     secrets: { vault: vault.state, list: () => names.state.value, close: names.close },
+    uploads: {
+      env: environment,
+      sees: (ref) => seesImages(models, ref),
+    },
     monitor: {
       kernel: client,
       groups,

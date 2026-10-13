@@ -141,6 +141,17 @@ Each tool call shows its input in the way that suits it:
 - `edit`: the path, and its change as a `diff` (spectrum ≥ 1.13.0). While the edit runs, the diff comes from its `oldText`/`newText` pairs. Once done, it comes from the hunks of the unified `patch` that pi's edit tool returns in its result details, with context lines;
 - other tools: their arguments as pretty-printed JSON.
 
+#### Attachments
+
+A send's `Outgoing.attachments` reach the model. In the page, `send()` reads each attachment's `url` (a `data:` or `blob:` URL) into bytes before anything else, so a `blob:` URL spectrum revokes later has already been read, and passes them on `SendRequest.attachments` as `{ name, mimeType, kind, data?, text?, path? }`, where `data` is base64 because chord carries JSON only. It skips attachments with an `error` and secrets. In the worker, `control.send` turns them into the user message:
+- an image (`image/png`, `jpeg`, `gif` or `webp`) becomes a pi-ai `ImageContent` part after a short `<attachment kind="image" …>` text part that names it;
+- a text file is inlined as `<attachment kind="text" name="…" type="…">` with its text, and with its `path` when it is an @-mention;
+- any other file is written with the conversation's own environment, so the user's own client in users mode, into `uploads/` under the conversation's `cwd` (`/home` by default), and the text says `Saved at <path>.` A free name gets `-1`, `-2` and so on;
+- for a model whose `input` lacks `image`, an image is saved the same way and the text adds "This model can't see images, so the image was saved as a file instead." (pi-ai alone would put `(image omitted: model does not support images)` in its place, and the image would be lost to the tools.)
+- an attachment with only a `path` is mentioned by its path.
+
+Images are limited to 5 MiB, other files to 8 MiB, and one message's attachments to 10 MiB together, because one pi protocol frame holds 16 MiB and providers refuse bigger images anyway. The page first shrinks an image over the limit (to 1600 px, as image reads do). Anything still too big isn't sent, and a notice says why, for example "photo.png is larger than 5 MiB, so it can't be sent.". Text and inlined files go through the vault's scrubbing like any send; images can't be scrubbed as text. The transcript maps the stored parts back to spectrum's user message `attachments`, images with a `data:` URL, so the conversation shows them and a rewind or a Retry gives them back to the composer. A remote `prompt()` takes the same `attachments`.
+
 ### Licks
 
 A lick is an event from outside the conversation (a file change, a schedule, a webhook, a reload, an upgrade) that reaches the agent as a steering input. pi durable's `submit({ type: 'input', whenBusy: 'steer' })` does the delivery: an idle cone starts a run, and a busy one gets the lick at its next boundary, after the current tool round, like a steer the user types. So the agent sees events during a long run instead of after it. Durable has no custom message role, so the input's text carries the lick:
@@ -536,7 +547,7 @@ It prints the tab's stdout and stderr on their own streams and exits with its co
 
 `remoteControl(connection, { agent? })` from `@ai-ecoverse/slicc-agent/page` gives a linked CLI's `slicc prompt`, `slicc watch` and `slicc abort` (the `agent` stream of the slicc link protocol, §5.11) as plain objects the page writes to the link as NDJSON. `agent()` names the agent, by default the cone the worker treats as current.
 
-- **`prompt({ text, whenBusy = 'followUp', thinking = false })`** sends the prompt and resolves `{ delivered, events }`. `delivered` is `run`, `steer` or `follow-up`. A `reject` while busy throws an `Error` with `code: 'EBUSY'`, and any other refusal `EIO`. `events` starts at the prompt's own `user` event and ends with `{ t: 'end', reason, message? }` after the run that holds it. Leaving the loop closes the stream but never aborts the run.
+- **`prompt({ text, whenBusy = 'followUp', thinking = false, attachments? })`** sends the prompt, with attachments as on `SendRequest` (see Attachments), and resolves `{ delivered, events }`. `delivered` is `run`, `steer` or `follow-up`. A `reject` while busy throws an `Error` with `code: 'EBUSY'`, and any other refusal `EIO`. `events` starts at the prompt's own `user` event and ends with `{ t: 'end', reason, message? }` after the run that holds it. Leaving the loop closes the stream but never aborts the run.
 - **`watch({ since, thinking })`** resolves `{ head, gap?, events }`. Without `since` it follows from the next event; with it, it first replays `since`'s own text or thinking whole, then everything after it, or answers `gap: true` when the transcript no longer holds it.
 - **`abort()`** resolves `{ aborted }`, `false` when nothing was running.
 - **Events** are `user`, `text`, `thinking` (only with `thinking`), `tool`, `tool-result`, `run`, `notice` and `error`. They are mapped in the worker from pi-durable's agent events (`watchEvents`: `run_start`/`run_end` with their inputs, message deltas, tool ends, retries, compactions) and polled by the page over the `slicc.agent.remote` service.

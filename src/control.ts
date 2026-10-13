@@ -9,9 +9,11 @@ import {
   type EntryRecord,
   type Harness,
   type SubmissionId,
+  type UserInput,
 } from '@earendil-works/pi-durable';
 import { answerText } from './agent.ts';
 import type { Agents } from './agents.ts';
+import { type ShownAttachment, splitUser, userParts } from './attachments.ts';
 import type { ChangesRuntime } from './changes/index.ts';
 import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
@@ -23,17 +25,19 @@ import type { Monitor } from './monitor/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
 import { pinned, SECRETS_COMMAND, secretsEntry } from './secrets/extension.ts';
 import type { SecretName } from './secrets/names.ts';
-import { scrubText } from './secrets/scrub.ts';
+import { scrubItems, scrubText } from './secrets/scrub.ts';
 import type {
   AgentControl,
   Created,
   LickResolved,
   OperationError,
   Rewound,
+  SendRequest,
   SendResponse,
 } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
+import { saverFor, type Uploads } from './uploads.ts';
 
 export interface HostLicks {
   licks: Licks;
@@ -159,6 +163,7 @@ function cones(target: Conversation | Cones): Cones {
 
 interface Turn {
   text: string;
+  attachments: ShownAttachment[];
   at: EntryId | null;
   files: boolean;
 }
@@ -187,7 +192,7 @@ function lastTurn(view: ConversationView, messageId: string | null): Turn | null
   if (turn < 0) return null;
   const user = entries[turn] as EntryRecord;
   return {
-    text: answerText(user.model?.[0]?.content),
+    ...splitUser(user.model?.[0]?.content),
     at: entries[turn - 1]?.id ?? null,
     files: writesIn(entries.slice(turn)),
   };
@@ -274,7 +279,25 @@ async function rewindAgent(
       (state.scoops[agentId as string] as { conversation: number }).conversation = fork.id;
     }, context);
   else await cone.switchCone(fork, context);
-  return { done: true, text: found.turn.text, reason: null };
+  const { attachments } = found.turn;
+  return {
+    done: true,
+    text: found.turn.text,
+    reason: null,
+    ...(attachments.length ? { attachments } : {}),
+  };
+}
+
+async function contentOf(
+  text: string,
+  request: SendRequest,
+  conversation: Conversation,
+  uploads: Uploads | undefined,
+  context: Context
+): Promise<UserInput> {
+  if (!request.attachments?.length) return scrubText(text);
+  const saver = await saverFor(conversation, uploads, context);
+  return scrubItems(await userParts(text, request.attachments, saver));
 }
 
 export function createAgentControl(
@@ -289,7 +312,8 @@ export function createAgentControl(
   freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>,
   changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>,
   monitor?: Pick<Monitor, 'open' | 'close'>,
-  secrets?: () => readonly SecretName[]
+  secrets?: () => readonly SecretName[],
+  uploads?: Uploads
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -362,18 +386,18 @@ export function createAgentControl(
             )
           );
         const expanded = skills ? await skills.expand(request.text, context) : request.text;
-        const text = await scrubText(expanded);
-        const response = await accepted(async () =>
-          (await conversationFor(request.agentId, context)).submit(
+        const response = await accepted(async () => {
+          const conversation = await conversationFor(request.agentId, context);
+          return conversation.submit(
             {
               type: 'input',
-              content: text,
+              content: await contentOf(expanded, request, conversation, uploads, context),
               whenBusy: request.whenBusy,
               ...(request.requestId ? { requestId: request.requestId } : {}),
             },
             context
-          )
-        );
+          );
+        });
         const id = response.submissionId === null ? undefined : submissionId(response.submissionId);
         if (id !== undefined) deliveries?.expect(id, request.whenBusy);
         return response;

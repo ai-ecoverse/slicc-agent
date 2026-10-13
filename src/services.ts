@@ -5,6 +5,7 @@ import {
   type ReplicatedState,
 } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
@@ -20,6 +21,7 @@ export interface SendRequest {
   whenBusy: SendMode;
   requestId: string | null;
   agentId?: string | null;
+  attachments?: SendAttachment[];
 }
 
 export interface OperationError {
@@ -209,7 +211,7 @@ export interface WebhookRequest {
 }
 
 export type Rewound =
-  | { done: true; text: string; reason: null }
+  | { done: true; text: string; reason: null; attachments?: ShownAttachment[] }
   | { done: false; text: null; reason: 'busy' | 'no-turn' };
 
 export interface AgentSettingsChange {
