@@ -12,7 +12,7 @@ const long = `l=$(printf '%0240d' 0); for i in $(seq 1 2400); do echo "dummy lin
 const views = [
   { name: 'light-1280', width: 1280, height: 860, scheme: 'light' },
   { name: 'dark-1280', width: 1280, height: 860, scheme: 'dark' },
-  { name: 'light-420', width: 420, height: 860, scheme: 'light', mobile: true },
+  { name: 'light-420', width: 420, height: 860, scheme: 'light' },
 ];
 
 test('a failed bash card shows no harness block, and its exit code as a note', async (t) => {
@@ -93,8 +93,13 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
     listing.notes.some((note) => note.severity === 'info' && /^Full output in /.test(note.text))
   );
   assert.doesNotMatch(seen.page, /<\/?harness>/);
-  assert.ok(
-    seen.notes.some((note) => note.severity === 'error' && note.text === 'Exited with code 5')
+  assert.deepEqual(seen.notes.slice(0, 2), [
+    { severity: 'error', text: 'Error: Exited with code 5' },
+    { severity: 'info', text: `Note: ${listing.notes[0].text}` },
+  ]);
+  assert.match(
+    seen.notes[2].text,
+    /^Warning: Output truncated: [\d,]+ lines and [\d,]+ bytes dropped from the start$/
   );
   const model = await page.evaluate(async () => {
     const entries = await globalThis.cardTest.owner
@@ -111,12 +116,34 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
       width: view.width,
       height: view.height,
       deviceScaleFactor: 2,
-      mobile: Boolean(view.mobile),
+      mobile: false,
     });
     await page.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-color-scheme', value: view.scheme }],
     });
     await new Promise((resolve) => setTimeout(resolve, 600));
-    await page.screenshot(`${env.CARD_SHOTS}/tool-card-${view.name}.png`);
+    const opened = await page.evaluate(() => {
+      const cards = globalThis.cardTest.find(document, 'details.tool');
+      for (const card of cards) if (!card.open) card.querySelector('summary').click();
+      return cards.map((card) => card.open);
+    });
+    assert.deepEqual(opened, [true, true]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    for (const [part, block] of [
+      ['top', 'start'],
+      ['tail', 'end'],
+    ]) {
+      await page.evaluate(
+        ({ part, block }) => {
+          const cards = globalThis.cardTest.find(document, 'details.tool');
+          const target = part === 'top' ? cards[0] : cards[1].querySelector('ul.notes');
+          target.scrollIntoView({ block });
+          window.scrollTo(0, 0);
+        },
+        { part, block }
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await page.screenshot(`${env.CARD_SHOTS}/tool-card-${view.name}-${part}.png`);
+    }
   }
 });
