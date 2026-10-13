@@ -144,6 +144,10 @@ export function agentUsers(
         const agentId = accounts.agentOf(conversationId);
         return agentId ? accounts.home(agentId) : undefined;
       },
+      async envOf(at) {
+        const user = wanted(state()).find((entry) => homeOf(entry.spec.name) === at);
+        return user ? envOf(user.agentId, at).catch(() => undefined) : undefined;
+      },
     },
     sprinklePlaces() {
       return wanted(state())

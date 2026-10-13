@@ -402,9 +402,11 @@ export function createAgentControl(
               context
             )
           );
-        const expanded = skills ? await skills.expand(request.text, context) : request.text;
         const response = await accepted(async () => {
           const conversation = await conversationFor(request.agentId, context);
+          const expanded = skills
+            ? await skills.expand(request.text, context, conversation.id)
+            : request.text;
           return conversation.submit(
             {
               type: 'input',
