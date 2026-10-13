@@ -72,3 +72,43 @@ test('a terminal runs agent through the production worker: a sync call, an async
   assert.ok(seen.commands.includes('prompt:parallel-review'));
   assert.ok(seen.commands.includes('skill:skill:licks'));
 });
+
+test('a package in /opt/user/node_modules adds its skills, and one that duplicates a system package is ignored', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const terminal = await attachKernel(await kernel.connect());
+    const write = async (path, text) => {
+      await terminal.fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+      await terminal.fs.writeFile(path, text);
+    };
+    const skill = (name) => `---\nname: ${name}\ndescription: The ${name} skill.\n---\nBody.\n`;
+    const manifest = JSON.stringify({ pi: { skills: ['./skills'] } });
+    await write('/node_modules/syspack/package.json', manifest);
+    await write('/node_modules/syspack/skills/sys-skill/SKILL.md', skill('sys-skill'));
+    await write('/opt/user/node_modules/syspack/package.json', manifest);
+    await write('/opt/user/node_modules/syspack/skills/twin-skill/SKILL.md', skill('twin-skill'));
+    await write('/opt/user/node_modules/userpack/package.json', manifest);
+    await write('/opt/user/node_modules/userpack/skills/user-skill/SKILL.md', skill('user-skill'));
+    const owner = await startAgent({
+      worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    let commands = [];
+    for (let i = 0; i < 600; i++) {
+      commands = connection.commands.value.map((command) => command.name);
+      if (commands.includes('skill:user-skill')) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await owner.release();
+    return commands;
+  });
+  assert.ok(seen.includes('skill:user-skill'));
+  assert.ok(seen.includes('skill:sys-skill'));
+  assert.ok(!seen.includes('skill:twin-skill'));
+});

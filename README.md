@@ -233,7 +233,7 @@ Each scoop is owned by a background durable task, its **anchor**, so Stop in its
 - `models use <provider/model> [--thinking <level>]` switches the caller's model the way the Settings picker does (`Conversation.configure`): a cone's or a scoop's own, or, in a terminal, the active cone's. An unknown id exits 1 naming the three closest ids; a model whose account isn't connected exits 1 and says to connect it in Settings.
 - `models --help` prints the usage; an unknown verb exits 2 with it.
 
-**Roles** are pi agent files: Markdown with a frontmatter subset (`name`, `description`, `tools`, `model`, `thinking`, `memory`, `inheritProjectContext`, `inheritGlobalContext`, …) and the role's prompt as the body, added to the scoop's instructions. The built-ins are `scout`, `worker`, `reviewer`, `oracle`, `delegate` and `gelatiere` (below). Later sources replace earlier ones by name: built-ins, then packages in the kernel's `node_modules` that name a folder in `pi-subagents.agents` or `pi.subagents.agents`, then `~/.pi/agent/agents/`. A project's `.pi/agents/` will count only in trusted folders, and folders can't be trusted yet. `~/.pi/agent/settings.json` can override roles (`subagents.agentOverrides`) and set the limits `subagents.maxLiveScoops` (16 live scoops per cone) and `subagents.maxPerTurn` (64 scoops started per cone turn), which the worker counts for both kinds.
+**Roles** are pi agent files: Markdown with a frontmatter subset (`name`, `description`, `tools`, `model`, `thinking`, `memory`, `inheritProjectContext`, `inheritGlobalContext`, …) and the role's prompt as the body, added to the scoop's instructions. The built-ins are `scout`, `worker`, `reviewer`, `oracle`, `delegate` and `gelatiere` (below). The first source with a name wins: `~/.pi/agent/agents/`, then the built-ins, then packages (see Package resources) that name a folder in `pi-subagents.agents` or `pi.subagents.agents`. A package role that loses its name is skipped with a warning in `agent list`. A project's `.pi/agents/` will count only in trusted folders, and folders can't be trusted yet. `~/.pi/agent/settings.json` can override roles (`subagents.agentOverrides`) and set the limits `subagents.maxLiveScoops` (16 live scoops per cone) and `subagents.maxPerTurn` (64 scoops started per cone turn), which the worker counts for both kinds.
 
 **Isolation, for now.** The file tools of a scoop write only under its folder and `/tmp`, plus the cwd of a v6-form call, and read those, their cone's working folder (`/home` by default) and `--read-only` paths; paths are normalized, `..` included, before the check. bash isn't confined, and the scoop is told so: the guard is a guardrail, not a boundary. A scoop's commands share one process group (see Bash and files on slicc-kernel), and stopping the scoop signals it, together with any group recorded for the scoop on an older kernel.
 
@@ -249,10 +249,10 @@ Skills and prompt templates work as in pi's coding-agent. pi's loaders read with
   1. `~/.pi/agent/skills`;
   2. `~/.agents/skills`;
   3. `/usr/share/skills`, the global skills every cone and scoop sees, such as those imported from SLICC 6;
-  4. packages in the kernel's `/node_modules` whose `package.json` lists folders in `pi.skills`;
-  5. the built-ins, which the worker writes to `/var/lib/slicc/agent/skills` on every start.
+  4. the built-ins, which the worker writes to `/var/lib/slicc/agent/skills` on every start;
+  5. packages whose `package.json` lists folders in `pi.skills` (see Package resources).
 
-  On a name collision the first skill found wins: an agent's own skills shadow the global ones, and a global skill shadows a package's and a built-in. A missing root is skipped.
+  On a name collision the first skill found wins: an agent's own skills shadow the global ones, a global skill shadows a built-in, and a built-in shadows a package's. A missing root is skipped.
 - **The global folder.** On every start the worker, as root, creates `/usr/share/skills` if it's missing and sets it to 0755, so it's root's and readable by everyone; once kernel users give each cone its own user and the kernel checks file modes, only root (the worker, sudo or the human) writes there, and every cone and scoop reads it. Each skill's `source` is `user`, `global`, `package` or `builtin`.
 - **Inside a root.** Folders with `SKILL.md` are found at any depth, and a `SKILL.md` ends its branch. A `.md` file with a description directly in a root counts too. Folders starting with `.` and `node_modules` are skipped. Symbolic links are followed, but each folder is read once by its real path, so a link back up a tree can't loop. Scoops may `read` the folders of the loaded skills, even outside their own folders.
 - **Problems.** A problem (a missing description, a bad name, a collision, a line the frontmatter parser can't read) becomes one lick with `severity="warn"` per distinct problem. A skill without a description is skipped; any other problem only warns.
@@ -261,9 +261,15 @@ Skills and prompt templates work as in pi's coding-agent. pi's loaders read with
 The worker watches the roots and reloads on change. A `skills` prompt section, given to cones and scoops, lists every skill's name, description and location in pi's `<available_skills>` block, and the model reads a `SKILL.md` with the `read` tool when a task matches.
 
 **Prompt templates.**
-- **Where they come from.** Each is a Markdown file directly in `~/.pi/agent/prompts`, in a package's `pi.prompts` (a file, a folder or `folder/*.md`), or one of the built-ins in `/var/lib/slicc/agent/prompts`. Its name is the file name.
+- **Where they come from.** Each is a Markdown file directly in `~/.pi/agent/prompts`, one of the built-ins in `/var/lib/slicc/agent/prompts`, or in a package's `pi.prompts` (a file, a folder or `folder/*.md`), read in that order. Its name is the file name, and the first one with a name wins; a later one is a collision problem.
 - **Frontmatter.** `description` (otherwise the first line) and `argument-hint`.
 - **Substitutions.** `$1`, `$@`, `$ARGUMENTS`, `${1:-default}`, `${@:-default}`, `${@:N}` and `${@:N:L}`, with shell-like quoting of the arguments.
+
+**Package resources.** Skills, prompt templates and roles also come from packages, read as files and never run. Two roots are scanned, in this order:
+1. `/node_modules`, the kernel's certified system packages;
+2. `/opt/user/node_modules`, "your packages": a pnpm project that root owns (0755, files 0644), which cones can't write. The agent only reads it, so it works for every user. A missing `/opt/user` is fine.
+
+Root's global pnpm (`/usr/local/share/pnpm`) isn't scanned. The first name wins. A package name already found in an earlier root is skipped whole: none of that copy's skills, prompts or roles load. A skill, prompt or role whose name is already taken (by `~/.pi/agent`, the global folder, a built-in or an earlier package) is skipped too. Each skip, of a package that declares pi resources or of a name, is one `warn` problem lick per session, naming the package's path and what it would have shadowed. Roles report theirs in `agent list`. Extension code (PR 20) will load from `/opt/user` under the same rule, which replaces the earlier `/opt/agent-extensions` plan.
 
 **Commands.**
 - **How they expand.** `AgentControl.send` expands `/skill:<name> [request]` (the skill's body in a `<skill name location>` block, then the request) and `/<template> [arguments]`, exactly as pi does. Only text sent from a composer is expanded: licks and `agent send` never are.
