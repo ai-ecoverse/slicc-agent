@@ -36,7 +36,6 @@ const idle: McpRuntime = {
   disconnect: async () => undefined,
   onChange: () => () => undefined,
   status: () => [],
-  secrets: () => [],
   reload: async () => undefined,
   close: async () => undefined,
 };

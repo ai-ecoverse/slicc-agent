@@ -34,7 +34,7 @@ const helpers = () => {
       return '';
     }
   };
-  window.boot = async (route, files) => {
+  window.boot = async (route, files, argv = ['mcp-loop', '8810']) => {
     for (const [path, text] of Object.entries(files)) await window.write(path, text);
     const { bootKernel } = await import('/kernel.js');
     const { attachKernel, fetchTransport } = await import(
@@ -49,7 +49,7 @@ const helpers = () => {
     let out = '';
     const decoder = new TextDecoder();
     const listening = new Promise((resolve) => {
-      client.spawn(['mcp-loop', '8810'], {
+      client.spawn(argv, {
         onStdout: (bytes) => {
           out += decoder.decode(bytes);
           if (out.includes('listening')) resolve(out.trim());
@@ -123,6 +123,64 @@ for (const route of ['page', 'relay']) {
     );
   });
 }
+
+test('a bridge token sealed in the vault reaches a kernel-loopback MCP server, filled by the vault in the agent request', async (t) => {
+  const token = 'loop-bridge-token-0001';
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const listening = await page.evaluate(
+    (files, argv) => window.boot('page', files, argv),
+    {
+      '/node_modules/mcp-loop/package.json': manifest,
+      '/node_modules/mcp-loop/server.mjs': program,
+      '/home/.pi/agent/mcp.json': JSON.stringify({
+        mcpServers: {
+          loop: {
+            url: 'http://8811.kernel.localhost/mcp',
+            headers: { Authorization: 'Bearer ${MCP_LOOP_TOKEN}' },
+            toolExposure: { echo: 'direct' },
+          },
+        },
+      }),
+    },
+    ['mcp-loop', '8811', token]
+  );
+  assert.equal(listening, 'listening 8811');
+  const record = {
+    kind: 'mcp',
+    name: 'MCP_LOOP_TOKEN',
+    server: 'loop',
+    placeholder: 'fnox_proxy_loop',
+    value: token,
+  };
+  const query = [
+    'vault',
+    `record=${encodeURIComponent(JSON.stringify(record))}`,
+    `tool=${encodeURIComponent(JSON.stringify({ name: 'mcp__loop__echo', args: { text: 'sealed' } }))}`,
+    'answer=Done.',
+  ].join('&');
+  await page.evaluate((q) => window.start(q), query);
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await page.evaluate(() =>
+    window.agent.send(window.agent.active(), 'Echo through the sealed loop.')
+  );
+  await page.within(60000, () =>
+    window.tools().some((tool) => tool.status === 'done' || tool.status === 'error')
+  );
+  const seen = await page.evaluate(() => ({
+    tools: window.tools().map(({ name, output, status }) => ({ name, output, status })),
+    messages: JSON.stringify(window.agent.messages()),
+  }));
+  assert.deepEqual(seen.tools, [
+    {
+      name: 'mcp__loop__echo',
+      status: 'done',
+      output: 'echo: sealed (origin none, versioned, bearer)',
+    },
+  ]);
+  assert.ok(!seen.messages.includes(token));
+});
 
 test("an MCP entry on the CDP facade's 9222.kernel.localhost is refused before anything is sent", async (t) => {
   const page = await chrome.page(t);

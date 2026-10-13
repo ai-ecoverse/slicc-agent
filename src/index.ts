@@ -26,7 +26,6 @@ export {
 } from './attachments.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
 export { createAgentControl } from './control.ts';
-export { CREDENTIALS_DATABASE, EncryptedCredentialStore } from './credentials.ts';
 export { type AgentHost, type ConnectOptions, hostAgent } from './host.ts';
 export type {
   KernelClient,

@@ -1,3 +1,11 @@
+import type {
+  AgentRecord,
+  ErrorCode,
+  McpServerEntry,
+  ModelEndpoint,
+  OAuthConfig,
+  OutgoingRequest,
+} from '@ai-ecoverse/slicc-vault';
 import { type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Scrub, Scrubbable, ScrubStream } from './scrub.ts';
@@ -17,7 +25,30 @@ export interface VaultState {
 export const WAITING_MS = 2000;
 export const WAITING = 'waiting for the vault';
 
-type Message = Record<string, unknown> & { id: number; op: string };
+type Message = Record<string, unknown> & { v: 1; id: number; op: string };
+
+export class VaultRefusal extends Error {
+  readonly code: ErrorCode | undefined;
+
+  constructor(code: ErrorCode | undefined, message: string) {
+    super(message);
+    this.name = 'VaultRefusal';
+    this.code = code;
+  }
+}
+
+export type RefreshTarget = { server: string } | { provider: string };
+
+export interface Granted {
+  response: string | Uint8Array;
+  records: { kind: string; name: string; placeholder: string }[];
+  expiresAt?: number;
+}
+
+export interface EndpointSet {
+  model: ModelEndpoint[];
+  mcp: McpServerEntry[];
+}
 
 interface Pending {
   message: Message;
@@ -26,12 +57,12 @@ interface Pending {
   reject(error: Error): void;
 }
 
-type Answer = {
+type Answer = Record<string, unknown> & {
   id?: unknown;
-  ok?: unknown;
-  error?: { message?: string };
+  error?: { code?: ErrorCode; message?: string };
   scrub?: unknown;
   locked?: unknown;
+  version?: unknown;
 };
 
 const LOCKS: readonly unknown[] = ['no', 'scrubbing', 'passkey'];
@@ -48,7 +79,7 @@ function pairOf(value: unknown): ScrubPair | undefined {
 export class Vault implements Scrub {
   readonly state: MutableReplicatedState<VaultState>;
   readonly #pending = new Map<number, Pending>();
-  readonly #streams = new Set<number>();
+  readonly #streams = new Set<string>();
   readonly #waiters = new Set<() => void>();
   readonly #now: () => number;
   #port: MessagePort | undefined;
@@ -57,6 +88,7 @@ export class Vault implements Scrub {
   #seen = 0;
   #serial = 0;
   #streamSerial = 0;
+  readonly #tag = Math.random().toString(36).slice(2, 10);
 
   constructor(now: () => number = Date.now) {
     this.#now = now;
@@ -65,6 +97,10 @@ export class Vault implements Scrub {
 
   get needed(): boolean {
     return this.#pair.needed || this.#seen > this.#pair.version;
+  }
+
+  get connected(): boolean {
+    return this.#port !== undefined;
   }
 
   connect(port: MessagePort | undefined, scrub: unknown): void {
@@ -95,28 +131,60 @@ export class Vault implements Scrub {
 
   async texts<T extends Scrubbable>(texts: readonly T[]): Promise<T[]> {
     if (!this.needed) return [...texts];
-    const answer = (await this.#call('redact', { texts: [...texts] })) as {
-      texts: T[];
-      version?: number;
-    };
+    const answer = (await this.#call('redact', { texts: [...texts] })) as { texts: T[] };
     return answer.texts;
   }
 
+  async model(provider: string | undefined, request: OutgoingRequest): Promise<OutgoingRequest> {
+    const fields = provider === undefined ? { request } : { provider, request };
+    return ((await this.#call('model', fields)) as { request: OutgoingRequest }).request;
+  }
+
+  async mcp(server: string, request: OutgoingRequest): Promise<OutgoingRequest> {
+    return ((await this.#call('mcp', { server, request })) as { request: OutgoingRequest }).request;
+  }
+
+  async records(): Promise<AgentRecord[]> {
+    return ((await this.#call('records', {})) as { records: AgentRecord[] }).records;
+  }
+
+  async grant(
+    server: string,
+    response: string | Uint8Array,
+    oauth: OAuthConfig,
+    name?: string
+  ): Promise<Granted> {
+    const fields = { server, response, oauth, ...(name === undefined ? {} : { name }) };
+    const { response: shown, records, expiresAt } = (await this.#call('grant', fields)) as Granted;
+    return { response: shown, records, ...(expiresAt === undefined ? {} : { expiresAt }) };
+  }
+
+  async refresh(target: RefreshTarget, name?: string): Promise<string> {
+    const fields = { ...target, ...(name === undefined ? {} : { name }) };
+    return ((await this.#call('refresh', fields)) as { state: string }).state;
+  }
+
+  async endpoints(set: EndpointSet): Promise<void> {
+    await this.#call('endpoints', { model: set.model, mcp: set.mcp });
+  }
+
   stream(): ScrubStream {
-    let stream: number | undefined;
+    let stream: string | undefined;
     return {
       push: (chunk) => {
         if (stream === undefined && !this.needed) return Promise.resolve(chunk);
         if (stream === undefined) {
-          stream = ++this.#streamSerial;
+          stream = `${this.#tag}-${++this.#streamSerial}`;
           this.#streams.add(stream);
           void this.#call('redactStream', { stream });
         }
-        return this.#call('push', { stream, chunk }) as Promise<Uint8Array>;
+        return this.#call('push', { stream, chunk }).then(
+          (answer) => (answer as { chunk: Uint8Array }).chunk
+        );
       },
       end: async () => {
         if (stream === undefined) return EMPTY;
-        const tail = (await this.#call('end', { stream })) as Uint8Array;
+        const { chunk: tail } = (await this.#call('end', { stream })) as { chunk: Uint8Array };
         this.#streams.delete(stream);
         return tail;
       },
@@ -127,7 +195,7 @@ export class Vault implements Scrub {
         for (const [id, item] of this.#pending)
           if (item.message.stream === dropped && item.message.op !== 'redactStream') {
             this.#pending.delete(id);
-            item.resolve(EMPTY);
+            item.resolve({ chunk: EMPTY });
           }
         void this.#call('drop', { stream: dropped });
       },
@@ -135,7 +203,7 @@ export class Vault implements Scrub {
   }
 
   #call(op: string, fields: Record<string, unknown>): Promise<unknown> {
-    const message: Message = { id: ++this.#serial, op, ...fields };
+    const message: Message = { v: 1, id: ++this.#serial, op, ...fields };
     const result = new Promise((resolve, reject) => {
       this.#pending.set(message.id, { message, at: this.#now(), resolve, reject });
     });
@@ -150,15 +218,23 @@ export class Vault implements Scrub {
     const pair = 'scrub' in data ? pairOf(data.scrub) : undefined;
     if (pair) this.#pair = pair;
     if (LOCKS.includes(data.locked)) this.#locked = data.locked as Locked;
+    if (data.op === 'welcome') this.#welcome(data.status);
     const item = typeof data.id === 'number' ? this.#pending.get(data.id) : undefined;
     if (item) {
       this.#pending.delete(data.id as number);
-      const version = (data.ok as { version?: unknown } | undefined)?.version;
-      if (typeof version === 'number') this.#seen = Math.max(this.#seen, version);
-      if (data.error) item.reject(new Error(data.error.message ?? 'the vault refused'));
-      else item.resolve(data.ok);
+      if (typeof data.version === 'number') this.#seen = Math.max(this.#seen, data.version);
+      if (data.error)
+        item.reject(new VaultRefusal(data.error.code, data.error.message ?? 'the vault refused'));
+      else item.resolve(data);
     }
     this.#refresh();
+  }
+
+  #welcome(status: unknown): void {
+    const given = status as { scrub?: unknown; locked?: unknown } | null;
+    const pair = given?.scrub ? pairOf(given.scrub) : undefined;
+    if (pair) this.#pair = pair;
+    if (typeof given?.locked === 'boolean') this.#locked = given.locked ? 'passkey' : 'no';
   }
 
   #waiting(): boolean {

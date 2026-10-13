@@ -14,11 +14,26 @@ import {
 } from './adobe.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
-import type { AccountState, AgentSettings, ModelChoice, SettingsState } from './services.ts';
+import type { VaultRecords } from './secrets/records.ts';
+import type { PlainStore } from './secrets/store.ts';
+import type {
+  AccountField,
+  AccountState,
+  AgentSettings,
+  ModelChoice,
+  SettingsState,
+} from './services.ts';
 
 export const BEDROCK = 'amazon-bedrock';
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
 export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
+
+export const ACCOUNT_FIELDS: Readonly<Record<string, readonly AccountField[]>> = {
+  [BEDROCK]: [{ name: 'region', label: 'Region' }],
+};
+const FIELD_ENV: Readonly<Record<string, string>> = { region: 'AWS_REGION' };
+export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
+export const KEY_NEEDS_VAULT = "API keys are kept in seven's vault: update seven";
 
 const corsFree = new Set([BEDROCK, ADOBE]);
 const signIn = new Set([ADOBE]);
@@ -73,15 +88,62 @@ function choices(
     );
 }
 
-function accounts(stored: ReadonlySet<string>, providers: Provider[]): AccountState[] {
-  return providers.map((provider) => ({
-    id: provider.id,
-    provider: provider.name ?? provider.id,
-    identity: stored.has(provider.id) ? (signIn.has(provider.id) ? 'Adobe ID' : 'API key') : '',
-    status: stored.has(provider.id) ? 'connected' : 'disconnected',
-    auth: signIn.has(provider.id) ? 'oauth' : 'api-key',
-    needs: corsFree.has(provider.id) ? 'cors-free-transport' : null,
-  }));
+function accounts(records: Pick<VaultRecords, 'model'>, providers: Provider[]): AccountState[] {
+  return providers.map((provider) => {
+    const record = records.model(provider.id);
+    const fields = ACCOUNT_FIELDS[provider.id];
+    return {
+      id: provider.id,
+      provider: provider.name ?? provider.id,
+      identity: record ? (signIn.has(provider.id) ? 'Adobe ID' : 'API key') : '',
+      status: !record ? 'disconnected' : record.state === 'expired' ? 'expired' : 'connected',
+      auth: signIn.has(provider.id) ? 'oauth' : 'api-key',
+      needs: corsFree.has(provider.id) ? 'cors-free-transport' : null,
+      store: 'vault',
+      ...(fields ? { fields: fields.map((field) => ({ ...field })) } : {}),
+    };
+  });
+}
+
+export interface ProviderFields {
+  get(providerId: string): Readonly<Record<string, string>> | undefined;
+  env(providerId: string): Readonly<Record<string, string>> | undefined;
+  set(providerId: string, fields: Record<string, string> | undefined): Promise<void>;
+}
+
+export async function providerFields(
+  store: PlainStore,
+  providers: readonly Provider[]
+): Promise<ProviderFields> {
+  const known = new Map<string, Record<string, string>>();
+  for (const provider of providers) {
+    const saved = (await store.get(`model:${provider.id}`)) as Record<string, string> | undefined;
+    if (saved && typeof saved === 'object') known.set(provider.id, saved);
+  }
+  return {
+    get: (providerId) => known.get(providerId),
+    env(providerId) {
+      const fields = known.get(providerId);
+      if (!fields) return undefined;
+      return Object.fromEntries(
+        Object.entries(fields).flatMap(([name, value]) =>
+          FIELD_ENV[name] ? [[FIELD_ENV[name], value]] : []
+        )
+      );
+    },
+    async set(providerId, fields) {
+      const allowed = new Set((ACCOUNT_FIELDS[providerId] ?? []).map((field) => field.name));
+      const kept = Object.fromEntries(
+        Object.entries(fields ?? {}).filter(
+          ([name, value]) => allowed.has(name) && typeof value === 'string' && value.trim() !== ''
+        )
+      );
+      const next = Object.keys(kept).length ? kept : undefined;
+      if (next) known.set(providerId, next);
+      else known.delete(providerId);
+      await store.set(`model:${providerId}`, next);
+    },
+  };
 }
 
 export async function shown<T>(run: () => Promise<T>): Promise<T> {
@@ -97,31 +159,38 @@ export async function shown<T>(run: () => Promise<T>): Promise<T> {
 
 export type UsageReader = (token: string) => Promise<Budget | null>;
 
-async function budget(credentials: CredentialStore, usage: UsageReader) {
-  const credential = await credentials.read(ADOBE);
-  const key = credential?.type === 'api_key' ? credential.key : undefined;
+async function budget(records: Pick<VaultRecords, 'model'>, usage: UsageReader) {
+  const key = records.model(ADOBE)?.placeholder;
   const found = key ? await usage(key).catch(() => null) : null;
   return found ? { provider: ADOBE, ...found } : null;
 }
 
+export interface SettingsSources {
+  records: VaultRecords;
+  fields: ProviderFields;
+}
+
 export async function createAgentSettings(
   models: MutableModels,
-  credentials: CredentialStore,
+  sources: SettingsSources,
   providers = sliccProviders(),
   options: { usage?: UsageReader; every?: number; mcp?: McpAccounts } = {}
 ): Promise<AgentSettings> {
   const { mcp } = options;
+  const { records, fields } = sources;
   const routed = (providerId: string) => (providerId.startsWith(MCP_ACCOUNT) ? mcp : undefined);
   const adobe = providers.find((provider) => provider.id === ADOBE);
   const endpoint = adobe?.baseUrl ?? ADOBE_PROXY;
   const identity = (adobe?.headers as Record<string, string> | undefined) ?? adobeIdentity();
   const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint, identity }));
   const snapshot = async (): Promise<SettingsState> => {
-    const stored = new Set((await credentials.list()).map((info) => info.providerId));
+    const stored = new Set(
+      providers.filter((provider) => records.model(provider.id)).map((provider) => provider.id)
+    );
     return {
       models: choices(models, providers, stored),
-      accounts: [...accounts(stored, providers), ...((await mcp?.accounts()) ?? [])],
-      budget: await budget(credentials, usage),
+      accounts: [...accounts(records, providers), ...((await mcp?.accounts()) ?? [])],
+      budget: await budget(records, usage),
     };
   };
   const state = replicatedState<SettingsState>(await snapshot());
@@ -149,20 +218,32 @@ export async function createAgentSettings(
     (timer as { unref?: () => void }).unref?.();
   }
   mcp?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
+  const held = () => signedIn.filter((id) => records.model(id)).join(' ');
+  let seen = held();
+  records.state.subscribe(() => {
+    const now = held();
+    const added = now !== seen;
+    seen = now;
+    const discovered = added ? discover(signedIn) : Promise.resolve();
+    void discovered.then(() => refresh(BACKGROUND_CONTEXT)).catch(() => undefined);
+  });
+  const reread = (context: Context) => records.refresh(context).catch(() => undefined);
   return {
     state,
-    async connect(providerId, secret, region, context) {
+    async connect(providerId, secret, given, context) {
       const server = routed(providerId);
       if (server) {
         await shown(() => server.connect(providerId, secret));
         await refresh(context);
         return;
       }
-      await credentials.modify(providerId, async () => ({
-        type: 'api_key',
-        key: secret,
-        ...(region ? { env: { AWS_REGION: region } } : {}),
-      }));
+      if (secret !== null)
+        throw new RemoteServiceError(
+          'service_invalid_value',
+          signIn.has(providerId) ? SIGN_IN_NEEDS_VAULT : KEY_NEEDS_VAULT
+        );
+      if (given !== null) await fields.set(providerId, given);
+      await reread(context);
       if (signIn.has(providerId)) await discover([providerId]);
       await refresh(context);
     },
@@ -180,7 +261,8 @@ export async function createAgentSettings(
     async disconnect(providerId, context) {
       const server = routed(providerId);
       if (server) await server.disconnect(providerId);
-      else await credentials.delete(providerId);
+      else await fields.set(providerId, undefined);
+      await reread(context);
       await refresh(context);
     },
   };

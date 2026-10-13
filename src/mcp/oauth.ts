@@ -1,4 +1,3 @@
-import type { CredentialStore } from '@earendil-works/pi-ai';
 import type { AuthProvider, McpFetch, UnauthorizedContext } from '@earendil-works/pi-mcp';
 import {
   authorizeMcp,
@@ -11,6 +10,7 @@ import {
   selectResource,
   stepUpScope,
 } from '@earendil-works/pi-mcp/oauth';
+import type { PlainStore } from '../secrets/store.ts';
 import type { McpSignIn } from '../services.ts';
 import type { McpServerConfig } from './config.ts';
 import { credentialKey } from './credentials.ts';
@@ -57,8 +57,9 @@ export function authProvider(provider: StoredOAuth, server: OAuthServer): AuthPr
         ...(challenge.resourceMetadataUrl
           ? { resourceMetadataUrl: challenge.resourceMetadataUrl }
           : {}),
+        skipRefresh: true,
         ...(step
-          ? { scope: stepUpScope(granted?.scope, challenge.scope), skipRefresh: true }
+          ? { scope: stepUpScope(granted?.scope, challenge.scope) }
           : challenge.scope
             ? { scope: challenge.scope }
             : {}),
@@ -112,13 +113,13 @@ export interface OAuthServer {
 export class StoredOAuth implements Provider {
   readonly redirectUrl: string;
   readonly clientMetadata: Provider['clientMetadata'];
-  readonly #credentials: CredentialStore;
+  readonly #store: PlainStore;
   readonly #server: OAuthServer;
   #writes: Promise<unknown> = Promise.resolve();
 
-  constructor(server: OAuthServer, credentials: CredentialStore, redirectUrl: string) {
+  constructor(server: OAuthServer, store: PlainStore, redirectUrl: string) {
     this.#server = server;
-    this.#credentials = credentials;
+    this.#store = store;
     this.redirectUrl = redirectUrl;
     this.clientMetadata = {
       client_name: server.config.oauth?.clientName ?? CLIENT_NAME,
@@ -140,29 +141,18 @@ export class StoredOAuth implements Provider {
 
   async load(): Promise<McpOAuthState> {
     await this.#writes;
-    const stored = await this.#credentials.read(await this.#key());
-    const state =
-      stored?.type === 'oauth' ? (stored.state as McpOAuthState | undefined) : undefined;
+    const state = (await this.#store.get(await this.#key())) as McpOAuthState | undefined;
     return state?.serverUrl === this.serverUrl ? state : { serverUrl: this.serverUrl };
   }
 
   async update(change: (state: McpOAuthState) => McpOAuthState): Promise<void> {
     const write = this.#writes.then(async () => {
       const key = await this.#key();
-      await this.#credentials.modify(key, async (current) => {
-        const before =
-          current?.type === 'oauth' ? (current.state as McpOAuthState | undefined) : undefined;
-        const next = change(
-          before?.serverUrl === this.serverUrl ? before : { serverUrl: this.serverUrl }
-        );
-        return {
-          type: 'oauth',
-          access: next.tokens?.access_token ?? '',
-          refresh: next.tokens?.refresh_token ?? '',
-          expires: next.tokensExpireAt ?? 0,
-          state: next,
-        };
-      });
+      const before = (await this.#store.get(key)) as McpOAuthState | undefined;
+      await this.#store.set(
+        key,
+        change(before?.serverUrl === this.serverUrl ? before : { serverUrl: this.serverUrl })
+      );
     });
     this.#writes = write.catch(() => undefined);
     await write;
@@ -242,7 +232,7 @@ export class StoredOAuth implements Provider {
 
   async forget(): Promise<void> {
     await this.#writes;
-    await this.#credentials.delete(await this.#key());
+    await this.#store.set(await this.#key(), undefined);
   }
 }
 
@@ -251,7 +241,7 @@ export type { McpSignIn } from '../services.ts';
 export async function beginSignIn(
   provider: StoredOAuth,
   server: OAuthServer,
-  options: { fetch: McpFetch; resourceMetadataUrl?: URL }
+  options: { fetch: McpFetch; resourceMetadataUrl?: URL; register(tokenUrl: string): Promise<void> }
 ): Promise<McpSignIn> {
   const configured = server.config.oauth?.authServerMetadataUrl;
   const info = await discoverOAuthServerInfo(server.config.url, {
@@ -280,6 +270,9 @@ export async function beginSignIn(
     });
     await provider.saveClientInformation(client);
   }
+  await options.register(
+    new URL(metadata?.token_endpoint ?? new URL('/token', info.authorizationServerUrl)).href
+  );
   const { verifier, challenge } = await pkce();
   const state = randomState();
   await provider.update((current) => ({ ...current, codeVerifier: verifier, oauthState: state }));

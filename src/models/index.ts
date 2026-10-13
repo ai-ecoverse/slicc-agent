@@ -22,7 +22,10 @@ export interface ModelsOptions {
   agents: Agents;
   settings: Pick<AgentSettings, 'state'>;
   catalog: Pick<Models, 'getProviders' | 'getModels'>;
+  locked?: () => boolean;
 }
+
+export const LOCKED_NOTE = 'the vault is locked: unlock it to use these accounts';
 
 const ok = (out: string): Answer => ({ code: 0, out });
 const fail = (out: string, code = 1): Answer => ({ code, out: `models: ${out}\n` });
@@ -111,13 +114,14 @@ function missing(state: SettingsState, id: string): string {
     : `current: ${id}, whose account is not connected`;
 }
 
-function list(state: SettingsState, current: Current, json: boolean): Answer {
+function list(state: SettingsState, current: Current, json: boolean, locked: boolean): Answer {
   const listed = rows(state, current);
   if (json) return ok(`${JSON.stringify(listed, null, 2)}\n`);
   const lines = listed.map(
     (row) => `${row.current ? '*' : ' '} ${row.id}\t${row.label}\t${row.account}`
   );
-  if (!listed.length) lines.push('no models: connect an account in Settings');
+  if (locked) lines.push(LOCKED_NOTE);
+  if (!listed.length) lines.push('no models: connect an account in Settings › Accounts');
   if (current.id && !listed.some((row) => row.current)) lines.push(missing(state, current.id));
   return ok(`${lines.join('\n')}\n`);
 }
@@ -140,7 +144,7 @@ function refuse(options: ModelsOptions, state: SettingsState, wanted: string): A
   const known = options.catalog.getModels(providerId);
   if (disconnected && (!known.length || known.some((model) => model.id === modelId)))
     return fail(
-      `${wanted} needs the ${disconnected.provider} account; connect it in Settings, then try again`
+      `${wanted} needs the ${disconnected.provider} account; connect it in Settings › Accounts, then try again`
     );
   const ids = [
     ...state.models.map((choice) => choice.id),
@@ -207,7 +211,9 @@ export function modelsCommand(options: ModelsOptions) {
         await conversationOf(options.agents, caller, context),
         context
       );
-      return listing ? list(state, current, json) : show(state, current, json);
+      return listing
+        ? list(state, current, json, options.locked?.() ?? false)
+        : show(state, current, json);
     } catch (error) {
       return fail((error as Error).message);
     }

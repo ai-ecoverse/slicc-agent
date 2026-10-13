@@ -1,9 +1,11 @@
 import type { Context } from '@earendil-works/chord';
-import type { CredentialStore } from '@earendil-works/pi-ai';
 import type { Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { StreamableHttpTransport } from '@earendil-works/pi-mcp';
 import type { LickEvent, Licks } from '../licks/licks.ts';
+import type { McpServerSource } from '../secrets/endpoints.ts';
+import { scrubText } from '../secrets/scrub.ts';
+import type { PlainStore } from '../secrets/store.ts';
 import { type McpAccounts, mcpAccounts } from './accounts.ts';
 import { McpCatalog } from './catalog.ts';
 import {
@@ -14,7 +16,7 @@ import {
   usesOAuth,
 } from './config.ts';
 import { McpServerConnection } from './connection.ts';
-import { resolveHeaders, scrub, secretNames } from './credentials.ts';
+import { type McpRecords, resolveHeaders, secretNames } from './credentials.ts';
 import { authProvider as oauthAuth, StoredOAuth } from './oauth.ts';
 import { configPath, logPath, shown } from './paths.ts';
 import { patchSse } from './sse.ts';
@@ -23,12 +25,24 @@ export const MCP_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 export { configPath, logPath, shown } from './paths.ts';
 
+export interface McpVault {
+  records: McpRecords & {
+    refresh(context: Context): Promise<void>;
+    state: { subscribe(listener: () => void): () => void };
+  };
+  fetch(server: string, base: typeof fetch): typeof fetch;
+  grant(server: string, base: typeof fetch): typeof fetch;
+  servers(list: readonly McpServerSource[]): Promise<void>;
+  token(server: string, url: string): Promise<void>;
+}
+
 export interface McpAttach {
   licks: Licks;
   env: ExecutionEnv;
   home: string;
   agentDir?: string;
-  credentials: CredentialStore;
+  store: PlainStore;
+  vault: McpVault;
   fetch: typeof fetch;
   version: string;
   reloadMs: number;
@@ -48,7 +62,6 @@ export type { McpAccounts } from './accounts.ts';
 
 export interface McpRuntime extends McpAccounts {
   status(): ServerStatus[];
-  secrets(): string[];
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
 }
@@ -93,7 +106,7 @@ export function stateLick(connection: McpServerConnection, cors: boolean): LickE
       eventId: `${name}\nauth`,
     };
   if (connection.state !== 'failed') return undefined;
-  const error = scrub(connection.error ?? 'unknown error', connection.secrets);
+  const error = connection.error ?? 'unknown error';
   const blocked = cors && CORS_ERROR.test(error);
   return {
     ...base,
@@ -118,18 +131,13 @@ export function connectedLick(connection: McpServerConnection): LickEvent {
   };
 }
 
-export function logLine(
-  server: string,
-  params: unknown,
-  secrets: readonly string[],
-  at: Date
-): string {
+export function logLine(server: string, params: unknown, at: Date): string {
   const { level, logger, data } = (params ?? {}) as {
     level?: string;
     logger?: string;
     data?: unknown;
   };
-  const text = scrub(typeof data === 'string' ? data : (JSON.stringify(data) ?? ''), secrets);
+  const text = typeof data === 'string' ? data : (JSON.stringify(data) ?? '');
   return `${at.toISOString()} [${server}] ${level ?? 'info'}${logger ? ` ${logger}` : ''}: ${text}\n`;
 }
 
@@ -139,8 +147,9 @@ function serverLog(options: McpAttach, context: Context) {
   const { env } = options;
   return {
     write(connection: McpServerConnection, params: unknown) {
-      const line = logLine(connection.name, params, connection.secrets, new Date());
+      const text = logLine(connection.name, params, new Date());
       logging = logging.then(async () => {
+        const line = await scrubText(text);
         const info = await env.fileInfo(path, context);
         if (info.ok && info.value.size > MCP_LOG_MAX_BYTES)
           await env.renameFile(path, `${path}.1`, context);
@@ -171,23 +180,33 @@ export async function attachMcp(
   let initial: Set<string> = new Set();
   let first = true;
   const log = serverLog(options, context);
-  const fetcher = (input: string | URL, init?: RequestInit) => options.fetch(input, init);
-  const oauth = (entry: McpServerEntry) =>
-    new StoredOAuth(entry, options.credentials, options.redirect);
+  const { vault } = options;
+  const base = (input: string | URL | Request, init?: RequestInit) => options.fetch(input, init);
+  const fetcher = (server: string) => vault.fetch(server, base);
+  const oauth = (entry: McpServerEntry) => new StoredOAuth(entry, options.store, options.redirect);
   const transport = async (entry: McpServerEntry) => {
-    const resolved = await resolveHeaders(entry.name, entry.config, options.credentials);
+    const resolved = resolveHeaders(entry.name, entry.config, vault.records);
     if (!resolved.ok) return { missing: resolved.missing };
     const authProvider = usesOAuth(entry.config) ? oauthAuth(oauth(entry), entry) : undefined;
     return {
       transport: new StreamableHttpTransport({
         url: entry.config.url,
         headers: resolved.headers,
-        fetch: fetcher,
+        fetch: fetcher(entry.name),
         ...(authProvider ? { authProvider } : {}),
       }),
-      secrets: resolved.secrets,
     };
   };
+  const register = (entries: Iterable<McpServerEntry>) =>
+    vault
+      .servers(
+        [...entries].map((entry) => ({
+          server: entry.name,
+          url: entry.config.url,
+          names: secretNames(entry.config),
+        }))
+      )
+      .catch(() => undefined);
   const open = (entry: McpServerEntry) => {
     const connection = new McpServerConnection({
       entry,
@@ -226,6 +245,7 @@ export async function attachMcp(
     }
     if (first) initial = new Set(wanted.keys());
     first = false;
+    void register(wanted.values());
     for (const [name, entry] of wanted) if (!catalog.connections.has(name)) open(entry);
     catalog.rebuild();
     notify();
@@ -248,10 +268,21 @@ export async function attachMcp(
     void connection.close();
     catalog.rebuild();
   };
+  const stopRecords = vault.records.state.subscribe(() => {
+    for (const connection of [...catalog.connections.values()])
+      if (connection.state === 'needs-secret') restart(connection);
+    notify();
+  });
   return {
     ...mcpAccounts(
       catalog,
-      { credentials: options.credentials, oauth, fetch: fetcher },
+      {
+        records: vault.records,
+        oauth,
+        fetch: fetcher,
+        grant: (server) => vault.grant(server, fetcher(server)),
+        register: (server, url) => vault.token(server, url),
+      },
       restart,
       listeners
     ),
@@ -260,12 +291,12 @@ export async function attachMcp(
         name: connection.name,
         state: connection.state,
         tools: connection.tools.length,
-        ...(connection.error ? { error: scrub(connection.error, connection.secrets) } : {}),
+        ...(connection.error ? { error: connection.error } : {}),
       })),
-    secrets: () => [...catalog.connections.values()].flatMap((connection) => connection.secrets),
     reload,
     async close(using) {
       clearTimeout(timer);
+      stopRecords();
       await watcher?.close(using);
       const all = [...catalog.connections.values()];
       catalog.connections.clear();

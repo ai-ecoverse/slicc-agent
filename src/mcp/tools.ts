@@ -24,7 +24,6 @@ import {
   scriptResult,
   spiller,
 } from './content.ts';
-import { scrub } from './credentials.ts';
 
 export const LIST_MCP_RESOURCES = 'list_mcp_resources';
 export const LIST_MCP_RESOURCE_TEMPLATES = 'list_mcp_resource_templates';
@@ -88,9 +87,8 @@ function progressText(progress: { progress: number; total?: number; message?: st
   return progress.message ?? `Progress ${progress.progress}${total}`;
 }
 
-function failure(entry: { connection: McpServerConnection }, error: unknown): never {
-  const message = error instanceof Error ? error.message : String(error);
-  throw new Error(scrub(message, entry.connection.secrets));
+function failure(error: unknown): never {
+  throw new Error(error instanceof Error ? error.message : String(error));
 }
 
 export function directTool(entry: McpToolEntry, readable: () => boolean): ToolRegistration {
@@ -109,7 +107,7 @@ export function directTool(entry: McpToolEntry, readable: () => boolean): ToolRe
       if (signal) options.signal = signal;
       const result = await entry.connection
         .callTool(entry.tool.name, args as Record<string, unknown>, options)
-        .catch((error) => failure(entry, error));
+        .catch(failure);
       const converted = await convertResult(
         entry.server,
         entry.tool.name,
@@ -146,7 +144,7 @@ export function scriptTool(entry: McpToolEntry, signal: AbortSignal | undefined)
           signal: combined,
           timeoutMs: entry.connection.timeoutMs,
         })
-        .catch((error) => failure(entry, error));
+        .catch(failure);
       return scriptResult(result);
     },
   };

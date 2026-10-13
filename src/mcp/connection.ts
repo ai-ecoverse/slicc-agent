@@ -29,7 +29,7 @@ export type ServerState =
 
 export type TransportFactory = (
   entry: McpServerEntry
-) => Promise<{ transport: McpTransport; secrets: string[] } | { missing: string[] }>;
+) => Promise<{ transport: McpTransport } | { missing: string[] }>;
 
 export const CONNECT_RETRY_DELAYS_MS = [250, 1_000];
 export const CLIENT_NAME = 'slicc';
@@ -99,7 +99,6 @@ export class McpServerConnection {
   resources: Resource[] = [];
   resourceTemplates: ResourceTemplate[] = [];
   instructions: string | undefined;
-  secrets: string[] = [];
   #client: McpClient | undefined;
   #opening: Promise<McpClient> | undefined;
   readonly #shutdown = new AbortController();
@@ -254,7 +253,6 @@ export class McpServerConnection {
       this.missing = made.missing;
       throw new MissingSecret(made.missing);
     }
-    this.secrets = made.secrets;
     const client = new McpClient({
       name: CLIENT_NAME,
       version: this.#options.version,

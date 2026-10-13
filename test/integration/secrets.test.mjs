@@ -249,3 +249,77 @@ test('secrets: with no vault the agent is unchanged, and /secrets answers locall
   assert.deepEqual(seen.vault, { port: 'none', needed: false, version: 0, locked: 'no', held: 0 });
   assert.equal(seen.listed, 'The user listed secrets: none.');
 });
+
+test('secrets: a model call goes out prepared by the vault, with the key filled in and the body scrubbed', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const key = 'e2e-model-key-0001';
+  const record = {
+    kind: 'model',
+    name: 'ADOBE_IMS_TOKEN',
+    provider: 'adobe',
+    placeholder: 'fnox_proxy_adobe',
+    value: key,
+  };
+  const query = [
+    'relay=mcp.test',
+    'e2e',
+    'vault',
+    'scrub',
+    `record=${encodeURIComponent(JSON.stringify(record))}`,
+  ].join('&');
+  const seen = await page.evaluate(
+    async ({ query, alpha }) => {
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      let worker;
+      const owner = await startAgent({
+        worker: () =>
+          (worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' })),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const { agent, settings } = createAgentModel(await owner.connect(), {
+        storage: localStorage,
+      });
+      await agent.ready();
+      const until = async (check, tries = 500) => {
+        for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
+        return check();
+      };
+      await until(() => settings.models().some((model) => model.id === 'adobe/e2e-1'));
+      agent.setModel(agent.active(), 'adobe/e2e-1');
+      await until(
+        () => agent.list().find((row) => row.id === agent.active())?.model === 'adobe/e2e-1'
+      );
+      await agent.send(agent.active(), `My key is ${alpha}.`);
+      await until(() =>
+        agent
+          .messages()
+          .some(
+            (m) =>
+              m.role === 'assistant' && m.parts?.some((part) => part.text === 'From the model.')
+          )
+      );
+      const channel = new MessageChannel();
+      const answer = new Promise((resolve) => {
+        channel.port1.onmessage = ({ data }) => resolve(data);
+      });
+      worker.postMessage({ upstream: channel.port2 }, [channel.port2]);
+      const result = { ...(await answer), messages: JSON.stringify(agent.messages()) };
+      await owner.release();
+      return result;
+    },
+    { query, alpha }
+  );
+  captured.push(
+    ...seen.upstream.map((request, at) => ({ what: `upstream ${at}`, text: request.body })),
+    { what: 'messages', text: seen.messages }
+  );
+  assert.equal(seen.upstream.length, 1);
+  assert.equal(seen.upstream[0].authorization, `Bearer ${key}`);
+  assert.match(seen.upstream[0].body, /My key is fnox_proxy_alpha\./);
+  assert.ok(seen.vault.some((message) => message.op === 'model' && message.provider === 'adobe'));
+  assert.ok(seen.vault.some((message) => message.op === 'endpoints'));
+  assert.ok(!seen.messages.includes(key));
+});
