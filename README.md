@@ -447,9 +447,9 @@ The process table is the worker's root client's `ps()`. Each process is named af
 
 **The feed.** The transcript service adds `monitor`, a `MonitorFeed` with these parts:
 - `usage`;
-- `agents`, each with running, queued, tool, retry, last error, model and context tokens;
+- `agents`, each with running, queued, tool, retry, last error, model, context tokens and, on kernels that report CPU times, the CPU share of its processes;
 - `tasks`;
-- `processes`;
+- `processes`, with each one's CPU times and share of a core on kernels that report them (see CPU);
 - `problems`, the newest 50 failed tasks, retries and failed turns since the panel opened;
 - `paused`.
 
@@ -471,14 +471,17 @@ The process table is the worker's root client's `ps()`. Each process is named af
   | Processes in one agent's group | over 32 | over 64 |
   | Processes in the kernel | over 128 | over 256 |
   | A zombie | after 60 s | |
-  | A background process of an agent | after 30 min | after an hour |
+  | A background process of an agent, on kernels without CPU times | after 30 min | after an hour |
+  | An agent's process group at 90% of a core or more, on kernels with CPU times | for 2 min | for 4 min, or at 180% |
   | Context | 80% | |
   | A paused scheduler | always | |
 
 - **Sections:** cones and scoops, tasks as a tree per cone, processes, recent problems, pending changes and sprinkles. Each row has an `id`, and agents and tasks have a `depth` (at most 6), which spectrum (≥ 1.57.0) draws as indentation.
 - **More sections:** `createAgentModel(connection, { monitor: { extra } })` adds the page's own sections, such as terminals, browser tabs and tray followers.
 
-**Memory.** From slicc-kernel 1.61.0, `ps()` entries carry `rss`, each process's wasm memory. When they do, the monitor shows a Process memory vital and each process row's size. On older kernels, both are left out. `/proc/meminfo`'s `MemTotal`, CPU times and load are placeholders, so the runaway alerts count processes and their age instead of measuring CPU. The tray chip gets no `spent` or `rate`, so spectrum (≥ 1.57.0) shows only what's known.
+**CPU.** From slicc-kernel 1.67.1, `ps()` entries carry `utime` and `stime`, each process's CPU time in milliseconds. The feed passes them on, and each process's `cpu` is its share of one core between the last two polls: `null` on the first poll, or when a pid is restarted or reused. An agent's `cpu` sums its processes. The adapter remembers since when each agent's process group has been at 90% of a core or more, and raises `runaway-cpu-<pgid>`, "research is using a lot of CPU", once that has lasted 2 min. With CPU times, an idle long-running process raises no alert. On older kernels, none of these fields appear, and the age alert stays.
+
+**Memory.** From slicc-kernel 1.61.0, `ps()` entries carry `rss`, each process's wasm memory. When they do, the monitor shows a Process memory vital and each process row's size. On older kernels, both are left out. `/proc/meminfo`'s `MemTotal` is a placeholder. The tray chip gets no `spent` or `rate`, so spectrum (≥ 1.57.0) shows only what's known.
 
 ### Sprinkles
 

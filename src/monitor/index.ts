@@ -36,6 +36,52 @@ export interface PsEntry {
   state?: string;
   uid?: number;
   rss?: number;
+  utime?: number;
+  stime?: number;
+}
+
+export interface CpuMark {
+  started: number;
+  total: number;
+  at: number;
+}
+
+export interface CpuReading {
+  marks: Map<number, CpuMark>;
+  shares: Map<number, number | null>;
+}
+
+function timed(entry: PsEntry): entry is PsEntry & { utime: number; stime: number } {
+  return typeof entry.utime === 'number' && typeof entry.stime === 'number';
+}
+
+export function cpuShares(
+  entries: readonly PsEntry[],
+  previous: ReadonlyMap<number, CpuMark>,
+  at: number
+): CpuReading {
+  const marks = new Map<number, CpuMark>();
+  const shares = new Map<number, number | null>();
+  for (const entry of entries) {
+    if (!timed(entry)) continue;
+    const mark = { started: entry.started ?? 0, total: entry.utime + entry.stime, at };
+    const last = previous.get(entry.pid);
+    marks.set(entry.pid, mark);
+    shares.set(
+      entry.pid,
+      last && last.started === mark.started && mark.total >= last.total && at > last.at
+        ? Math.round(((mark.total - last.total) / (at - last.at)) * 1000) / 1000
+        : null
+    );
+  }
+  return { marks, shares };
+}
+
+export function agentCpu(processes: readonly MonitorProcess[], agentId: string): number | null {
+  if (!processes.some((row) => typeof row.cpu === 'number')) return null;
+  let sum = 0;
+  for (const row of processes) if (row.agentId === agentId) sum += row.cpu ?? 0;
+  return Math.round(sum * 1000) / 1000;
 }
 
 export interface Timers {
@@ -200,6 +246,7 @@ class Session {
   #graph: TaskGraph = { tasks: {} };
   #usage: UsageState | null = null;
   #processes: readonly PsEntry[] | null = null;
+  #cpu: CpuReading = { marks: new Map(), shares: new Map() };
   #kernel: MonitorFeed['kernel'];
   #users = new Map<number, string>();
   #paused = false;
@@ -317,6 +364,7 @@ class Session {
       this.#settings.timers.clear(timeout);
       this.#handles.delete(timeout);
       this.#processes = entries;
+      if (entries) this.#cpu = cpuShares(entries, this.#cpu.marks, this.#settings.now());
       this.#kernel = entries ? 'ok' : 'unreachable';
       this.schedule();
       this.#later(() => this.#poll(), this.#settings.psMs);
@@ -462,6 +510,9 @@ class Session {
       zombie: zombie ? this.#since(`zombie:${entry.pid}`) : null,
       tty: Boolean(entry.tty),
       rss: typeof entry.rss === 'number' ? entry.rss : null,
+      ...(timed(entry)
+        ? { utime: entry.utime, stime: entry.stime, cpu: this.#cpu.shares.get(entry.pid) ?? null }
+        : {}),
     };
   }
 
@@ -486,8 +537,11 @@ class Session {
       for (const pgid of this.#options.groups?.owned(agent.conversation) ?? [])
         groups.set(pgid, agent.id);
     const programs = new Map<number, string>();
+    const entries = this.#processes;
     const processes: MonitorProcess[] | null =
-      this.#processes?.map((entry) => this.#process(entry, groups, programs)) ?? null;
+      entries?.map((entry) => this.#process(entry, groups, programs)) ?? null;
+    if (entries?.some(timed))
+      for (const row of rows) row.cpu = agentCpu(processes as MonitorProcess[], row.id);
     this.#seen = this.#next;
     const feed: MonitorFeed = {
       open: true,
