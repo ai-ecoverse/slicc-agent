@@ -35,7 +35,7 @@ import { lickTriage } from './licks/triage.ts';
 import { setupMcp } from './mcp/index.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
-import { type Transport, transportFetch } from './net.ts';
+import { pageOnly, type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { createPages } from './remote/pages.ts';
 import { identity } from './scoops/identity.ts';
@@ -236,7 +236,7 @@ async function start(
       version: facts.version,
       reloadMs: RELOAD_MS,
       codemode: codemode.length > 0,
-      cors: client.transport.traits?.crossOrigin === 'cors',
+      cors: pageOnly(client.transport),
       redirect: options.mcpRedirect ?? new URL(MCP_CALLBACK, scope.location.origin).href,
     },
     BACKGROUND_CONTEXT

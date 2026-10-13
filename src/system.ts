@@ -1,5 +1,5 @@
 import type { KernelClient } from './kernel/client.ts';
-import type { Transport } from './net.ts';
+import { linkedExit, pageOnly, type Transport } from './net.ts';
 
 export interface SystemFacts {
   version: string;
@@ -40,11 +40,12 @@ export async function browserConnected(client: KernelClient): Promise<boolean> {
 }
 
 export function transportName(transport: Transport | undefined): string {
-  const traits = transport?.traits;
-  if (traits?.crossOrigin === 'cors') {
-    return "the page's own fetch, so only servers that allow CORS answer";
+  const exit = linkedExit(transport);
+  if (exit) {
+    return `a linked slicc exit${exit.kind === 'remote' ? ' on another device' : ''} that fetches without CORS`;
   }
-  if (traits?.manualRedirects) return 'a local proxy (slicc-node) that fetches without CORS';
+  if (pageOnly(transport)) return "the page's own fetch, so only servers that allow CORS answer";
+  if (transport?.traits?.manualRedirects) return 'a local proxy that fetches without CORS';
   return 'a relay that fetches without CORS';
 }
 
@@ -75,7 +76,7 @@ export function systemSection(facts: SystemFacts): string {
         ]
       : []),
     facts.commands.includes('git')
-      ? 'Git: local repositories work (init, add, commit, status, diff, restore, branch, checkout, log). Clone, fetch and push over HTTPS need slicc-node or the SLICC extension; through the page alone they fail with a CORS or 502 error.'
+      ? 'Git: local repositories work (init, add, commit, status, diff, restore, branch, checkout, log). Clone, fetch and push over HTTPS need slicc linked or the SLICC extension connected; through the page alone they fail with a CORS or 502 error.'
       : 'Git: not installed. When you need it, install it with `pnpm add -g @ai-ecoverse/wasm-git`.',
     `Not here yet: ${[...missing, ...(facts.browser ? [] : ['a browser or CDP tool']), 'GitHub credentials'].join(', ')}.`,
   ].join('\n');
