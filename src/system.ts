@@ -1,5 +1,4 @@
-import type { KernelClient, KernelProcess } from './kernel/client.ts';
-import { sweep } from './kernel/exec.ts';
+import type { KernelClient } from './kernel/client.ts';
 import type { Transport } from './net.ts';
 
 export interface SystemFacts {
@@ -29,70 +28,15 @@ export async function commandsOnPath(client: KernelClient): Promise<string[]> {
   return [...new Set(names.filter(Boolean))].sort();
 }
 
-const PROBE =
-  '[ -n "$SLICC_CDP_URL" ] && command -v playwright-cli >/dev/null && playwright-cli tab-list';
-const PROBE_TIMEOUT = 5000;
-const PROBE_TTL = 30000;
+const BROWSER = '[ -n "$SLICC_CDP_URL" ] && command -v playwright-cli >/dev/null';
 
-export async function browserConnected(
-  client: Pick<KernelClient, 'spawn' | 'kill' | 'ps'>,
-  timeout = PROBE_TIMEOUT
-): Promise<boolean> {
-  let process: KernelProcess;
+export async function browserConnected(client: KernelClient): Promise<boolean> {
   try {
-    process = await client.spawn(['bash', '-c', PROBE], {});
+    const process = await client.spawn(['bash', '-c', BROWSER], {});
+    return (await process.exited) === 0;
   } catch {
     return false;
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<number>((resolve) => {
-    timer = setTimeout(() => {
-      void sweep(client, process);
-      resolve(-1);
-    }, timeout);
-  });
-  try {
-    return (await Promise.race([process.exited, late])) === 0;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export interface BrowserProbe {
-  connected(): Promise<boolean>;
-  stale(): void;
-}
-
-export function browserProbe(
-  client: Pick<KernelClient, 'spawn' | 'kill' | 'ps'>,
-  options: { ttl?: number; timeout?: number; now?: () => number } = {}
-): BrowserProbe {
-  const ttl = options.ttl ?? PROBE_TTL;
-  const now = options.now ?? Date.now;
-  let value: boolean | undefined;
-  let at = 0;
-  let running: Promise<boolean> | undefined;
-  const refresh = () => {
-    running ??= browserConnected(client, options.timeout).then((connected) => {
-      value = connected;
-      at = now();
-      running = undefined;
-      return connected;
-    });
-    return running;
-  };
-  return {
-    connected() {
-      if (value === undefined) return refresh();
-      if (now() - at >= ttl) void refresh();
-      return Promise.resolve(value);
-    },
-    stale() {
-      void refresh();
-    },
-  };
 }
 
 export function transportName(transport: Transport | undefined): string {
@@ -127,7 +71,7 @@ export function systemSection(facts: SystemFacts): string {
     `Network: requests go through ${facts.transport}. localhost and 127.0.0.1 are this sandbox's own loopback, not the user's computer.`,
     ...(facts.browser
       ? [
-          `Browser: ${facts.commands.includes('curlwright') ? 'playwright-cli and curlwright drive' : 'playwright-cli drives'} the user's own browser through the SLICC extension, with their logins. Read the browser skill before you use it.`,
+          `Browser: one may be available (SLICC_CDP_URL is set), but nothing has checked that one is attached, so don't tell the user it's connected. ${facts.commands.includes('curlwright') ? 'playwright-cli and curlwright drive' : 'playwright-cli drives'} the user's own browser through the SLICC extension, with their logins. Read the browser skill and run its check before you use it.`,
         ]
       : []),
     facts.commands.includes('git')

@@ -52,7 +52,13 @@ import {
 import { RELOAD_MS, setupSkills } from './skills/index.ts';
 import { setupSprinkles } from './sprinkles/index.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
-import { agentVersion, browserProbe, commandsOnPath, kernelBoot, transportName } from './system.ts';
+import {
+  agentVersion,
+  browserConnected,
+  commandsOnPath,
+  kernelBoot,
+  transportName,
+} from './system.ts';
 import { type KernelPorts, kernelPorts, serveConnections, type WorkerScope } from './worker.ts';
 
 export interface AgentWorkerScope extends WorkerScope {
@@ -165,15 +171,14 @@ async function start(
     version: await agentVersion((url) => native(url)),
     commands: await commandsOnPath(client),
     transport: transportName(client.transport),
+    browser: await browserConnected(client),
   };
-  const browser = browserProbe(client);
-  void browser.connected();
   const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
   const providers = options.providers ?? sliccProviders();
   const models = createSliccModels(credentials, providers);
   const registry = createRegistry();
   registry.install(CodingTools);
-  registry.install(sliccPrompt(facts, browser));
+  registry.install(sliccPrompt(facts));
   registry.install(
     imageReads(
       (CodingTools.tools as readonly ToolRegistration[]).find(

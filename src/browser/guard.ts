@@ -73,10 +73,6 @@ function commandOf(args: unknown): string {
   return typeof command === 'string' ? command : '';
 }
 
-export function drivesBrowser(args: unknown): boolean {
-  return words(commandOf(args)).some(browserCommand);
-}
-
 export function browserGuard(
   origins: readonly string[],
   tools: readonly ToolRegistration[]

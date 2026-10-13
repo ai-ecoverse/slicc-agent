@@ -11,11 +11,22 @@ The first time an agent reaches for the browser in a session, SLICC may ask the 
 
 ## Before you start
 
+The system prompt only says a browser may be available. Check that one is attached, once, right before you first browse:
+
 ```bash
-[ -n "$SLICC_CDP_URL" ] && timeout -k 1 5 playwright-cli tab-list
+[ -n "$SLICC_CDP_URL" ] && timeout -k 1 5 bash -c 'playwright-cli tab-list'; echo "exit $?"
 ```
 
-This only lists tabs: it opens and changes nothing. If it exits 0, the browser is connected. Anything else (`SLICC_CDP_URL` unset, no `playwright-cli`, a 502 "no browser to drive", or no answer within 5 seconds) means it isn't connected: tell the user the browser is not connected, and that connecting it takes the SLICC extension, installed and attached to this browser. Then stop. Never try `127.0.0.1:9222`: that is the sandbox's own loopback.
+It only lists tabs: it opens and changes nothing. This may be when SLICC asks the user whether its agents may control the browser. Go by the exit status and the error, never by the number of tabs (the list can leave tabs out).
+
+- **exit 0:** the browser is connected.
+- **exit 124 or 137** (no answer in 5 seconds): SLICC is waiting for the user to allow browser control. Tell them so, and run the check again once they've answered.
+- **"no browser to drive":** the browser isn't connected. Tell the user, with the way to connect that the error names (install slicc-extension, or run `npx @ai-ecoverse/slicc-node`).
+- **"declined":** the user declined browser control. Tell them, and don't retry; reloading SLICC asks again.
+- **"no seven page connected", or the connection is refused:** the local link (slicc-node) isn't running or isn't connected to this page. Tell the user.
+- **Anything else,** including an empty `SLICC_CDP_URL` or no `playwright-cli`: the browser isn't connected (the extension isn't installed or attached). Say so and stop.
+
+Never try `127.0.0.1:9222`: that is the sandbox's own loopback.
 
 ## The loop
 
