@@ -149,6 +149,25 @@ function reloader(
 
 export const NO_OWNER = 'this sprinkle has no owner, so it can only be shown';
 
+export async function ownedRead(
+  files: ExecutionEnv,
+  asked: string,
+  home: string,
+  using: Context
+): Promise<{ files: ExecutionEnv; path: string; check: () => Promise<void> }> {
+  const real = await files.canonicalPath(asked, using);
+  const path = real.ok ? homePath(real.value, home, home) : asked;
+  return {
+    files,
+    path,
+    async check() {
+      const again = await files.canonicalPath(path, using);
+      if (again.ok && again.value !== path)
+        throw new Error(`${asked} changed while it was read; read it again`);
+    },
+  };
+}
+
 function readerFor(
   options: SprinklesAttach,
   owners: (context: Context) => Promise<Record<string, string>>,
@@ -166,7 +185,7 @@ function readerFor(
     const home = options.homeOf?.(agentId);
     const files = await options.envOf?.(agentId, using);
     if (!home || !files) throw new Error(NO_OWNER);
-    return { files, path: homePath(path, home, home), check: none };
+    return ownedRead(files, homePath(path, home, home), home, using);
   };
 }
 
