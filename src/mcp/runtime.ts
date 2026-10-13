@@ -103,7 +103,7 @@ export function stateLick(connection: McpServerConnection, cors: boolean): LickE
     ...base,
     title: `MCP server "${name}" can't connect`,
     text: blocked
-      ? "Seven reaches it with the page's own fetch, and the server sends no CORS headers. Run slicc-node, slicc-swift or the SLICC extension, which fetch without CORS."
+      ? "Seven reaches it with the page's own fetch, and the server sends no CORS headers. Link the `slicc` CLI or connect the SLICC extension; either fetches without CORS."
       : error,
     severity: 'warn',
     eventId: `${name}\nfailed\n${blocked ? 'cors' : error}`,

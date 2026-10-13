@@ -8,7 +8,12 @@ export interface TransportResponse {
 }
 
 export interface Transport {
-  traits?: { crossOrigin?: 'cors' | 'any'; manualRedirects?: boolean };
+  traits?: {
+    crossOrigin?: 'cors' | 'any';
+    manualRedirects?: boolean;
+    unavailable?: boolean;
+    exit?: TransportExit;
+  };
   fetch(request: {
     url: string;
     method: string;
@@ -16,6 +21,20 @@ export interface Transport {
     body?: Uint8Array;
     signal?: AbortSignal;
   }): Promise<TransportResponse>;
+}
+
+export interface TransportExit {
+  kind: 'local' | 'remote';
+  caps: string[];
+}
+
+export function linkedExit(transport: Transport | undefined): TransportExit | undefined {
+  const exit = transport?.traits?.exit;
+  return exit && (exit.kind === 'local' || exit.kind === 'remote') ? exit : undefined;
+}
+
+export function pageOnly(transport: Transport | undefined): boolean {
+  return transport?.traits?.crossOrigin === 'cors' && !linkedExit(transport);
 }
 
 export type Loopback = (
@@ -59,7 +78,7 @@ export function transportFetch(
     const request = new Request(input, init);
     const port = kernelPort(request.url);
     if (loopback && port) return loopback(request, { port, signal: request.signal });
-    if (new URL(request.url).origin === origin || transport.traits?.crossOrigin === 'cors') {
+    if (new URL(request.url).origin === origin || transport.traits?.unavailable) {
       return native(request);
     }
     const body = ['GET', 'HEAD'].includes(request.method)

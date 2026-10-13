@@ -21,9 +21,9 @@ It only lists tabs: it opens and changes nothing. This may be when SLICC asks th
 
 - **exit 0:** the browser is connected.
 - **exit 124 or 137** (no answer in 5 seconds): SLICC is waiting for the user to allow browser control. Tell them so, and run the check again once they've answered.
-- **"no browser to drive":** the browser isn't connected. Tell the user, with the way to connect that the error names (install slicc-extension, or run `npx @ai-ecoverse/slicc-node`).
+- **"no browser to drive":** the browser isn't connected. Tell the user, with the way to connect that the error names (install slicc-extension, or link the `slicc` CLI).
 - **"declined":** the user declined browser control. Tell them, and don't retry; reloading SLICC asks again.
-- **"no seven page connected", or the connection is refused:** the local link (slicc-node) isn't running or isn't connected to this page. Tell the user.
+- **"no seven page connected", or the connection is refused:** the linked `slicc` CLI isn't running or isn't connected to this page. Tell the user.
 - **Anything else,** including an empty `SLICC_CDP_URL` or no `playwright-cli`: the browser isn't connected (the extension isn't installed or attached). Say so and stop.
 
 Never try `127.0.0.1:9222`: that is the sandbox's own loopback.
