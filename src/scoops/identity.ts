@@ -27,7 +27,10 @@ export function identity(agents: () => Agents | undefined, fallback: ModelRef) {
   return async (target: EnvTargetLike, context: Context): Promise<Record<string, string>> => {
     const out: Record<string, string> = {};
     const caller = callerOf(agents(), target.conversationId);
-    if (caller) out.SLICC_AGENT = caller;
+    if (caller) {
+      out.SLICC_AGENT = caller;
+      out.PLAYWRIGHT_CLI_SESSION = caller;
+    }
     const read = target.read as DocumentReader | undefined;
     const stored =
       read && target.conversationId !== undefined
