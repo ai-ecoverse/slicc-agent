@@ -376,10 +376,20 @@ function harness(
   return { content: (content as Block[]).slice(0, -1), diagnostics: listed };
 }
 
+const count = (value: string | undefined): string => Number(value).toLocaleString('en');
+
+const ends: Record<string, string> = { end: ' from the start', beginning: ' from the end' };
+
 const phrasings: [RegExp, (match: RegExpExecArray) => string][] = [
   [/^Command exited with code (-?\d+)$/, (match) => `Exited with code ${match[1]}`],
   [/^Command timed out after (.+)$/, (match) => `Timed out after ${match[1]}`],
   [/^Command aborted$/, () => 'Aborted'],
+  [/^Full output: (.+)$/, (match) => `Full output in ${match[1]}`],
+  [
+    /^Output truncated(?: to its (beginning|end))?: (\d+) lines, (\d+) bytes dropped$/,
+    (match) =>
+      `Output truncated: ${count(match[2])} lines and ${count(match[3])} bytes dropped${ends[match[1] ?? ''] ?? ''}`,
+  ],
 ];
 
 function phrased(message: string): string {
