@@ -73,7 +73,7 @@ test('a terminal runs agent through the production worker: a sync call, an async
   assert.ok(seen.commands.includes('skill:skill:licks'));
 });
 
-test('a package in /opt/user/node_modules adds its skills, and one that duplicates a system package is ignored', async (t) => {
+test('a pnpm-linked package in /opt/user/node_modules adds its skills, and one that duplicates a system package is ignored', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await page.evaluate(async () => {
@@ -92,8 +92,10 @@ test('a package in /opt/user/node_modules adds its skills, and one that duplicat
     await write('/node_modules/syspack/skills/sys-skill/SKILL.md', skill('sys-skill'));
     await write('/opt/user/node_modules/syspack/package.json', manifest);
     await write('/opt/user/node_modules/syspack/skills/twin-skill/SKILL.md', skill('twin-skill'));
-    await write('/opt/user/node_modules/userpack/package.json', manifest);
-    await write('/opt/user/node_modules/userpack/skills/user-skill/SKILL.md', skill('user-skill'));
+    const store = '/opt/user/node_modules/.pnpm/userpack@1.0.0/node_modules/userpack';
+    await write(`${store}/package.json`, manifest);
+    await write(`${store}/skills/user-skill/SKILL.md`, skill('user-skill'));
+    await terminal.fs.symlink(store, '/opt/user/node_modules/userpack');
     const owner = await startAgent({
       worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },

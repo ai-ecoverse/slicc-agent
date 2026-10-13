@@ -333,6 +333,10 @@ export function findRole(roles: readonly Role[], name: string): Role | undefined
   );
 }
 
+function folder(kind: string): boolean {
+  return kind === 'directory' || kind === 'symlink';
+}
+
 export async function manifestDirs(
   files: RoleFiles,
   root: string,
@@ -342,7 +346,7 @@ export async function manifestDirs(
   if (!top.ok) return [];
   const out: string[] = [];
   for (const entry of top.value) {
-    if (entry.kind !== 'directory' || entry.name.startsWith('.')) continue;
+    if (!folder(entry.kind) || entry.name.startsWith('.')) continue;
     if (!entry.name.startsWith('@')) {
       out.push(`${root}/${entry.name}`);
       continue;
@@ -350,7 +354,7 @@ export async function manifestDirs(
     const scoped = await files.listDir(`${root}/${entry.name}`, context);
     if (scoped.ok)
       for (const inner of scoped.value)
-        if (inner.kind === 'directory') out.push(`${root}/${entry.name}/${inner.name}`);
+        if (folder(inner.kind)) out.push(`${root}/${entry.name}/${inner.name}`);
   }
   return out;
 }
