@@ -40,7 +40,7 @@ export interface SkillsRuntime {
   skills(): readonly Skill[];
   dirs(): string[];
   templates(): readonly PromptTemplate[];
-  expand(text: string, context: Context): Promise<string>;
+  expand(text: string, context: Context, conversationId?: number): Promise<string>;
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
 }
@@ -57,6 +57,7 @@ export interface SkillsAttach {
 export interface SkillPeople {
   homes(): readonly string[];
   homeOf(conversationId: number | undefined): string | undefined;
+  envOf(home: string): Promise<ExecutionEnv | undefined>;
 }
 
 export function userRoots(homes: readonly string[]): SkillRoot[] {
@@ -64,17 +65,6 @@ export function userRoots(homes: readonly string[]): SkillRoot[] {
     { dir: `${home}/.pi/agent/skills`, source: 'user' as const },
     { dir: `${home}/.agents/skills`, source: 'user' as const },
   ]);
-}
-
-export function visibleSkills(
-  skills: readonly Skill[],
-  homes: readonly string[],
-  own: string | undefined
-): Skill[] {
-  return skills.filter((skill) => {
-    const home = homes.find((dir) => skill.baseDir.startsWith(`${dir}/`));
-    return home === undefined || home === own;
-  });
 }
 
 export interface SkillsSetup {
@@ -170,15 +160,17 @@ export function commandsOf(
 
 export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
   let current: Skill[] = [];
+  let own = new Map<string, Skill[]>();
   let people: SkillPeople | undefined;
+  const mine = (conversationId: number | undefined) => {
+    const at = people?.homeOf(conversationId);
+    return (at ? own.get(at) : undefined) ?? current;
+  };
   const extension = defineExtension({
     name: 'slicc-skills',
     sections: [
       section('skills', async (input) => {
-        const shown = people
-          ? visibleSkills(current, people.homes(), people.homeOf(input.conversationId))
-          : current;
-        return formatSkillsForPrompt(shown) || undefined;
+        return formatSkillsForPrompt(mine(input.conversationId)) || undefined;
       }),
     ],
   });
@@ -199,7 +191,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       const reload = async (using: Context) => {
         const roots: SkillRoot[] = [
           ...(options.people
-            ? [...userRoots(homes()), { dir: GLOBAL_DIR, source: 'global' as const }]
+            ? [{ dir: GLOBAL_DIR, source: 'global' as const }]
             : [
                 { dir: `${dir}/skills`, source: 'user' as const },
                 { dir: `${home}/.agents/skills`, source: 'user' as const },
@@ -212,6 +204,15 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           { dir: SKILLS_DIR, source: 'builtin' },
         ];
         const loaded = await loadSkills(env, roots, using);
+        const homesLoaded = new Map<string, Skill[]>();
+        for (const at of homes()) {
+          const files = await options.people?.envOf(at);
+          if (!files) continue;
+          const found = await loadSkills(files, [...userRoots([at]), ...roots], using);
+          homesLoaded.set(at, found.skills);
+          loaded.diagnostics.push(...found.diagnostics);
+        }
+        own = homesLoaded;
         const prompts = await loadTemplates(
           env,
           [`${dir}/prompts`, ...(await packaged(env, 'prompts', using)), PROMPTS_DIR],
@@ -259,8 +260,11 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         skills: () => current,
         dirs: () => current.map((skill) => skill.baseDir),
         templates: () => templates,
-        async expand(text, using) {
-          const expanded = await expandSkillCommand(text, current, env, using);
+        async expand(text, using, conversationId) {
+          const at = people?.homeOf(conversationId);
+          const files = at ? await people?.envOf(at) : env;
+          if (!files) return text;
+          const expanded = await expandSkillCommand(text, mine(conversationId), files, using);
           return expanded === text ? expandPromptTemplate(text, templates) : expanded;
         },
         async reload(using) {
