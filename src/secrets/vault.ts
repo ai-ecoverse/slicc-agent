@@ -1,3 +1,4 @@
+import type { Hit } from '@ai-ecoverse/slicc-scrub';
 import type {
   AgentRecord,
   ErrorCode,
@@ -131,7 +132,11 @@ export class Vault implements Scrub {
 
   async texts<T extends Scrubbable>(texts: readonly T[]): Promise<T[]> {
     if (!this.needed) return [...texts];
-    const answer = (await this.#call('redact', { texts: [...texts] })) as { texts: T[] };
+    const answer = (await this.#call('redact', { texts: [...texts] })) as {
+      texts: T[];
+      hits: Hit[];
+      version: number;
+    };
     return answer.texts;
   }
 

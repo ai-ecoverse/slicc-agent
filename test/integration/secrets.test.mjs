@@ -3,23 +3,32 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname } from 'node:path';
 import { after, afterEach, test } from 'node:test';
+import { compile } from '@ai-ecoverse/slicc-scrub';
+import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' };
 import { launch } from './chrome.mjs';
-import { compile } from './fixtures/scrub.mjs';
+import { seeded } from './fixtures/seeds.mjs';
 
-const vectors = JSON.parse(
-  await readFile(new URL('./fixtures/scrub-vectors.json', import.meta.url), 'utf8')
-);
-const scrubber = compile(vectors.values);
+const seeds = seeded(vectors);
+const scrubber = compile(seeds.values);
 const leaks = (text) => scrubber.text(text).hits;
-const [alpha, beta, gamma] = vectors.values.map((item) => item.value);
-const split = (value) => `'${value.slice(0, 12)}''${value.slice(12, 24)}''${value.slice(24)}'`;
+const [alpha, beta, gamma] = seeds.values.map((item) => item.value);
+const split = (value) => (value.match(/.{1,10}/gu) ?? []).map((part) => `'${part}'`).join('');
 
 const types = { '.html': 'text/html', '.mjs': 'text/javascript', '.json': 'application/json' };
+const scrubPackage = new URL('../../node_modules/@ai-ecoverse/slicc-scrub/', import.meta.url);
+const served = {
+  'vault.html': new URL('./fixtures/vault.html', import.meta.url),
+  'fake-vault.mjs': new URL('./fixtures/fake-vault.mjs', import.meta.url),
+  'seeds.mjs': new URL('./fixtures/seeds.mjs', import.meta.url),
+  'slicc-scrub.mjs': new URL('dist/index.js', scrubPackage),
+  'vectors.json': new URL('vectors.json', scrubPackage),
+};
 const vaultServer = createServer(async (request, response) => {
   const name = new URL(request.url, 'http://vault').pathname.slice(1);
-  const body = await readFile(new URL(`./fixtures/${name}`, import.meta.url)).catch(() => null);
-  if (!body || !/^(vault\.html|fake-vault\.mjs|scrub\.mjs|scrub-vectors\.json)$/.test(name))
-    return response.writeHead(404).end();
+  const file = Object.hasOwn(served, name) ? served[name] : undefined;
+  const read = file ? await readFile(file, 'utf8').catch(() => null) : null;
+  const body = read?.replace("'@ai-ecoverse/slicc-scrub'", "'./slicc-scrub.mjs'");
+  if (!body) return response.writeHead(404).end();
   response
     .writeHead(200, {
       'content-type': types[extname(name)],
@@ -113,7 +122,7 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
   await page.init(helpers);
   await page.goto('/');
   const seeded = `${alpha}\n${beta}\n${gamma}\n`;
-  const command = `cat /home/seeded.txt; base64 /home/seeded.txt; printf '%s' ${split(beta)} | basenc --base16 -w 0; echo; printf '%s' ${split(alpha)}`;
+  const command = `cat /home/seeded.txt; base64 /home/seeded.txt; xxd -p /home/seeded.txt; printf '%s' ${split(beta)} | basenc --base16 -w 0; echo; printf '%s' ${split(alpha)}`;
   const steps = [
     { tool: { name: 'bash', args: { command } } },
     { tool: { name: 'read', args: { path: '/home/seeded.txt' } } },
@@ -190,13 +199,13 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
   assert.equal(seen.answer, 'Done.');
   assert.deepEqual(seen.vault, { port: 'ready', needed: true, version: 1, locked: 'no', held: 0 });
   for (const shown of [
-    'fnox_proxy_alpha',
-    'fnox_proxy_beta',
-    '[redacted:BETA_KEY]',
-    '[redacted:ALPHA_TOKEN]',
+    'fnox_proxy_000000000000000000000001',
+    'fnox_proxy_000000000000000000000004',
+    '[redacted:UNI_KEY]',
+    '[redacted:GH_TOKEN]',
   ])
     assert.ok(seen.entries.includes(shown), shown);
-  assert.ok(seen.memory.includes('remember fnox_proxy_beta'));
+  assert.ok(seen.memory.includes('remember fnox_proxy_000000000000000000000004'));
   assert.ok(seen.requests.length >= 5);
 });
 
@@ -318,7 +327,7 @@ test('secrets: a model call goes out prepared by the vault, with the key filled 
   );
   assert.equal(seen.upstream.length, 1);
   assert.equal(seen.upstream[0].authorization, `Bearer ${key}`);
-  assert.match(seen.upstream[0].body, /My key is fnox_proxy_alpha\./);
+  assert.match(seen.upstream[0].body, /My key is fnox_proxy_000000000000000000000001\./);
   assert.ok(seen.vault.some((message) => message.op === 'model' && message.provider === 'adobe'));
   assert.ok(seen.vault.some((message) => message.op === 'endpoints'));
   assert.ok(!seen.messages.includes(key));

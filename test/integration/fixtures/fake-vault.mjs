@@ -1,4 +1,4 @@
-import { compile } from './scrub.mjs';
+import { compile } from '@ai-ecoverse/slicc-scrub';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -31,10 +31,12 @@ export function serveVault(port, values, version = 1, options = {}) {
   const records = (options.records ?? []).map((record) => ({ state: 'ready', ...record }));
   const builtIn = options.models ?? [];
   let current = version;
-  let scrubber = compile([...values, ...records], current);
+  const secretsOf = () =>
+    [...values, ...records].map(({ name, value, placeholder }) => ({ name, value, placeholder }));
+  let scrubber = compile(secretsOf(), { version: current });
   const rebuild = () => {
     current += 1;
-    scrubber = compile([...values, ...records], current);
+    scrubber = compile(secretsOf(), { version: current });
   };
   const registered = { model: [], mcp: [] };
   const streams = new Map();
@@ -73,7 +75,7 @@ export function serveVault(port, values, version = 1, options = {}) {
         ? undefined
         : typeof request.body === 'string'
           ? scrubber.text(request.body).text
-          : scrubber.bytes(request.body);
+          : scrubber.bytes(request.body).bytes;
     const ready = {
       method: request.method,
       url: fill(request.url, owns, reaches, true),
@@ -213,22 +215,26 @@ export function serveVault(port, values, version = 1, options = {}) {
     return { ok: true };
   };
   const ops = {
-    redact: (message) => ({
-      texts: message.texts.map((text) =>
-        typeof text === 'string' ? scrubber.text(text).text : scrubber.bytes(text)
-      ),
-      hits: [],
-      version: current,
-    }),
+    redact: (message) => {
+      const hits = [];
+      const texts = message.texts.map((text) => {
+        const done = typeof text === 'string' ? scrubber.text(text) : scrubber.bytes(text);
+        hits.push(...done.hits);
+        return typeof text === 'string' ? done.text : done.bytes;
+      });
+      return { texts, hits, version: current };
+    },
     redactStream: (message) => {
       streams.set(message.stream, scrubber.stream());
-      return { stream: message.stream, idleMs: 0, version: current };
+      return { stream: message.stream, idleMs: scrubber.idleMs, version: current };
     },
     push: (message) => ({ chunk: stream(message).push(message.chunk) }),
+    idle: (message) => ({ chunk: stream(message).idle() }),
     end: (message) => {
-      const chunk = stream(message).end();
+      const open = stream(message);
+      const chunk = open.end();
       streams.delete(message.stream);
-      return { chunk, hits: [] };
+      return { chunk, hits: open.hits };
     },
     drop: (message) => {
       streams.delete(message.stream);
