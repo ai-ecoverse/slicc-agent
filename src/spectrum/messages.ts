@@ -350,6 +350,8 @@ interface Note {
 
 type Card = ToolCall & { notes?: Note[] };
 
+const RANK: Note['severity'][] = ['error', 'warn', 'info'];
+
 const LINE = /^\[(error|warn|info)\] (.*)$/;
 
 function rendered(diagnostics: readonly Diagnostic[]): string {
@@ -413,7 +415,10 @@ function settle(calls: Map<string, ToolCall>, result: ModelMessage, data?: unkno
   if (!call) return;
   const split = harness(result.content, data);
   call.output = textOf(split.content);
-  if (split.diagnostics.length) call.notes = split.diagnostics.map(note);
+  if (split.diagnostics.length)
+    call.notes = split.diagnostics
+      .map(note)
+      .sort((a, b) => RANK.indexOf(a.severity) - RANK.indexOf(b.severity));
   call.status = result.isError ? 'error' : 'done';
   const image = Array.isArray(result.content)
     ? (result.content as { type: string; data?: string; mimeType?: string }[]).find(

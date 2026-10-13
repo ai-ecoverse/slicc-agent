@@ -93,14 +93,16 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
     listing.notes.some((note) => note.severity === 'info' && /^Full output in /.test(note.text))
   );
   assert.doesNotMatch(seen.page, /<\/?harness>/);
-  assert.deepEqual(seen.notes.slice(0, 2), [
-    { severity: 'error', text: 'Error: Exited with code 5' },
-    { severity: 'info', text: `Note: ${listing.notes[0].text}` },
-  ]);
+  assert.deepEqual(
+    seen.notes.map((note) => note.severity),
+    ['error', 'warn', 'info']
+  );
+  assert.equal(seen.notes[0].text, 'Error: Exited with code 5');
   assert.match(
-    seen.notes[2].text,
+    seen.notes[1].text,
     /^Warning: Output truncated: [\d,]+ lines and [\d,]+ bytes dropped from the start$/
   );
+  assert.equal(seen.notes[2].text, `Note: ${listing.notes[1].text}`);
   const model = await page.evaluate(async () => {
     const entries = await globalThis.cardTest.owner
       .connect()
