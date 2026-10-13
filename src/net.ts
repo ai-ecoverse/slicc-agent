@@ -78,7 +78,11 @@ export function transportFetch(
     const request = new Request(input, init);
     const port = kernelPort(request.url);
     if (loopback && port) return loopback(request, { port, signal: request.signal });
-    if (new URL(request.url).origin === origin || transport.traits?.unavailable) {
+    if (
+      new URL(request.url).origin === origin ||
+      transport.traits?.unavailable ||
+      request.credentials === 'include'
+    ) {
       return native(request);
     }
     const body = ['GET', 'HEAD'].includes(request.method)
