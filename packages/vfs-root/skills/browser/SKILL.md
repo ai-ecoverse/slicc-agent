@@ -12,10 +12,10 @@ The first time an agent reaches for the browser in a session, SLICC may ask the 
 ## Before you start
 
 ```bash
-command -v playwright-cli && echo "$SLICC_CDP_URL"
+[ -n "$SLICC_CDP_URL" ] && timeout 5 playwright-cli tab-list
 ```
 
-If either is empty, the browser isn't connected (the extension isn't installed or attached). Say so and stop. Never try `127.0.0.1:9222`: that is the sandbox's own loopback.
+This only lists tabs: it opens and changes nothing. If it exits 0, the browser is connected. Anything else (`SLICC_CDP_URL` unset, no `playwright-cli`, a 502 "no browser to drive", or no answer within 5 seconds) means it isn't connected: tell the user the browser is not connected, and that connecting it takes the SLICC extension, installed and attached to this browser. Then stop. Never try `127.0.0.1:9222`: that is the sandbox's own loopback.
 
 ## The loop
 
