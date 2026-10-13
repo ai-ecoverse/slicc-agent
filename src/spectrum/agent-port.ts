@@ -7,6 +7,7 @@ import type {
   Message,
   Outgoing,
   SlashCommand,
+  SystemMessage,
   Thinking,
   UserMessage,
 } from '@ai-ecoverse/slicc-spectrum/ui';
@@ -16,6 +17,7 @@ import type { AgentConnection } from '../client.ts';
 import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
 import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
+import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
 
@@ -73,6 +75,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   #creating = new Map<string, Promise<string | null>>();
   #hold: AgentHold | null = null;
   readonly #outbox = new Map<string, Pending>();
+  readonly #notices = new Map<string, { at: number; message: SystemMessage }[]>();
 
   constructor(connection: AgentConnection) {
     super();
@@ -120,8 +123,31 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     this.#active ??= this.#connection.agents?.value?.active ?? null;
     this.emit('agents', this.list());
     for (const summary of this.#summary()) this.#update(summary.id);
-    for (const id of [...this.#messages.keys()])
-      if (!this.#summary().some((summary) => summary.id === id)) this.#messages.delete(id);
+    for (const id of [...this.#messages.keys(), ...this.#notices.keys()])
+      if (!this.#summary().some((summary) => summary.id === id)) {
+        this.#messages.delete(id);
+        this.#notices.delete(id);
+      }
+  }
+
+  notify(text: string, agentId: string = this.active()): void {
+    const notes = this.#notices.get(agentId) ?? [];
+    notes.push({
+      at: this.#messages.get(agentId)?.length ?? 0,
+      message: {
+        id: `n${crypto.randomUUID()}`,
+        role: 'system',
+        kind: 'notice',
+        text,
+        createdAt: Date.now(),
+      },
+    });
+    this.#notices.set(agentId, notes);
+    this.emit('messages', agentId);
+  }
+
+  #report(agentId: string): (text: string) => void {
+    return (text) => this.notify(text, agentId);
   }
 
   #update(agentId: string): void {
@@ -187,13 +213,23 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const found = this.#summary().find((summary) => summary.id === id);
     if (!found) return;
     this.#active = id;
-    if (found.kind === 'cone') void this.#connection.control.selectCone(id, BACKGROUND_CONTEXT);
+    if (found.kind === 'cone')
+      attempt(
+        this.#connection.control.selectCone(id, BACKGROUND_CONTEXT),
+        'switch cones',
+        this.#report(id)
+      );
     this.emit('active', id);
     this.emit('messages', id);
   }
 
   messages(agentId: string = this.active()): readonly Message[] {
-    return this.#messages.get(agentId) ?? [];
+    const shown = this.#messages.get(agentId) ?? [];
+    const notes = this.#notices.get(agentId);
+    if (!notes) return shown;
+    const at = (index: number) => notes.filter((note) => note.at === index).map((n) => n.message);
+    const late = notes.filter((note) => note.at >= shown.length).map((note) => note.message);
+    return [...shown.flatMap((message, index) => [...at(index), message]), ...late];
   }
 
   async send(agentId: string, input: string | Outgoing): Promise<void> {
@@ -216,7 +252,11 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       .finally(() => pending && this.#settle(pending));
     if (!sent.accepted) throw new Error(sent.error.message);
     if (pending?.dropped)
-      void this.#connection.control.unqueue(pending.agentId, sent.submissionId, BACKGROUND_CONTEXT);
+      attempt(
+        this.#connection.control.unqueue(pending.agentId, sent.submissionId, BACKGROUND_CONTEXT),
+        'remove queued messages',
+        this.#report(pending.agentId)
+      );
   }
 
   #pending(agentId: string, outgoing: Outgoing): Pending {
@@ -251,7 +291,11 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   }
 
   stop(agentId: string = this.active()): void {
-    void this.#connection.control.stopAgent(agentId, BACKGROUND_CONTEXT);
+    attempt(
+      this.#connection.control.stopAgent(agentId, BACKGROUND_CONTEXT),
+      'stop agents',
+      this.#report(agentId)
+    );
   }
 
   busy(agentId: string = this.active()): boolean {
@@ -281,7 +325,11 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       this.emit('messages', pending.agentId);
       return;
     }
-    void this.#connection.control.unqueue(agentId, messageId.replace(/^q/, ''), BACKGROUND_CONTEXT);
+    attempt(
+      this.#connection.control.unqueue(agentId, messageId.replace(/^q/, ''), BACKGROUND_CONTEXT),
+      'remove queued messages',
+      this.#report(agentId)
+    );
   }
 
   suggestion(): string | null {
@@ -297,29 +345,49 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     );
     const lick = message?.role === 'lick' && entry ? entryLick(entry) : undefined;
     if (lick)
-      void this.#connection.control.resolveAgentLick(agentId, lick.id, state, BACKGROUND_CONTEXT);
+      attempt(
+        this.#connection.control.resolveAgentLick(agentId, lick.id, state, BACKGROUND_CONTEXT),
+        'answer licks',
+        this.#report(agentId)
+      );
   }
 
   compact(agentId: string = this.active()): void {
-    void this.#connection.control.compactAgent(agentId, null, BACKGROUND_CONTEXT);
+    attempt(
+      this.#connection.control.compactAgent(agentId, null, BACKGROUND_CONTEXT),
+      'compact conversations',
+      this.#report(agentId)
+    );
   }
 
   clear(agentId: string = this.active()): void {
-    void this.#connection.control.newChat(agentId, BACKGROUND_CONTEXT);
+    attempt(
+      this.#connection.control.newChat(agentId, BACKGROUND_CONTEXT),
+      'start new chats',
+      this.#report(agentId)
+    );
   }
 
   freeze(agentId: string = this.active()): void {
-    void this.#connection.control.freeze(agentId, BACKGROUND_CONTEXT);
+    attempt(
+      this.#connection.control.freeze(agentId, BACKGROUND_CONTEXT),
+      'freeze cones',
+      this.#report(agentId)
+    );
   }
 
   #configure(agentId: string, change: Partial<AgentSettingsChange>): void {
-    void this.#connection.control.configure(
-      {
-        model: change.model ?? null,
-        thinkingLevel: change.thinkingLevel ?? null,
-        agentId,
-      },
-      BACKGROUND_CONTEXT
+    attempt(
+      this.#connection.control.configure(
+        {
+          model: change.model ?? null,
+          thinkingLevel: change.thinkingLevel ?? null,
+          agentId,
+        },
+        BACKGROUND_CONTEXT
+      ),
+      'change agent settings',
+      this.#report(agentId)
     );
   }
 
@@ -439,6 +507,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   }
 
   discard(id: string): void {
-    void this.#connection.control.discard(id, BACKGROUND_CONTEXT);
+    attempt(
+      this.#connection.control.discard(id, BACKGROUND_CONTEXT),
+      'discard frozen cones',
+      this.#report(this.active())
+    );
   }
 }
