@@ -90,7 +90,7 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
   assert.deepEqual(refused.notes, [{ severity: 'error', text: 'Exited with code 5' }]);
   assert.doesNotMatch(listing.output, /<\/?harness>/);
   assert.ok(
-    listing.notes.some((note) => note.severity === 'info' && /^Full output: /.test(note.text))
+    listing.notes.some((note) => note.severity === 'info' && /^Full output in /.test(note.text))
   );
   assert.doesNotMatch(seen.page, /<\/?harness>/);
   assert.ok(
