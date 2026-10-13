@@ -169,22 +169,23 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
       return check();
     };
     await until(() => model.agent.hold() === null);
+    const texts = () =>
+      model.agent.messages('cone').map((message) => message.parts?.[0]?.text ?? message.text);
     await until(
       () =>
         !globalThis.deep('slicc-composer')?.shadowRoot?.querySelector('.hold') &&
         connection.transcript.value.entries.some(
           (entry) =>
             entry.kind === 'pi.assistant' && JSON.stringify(entry.model).includes('Later done.')
-        )
+        ) &&
+        texts().includes('Later done.')
     );
     const result = {
       line: Boolean(globalThis.deep('slicc-composer')?.shadowRoot?.querySelector('.hold')),
       hold: model.agent.hold(),
       last: holds.at(-1),
       reasons: holds.map((hold) => hold?.reason ?? null),
-      texts: model.agent
-        .messages('cone')
-        .map((message) => message.parts?.[0]?.text ?? message.text),
+      texts: texts(),
     };
     await owner.release();
     return result;
