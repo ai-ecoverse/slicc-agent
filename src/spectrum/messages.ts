@@ -272,7 +272,7 @@ function user(
   return {
     id,
     role: 'user',
-    ...shownUser(message.content),
+    ...shownUser(message.content, `ref:${id.slice(1)}:0`),
     createdAt: message.timestamp ?? 0,
     ...(delivered ? { delivered } : {}),
     ...(from ? { from: from.from } : {}),
@@ -563,8 +563,11 @@ export function toMessages(
   return out;
 }
 
-function shownUser(content: ModelMessage['content']): Pick<UserMessage, 'text' | 'attachments'> {
-  const { text, attachments } = splitUser(content);
+function shownUser(
+  content: ModelMessage['content'],
+  prefix?: string
+): Pick<UserMessage, 'text' | 'attachments'> {
+  const { text, attachments } = splitUser(content, prefix);
   return attachments.length ? { text, attachments } : { text };
 }
 

@@ -45,6 +45,7 @@ import {
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
+import { slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
@@ -120,21 +121,26 @@ const noSettings: AgentSettings = {
   signIn: async () => null,
 };
 
-async function follow(agent: Agent, context: Context) {
+async function follow(
+  agent: Agent,
+  context: Context,
+  slim: (view: ConversationView) => ConversationView
+) {
   let attached = await agent.cone().viewState(context);
-  const state = replicatedState<ConversationView>(attached.value);
-  const mirror = (value: ConversationView, from: Context) => state.replace(from, value);
+  const state = replicatedState<ConversationView>(slim(attached.value));
+  const mirror = (value: ConversationView, from: Context) => state.replace(from, slim(value));
   let off = attached.subscribe(mirror);
   const stop = agent.onCone(async (conversation) => {
     const next = await conversation.viewState(context);
     off();
     attached.dispose();
     attached = next;
-    state.replace(context, next.value);
+    state.replace(context, slim(next.value));
     off = next.subscribe(mirror);
   });
   return {
     state,
+    refresh: () => state.replace(context, slim(attached.value)),
     dispose() {
       stop();
       off();
@@ -176,13 +182,20 @@ export async function hostAgent(
     pages?: Pages;
     secrets?: HostSecrets;
     uploads?: Uploads;
+    thumbnail?: Thumbnail;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const serverId = options.serverId ?? crypto.randomUUID();
-  const transcript = await follow(agent, context);
+  let refresh = () => {};
+  const slims = slimmer(options.thumbnail ?? thumbnail, () => refresh());
+  const transcript = await follow(agent, context, slims.slim);
   const { state } = transcript;
-  const mounted = await agentViews(agent, context);
+  const mounted = await agentViews(agent, context, slims.slim);
+  refresh = () => {
+    transcript.refresh();
+    mounted.refresh();
+  };
   const touch = () => options.freezer?.touch();
   const untouch = [state.subscribe(touch), mounted.views.subscribe(touch)];
   const catalogue = () =>
@@ -317,6 +330,7 @@ export async function hostAgent(
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();
+      slims.dispose();
       for (const off of untouch) off();
       options.freezer?.close();
       options.secrets?.close?.();

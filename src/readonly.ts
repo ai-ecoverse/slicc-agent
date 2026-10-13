@@ -6,7 +6,13 @@ import { VIEW_ONLY } from './view-only.ts';
 
 export { VIEW_ONLY };
 
-const READS = new Set<keyof AgentControl>(['wait', 'changesOpen', 'monitorOpen', 'monitorClose']);
+const READS = new Set<keyof AgentControl>([
+  'wait',
+  'changesOpen',
+  'monitorOpen',
+  'monitorClose',
+  'image',
+]);
 
 function refuse(): Promise<never> {
   return Promise.reject(new ServerError('EACCES' as never, VIEW_ONLY));

@@ -29,11 +29,13 @@ import { scrubItems, scrubText } from './secrets/scrub.ts';
 import type {
   AgentControl,
   Created,
+  ImageRef,
   LickResolved,
   OperationError,
   Rewound,
   SendRequest,
   SendResponse,
+  StoredImage,
 } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
@@ -288,6 +290,21 @@ async function rewindAgent(
   };
 }
 
+type Picture = { type?: string; data?: string; mimeType?: string };
+
+async function storedImage(
+  harness: Harness,
+  ref: ImageRef,
+  context: Context
+): Promise<StoredImage> {
+  const entry = await harness.commit((tx) => tx.entry(ref.entry as EntryId), context);
+  const content = entry?.model?.[ref.message]?.content;
+  const part = Array.isArray(content) ? (content[ref.part] as Picture | undefined) : undefined;
+  return part?.type === 'image' && part.data && part.mimeType
+    ? { data: part.data, mimeType: part.mimeType }
+    : { data: null, mimeType: null };
+}
+
 async function contentOf(
   text: string,
   request: SendRequest,
@@ -425,6 +442,7 @@ export function createAgentControl(
     monitorOpen: async (lease, resync, context) =>
       monitor ? monitor.open(lease, resync, context) : { lease: '', ttlMs: 0 },
     monitorClose: async (lease, context) => monitor?.close(lease, context),
+    image: (ref, context) => storedImage(harness, ref, context),
     async unqueue(agentId, id, context) {
       return withdraw(await conversationFor(agentId, context), id, context);
     },

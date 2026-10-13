@@ -103,7 +103,16 @@ export interface AgentControl {
   changeRevert(path: string, context: Context): Promise<Created>;
   monitorOpen(lease: string | null, resync: boolean, context: Context): Promise<MonitorLease>;
   monitorClose(lease: string, context: Context): Promise<void>;
+  image(ref: ImageRef, context: Context): Promise<StoredImage>;
 }
+
+export interface ImageRef {
+  entry: number;
+  message: number;
+  part: number;
+}
+
+export type StoredImage = { data: string; mimeType: string } | { data: null; mimeType: null };
 
 export interface MonitorLease {
   lease: string;
