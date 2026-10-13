@@ -488,6 +488,7 @@ async function resetWorkspace(
   const place = workspace(folder, host.layout);
   const cleared = await files.remove(place, { recursive: true, force: true }, context);
   if (!cleared.ok) return false;
+  if (host.layout?.users) return true;
   return (await files.createDir(place, { recursive: true }, context)).ok;
 }
 
