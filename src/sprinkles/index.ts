@@ -69,6 +69,14 @@ function targetOf(agentId: string): LickTarget {
   return agentId.startsWith('scoop:') ? (agentId as LickTarget) : `cone:${agentId}`;
 }
 
+export function liveOwner(agents: Agents, owner: string | undefined): string | undefined {
+  if (!owner) return undefined;
+  const state = agents.state();
+  if (state.cones[owner]) return owner;
+  const scoop = state.scoops[owner];
+  return scoop && live(scoop) ? owner : undefined;
+}
+
 export function ownerOf(agents: Agents, owner: string | undefined): string {
   const state = agents.state();
   if (owner && state.cones[owner]) return owner;
@@ -89,7 +97,8 @@ async function filesIn(
   dir: string,
   reserved: ReadonlySet<string>,
   owned: Record<string, string>,
-  using: Context
+  using: Context,
+  found: Record<string, string> = {}
 ): Promise<Sprinkle[]> {
   const { env, agents } = options;
   const out: Sprinkle[] = [];
@@ -98,6 +107,7 @@ async function filesIn(
       const id = place.cone ? `${place.cone}/${name}` : name;
       if (reserved.has(name) || out.some((item) => item.id === id)) continue;
       const read = await env.readTextFile(path, using);
+      if (place.cone && !owned[id]) found[id] = place.cone;
       const owner = owned[id] ?? (place.cone || undefined);
       if (read.ok) out.push(entry(name, read.value, ownerOf(agents, owner), id));
     }
@@ -119,7 +129,13 @@ function reloader(
     const stored = suggestions === undefined ? undefined : await env.exists(store, using);
     const offered = stored?.ok === true && stored.value;
     const reserved = new Set([WELCOME, ...(offered ? [SUGGESTIONS] : [])]);
-    const out = await filesIn(options, dir, reserved, owned, using);
+    const found: Record<string, string> = {};
+    const out = await filesIn(options, dir, reserved, owned, using, found);
+    if (Object.keys(found).length)
+      await options.harness.commit(async (tx) => {
+        const doc = await tx.doc(SprinklesDoc);
+        for (const [id, cone] of Object.entries(found)) doc.owners[id] ??= cone;
+      }, using);
     if (offered)
       out.push(entry(SUGGESTIONS, suggestions as string, ownerOf(agents, owned[SUGGESTIONS])));
     if (welcome !== undefined)
@@ -131,22 +147,26 @@ function reloader(
   };
 }
 
+export const NO_OWNER = 'this sprinkle has no owner, so it can only be shown';
+
 function readerFor(
   options: SprinklesAttach,
   owners: (context: Context) => Promise<Record<string, string>>,
   inside: (path: unknown, context: Context) => Promise<string>
 ) {
   const { env, agents } = options;
+  const none = async () => undefined;
   return async (id: string, path: unknown, using: Context) => {
     if (options.shared && BUILTIN.has(id))
-      return { files: env, path: homePath(path, options.shared, options.shared) };
-    const owner = ownerOf(agents, (await owners(using))[id]);
+      return { files: env, path: homePath(path, options.shared, options.shared), check: none };
+    if (!options.places) return { files: env, path: await inside(path, using), check: none };
+    const owner = liveOwner(agents, (await owners(using))[id]);
+    if (!owner) throw new Error(NO_OWNER);
     const agentId = owner.startsWith('scoop:') ? owner : `cone:${owner}`;
     const home = options.homeOf?.(agentId);
-    return {
-      files: (await options.envOf?.(agentId, using)) ?? env,
-      path: home ? homePath(path, home, home) : await inside(path, using),
-    };
+    const files = await options.envOf?.(agentId, using);
+    if (!home || !files) throw new Error(NO_OWNER);
+    return { files, path: homePath(path, home, home), check: none };
   };
 }
 
@@ -232,6 +252,9 @@ export function setupSprinkles() {
                 using
               );
           }
+          const owner = (await owners(using))[id];
+          if (options.places && !BUILTIN.has(id) && !liveOwner(agents, owner))
+            return { delivered: false };
           await licks.deliver(
             {
               channel: 'sprinkle',
@@ -239,7 +262,7 @@ export function setupSprinkles() {
               title: sprinkle.title,
               text: payload.action || '(no action)',
               ...(payload.data === null ? {} : { body: JSON.stringify(payload.data, null, 2) }),
-              target: targetOf(ownerOf(agents, (await owners(using))[id])),
+              target: targetOf(ownerOf(agents, owner)),
             },
             using
           );
@@ -249,9 +272,10 @@ export function setupSprinkles() {
           if (!find(id)) throw new Error(`there is no sprinkle ${id}`);
           const handlers: Record<SprinkleMethod, () => Promise<JsonValue>> = {
             async readFile() {
-              const { files, path } = await reader(id, args[0], using);
+              const { files, path, check } = await reader(id, args[0], using);
               const read = await files.readTextFile(path, using);
               if (!read.ok) throw new Error(read.error.message);
+              await check();
               return read.value;
             },
             async exists() {
