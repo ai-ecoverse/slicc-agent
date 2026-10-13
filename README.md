@@ -476,7 +476,7 @@ The process table is the worker's root client's `ps()`. Each process is named af
   | Context | 80% | |
   | A paused scheduler | always | |
 
-  An alert that suggests a command, such as a runaway's `kill -- -412`, a background process's `kill 52` or a zombie's parent, ends its `detail` with a sentence that introduces it, and puts the plain command in `command`, which spectrum shows as a code chip. A process row takes the severity of its alerts, so it's red only when its alert is at error.
+  An alert that suggests a command, such as a runaway's `kill -- -412`, a background process's `kill 52` or a zombie's parent, keeps its `detail` a full sentence and puts the plain command in `command`, with the lead-in for it, such as "To stop it, run", in `commandLabel`. Spectrum shows the label and the command as a code chip after the detail; an older spectrum shows only the detail. A process row takes the severity of its alerts, so it's red only when its alert is at error.
 
 - **Sections:** cones and scoops, tasks as a tree per cone, processes, recent problems, pending changes and sprinkles. Each row has an `id`, and agents and tasks have a `depth` (at most 6), which spectrum (≥ 1.57.0) draws as indentation.
 - **More sections:** `createAgentModel(connection, { monitor: { extra } })` adds the page's own sections, such as terminals, browser tabs and tray followers.

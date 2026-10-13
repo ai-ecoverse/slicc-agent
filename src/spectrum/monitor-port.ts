@@ -44,7 +44,7 @@ export const DEPTH_MAX = 6;
 const MINUTE = 60000;
 const HOUR = 3600000;
 
-export type AgentMonitorAlert = MonitorAlert & { command?: string };
+export type AgentMonitorAlert = MonitorAlert & { command?: string; commandLabel?: string };
 
 export interface Sample {
   at: number;
@@ -367,8 +367,9 @@ function cpuAlerts(input: MonitorInput, processes: readonly MonitorProcess[], na
     (group): AgentMonitorAlert => ({
       id: `runaway-cpu-${group.pgid}`,
       title: `${nameOf(group.agentId)} is using a lot of CPU`,
-      detail: `${Math.round(group.share * 100)}% of one core for ${Math.floor(group.held / MINUTE)} minutes. To stop it, run:`,
+      detail: `${Math.round(group.share * 100)}% of one core for ${Math.floor(group.held / MINUTE)} minutes.`,
       command: `kill -- -${group.pgid}`,
+      commandLabel: 'To stop it, run',
       severity: cpuSeverity(group),
     })
   );
@@ -462,8 +463,9 @@ function crowdAlerts(processes: readonly MonitorProcess[], nameOf: Names): Agent
       out.push({
         id: `runaway-${pgid}`,
         title: `${nameOf((members[0] as MonitorProcess).agentId)} has ${members.length} processes`,
-        detail: 'To stop them, run:',
+        detail: 'Something in it may be starting processes in a loop.',
         command: `kill -- -${pgid}`,
+        commandLabel: 'To stop them, run',
         severity: crowdSeverity(members),
       });
   if (processes.length > TOTAL_MAX)
@@ -485,20 +487,19 @@ function processAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): A
       out.push({
         id: `zombie-${process.pid}`,
         title: `Process ${process.pid} is a zombie`,
+        detail: `Its parent ${process.ppid} hasn't reaped it.`,
         ...(process.ppid > 1
-          ? {
-              detail: `Its parent ${process.ppid} hasn't reaped it. To clear it, stop the parent:`,
-              command: `kill ${process.ppid}`,
-            }
-          : { detail: `Its parent ${process.ppid} hasn't reaped it.` }),
+          ? { command: `kill ${process.ppid}`, commandLabel: 'To clear it, stop the parent' }
+          : {}),
         severity: 'warn',
       });
     if (stale(process, agents, input.now))
       out.push({
         id: `stale-${process.pid}`,
         title: `${process.command || `Process ${process.pid}`} has run for ${age(input.now - process.started)}`,
-        detail: `${nameOf(process.agentId)} started it in the background. To stop it, run:`,
+        detail: `${nameOf(process.agentId)} started it in the background.`,
         command: `kill ${process.pid}`,
+        commandLabel: 'To stop it, run',
         severity: staleSeverity(process, input.now),
       });
   }
