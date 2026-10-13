@@ -23,6 +23,8 @@ import { Emitter } from './emitter.ts';
 export const RENEW_MS = 10000;
 export const ROWS_MAX = 200;
 export const HISTORY = 24;
+export const CPU_HISTORY = 30;
+export const CPU_QUIET = 0.01;
 export const BUDGET_WARN = 80;
 export const BUDGET_ERROR = 95;
 export const RETRY_WARN = 3;
@@ -59,6 +61,7 @@ export interface MonitorInput {
   history: readonly Sample[];
   now: number;
   hot?: ReadonlyMap<number, number>;
+  cpu?: readonly number[];
 }
 
 const KINDS: Record<string, string> = {
@@ -98,6 +101,32 @@ export function bytes(value: number): string {
     unit++;
   }
   return `${size.toFixed(size < 10 ? 1 : 0)} ${units[unit]}`;
+}
+
+export function cpuText(share: number | null | undefined): string | null {
+  if (typeof share !== 'number' || share < CPU_QUIET) return null;
+  return `${Math.round(share * 100)}% CPU`;
+}
+
+export function agentsCpu(feed: MonitorFeed): number | null {
+  const shares = feed.agents
+    .map((agent) => agent.cpu)
+    .filter((share): share is number => typeof share === 'number');
+  return shares.length ? shares.reduce((sum, share) => sum + share, 0) : null;
+}
+
+function cpuVital(feed: MonitorFeed, history: readonly number[]): MonitorVital[] {
+  const share = agentsCpu(feed);
+  if (share === null) return [];
+  return [
+    {
+      id: 'cpu',
+      label: 'CPU',
+      value: String(Math.round(share * 100)),
+      unit: '%',
+      ...(history.length > 1 ? { series: history.map((value) => Math.round(value * 100)) } : {}),
+    },
+  ];
 }
 
 function memoryVital(processes: readonly MonitorProcess[]): MonitorVital[] {
@@ -259,6 +288,7 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
         : { id: 'processes', label: 'Processes', value: '—', unit: 'kernel not reachable' }
   );
   out.push(...memoryVital(feed.processes ?? []));
+  out.push(...cpuVital(feed, input.cpu ?? []));
   const ratios = feed.agents
     .map((agent) => contextRatio(agent, input.models))
     .filter((ratio): ratio is number => ratio !== null);
@@ -497,7 +527,12 @@ function agentRow(agent: MonitorAgent, depth: number, models: readonly ModelChoi
         ? 'error'
         : 'idle';
   const model = models.find((choice) => choice.id === agent.model)?.label ?? agent.model;
-  const meta = [word, model, ratio === null ? null : `${Math.round(ratio * 100)}% context`]
+  const meta = [
+    word,
+    model,
+    ratio === null ? null : `${Math.round(ratio * 100)}% context`,
+    cpuText(agent.cpu),
+  ]
     .filter(Boolean)
     .join(' · ');
   const badges = [
@@ -561,6 +596,7 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
         `pid ${process.pid}`,
         process.user,
         typeof process.rss === 'number' ? bytes(process.rss) : null,
+        cpuText(process.cpu),
         process.started ? age(input.now - process.started) : null,
       ]
         .filter(Boolean)
@@ -696,6 +732,7 @@ export class MonitorAdapter implements MonitorPort {
   #history: Sample[] = [];
   #hot = new Map<number, number>();
   #hotAt = -1;
+  #cpu: number[] = [];
 
   constructor(connection: AgentConnection, options: MonitorAdapterOptions = {}) {
     this.#connection = connection;
@@ -738,6 +775,7 @@ export class MonitorAdapter implements MonitorPort {
       history: this.#history,
       now: this.#now(),
       hot: this.#hot,
+      cpu: this.#cpu,
     });
   }
 
@@ -756,6 +794,7 @@ export class MonitorAdapter implements MonitorPort {
     this.#history = [];
     this.#hot = new Map();
     this.#hotAt = -1;
+    this.#cpu = [];
     void control.changesOpen(BACKGROUND_CONTEXT).catch(() => undefined);
     const lease = control.monitorOpen(null, true, BACKGROUND_CONTEXT).then(
       (opened) => opened.lease || null,
@@ -796,6 +835,10 @@ export class MonitorAdapter implements MonitorPort {
     if (!feed?.open || feed.at === this.#hotAt) return;
     this.#hotAt = feed.at;
     this.#hot = hotGroups(feed.processes ?? [], feed.at, this.#hot);
+    const share = agentsCpu(feed);
+    if (share === null) return;
+    this.#cpu.push(share);
+    if (this.#cpu.length > CPU_HISTORY) this.#cpu.shift();
   }
 
   #update(): void {
