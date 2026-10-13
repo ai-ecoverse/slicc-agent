@@ -5,7 +5,13 @@ import { type Agents, live } from '../agents.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
 import { type Layout, LEGACY } from '../layout.ts';
 import type { Licks } from '../licks/licks.ts';
-import { DEFAULT_LIMITS, loadRoles, packageDirs, type Roles } from '../roles/roles.ts';
+import {
+  DEFAULT_LIMITS,
+  loadRoles,
+  PACKAGE_ROOTS,
+  packageDirs,
+  type Roles,
+} from '../roles/roles.ts';
 import { type CliOptions, createCli, RUN_DIR } from './cli.ts';
 import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
 import {
@@ -303,7 +309,7 @@ export function setupScoops(
             files: env,
             builtin,
             dirs: [
-              ...(await packageDirs(env, '/node_modules', using)).map((dir) => ({
+              ...(await packageDirs(env, PACKAGE_ROOTS, using)).map((dir) => ({
                 source: 'package' as const,
                 dir,
               })),

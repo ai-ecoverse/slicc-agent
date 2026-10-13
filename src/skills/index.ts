@@ -7,7 +7,7 @@ import {
 } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Licks } from '../licks/licks.ts';
-import { manifestDirs } from '../roles/roles.ts';
+import { PACKAGE_ROOTS, type PiPackages, piPackages } from '../roles/roles.ts';
 import type { Command } from '../services.ts';
 import {
   type Diagnostic,
@@ -88,13 +88,8 @@ export function piResources(dir: string, text: string, kind: 'skills' | 'prompts
     .map((path) => `${dir}/${path.replace(/^\.\//, '').replace(/\/$/, '')}`);
 }
 
-async function packaged(env: ExecutionEnv, kind: 'skills' | 'prompts', context: Context) {
-  const out: string[] = [];
-  for (const dir of await manifestDirs(env, '/node_modules', context)) {
-    const read = await env.readTextFile(`${dir}/package.json`, context);
-    if (read.ok) out.push(...piResources(dir, read.value, kind));
-  }
-  return out;
+function packaged(found: PiPackages, kind: 'skills' | 'prompts') {
+  return found.packages.flatMap(({ dir, manifest }) => piResources(dir, manifest, kind));
 }
 
 async function installBuiltins(
@@ -189,6 +184,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       const commands = replicatedState<Command[]>([]);
       const reported = new Set<string>();
       const reload = async (using: Context) => {
+        const packages = await piPackages(env, PACKAGE_ROOTS, using);
         const roots: SkillRoot[] = [
           ...(options.people
             ? [{ dir: GLOBAL_DIR, source: 'global' as const }]
@@ -197,11 +193,8 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
                 { dir: `${home}/.agents/skills`, source: 'user' as const },
                 { dir: GLOBAL_DIR, source: 'global' as const },
               ]),
-          ...(await packaged(env, 'skills', using)).map((dir) => ({
-            dir,
-            source: 'package' as const,
-          })),
           { dir: SKILLS_DIR, source: 'builtin' },
+          ...packaged(packages, 'skills').map((dir) => ({ dir, source: 'package' as const })),
         ];
         const loaded = await loadSkills(env, roots, using);
         const homesLoaded = new Map<string, Skill[]>();
@@ -215,13 +208,17 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         own = homesLoaded;
         const prompts = await loadTemplates(
           env,
-          [`${dir}/prompts`, ...(await packaged(env, 'prompts', using)), PROMPTS_DIR],
+          [`${dir}/prompts`, PROMPTS_DIR, ...packaged(packages, 'prompts')],
           using
         );
         current = loaded.skills;
         templates = prompts.templates;
         commands.replace(using, commandsOf(current, templates));
-        for (const problem of [...loaded.diagnostics, ...prompts.diagnostics]) {
+        for (const problem of [
+          ...packages.skipped,
+          ...loaded.diagnostics,
+          ...prompts.diagnostics,
+        ]) {
           const key = `${problem.path}\n${problem.message}`;
           if (reported.has(key)) continue;
           reported.add(key);

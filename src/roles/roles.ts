@@ -288,22 +288,31 @@ export interface LoadOptions {
   settingsPath: string;
 }
 
-const ORDER: RoleSource[] = ['builtin', 'package', 'user', 'project'];
+const ORDER: RoleSource[] = ['project', 'user', 'builtin', 'package'];
 
 export async function loadRoles(options: LoadOptions, context: Context): Promise<Roles> {
   const warnings: string[] = [];
   const byName = new Map<string, Role>();
   const add = (role: Role | undefined) => {
-    if (role) byName.set(role.name, role);
+    if (!role) return;
+    const earlier = byName.get(role.name);
+    if (!earlier) byName.set(role.name, role);
+    else if (role.source === 'package')
+      warnings.push(
+        `${role.path}: role "${role.name}" is already provided by ${earlier.path}; ignored`
+      );
   };
+  const dirs = [...options.dirs].sort((a, b) => ORDER.indexOf(a.source) - ORDER.indexOf(b.source));
+  const read = async (dir: RoleSourceDir) => {
+    for (const path of await markdown(options.files, dir.dir, context)) {
+      const text = await options.files.readTextFile(path, context);
+      if (text.ok) add(parseRole(text.value, dir.source, path, warnings));
+    }
+  };
+  for (const dir of dirs.filter((item) => ORDER.indexOf(item.source) < 2)) await read(dir);
   for (const { path, text } of await options.builtin())
     add(parseRole(text, 'builtin', path, warnings));
-  const dirs = [...options.dirs].sort((a, b) => ORDER.indexOf(a.source) - ORDER.indexOf(b.source));
-  for (const { source, dir } of dirs)
-    for (const path of await markdown(options.files, dir, context)) {
-      const read = await options.files.readTextFile(path, context);
-      if (read.ok) add(parseRole(read.value, source, path, warnings));
-    }
+  for (const dir of dirs.filter((item) => ORDER.indexOf(item.source) >= 2)) await read(dir);
   const { overrides, limits } = await settings(
     options.files,
     options.settingsPath,
@@ -365,15 +374,57 @@ export function agentPaths(dir: string, text: string): string[] {
     .map((path) => `${dir}/${path.replace(/^\.\//, '').replace(/\/$/, '')}`);
 }
 
+export const PACKAGE_ROOTS = ['/node_modules', '/opt/user/node_modules'];
+
+export interface PiPackage {
+  dir: string;
+  manifest: string;
+}
+
+export interface PiPackages {
+  packages: PiPackage[];
+  skipped: { path: string; message: string }[];
+}
+
+function declaresPi(text: string): boolean {
+  try {
+    const manifest = JSON.parse(text) as Record<string, unknown>;
+    return manifest.pi !== undefined || manifest['pi-subagents'] !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+export async function piPackages(
+  files: RoleFiles,
+  roots: readonly string[],
+  context: Context
+): Promise<PiPackages> {
+  const out: PiPackages = { packages: [], skipped: [] };
+  const seen = new Map<string, string>();
+  for (const root of roots)
+    for (const dir of await manifestDirs(files, root, context)) {
+      const read = await files.readTextFile(`${dir}/package.json`, context);
+      if (!read.ok) continue;
+      const name = dir.slice(root.length + 1);
+      const earlier = seen.get(name);
+      if (earlier === undefined) {
+        seen.set(name, dir);
+        out.packages.push({ dir, manifest: read.value });
+      } else if (declaresPi(read.value))
+        out.skipped.push({
+          path: dir,
+          message: `package "${name}" is already installed at ${earlier}, so this copy's skills, prompts and roles are ignored`,
+        });
+    }
+  return out;
+}
+
 export async function packageDirs(
   files: RoleFiles,
-  root: string,
+  roots: readonly string[],
   context: Context
 ): Promise<string[]> {
-  const out: string[] = [];
-  for (const dir of await manifestDirs(files, root, context)) {
-    const read = await files.readTextFile(`${dir}/package.json`, context);
-    if (read.ok) out.push(...agentPaths(dir, read.value));
-  }
-  return out;
+  const { packages } = await piPackages(files, roots, context);
+  return packages.flatMap(({ dir, manifest }) => agentPaths(dir, manifest));
 }
