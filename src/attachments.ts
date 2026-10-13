@@ -53,6 +53,10 @@ export function tooLarge(name: string, kind: AttachmentKind): string {
   return `${name} is larger than ${mib(limitOf(kind))}, so it can't be sent.`;
 }
 
+export function textBytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 export function decodedSize(data: string): number {
   return Math.floor((data.length * 3) / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
 }
@@ -198,8 +202,11 @@ async function partsOf(attachment: SendAttachment, saver: Saver): Promise<Part[]
     type: attachment.mimeType,
     ...(attachment.path === undefined ? {} : { path: attachment.path }),
   };
-  if (attachment.kind === 'text' && attachment.text !== undefined)
+  if (attachment.kind === 'text' && attachment.text !== undefined) {
+    if (textBytes(attachment.text) > FILE_LIMIT)
+      throw new Error(tooLarge(attachment.name, attachment.kind));
     return [{ type: 'text', text: wrap(header, attachment.text) }];
+  }
   if (attachment.data !== undefined) return encoded(attachment, attachment.data, saver);
   if (attachment.path !== undefined)
     return [{ type: 'text', text: wrap(header, `It is at ${attachment.path}.`) }];
@@ -212,7 +219,7 @@ export async function userParts(
   saver: Saver
 ): Promise<Part[]> {
   const total = attachments.reduce(
-    (sum, item) => sum + (item.text?.length ?? 0) + decodedSize(item.data ?? ''),
+    (sum, item) => sum + textBytes(item.text ?? '') + decodedSize(item.data ?? ''),
     0
   );
   if (total > TOTAL_LIMIT) throw new Error(TOGETHER);

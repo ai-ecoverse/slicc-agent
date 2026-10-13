@@ -257,9 +257,19 @@ export async function hostAgent(
     vault: options.secrets?.vault ?? idleVault,
   };
   const settings = options.settings ?? noSettings;
+  const visible = (entry: number) =>
+    [state.value, ...Object.values(mounted.views.value)].some((view) =>
+      view.entries.some((item) => item.id === entry)
+    );
+  const gated =
+    (allowed: (entry: number) => boolean): AgentControl['image'] =>
+    async (ref, using) =>
+      allowed(ref.entry) ? control.image(ref, using) : { data: null, mimeType: null };
+  const trusted: AgentControl = { ...control, image: gated(slims.shown) };
+  const viewed: AgentControl = { ...control, image: gated(visible) };
   const served = (served: AgentPages) => {
     const made = catalogue();
-    made.provide(AgentControl, control);
+    made.provide(AgentControl, trusted);
     made.provide(AgentTranscript, transcriptService);
     made.provide(AgentSettings, settings);
     made.provide(AgentRemoteService, remote);
@@ -279,7 +289,7 @@ export async function hostAgent(
   };
   const follower = served(viewPages());
   const viewer = catalogue();
-  viewer.provide(AgentControl, viewControl(control));
+  viewer.provide(AgentControl, viewControl(viewed));
   viewer.provide(AgentTranscript, { ...transcriptService, monitor: monitor.viewState });
   viewer.provide(AgentSettings, viewSettings(settings));
   viewer.provide(AgentRemoteService, viewRemote(remote));

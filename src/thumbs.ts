@@ -56,11 +56,13 @@ export const thumbnail: Thumbnail = async (image) => {
 
 export interface Slimmer {
   slim(view: ConversationView): ConversationView;
+  shown(entry: number): boolean;
   dispose(): void;
 }
 
 export function slimmer(make: Thumbnail, ready: () => void): Slimmer {
   const made = new Map<string, Picture | null>();
+  const entries = new Set<number>();
   let closed = false;
   const thumb = (key: string, part: Part): Part => {
     const full = { mimeType: String(part.mimeType), size: decodedSize(part.data as string) };
@@ -92,10 +94,12 @@ export function slimmer(make: Thumbnail, ready: () => void): Slimmer {
   const entry = (record: EntryRecord): EntryRecord => {
     if (!record.model?.length) return record;
     let changed = false;
+    const seen = () => entries.add(record.id);
     const model = (record.model as readonly Message[]).map((message, at) => {
       const next = content(`${record.id}:${at}`, message.content);
       if (next === message.content) return message;
       changed = true;
+      seen();
       return { ...message, content: next };
     });
     return changed ? ({ ...record, model } as unknown as EntryRecord) : record;
@@ -124,9 +128,11 @@ export function slimmer(make: Thumbnail, ready: () => void): Slimmer {
         docs: slimmed === queue ? view.docs : { ...view.docs, 'pi.inbox': slimmed as never },
       };
     },
+    shown: (entry) => entries.has(entry),
     dispose() {
       closed = true;
       made.clear();
+      entries.clear();
     },
   };
 }
