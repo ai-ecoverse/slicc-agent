@@ -97,7 +97,6 @@ export interface MonitorOptions {
   kernel?: { ps?(): Promise<readonly PsEntry[]> };
   groups?: { owned(owner: number): number[] };
   users?: () => Promise<readonly { name: string; uid: number }[]>;
-  secrets?: () => readonly string[];
   now?: () => number;
   timers?: Timers;
   ttlMs?: number;
@@ -222,7 +221,6 @@ interface Settings {
   psTimeoutMs: number;
   throttleMs: number;
   usageMs: number;
-  secrets: () => readonly string[];
 }
 
 type Agent = ReturnType<typeof liveAgents>[number];
@@ -390,10 +388,7 @@ class Session {
       at: this.#settings.now(),
       agentId: conversations(this.#options.agents.state()).get(task.conversationId) ?? null,
       kind: 'task',
-      message: redacted(
-        outcome.status === 'faulted' ? outcome.error.message : outcome.reason,
-        this.#settings.secrets()
-      ),
+      message: redacted(outcome.status === 'faulted' ? outcome.error.message : outcome.reason),
     });
     return true;
   }
@@ -413,7 +408,6 @@ class Session {
   }
 
   #agent(agent: Agent, view: ConversationView | undefined, tools: Map<string, string>) {
-    const secrets = this.#settings.secrets();
     const liveDoc = view?.docs['pi.live'] as Live | undefined;
     for (const slot of liveDoc?.tools ?? [])
       if (slot.taskId !== undefined) tools.set(String(slot.taskId), slot.name);
@@ -426,7 +420,7 @@ class Session {
       ? {
           attempt: generation.attempt,
           since: this.#since(`retry:${agent.id}`),
-          error: redacted(generation.retry.error, secrets),
+          error: redacted(generation.retry.error),
         }
       : null;
     if (retry)
@@ -439,9 +433,7 @@ class Session {
       });
     const last = lastAssistant(view);
     const failed =
-      last?.message.stopReason === 'error'
-        ? redacted(last.message.errorMessage || 'error', secrets)
-        : null;
+      last?.message.stopReason === 'error' ? redacted(last.message.errorMessage || 'error') : null;
     if (failed && last)
       this.#problem({
         id: `turn:${last.id}`,
@@ -496,7 +488,7 @@ class Session {
       user:
         uid === undefined ? null : (this.#users.get(uid) ?? (uid === 0 ? 'root' : `uid ${uid}`)),
       agentId: groups.get(pgid) ?? null,
-      command: commandLine(argv, this.#settings.secrets()),
+      command: commandLine(argv),
       state: zombie ? ('Z' as const) : ('S' as const),
       started: entry.started ?? 0,
       zombie: zombie ? this.#since(`zombie:${entry.pid}`) : null,
@@ -562,7 +554,6 @@ export function createMonitor(options: MonitorOptions): Monitor {
     psTimeoutMs: options.psTimeoutMs ?? PS_TIMEOUT_MS,
     throttleMs: options.throttleMs ?? THROTTLE_MS,
     usageMs: options.usageMs ?? USAGE_MS,
-    secrets: () => options.secrets?.() ?? [],
   };
   const { now, timers, context } = settings;
   const ttlMs = options.ttlMs ?? TTL_MS;

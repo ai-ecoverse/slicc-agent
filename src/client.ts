@@ -91,8 +91,8 @@ function lastingSettings(
 ): AgentSettings {
   return {
     state: hold(settings.state),
-    connect: (providerId, secret, region, context) =>
-      settings.connect(providerId, secret, region, context),
+    connect: (providerId, secret, fields, context) =>
+      settings.connect(providerId, secret, fields, context),
     disconnect: (providerId, context) => settings.disconnect(providerId, context),
     signIn: (providerId, context) => settings.signIn(providerId, context),
   };

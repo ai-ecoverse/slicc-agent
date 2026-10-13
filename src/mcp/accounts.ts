@@ -1,25 +1,30 @@
-import type { CredentialStore } from '@earendil-works/pi-ai';
+import type { Context } from '@earendil-works/chord';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { McpFetch } from '@earendil-works/pi-mcp';
 import type { AccountState } from '../services.ts';
 import type { McpCatalog } from './catalog.ts';
 import type { McpServerEntry } from './config.ts';
 import type { McpServerConnection } from './connection.ts';
-import { credentialKey, secretNames } from './credentials.ts';
+import { type McpRecords, resolveHeaders, secretNames } from './credentials.ts';
 import { MCP_ACCOUNT } from './label.ts';
 import { beginSignIn, finishSignIn, type McpSignIn, type StoredOAuth } from './oauth.ts';
+
+export const TOKENS_IN_VAULT = "MCP tokens are kept in seven's vault: update seven";
 
 export interface McpAccounts {
   accounts(): Promise<AccountState[]>;
   signIn(id: string): Promise<McpSignIn>;
-  connect(id: string, secret: string): Promise<void>;
+  connect(id: string, secret: string | null): Promise<void>;
   disconnect(id: string): Promise<void>;
   onChange(listener: () => void): () => void;
 }
 
 export interface AccountSources {
-  credentials: CredentialStore;
+  records: McpRecords & { refresh(context: Context): Promise<void> };
   oauth: (entry: McpServerEntry) => StoredOAuth;
-  fetch: McpFetch;
+  fetch: (server: string) => McpFetch;
+  grant: (server: string) => McpFetch;
+  register: (server: string, tokenUrl: string) => Promise<void>;
 }
 
 type Kind = 'token' | 'oauth';
@@ -43,6 +48,7 @@ function row(connection: McpServerConnection, kind: Kind, stored: boolean): Acco
     auth: kind === 'token' ? 'api-key' : 'oauth',
     needs: null,
     group: 'mcp',
+    store: 'vault',
     ...(kind === 'token' ? { secret: 'token' as const } : {}),
   };
 }
@@ -53,7 +59,7 @@ export function mcpAccounts(
   restart: (connection: McpServerConnection) => void,
   listeners: Set<() => void>
 ): McpAccounts {
-  const { credentials } = sources;
+  const { records } = sources;
   const find = (id: string, want?: Kind) => {
     const connection = id.startsWith(MCP_ACCOUNT)
       ? catalog.connections.get(id.slice(MCP_ACCOUNT.length))
@@ -65,8 +71,7 @@ export function mcpAccounts(
       );
     return { connection, kind: kind as Kind };
   };
-  const keyOf = (connection: McpServerConnection) =>
-    credentialKey(connection.name, connection.entry.config.url);
+  const reread = () => records.refresh(BACKGROUND_CONTEXT).catch(() => undefined);
   return {
     async accounts() {
       const rows: AccountState[] = [];
@@ -74,7 +79,7 @@ export function mcpAccounts(
         const kind = kindOf(connection);
         const stored =
           kind === 'token'
-            ? (await credentials.read(await keyOf(connection))) !== undefined
+            ? resolveHeaders(connection.name, connection.entry.config, records).ok
             : await sources.oauth(connection.entry).signedIn();
         if (kind === 'oauth' && !stored && connection.state !== 'needs-auth') continue;
         rows.push(row(connection, kind, stored));
@@ -84,28 +89,28 @@ export function mcpAccounts(
     async signIn(id) {
       const { connection } = find(id, 'oauth');
       return beginSignIn(sources.oauth(connection.entry), connection.entry, {
-        fetch: sources.fetch,
+        fetch: sources.fetch(connection.name),
+        register: (tokenUrl) => sources.register(connection.name, tokenUrl),
       });
     },
     async connect(id, secret) {
       const { connection, kind } = find(id);
-      if (kind === 'oauth')
+      if (kind === 'oauth') {
+        if (secret === null) throw new Error(`${id} needs a sign-in`);
         await finishSignIn(
           sources.oauth(connection.entry),
           connection.entry,
           secret,
-          sources.fetch
+          sources.grant(connection.name)
         );
-      else
-        await credentials.modify(await keyOf(connection), async () => ({
-          type: 'api_key',
-          key: secret,
-        }));
+      } else if (secret !== null) throw new Error(TOKENS_IN_VAULT);
+      await reread();
       restart(connection);
     },
     async disconnect(id) {
-      const { connection } = find(id);
-      await credentials.delete(await keyOf(connection));
+      const { connection, kind } = find(id);
+      if (kind === 'oauth') await sources.oauth(connection.entry).forget();
+      await reread();
       restart(connection);
     },
     onChange(listener) {

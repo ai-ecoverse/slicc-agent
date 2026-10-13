@@ -178,7 +178,7 @@ export async function hostAgent(
     changes?: ChangesRuntime;
     mcp?: Pick<McpRuntime, 'close'>;
     users?: UserClients;
-    monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users' | 'secrets'>;
+    monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users'>;
     pages?: Pages;
     secrets?: HostSecrets;
     uploads?: Uploads;

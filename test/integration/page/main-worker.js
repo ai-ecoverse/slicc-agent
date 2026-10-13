@@ -5,8 +5,10 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
 import { MemoryStorage } from '@earendil-works/pi-durable';
-import { EncryptedCredentialStore, runAgentWorker } from '../../../src/index.ts';
+import { adobeProvider, runAgentWorker } from '../../../src/index.ts';
+import { fakeVault } from '../fixtures/fake-vault.mjs';
 import { createMcpServer } from '../fixtures/mcp-server.mjs';
+import vectors from '../fixtures/scrub-vectors.json' with { type: 'json' };
 
 const params = new URL(self.location.href).searchParams;
 const fauxModels = [
@@ -19,7 +21,14 @@ const recorded = (message) => (context) => {
   requests.push(JSON.stringify(context));
   return message;
 };
-self.addEventListener('message', ({ data }) => data?.requests?.postMessage(requests));
+const upstream = [];
+self.addEventListener('message', ({ data }) => {
+  data?.requests?.postMessage(requests);
+  data?.upstream?.postMessage({
+    upstream,
+    vault: self.fakeVault?.log.map(({ op, provider, server }) => ({ op, provider, server })) ?? [],
+  });
+});
 const steps = [
   ...params.getAll('step').map((spec) => {
     const { tool, answer } = JSON.parse(spec);
@@ -74,9 +83,45 @@ async function* chunks(body) {
     yield value;
   }
 }
+const MODEL_HOST = 'model.test';
+const json = (body) => ({
+  status: 200,
+  headers: [['content-type', 'application/json']],
+  body: (async function* () {
+    yield new TextEncoder().encode(JSON.stringify(body));
+  })(),
+});
+function model(request) {
+  const path = new URL(request.url).pathname;
+  if (path === '/v1/config')
+    return json({
+      clientId: 'c',
+      scopes: 's',
+      imsEnvironment: 'prod',
+      models: [{ id: 'e2e-1', name: 'E2E', api: 'openai' }],
+    });
+  if (path !== '/v1/chat/completions')
+    return { status: 404, headers: [], body: (async function* () {})() };
+  upstream.push({
+    authorization:
+      request.headers.find(([name]) => name.toLowerCase() === 'authorization')?.[1] ?? null,
+    body: new TextDecoder().decode(request.body),
+  });
+  const chunk = (delta, finish) =>
+    `data: ${JSON.stringify({ id: 'e2e', object: 'chat.completion.chunk', created: 1, model: 'e2e-1', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+  const text = `${chunk({ role: 'assistant', content: 'From the model.' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+  return {
+    status: 200,
+    headers: [['content-type', 'text/event-stream']],
+    body: (async function* () {
+      yield new TextEncoder().encode(text);
+    })(),
+  };
+}
 const relay = {
   traits: { crossOrigin: 'any' },
   async fetch(request) {
+    if (new URL(request.url).host === MODEL_HOST && params.has('e2e')) return model(request);
     if (new URL(request.url).host !== relayed) throw new TypeError('relay: unknown host');
     const response = await fake.fetch(request.url, {
       method: request.method,
@@ -89,17 +134,25 @@ const relay = {
 const attach = relayed
   ? async (port) => Object.assign(await attachKernel(port), { transport: relay })
   : undefined;
+const e2e = params.has('e2e')
+  ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]
+  : [];
 void runAgentWorker(self, {
   ...(attach ? { attach } : {}),
   ...(params.has('redirect')
     ? { mcpRedirect: new URL(params.get('redirect'), self.location.origin).href }
     : {}),
   model: { provider: 'faux', modelId: 'faux-1' },
-  providers: [faux.provider],
-  credentials: () => EncryptedCredentialStore.open('integration-credentials'),
+  providers: [faux.provider, ...e2e],
   storage: async () => new MemoryStorage(),
   codemodeWorker: new URL('./codemode-worker.js', import.meta.url),
   ...(params.get('catalog')
     ? { catalog: new URL(params.get('catalog'), self.location.href).href }
     : {}),
 });
+if (params.has('vault')) {
+  const records = params.getAll('record').map((record) => JSON.parse(record));
+  const fake = fakeVault(params.has('scrub') ? vectors.values : [], 1, { records });
+  self.fakeVault = fake;
+  self.dispatchEvent(new MessageEvent('message', { data: { vault: fake.port, scrub: fake.pair } }));
+}

@@ -158,7 +158,7 @@ test('on the page route a server with CORS works and one without CORS is reporte
   }
 });
 
-test('an OAuth MCP server signs in through a popup and the callback page, then its tools work', async (t) => {
+test('an OAuth MCP server signs in through a popup and the callback page, and without a vault no token is ever exchanged', async (t) => {
   const docs = await serve(true, { oauth: {} });
   try {
     const page = await chrome.page(t);
@@ -194,22 +194,9 @@ test('an OAuth MCP server signs in through a popup and the callback page, then i
       userGesture: true,
     });
     const signed = await page.evaluate(() => window.signing);
-    assert.equal(signed, 'ok');
-    await page.within(60000, () =>
-      window.model.settings
-        .accounts()
-        .some((account) => account.id === 'mcp:docs' && account.status === 'connected')
-    );
-    await page.evaluate(() => window.agent.send(window.agent.active(), 'Call it.'));
-    await page.within(60000, () =>
-      window.tools().some((tool) => tool.status === 'done' || tool.status === 'error')
-    );
-    const tools = await page.evaluate(() =>
-      window.tools().map(({ name, title, output }) => ({ name, title, output }))
-    );
-    assert.deepEqual(tools, [
-      { name: 'mcp__docs__echo', title: 'docs · echo', output: 'echo: signed in' },
-    ]);
+    assert.match(signed, /MCP sign-in needs seven's vault: update seven/);
+    assert.equal(docs.fake.state.oauth.authorizations.length, 1);
+    assert.equal(docs.fake.state.oauth.issued, 0);
     assert.equal(
       docs.fake.state.oauth.clients[0].redirect_uris[0].endsWith('/dist/oauth/mcp-callback.html'),
       true

@@ -288,6 +288,14 @@ export interface AccountState {
   needs: 'cors-free-transport' | null;
   group?: 'providers' | 'mcp';
   secret?: 'api-key' | 'token';
+  store?: 'vault';
+  fields?: AccountField[];
+}
+
+export interface AccountField {
+  name: string;
+  label: string;
+  required?: boolean;
 }
 
 export interface BudgetState {
@@ -318,8 +326,8 @@ export interface AgentSettings {
   readonly state: ReplicatedState<SettingsState>;
   connect(
     providerId: string,
-    secret: string,
-    region: string | null,
+    secret: string | null,
+    fields: Record<string, string> | null,
     context: Context
   ): Promise<void>;
   disconnect(providerId: string, context: Context): Promise<void>;

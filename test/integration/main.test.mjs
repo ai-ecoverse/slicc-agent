@@ -8,12 +8,13 @@ after(() => chrome.close());
 test('the production worker entry chats and lists accounts', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const query = `answer=Ready.&vault&record=${encodeURIComponent(JSON.stringify({ kind: 'model', name: 'FAUX_API_KEY', provider: 'faux', placeholder: 'fnox_proxy_faux', value: 'faux-model-key-0001' }))}`;
+  const seen = await page.evaluate(async (query) => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
     const owner = await startAgent({
-      worker: () => new Worker('/dist-test/main-worker.js?answer=Ready.', { type: 'module' }),
+      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
     const { agent, settings } = createAgentModel(await owner.connect(), { storage: localStorage });
@@ -26,17 +27,17 @@ test('the production worker entry chats and lists accounts', async (t) => {
     }
     for (let i = 0; i < 100 && settings.accounts().length === 0; i++)
       await new Promise((r) => setTimeout(r, 20));
-    await settings.connect('faux', 'not-a-real-key');
+    await settings.connect('faux');
     for (let i = 0; i < 100 && settings.accounts()[0]?.status !== 'connected'; i++)
       await new Promise((r) => setTimeout(r, 20));
     return {
       reply: agent.messages().at(-1)?.parts?.[0]?.text,
-      accounts: settings.accounts().map((account) => [account.id, account.status]),
+      accounts: settings.accounts().map((account) => [account.id, account.status, account.store]),
       model: settings.get().model,
     };
-  });
+  }, query);
   assert.equal(seen.reply, 'Ready.');
-  assert.deepEqual(seen.accounts, [['faux', 'connected']]);
+  assert.deepEqual(seen.accounts, [['faux', 'connected', 'vault']]);
   assert.equal(seen.model, 'faux/faux-1');
 });
 

@@ -18,6 +18,8 @@ test("an agent's bash lists models and switches its own model in the production 
   const query = [
     'model=faux-1',
     'model=faux-2',
+    'vault',
+    `record=${encodeURIComponent(JSON.stringify({ kind: 'model', name: 'FAUX_API_KEY', provider: 'faux', placeholder: 'fnox_proxy_faux', value: 'faux-model-key-0001' }))}`,
     `step=${encodeURIComponent(JSON.stringify({ tool: { name: 'bash', args: { command: script } } }))}`,
     `step=${encodeURIComponent(JSON.stringify({ answer: 'Switched.' }))}`,
   ].join('&');
@@ -36,7 +38,7 @@ test("an agent's bash lists models and switches its own model in the production 
       return check();
     };
     await until(() => settings.accounts().length > 0);
-    await settings.connect('faux', 'not-a-real-key');
+    await settings.connect('faux');
     await until(() => settings.accounts()[0]?.status === 'connected');
     await agent.send(agent.active(), 'Switch to faux-2.');
     const tools = () =>

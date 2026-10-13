@@ -1,6 +1,6 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
+import type { Provider } from '@earendil-works/pi-ai';
 import type { Models } from '@earendil-works/pi-ai/models';
 import {
   createRegistry,
@@ -19,7 +19,6 @@ import {
   locateWasm,
   sandboxFactory,
 } from './codemode/index.ts';
-import { EncryptedCredentialStore } from './credentials.ts';
 import { attachFreezer } from './freezer/index.ts';
 import { settingsText, titler } from './freezer/title.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
@@ -34,7 +33,7 @@ import { adminOver, type UserClient, type UserClients, userClients } from './ker
 import { AGENT_DIR, ROOT_HOME } from './layout.ts';
 import { setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
-import { setupMcp } from './mcp/index.ts';
+import { type McpAccounts, setupMcp } from './mcp/index.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
 import { pageOnly, type Transport, transportFetch } from './net.ts';
@@ -42,14 +41,26 @@ import { sliccPrompt } from './prompt.ts';
 import { createPages } from './remote/pages.ts';
 import { identity } from './scoops/identity.ts';
 import { type Assets, packageAssets, type ScoopsRuntime, setupScoops } from './scoops/index.ts';
+import { vaultCredentials } from './secrets/credentials.ts';
+import {
+  BEDROCK_ENDPOINTS,
+  type ModelBases,
+  modelRoute,
+  vaultEndpoints,
+} from './secrets/endpoints.ts';
 import { repin, secretsExtension, shellGrants } from './secrets/extension.ts';
+import { grantFetch, mcpFetch, vaultFetch } from './secrets/fetch.ts';
 import { secretNames } from './secrets/names.ts';
+import { type VaultRecords, vaultRecords } from './secrets/records.ts';
 import { scrubWith } from './secrets/scrub.ts';
+import { fileStore, type PlainStore } from './secrets/store.ts';
 import { listenVault, Vault } from './secrets/vault.ts';
 import {
+  BEDROCK,
   createAgentSettings,
   createSliccModels,
   DEFAULT_MODEL,
+  providerFields,
   sliccProviders,
 } from './settings.ts';
 import { RELOAD_MS, setupSkills } from './skills/index.ts';
@@ -75,7 +86,7 @@ export interface AgentWorkerOptions {
   model?: ModelRef;
   providers?: Provider[];
   attach?: KernelAttach;
-  credentials?: () => Promise<CredentialStore>;
+  store?: () => Promise<PlainStore>;
   storage?: () => Promise<Storage>;
   assets?: Assets;
   codemodeWasm?: () => Promise<WebAssembly.Module | undefined>;
@@ -99,6 +110,7 @@ export function usersOf(
 }
 
 export const STORE_DIR = '/.slicc';
+export const ACCOUNTS_FILE = `${STORE_DIR}/accounts.json`;
 
 async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions) {
   const attach: KernelAttach = options.attach ?? attachKernel;
@@ -160,10 +172,76 @@ async function secretsFor(home: SliccKernelEnv, vault: Vault) {
   return names;
 }
 
-async function modelsOf(options: AgentWorkerOptions, version: string) {
-  const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
+export function modelBases(
+  providers: readonly Provider[],
+  models: Pick<ReturnType<typeof createSliccModels>, 'getModels'>
+): ModelBases[] {
+  return providers.map((provider) => ({
+    provider: provider.id,
+    urls: [
+      ...new Set(
+        [
+          provider.baseUrl,
+          ...models.getModels(provider.id).map((model) => model.baseUrl),
+          ...(provider.id === BEDROCK ? BEDROCK_ENDPOINTS : []),
+        ].filter((url): url is string => typeof url === 'string' && url !== '')
+      ),
+    ],
+  }));
+}
+
+function mcpVault(
+  vault: Vault,
+  made: { store: PlainStore; records: VaultRecords; endpoints: ReturnType<typeof vaultEndpoints> }
+) {
+  const { store, records, endpoints } = made;
+  return {
+    store,
+    vault: {
+      records,
+      fetch: (server: string, base: typeof fetch) => mcpFetch(vault, base, server),
+      grant: (server: string, base: typeof fetch) => grantFetch(vault, server, base),
+      servers: endpoints.servers,
+      token: endpoints.token,
+    },
+  };
+}
+
+function hostSecrets(
+  vault: Vault,
+  names: Awaited<ReturnType<typeof secretsFor>>,
+  parts: readonly { close(): void }[]
+) {
+  return {
+    vault: vault.state,
+    list: () => names.state.value,
+    close: () => {
+      for (const part of parts) part.close();
+    },
+  };
+}
+
+async function modelsOf(
+  scope: AgentWorkerScope,
+  options: AgentWorkerOptions,
+  given: { vault: Vault; home: SliccKernelEnv; transport: typeof fetch; version: string }
+) {
+  const { vault, home, transport, version } = given;
+  const store = await (options.store ?? (async () => fileStore(home, ACCOUNTS_FILE)))();
+  const records = vaultRecords(vault);
+  void records.refresh(BACKGROUND_CONTEXT).catch(() => undefined);
   const providers = options.providers ?? sliccProviders(version);
-  return { credentials, providers, models: createSliccModels(credentials, providers) };
+  const fields = await providerFields(store, providers);
+  const models = createSliccModels(vaultCredentials(records, fields.env), providers);
+  const bases = () => modelBases(providers, models);
+  scope.fetch = vaultFetch(
+    vault,
+    transport,
+    modelRoute(bases, () => records.state.value)
+  );
+  const endpoints = vaultEndpoints(vault);
+  void endpoints.models(bases()).catch(() => undefined);
+  return { store, records, providers, fields, models, bases, endpoints };
 }
 
 function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>) {
@@ -189,8 +267,9 @@ async function factsOf(client: KernelClient & { transport: Transport }, native: 
 function routeFetch(scope: AgentWorkerScope, client: KernelClient & { transport: Transport }) {
   const native = scope.fetch.bind(scope);
   const loopback = client.loopbackFetch?.bind(client);
-  scope.fetch = transportFetch(client.transport, scope.location.origin, native, loopback);
-  return native;
+  const transport = transportFetch(client.transport, scope.location.origin, native, loopback);
+  scope.fetch = transport;
+  return { native, transport };
 }
 
 async function prepare(
@@ -199,15 +278,32 @@ async function prepare(
   options: AgentWorkerOptions
 ) {
   const names = await secretsFor(kernel.home, kernel.vault);
-  const native = routeFetch(scope, kernel.client);
+  const { native, transport } = routeFetch(scope, kernel.client);
   const facts = await factsOf(kernel.client, native);
-  return {
-    names,
-    native,
-    facts,
-    ...(await modelsOf(options, facts.version)),
-    registry: baseRegistry(facts),
-  };
+  const made = await modelsOf(scope, options, {
+    vault: kernel.vault,
+    home: kernel.home,
+    transport,
+    version: facts.version,
+  });
+  return { names, native, transport, facts, ...made, registry: baseRegistry(facts) };
+}
+
+function modelsOfAgent(
+  agent: Agent,
+  settings: Awaited<ReturnType<typeof createAgentSettings>>,
+  catalog: Models,
+  vault: Vault
+) {
+  const locked = () => vault.state.value.locked !== 'no';
+  return modelsCommand({ agents: agent.agents, settings, catalog, locked });
+}
+
+async function settingsOf(made: Awaited<ReturnType<typeof modelsOf>>, mcp: McpAccounts) {
+  const { models, records, fields, providers, bases, endpoints } = made;
+  const settings = await createAgentSettings(models, { records, fields }, providers, { mcp });
+  settings.state.subscribe(() => void endpoints.models(bases()).catch(() => undefined));
+  return settings;
 }
 
 async function start(
@@ -218,7 +314,8 @@ async function start(
 ): Promise<AgentHost> {
   const { client, users, home, at } = await attached(ports, options);
   const ready = await prepare(scope, { client, home, vault }, options);
-  const { names, native, facts, credentials, providers, models, registry } = ready;
+  const { names, native, transport, facts, models, registry } = ready;
+  const { records, endpoints } = ready;
   const memory = setupMemory(registry);
   const coding = CodingTools.tools as readonly ToolRegistration[];
   registry.install(browserGuard([scope.location.origin], coding));
@@ -271,9 +368,9 @@ async function start(
     {
       env: home,
       ...at,
-      credentials,
+      ...mcpVault(vault, ready),
       licks: licks.licks,
-      fetch: scope.fetch,
+      fetch: transport,
       version: facts.version,
       reloadMs: RELOAD_MS,
       codemode: codemode.length > 0,
@@ -319,7 +416,7 @@ async function start(
     ...(people ? { layout: people.layout } : {}),
   });
   licks.licks.guard(freezer.frozenTarget);
-  const settings = await createAgentSettings(models, credentials, providers, { mcp: mcpRuntime });
+  const settings = await settingsOf(ready, mcpRuntime);
   const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(
     {
@@ -336,7 +433,7 @@ async function start(
       memory: memoryRuntime.command,
       gelatiere: gelatiere.command,
       freezer: freezer.command,
-      models: modelsCommand({ agents: agent.agents, settings, catalog: models }),
+      models: modelsOfAgent(agent, settings, models, vault),
       panel: pages.command,
       mcp: mcp.direct,
       ...(options.assets ? { assets: options.assets } : {}),
@@ -371,7 +468,7 @@ async function start(
     pages,
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
-    secrets: { vault: vault.state, list: () => names.state.value, close: names.close },
+    secrets: hostSecrets(vault, names, [names, records, endpoints]),
     uploads: {
       env: environment,
       sees: (ref) => seesImages(models, ref),
@@ -380,7 +477,6 @@ async function start(
       kernel: client,
       groups,
       ...(users ? { users: () => users.users.list() } : {}),
-      secrets: () => mcpRuntime.secrets(),
     },
   });
 }

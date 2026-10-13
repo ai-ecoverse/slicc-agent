@@ -63,9 +63,11 @@ function chunk(text) {
 
 const event = (message) => `event: message\ndata: ${JSON.stringify(message)}\n\n`;
 
-async function answer(request, writer, seen) {
+async function answer(request, writer, seen, bearer) {
   const origin = request.headers.origin;
   seen.push({ method: request.method, origin: origin ?? null });
+  if (bearer && request.headers.authorization !== `Bearer ${bearer}`)
+    return plain(writer, 401, 'Unauthorized', 'wrong token');
   if (origin && !LOOPBACK.test(new URL(origin).hostname))
     return plain(writer, 403, 'Forbidden', `origin ${origin} is not loopback`);
   if (request.target !== '/mcp') return plain(writer, 404, 'Not Found');
@@ -108,7 +110,7 @@ async function answer(request, writer, seen) {
     );
     await new Promise((resolve) => setTimeout(resolve, 50));
     const origins = [...new Set(seen.map((entry) => entry.origin ?? 'none'))].join(',');
-    const text = `echo: ${message.params.arguments.text} (origin ${origins}, ${request.headers['mcp-protocol-version'] ? 'versioned' : 'unversioned'})`;
+    const text = `echo: ${message.params.arguments.text} (origin ${origins}, ${request.headers['mcp-protocol-version'] ? 'versioned' : 'unversioned'}${bearer ? ', bearer' : ''})`;
     await writer.write(chunk(event(reply({ content: [{ type: 'text', text }] }))));
     await writer.write(encoder.encode('0\r\n\r\n'));
     return undefined;
@@ -126,12 +128,12 @@ async function answer(request, writer, seen) {
   );
 }
 
-async function serve(connection, seen) {
+async function serve(connection, seen, bearer) {
   const reader = connection.readable.getReader();
   const writer = connection.writable.getWriter();
   try {
     const request = await readRequest(reader);
-    if (request) await answer(request, writer, seen);
+    if (request) await answer(request, writer, seen, bearer);
   } finally {
     await writer.close().catch(() => undefined);
     connection.close();
@@ -140,8 +142,10 @@ async function serve(connection, seen) {
 
 export default async function main(ctx) {
   const port = Number(ctx.argv[1] ?? 8810);
+  const bearer = ctx.argv[2];
   const listener = await ctx.net.listen({ port });
   const seen = [];
   await ctx.write(1, `listening ${listener.port}\n`);
-  for await (const connection of listener) void serve(connection, seen).catch(() => undefined);
+  for await (const connection of listener)
+    void serve(connection, seen, bearer).catch(() => undefined);
 }

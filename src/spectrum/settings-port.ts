@@ -25,11 +25,15 @@ const defaults: Settings = {
 
 type Local = Omit<Settings, 'model' | 'thinking'>;
 
+export type Sealed = { sealed: true };
+
 export type Login = (
   providerId: string,
   signIn: () => Promise<SignIn | null>,
   options: { signal: AbortSignal }
-) => Promise<string>;
+) => Promise<string | Sealed>;
+
+export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
 
 export class SettingsAdapter extends Emitter<SettingsEvents> implements SettingsPort {
   readonly #settings: AgentSettings;
@@ -102,17 +106,32 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
     });
   }
 
-  async connect(id: string, secret?: string, options: { region?: string } = {}): Promise<void> {
+  async connect(id: string, secret?: string, fields?: Record<string, string>): Promise<void> {
     const account = this.#state().accounts.find((candidate) => candidate.id === id);
-    const login =
-      account?.auth !== 'oauth' ? null : account.group === 'mcp' ? this.#mcpLogin : this.#login;
-    const key = secret ?? (login ? await this.#signIn(id, login) : undefined);
-    if (!key)
-      throw new Error(`${id} needs ${account?.auth === 'oauth' ? 'a sign-in' : 'an API key'}`);
-    await this.#settings.connect(id, key, options.region ?? null, BACKGROUND_CONTEXT);
+    const mcp = account?.group === 'mcp';
+    const login = account?.auth !== 'oauth' ? null : mcp ? this.#mcpLogin : this.#login;
+    const given = fields ? { ...fields } : null;
+    if (secret !== undefined) {
+      await this.#settings.connect(id, secret, given, BACKGROUND_CONTEXT);
+      return;
+    }
+    if (account?.auth === 'oauth' && !login) throw new Error(`${id} needs a sign-in`);
+    if (!login) {
+      if (account?.store !== 'vault') throw new Error(`${id} needs an API key`);
+      await this.#settings.connect(id, null, given, BACKGROUND_CONTEXT);
+      return;
+    }
+    const answer = await this.#signIn(id, login);
+    if (typeof answer === 'string') {
+      if (!mcp) throw new Error(SIGN_IN_NEEDS_VAULT);
+      await this.#settings.connect(id, answer, given, BACKGROUND_CONTEXT);
+      return;
+    }
+    if (answer?.sealed !== true) throw new Error(`${id}'s sign-in didn't finish`);
+    await this.#settings.connect(id, null, given, BACKGROUND_CONTEXT);
   }
 
-  async #signIn(id: string, login: Login): Promise<string> {
+  async #signIn(id: string, login: Login): Promise<string | Sealed> {
     const controller = new AbortController();
     this.#signing
       .get(id)
