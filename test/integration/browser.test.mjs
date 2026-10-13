@@ -134,12 +134,14 @@ test("bash refuses to point playwright-cli at SLICC's own pages, through the pro
   assert.match(seen.results[3], /opened open https:\/\/example\.com\//);
 });
 
-test('with SLICC_CDP_URL set and no browser attached, the system prompt says the browser is not here', async (t) => {
+test("with SLICC_CDP_URL set and no browser attached, the browser skill's check reports not connected", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await page.evaluate(async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    const skill = await (await fetch('/packages/vfs-root/skills/browser/SKILL.md')).text();
+    const check = /## Before you start[\s\S]*?```bash\n([\s\S]*?)\n```/.exec(skill)[1];
     const kernel = await bootKernel();
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
     const client = await attachKernel(await kernel.connect());
@@ -159,20 +161,27 @@ test('with SLICC_CDP_URL set and no browser attached, the system prompt says the
     await client.fs.mkdir(bin, { recursive: true });
     await client.fs.writeFile(
       `${bin}/playwright-cli`,
-      '#!/bin/bash\necho "Error: 502 no browser to drive" >&2\nexit 1\n'
+      '#!/bin/bash\necho "Error: HTTP 502: no browser to drive: install slicc-extension, or run npx @ai-ecoverse/slicc-node" >&2\nexit 1\n'
     );
     const chmod = await client.spawn(['chmod', '+x', `${bin}/playwright-cli`], { cwd: '/' });
     await chmod.exited;
+    const params = new URLSearchParams([
+      ['tool', JSON.stringify({ name: 'bash', args: { command: check } })],
+      ['answer', 'Not connected.'],
+    ]);
     let worker;
     const owner = await startAgent({
       worker: () => {
-        worker = new Worker('/dist-test/main-worker.js?answer=Not+connected.', { type: 'module' });
+        worker = new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' });
         return worker;
       },
       kernel: { connect: () => kernel.connect() },
     });
     const connection = await owner.connect();
     const answer = await connection.prompt('Is the browser connected?');
+    const result = connection.transcript.value.entries
+      .filter((entry) => entry.kind === 'pi.tool-result')
+      .map((entry) => entry.model[0].content.map((part) => part.text ?? '').join(''))[0];
     const channel = new MessageChannel();
     const requests = new Promise((resolve) => {
       channel.port1.onmessage = ({ data }) => resolve(data);
@@ -180,10 +189,16 @@ test('with SLICC_CDP_URL set and no browser attached, the system prompt says the
     worker.postMessage({ requests: channel.port2 }, [channel.port2]);
     const [request] = await requests;
     await owner.release();
-    return { answer, cdp, request };
+    return { answer, cdp, check, result, request };
   });
   assert.equal(seen.answer, 'Not connected.');
   assert.match(seen.cdp, /^ws:\/\//);
-  assert.match(seen.request, /Not here yet: [^"]*a browser or CDP tool/);
-  assert.doesNotMatch(seen.request, /Browser: playwright-cli drives/);
+  assert.match(seen.check, /playwright-cli tab-list/);
+  assert.match(seen.result, /no browser to drive/);
+  assert.match(seen.result, /exit 1/);
+  assert.match(
+    seen.request,
+    /Browser: one may be available \(SLICC_CDP_URL is set\), but nothing has checked/
+  );
+  assert.doesNotMatch(seen.request, /a browser or CDP tool/);
 });
