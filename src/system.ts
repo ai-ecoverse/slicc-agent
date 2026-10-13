@@ -39,11 +39,15 @@ export async function browserConnected(client: KernelClient): Promise<boolean> {
   }
 }
 
+const EXITS: Record<string, string> = {
+  local: 'a linked slicc exit that fetches without CORS',
+  remote: 'a linked slicc exit on another device that fetches without CORS',
+  tailnet: "your tailnet's exit node, which fetches without CORS",
+};
+
 export function transportName(transport: Transport | undefined): string {
   const exit = linkedExit(transport);
-  if (exit) {
-    return `a linked slicc exit${exit.kind === 'remote' ? ' on another device' : ''} that fetches without CORS`;
-  }
+  if (exit) return EXITS[exit.kind] ?? 'a linked exit that fetches without CORS';
   if (pageOnly(transport)) return "the page's own fetch, so only servers that allow CORS answer";
   if (transport?.traits?.manualRedirects) return 'a local proxy that fetches without CORS';
   return 'a relay that fetches without CORS';

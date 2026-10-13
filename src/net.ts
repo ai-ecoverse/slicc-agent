@@ -24,13 +24,13 @@ export interface Transport {
 }
 
 export interface TransportExit {
-  kind: 'local' | 'remote';
+  kind: string;
   caps: string[];
 }
 
 export function linkedExit(transport: Transport | undefined): TransportExit | undefined {
   const exit = transport?.traits?.exit;
-  return exit && (exit.kind === 'local' || exit.kind === 'remote') ? exit : undefined;
+  return typeof exit?.kind === 'string' ? exit : undefined;
 }
 
 export function pageOnly(transport: Transport | undefined): boolean {
