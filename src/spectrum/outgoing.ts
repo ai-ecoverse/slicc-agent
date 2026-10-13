@@ -8,7 +8,7 @@ import {
   TOTAL_LIMIT,
   tooLarge,
 } from '../attachments.ts';
-import { base64, type Shrink, shrink } from '../images/index.ts';
+import { base64, type Shrink, shrink } from '../images/fit.ts';
 import type { ImageRef, StoredImage } from '../services.ts';
 
 export type Read = (url: string) => Promise<Uint8Array>;
