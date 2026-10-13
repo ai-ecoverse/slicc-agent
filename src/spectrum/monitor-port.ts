@@ -44,6 +44,8 @@ export const DEPTH_MAX = 6;
 const MINUTE = 60000;
 const HOUR = 3600000;
 
+export type AgentMonitorAlert = MonitorAlert & { command?: string };
+
 export interface Sample {
   at: number;
   cost: number;
@@ -105,7 +107,7 @@ export function bytes(value: number): string {
 
 export function cpuText(share: number | null | undefined): string | null {
   if (typeof share !== 'number' || share < CPU_QUIET) return null;
-  return `${Math.round(share * 100)}% CPU`;
+  return `${Math.round(share * 100)}%\u00a0CPU`;
 }
 
 export function agentsCpu(feed: MonitorFeed): number | null {
@@ -122,8 +124,8 @@ function cpuVital(feed: MonitorFeed, history: readonly number[]): MonitorVital[]
     {
       id: 'cpu',
       label: 'CPU',
-      value: String(Math.round(share * 100)),
-      unit: '%',
+      value: `${Math.round(share * 100)}%`,
+      unit: 'of one core',
       ...(history.length > 1 ? { series: history.map((value) => Math.round(value * 100)) } : {}),
     },
   ];
@@ -362,13 +364,33 @@ function busy(input: MonitorInput, processes: readonly MonitorProcess[]) {
 
 function cpuAlerts(input: MonitorInput, processes: readonly MonitorProcess[], nameOf: Names) {
   return busy(input, processes).map(
-    (group): MonitorAlert => ({
+    (group): AgentMonitorAlert => ({
       id: `runaway-cpu-${group.pgid}`,
       title: `${nameOf(group.agentId)} is using a lot of CPU`,
-      detail: `${Math.round(group.share * 100)}% of one core for ${Math.floor(group.held / MINUTE)} minutes. Kill them with kill -- -${group.pgid}.`,
-      severity: group.share >= CPU_SHARE * 2 || group.held >= CPU_SUSTAIN_MS * 2 ? 'error' : 'warn',
+      detail: `${Math.round(group.share * 100)}% of one core for ${Math.floor(group.held / MINUTE)} minutes. To stop it, run:`,
+      command: `kill -- -${group.pgid}`,
+      severity: cpuSeverity(group),
     })
   );
+}
+
+function cpuSeverity(group: { share: number; held: number }): 'warn' | 'error' {
+  return group.share >= CPU_SHARE * 2 || group.held >= CPU_SUSTAIN_MS * 2 ? 'error' : 'warn';
+}
+
+function crowdSeverity(members: readonly MonitorProcess[]): 'warn' | 'error' {
+  return members.length > GROUP_MAX * 2 ? 'error' : 'warn';
+}
+
+function staleSeverity(process: MonitorProcess, now: number): 'warn' | 'error' {
+  return now - process.started > STALE_MS * 2 ? 'error' : 'warn';
+}
+
+function worse(
+  a: 'warn' | 'error' | undefined,
+  b: 'warn' | 'error' | undefined
+): 'warn' | 'error' | undefined {
+  return a === 'error' || b === 'error' ? 'error' : (a ?? b);
 }
 
 function resetLine(budget: BudgetState): string {
@@ -378,7 +400,7 @@ function resetLine(budget: BudgetState): string {
     : `Resets ${resets.toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
 }
 
-function budgetAlerts(budget: BudgetState | null | undefined): MonitorAlert[] {
+function budgetAlerts(budget: BudgetState | null | undefined): AgentMonitorAlert[] {
   if (!budget || budget.percent < BUDGET_WARN) return [];
   return [
     {
@@ -390,8 +412,8 @@ function budgetAlerts(budget: BudgetState | null | undefined): MonitorAlert[] {
   ];
 }
 
-function agentAlerts(input: MonitorInput, feed: MonitorFeed): MonitorAlert[] {
-  const out: MonitorAlert[] = [];
+function agentAlerts(input: MonitorInput, feed: MonitorFeed): AgentMonitorAlert[] {
+  const out: AgentMonitorAlert[] = [];
   for (const agent of feed.agents) {
     const retry = agent.retry;
     if (retry && (retry.attempt >= RETRY_WARN || input.now - retry.since > RETRY_SLOW_MS))
@@ -412,8 +434,8 @@ function agentAlerts(input: MonitorInput, feed: MonitorFeed): MonitorAlert[] {
   return out;
 }
 
-function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): MonitorAlert[] {
-  const out: MonitorAlert[] = [];
+function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): AgentMonitorAlert[] {
+  const out: AgentMonitorAlert[] = [];
   for (const problem of feed.problems)
     if (problem.kind === 'task' && input.now - problem.at < FAILED_MS)
       out.push({
@@ -433,15 +455,16 @@ function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): Moni
   return out;
 }
 
-function crowdAlerts(processes: readonly MonitorProcess[], nameOf: Names): MonitorAlert[] {
-  const out: MonitorAlert[] = [];
+function crowdAlerts(processes: readonly MonitorProcess[], nameOf: Names): AgentMonitorAlert[] {
+  const out: AgentMonitorAlert[] = [];
   for (const [pgid, members] of groups(processes))
     if (members.length > GROUP_MAX)
       out.push({
         id: `runaway-${pgid}`,
         title: `${nameOf((members[0] as MonitorProcess).agentId)} has ${members.length} processes`,
-        detail: `Kill them with kill -- -${pgid}.`,
-        severity: members.length > GROUP_MAX * 2 ? 'error' : 'warn',
+        detail: 'To stop them, run:',
+        command: `kill -- -${pgid}`,
+        severity: crowdSeverity(members),
       });
   if (processes.length > TOTAL_MAX)
     out.push({
@@ -453,7 +476,7 @@ function crowdAlerts(processes: readonly MonitorProcess[], nameOf: Names): Monit
   return out;
 }
 
-function processAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): MonitorAlert[] {
+function processAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): AgentMonitorAlert[] {
   const processes = feed.processes ?? [];
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
   const out = [...crowdAlerts(processes, nameOf), ...cpuAlerts(input, processes, nameOf)];
@@ -462,22 +485,28 @@ function processAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): M
       out.push({
         id: `zombie-${process.pid}`,
         title: `Process ${process.pid} is a zombie`,
-        detail: `Its parent ${process.ppid} hasn't reaped it.`,
+        ...(process.ppid > 1
+          ? {
+              detail: `Its parent ${process.ppid} hasn't reaped it. To clear it, stop the parent:`,
+              command: `kill ${process.ppid}`,
+            }
+          : { detail: `Its parent ${process.ppid} hasn't reaped it.` }),
         severity: 'warn',
       });
     if (stale(process, agents, input.now))
       out.push({
         id: `stale-${process.pid}`,
         title: `${process.command || `Process ${process.pid}`} has run for ${age(input.now - process.started)}`,
-        detail: `${nameOf(process.agentId)} started it in the background. Kill it with kill ${process.pid}.`,
-        severity: input.now - process.started > STALE_MS * 2 ? 'error' : 'warn',
+        detail: `${nameOf(process.agentId)} started it in the background. To stop it, run:`,
+        command: `kill ${process.pid}`,
+        severity: staleSeverity(process, input.now),
       });
   }
   return out;
 }
 
-function contextAlerts(input: MonitorInput, feed: MonitorFeed): MonitorAlert[] {
-  const out: MonitorAlert[] = [];
+function contextAlerts(input: MonitorInput, feed: MonitorFeed): AgentMonitorAlert[] {
+  const out: AgentMonitorAlert[] = [];
   for (const agent of feed.agents) {
     const ratio = contextRatio(agent, input.models);
     if (ratio !== null && ratio >= CONTEXT_WARN)
@@ -498,7 +527,7 @@ function contextAlerts(input: MonitorInput, feed: MonitorFeed): MonitorAlert[] {
   return out;
 }
 
-function alerts(input: MonitorInput, feed: MonitorFeed): MonitorAlert[] {
+function alerts(input: MonitorInput, feed: MonitorFeed): AgentMonitorAlert[] {
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
   const nameOf: Names = (id) => (id ? (agents.get(id)?.name ?? id) : 'the session');
   return [
@@ -579,12 +608,16 @@ function taskRow(
 
 function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
-  const crowded = new Set<number>();
+  const flagged = new Map<number, 'warn' | 'error'>();
   for (const [pgid, members] of groups(feed.processes ?? []))
-    if (members.length > GROUP_MAX) crowded.add(pgid);
-  for (const group of busy(input, feed.processes ?? [])) crowded.add(group.pgid);
+    if (members.length > GROUP_MAX) flagged.set(pgid, crowdSeverity(members));
+  for (const group of busy(input, feed.processes ?? []))
+    flagged.set(group.pgid, worse(flagged.get(group.pgid), cpuSeverity(group)) as 'warn' | 'error');
   return (feed.processes ?? []).map((process) => {
-    const runaway = stale(process, agents, input.now) || crowded.has(process.pgid);
+    const runaway = worse(
+      flagged.get(process.pgid),
+      stale(process, agents, input.now) ? staleSeverity(process, input.now) : undefined
+    );
     const badges = [
       ...(process.agentId ? [agents.get(process.agentId)?.name ?? process.agentId] : []),
       ...(process.tty ? ['terminal'] : []),
@@ -601,7 +634,7 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
       ]
         .filter(Boolean)
         .join(' · '),
-      status: runaway ? 'error' : process.state === 'Z' ? 'warn' : 'idle',
+      status: runaway ?? (process.state === 'Z' ? 'warn' : 'idle'),
       ...(badges.length ? { badges } : {}),
     };
   });
