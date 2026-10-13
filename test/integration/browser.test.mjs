@@ -133,3 +133,57 @@ test("bash refuses to point playwright-cli at SLICC's own pages, through the pro
   assert.match(seen.results[2], refusal);
   assert.match(seen.results[3], /opened open https:\/\/example\.com\//);
 });
+
+test('with SLICC_CDP_URL set and no browser attached, the system prompt says the browser is not here', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const client = await attachKernel(await kernel.connect());
+    let out = '';
+    const probe = await client.spawn(
+      ['bash', '-c', 'printf "%s\\n%s" "$PNPM_HOME" "$SLICC_CDP_URL"'],
+      {
+        cwd: '/',
+        onStdout: (bytes) => {
+          out += new TextDecoder().decode(bytes);
+        },
+      }
+    );
+    await probe.exited;
+    const [pnpm, cdp] = out.split('\n');
+    const bin = `${pnpm || '/home/.local/share/pnpm'}/bin`;
+    await client.fs.mkdir(bin, { recursive: true });
+    await client.fs.writeFile(
+      `${bin}/playwright-cli`,
+      '#!/bin/bash\necho "Error: 502 no browser to drive" >&2\nexit 1\n'
+    );
+    const chmod = await client.spawn(['chmod', '+x', `${bin}/playwright-cli`], { cwd: '/' });
+    await chmod.exited;
+    let worker;
+    const owner = await startAgent({
+      worker: () => {
+        worker = new Worker('/dist-test/main-worker.js?answer=Not+connected.', { type: 'module' });
+        return worker;
+      },
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const answer = await connection.prompt('Is the browser connected?');
+    const channel = new MessageChannel();
+    const requests = new Promise((resolve) => {
+      channel.port1.onmessage = ({ data }) => resolve(data);
+    });
+    worker.postMessage({ requests: channel.port2 }, [channel.port2]);
+    const [request] = await requests;
+    await owner.release();
+    return { answer, cdp, request };
+  });
+  assert.equal(seen.answer, 'Not connected.');
+  assert.match(seen.cdp, /^ws:\/\//);
+  assert.match(seen.request, /Not here yet: [^"]*a browser or CDP tool/);
+  assert.doesNotMatch(seen.request, /Browser: playwright-cli drives/);
+});
