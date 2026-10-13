@@ -1,5 +1,6 @@
 import type { Change, ChangesPort } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { CLONE_COMMAND } from '../changes/git.ts';
 import type { AgentConnection } from '../client.ts';
 import { attempt, type Report, warn } from './attempt.ts';
 import { Emitter } from './emitter.ts';
@@ -45,6 +46,10 @@ export class ChangesAdapter extends Emitter<ChangesEvents> implements ChangesPor
   unavailable(): string | null {
     this.#open();
     return this.#connection.changes?.value?.unavailable ?? null;
+  }
+
+  commands(): readonly string[] {
+    return [CLONE_COMMAND];
   }
 
   accept(path: string): void {
