@@ -120,6 +120,7 @@ export interface MonitorAgent {
   retry: { attempt: number; since: number; error: string } | null;
   failed: string | null;
   context: number | null;
+  cpu?: number | null;
 }
 
 export interface MonitorTask {
@@ -148,6 +149,9 @@ export interface MonitorProcess {
   zombie: number | null;
   tty: boolean;
   rss: number | null;
+  utime?: number;
+  stime?: number;
+  cpu?: number | null;
 }
 
 export interface MonitorProblem {

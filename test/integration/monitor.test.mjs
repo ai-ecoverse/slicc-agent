@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
 import { launch } from './chrome.mjs';
+
+const kernelVersion = JSON.parse(
+  await readFile(
+    new URL('../../node_modules/@ai-ecoverse/slicc-kernel/package.json', import.meta.url)
+  )
+)
+  .version.split('.')
+  .map(Number);
+const timesKernel = kernelVersion[0] > 1 || (kernelVersion[0] === 1 && kernelVersion[1] >= 67);
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -18,7 +28,8 @@ test('the live monitor through the production worker: it runs only while the pan
         JSON.stringify({
           name: 'bash',
           args: {
-            command: "bash -c 'sleep 30; true' x --token=sekrit123 >/dev/null 2>&1 & echo started",
+            command:
+              "bash -c 'sleep 30; true' x --token=sekrit123 >/dev/null 2>&1 & bash -c 'while :; do :; done' spin >/dev/null 2>&1 & echo started",
           },
         }),
       ],
@@ -49,6 +60,14 @@ test('the live monitor through the production worker: it runs only while the pan
       return processes?.rows.some((row) => row.name.includes('--token=[redacted]')) && snapshot;
     });
     const full = connection.monitor.value;
+    const timed = full.processes.some((row) => typeof row.utime === 'number');
+    const measured = timed
+      ? await wait(() => {
+          const feed = connection.monitor.value;
+          const spin = feed.processes?.find((row) => row.command.includes('while :'));
+          return spin && typeof spin.cpu === 'number' && spin.cpu > 0 && feed;
+        })
+      : null;
     const viewed = await wait(
       () => viewer.monitor.value?.processes?.length && viewer.monitor.value
     );
@@ -67,6 +86,11 @@ test('the live monitor through the production worker: it runs only while the pan
       usage: full.usage,
       snapshots: snapshots.length,
       closed: Boolean(closed),
+      timed,
+      keys: [...new Set(full.processes.flatMap((row) => Object.keys(row)))],
+      agentKeys: Object.keys(full.agents[0]),
+      spin: measured?.processes.find((row) => row.command.includes('while :')),
+      cone: measured?.agents[0],
     };
   });
   assert.equal(seen.idle.open, false);
@@ -92,4 +116,15 @@ test('the live monitor through the production worker: it runs only while the pan
   assert.ok(seen.usage);
   assert.ok(seen.snapshots > 0);
   assert.ok(seen.closed);
+  assert.equal(seen.timed, timesKernel);
+  if (timesKernel) {
+    assert.ok(seen.keys.includes('utime') && seen.keys.includes('stime'));
+    assert.equal(typeof seen.spin.utime, 'number');
+    assert.ok(seen.spin.cpu > 0);
+    assert.equal(seen.spin.agentId, 'cone');
+    assert.ok(seen.cone.cpu >= seen.spin.cpu);
+  } else {
+    assert.ok(!['utime', 'stime', 'cpu'].some((key) => seen.keys.includes(key)));
+    assert.ok(!seen.agentKeys.includes('cpu'));
+  }
 });

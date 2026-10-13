@@ -35,6 +35,8 @@ export const GROUP_MAX = 32;
 export const TOTAL_MAX = 128;
 export const ZOMBIE_MS = 60000;
 export const STALE_MS = 1800000;
+export const CPU_SHARE = 0.9;
+export const CPU_SUSTAIN_MS = 120000;
 export const CONTEXT_WARN = 0.8;
 export const DEPTH_MAX = 6;
 const MINUTE = 60000;
@@ -56,6 +58,7 @@ export interface MonitorInput {
   extra: readonly MonitorSection[];
   history: readonly Sample[];
   now: number;
+  hot?: ReadonlyMap<number, number>;
 }
 
 const KINDS: Record<string, string> = {
@@ -273,6 +276,7 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
 
 function stale(process: MonitorProcess, agents: ReadonlyMap<string, MonitorAgent>, now: number) {
   if (!process.agentId || process.state === 'Z' || !process.started) return false;
+  if (typeof process.utime === 'number') return false;
   if (agents.get(process.agentId)?.tool === 'bash') return false;
   return now - process.started > STALE_MS;
 }
@@ -289,6 +293,53 @@ function groups(processes: readonly MonitorProcess[]): Map<number, MonitorProces
 }
 
 type Names = (id: string | null) => string;
+
+export function groupCpu(
+  processes: readonly MonitorProcess[]
+): Map<number, { agentId: string; share: number }> {
+  const out = new Map<number, { agentId: string; share: number }>();
+  for (const [pgid, members] of groups(processes)) {
+    const measured = members.filter((row) => typeof row.cpu === 'number');
+    if (!measured.length) continue;
+    const share = measured.reduce((sum, row) => sum + (row.cpu as number), 0);
+    out.set(pgid, { agentId: (members[0] as MonitorProcess).agentId as string, share });
+  }
+  return out;
+}
+
+export function hotGroups(
+  processes: readonly MonitorProcess[],
+  at: number,
+  previous: ReadonlyMap<number, number>
+): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const [pgid, { share }] of groupCpu(processes))
+    if (share >= CPU_SHARE) out.set(pgid, previous.get(pgid) ?? at);
+  return out;
+}
+
+function busy(input: MonitorInput, processes: readonly MonitorProcess[]) {
+  const shares = groupCpu(processes);
+  const out: { pgid: number; agentId: string; share: number; held: number }[] = [];
+  for (const [pgid, since] of input.hot ?? []) {
+    const group = shares.get(pgid);
+    const held = input.now - since;
+    if (group && group.share >= CPU_SHARE && held >= CPU_SUSTAIN_MS)
+      out.push({ pgid, ...group, held });
+  }
+  return out;
+}
+
+function cpuAlerts(input: MonitorInput, processes: readonly MonitorProcess[], nameOf: Names) {
+  return busy(input, processes).map(
+    (group): MonitorAlert => ({
+      id: `runaway-cpu-${group.pgid}`,
+      title: `${nameOf(group.agentId)} is using a lot of CPU`,
+      detail: `${Math.round(group.share * 100)}% of one core for ${Math.floor(group.held / MINUTE)} minutes. Kill them with kill -- -${group.pgid}.`,
+      severity: group.share >= CPU_SHARE * 2 || group.held >= CPU_SUSTAIN_MS * 2 ? 'error' : 'warn',
+    })
+  );
+}
 
 function resetLine(budget: BudgetState): string {
   const resets = new Date(budget.resets);
@@ -375,7 +426,7 @@ function crowdAlerts(processes: readonly MonitorProcess[], nameOf: Names): Monit
 function processAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): MonitorAlert[] {
   const processes = feed.processes ?? [];
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
-  const out = crowdAlerts(processes, nameOf);
+  const out = [...crowdAlerts(processes, nameOf), ...cpuAlerts(input, processes, nameOf)];
   for (const process of processes) {
     if (process.zombie !== null && input.now - process.zombie > ZOMBIE_MS)
       out.push({
@@ -496,6 +547,7 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
   const crowded = new Set<number>();
   for (const [pgid, members] of groups(feed.processes ?? []))
     if (members.length > GROUP_MAX) crowded.add(pgid);
+  for (const group of busy(input, feed.processes ?? [])) crowded.add(group.pgid);
   return (feed.processes ?? []).map((process) => {
     const runaway = stale(process, agents, input.now) || crowded.has(process.pgid);
     const badges = [
@@ -642,6 +694,8 @@ export class MonitorAdapter implements MonitorPort {
   #listeners = 0;
   #open: Open | undefined;
   #history: Sample[] = [];
+  #hot = new Map<number, number>();
+  #hotAt = -1;
 
   constructor(connection: AgentConnection, options: MonitorAdapterOptions = {}) {
     this.#connection = connection;
@@ -683,6 +737,7 @@ export class MonitorAdapter implements MonitorPort {
       extra: this.#extra(),
       history: this.#history,
       now: this.#now(),
+      hot: this.#hot,
     });
   }
 
@@ -699,6 +754,8 @@ export class MonitorAdapter implements MonitorPort {
   #start(): void {
     const control = this.#connection.control;
     this.#history = [];
+    this.#hot = new Map();
+    this.#hotAt = -1;
     void control.changesOpen(BACKGROUND_CONTEXT).catch(() => undefined);
     const lease = control.monitorOpen(null, true, BACKGROUND_CONTEXT).then(
       (opened) => opened.lease || null,
@@ -734,9 +791,17 @@ export class MonitorAdapter implements MonitorPort {
     if (this.#history.length > HISTORY) this.#history.shift();
   }
 
+  #track(): void {
+    const feed = this.#connection.monitor?.value;
+    if (!feed?.open || feed.at === this.#hotAt) return;
+    this.#hotAt = feed.at;
+    this.#hot = hotGroups(feed.processes ?? [], feed.at, this.#hot);
+  }
+
   #update(): void {
     if (!this.#listeners) return;
     this.#sample();
+    this.#track();
     this.#emitter.emit('snapshot', this.snapshot());
   }
 }
