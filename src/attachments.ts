@@ -104,9 +104,34 @@ function unwrap(text: string): (Header & { body: string }) | undefined {
   };
 }
 
-type Block = { type?: string; text?: string; data?: string; mimeType?: string };
+type Block = {
+  type?: string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  full?: { mimeType: string; size: number };
+};
 
-function shown(header: Header & { body: string }, index: number, next?: Block): ShownAttachment {
+export const REF = /^ref:(\d+):(\d+):(\d+)$/;
+
+function picture(base: Omit<ShownAttachment, 'size'>, block: Block, ref?: string): ShownAttachment {
+  const url = block.data ? { url: `data:${block.mimeType};base64,${block.data}` } : {};
+  if (!block.full) return { ...base, size: decodedSize(block.data ?? ''), ...url };
+  return {
+    ...base,
+    ...(ref ? { id: ref } : {}),
+    mimeType: block.full.mimeType,
+    size: block.full.size,
+    ...url,
+  };
+}
+
+function shown(
+  header: Header & { body: string },
+  index: number,
+  next?: Block,
+  ref?: string
+): ShownAttachment {
   const base = {
     id: `a${index}`,
     name: header.name,
@@ -116,16 +141,14 @@ function shown(header: Header & { body: string }, index: number, next?: Block): 
   };
   if (header.kind === 'text')
     return { ...base, size: header.size ?? header.body.length, text: header.body };
-  if (next?.data)
-    return {
-      ...base,
-      size: decodedSize(next.data),
-      url: `data:${next.mimeType};base64,${next.data}`,
-    };
+  if (next) return picture(base, next, ref);
   return { ...base, size: header.size ?? 0 };
 }
 
-export function splitUser(content: unknown): { text: string; attachments: ShownAttachment[] } {
+export function splitUser(
+  content: unknown,
+  prefix?: string
+): { text: string; attachments: ShownAttachment[] } {
   if (typeof content === 'string') return { text: content, attachments: [] };
   const blocks = Array.isArray(content) ? (content as Block[]) : [];
   const attachments: ShownAttachment[] = [];
@@ -134,17 +157,19 @@ export function splitUser(content: unknown): { text: string; attachments: ShownA
     const block = blocks[index] as Block;
     const header = block.type === 'text' ? unwrap(block.text ?? '') : undefined;
     const next = blocks[index + 1];
+    const ref = (at: number) => (prefix ? `${prefix}:${at}` : undefined);
     if (header) {
       const image = header.kind === 'image' && next?.type === 'image' ? next : undefined;
-      attachments.push(shown(header, attachments.length, image));
+      attachments.push(shown(header, attachments.length, image, ref(index + 1)));
       if (image) index++;
     } else if (block.type === 'text') text += block.text ?? '';
-    else if (block.type === 'image' && block.data)
+    else if (block.type === 'image' && (block.data || block.full))
       attachments.push(
         shown(
           { kind: 'image', name: 'image', type: String(block.mimeType), body: '' },
           attachments.length,
-          block
+          block,
+          ref(index)
         )
       );
   }

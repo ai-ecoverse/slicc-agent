@@ -14,13 +14,14 @@ import type {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
+import { shrink } from '../images/index.ts';
 import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
 import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
-import { sendAttachments } from './outgoing.ts';
+import { readUrl, sendAttachments } from './outgoing.ts';
 
 export const CONE = 'cone';
 
@@ -236,7 +237,9 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   async send(agentId: string, input: string | Outgoing): Promise<void> {
     const outgoing = typeof input === 'string' ? { text: input } : input;
     const attachments = outgoing.attachments?.length
-      ? await sendAttachments(outgoing.attachments).catch((error: Error) => {
+      ? await sendAttachments(outgoing.attachments, readUrl, shrink, (ref) =>
+          this.#connection.control.image(ref, BACKGROUND_CONTEXT)
+        ).catch((error: Error) => {
           this.notify(error.message, agentId);
           return null;
         })

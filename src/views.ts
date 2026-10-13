@@ -35,10 +35,15 @@ function wanted(state: Readonly<AgentsState>): Map<string, number> {
 interface Mounted {
   conversation: number;
   attached: AttachedReplicatedState<ConversationView>;
+  put: (value: ConversationView) => void;
   off: () => void;
 }
 
-export async function agentViews(agent: Agent, context: Context) {
+export async function agentViews(
+  agent: Agent,
+  context: Context,
+  slim: (view: ConversationView) => ConversationView = (view) => view
+) {
   const agents = replicatedState<AgentsSummary>(summarize(agent.agents.state()));
   const views = replicatedState<Record<string, ConversationView>>({});
   const mounted = new Map<string, Mounted>();
@@ -66,12 +71,13 @@ export async function agentViews(agent: Agent, context: Context) {
           const attached = await handle.viewState(context);
           const put = (value: ConversationView) =>
             views.change(context, (draft) => {
-              (draft as Record<string, unknown>)[id] = value;
+              (draft as Record<string, unknown>)[id] = slim(value);
             });
           put(attached.value);
           mounted.set(id, {
             conversation,
             attached,
+            put,
             off: attached.subscribe((value) => put(value)),
           });
         }
@@ -88,6 +94,9 @@ export async function agentViews(agent: Agent, context: Context) {
     agents,
     views,
     sync,
+    refresh() {
+      for (const entry of mounted.values()) entry.put(entry.attached.value);
+    },
     dispose() {
       offChange();
       offCone();

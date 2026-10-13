@@ -81,7 +81,7 @@ async function boot(page, query) {
         .filter((m) => m.role === 'assistant' && m.parts.some((part) => part.type === 'text'))
         .length >= count && !model.agent.busy('cone');
     const client = await attachKernel(await kernel.connect());
-    globalThis.attach = { model, find, requests, files, composer, answered, client };
+    globalThis.attach = { model, find, requests, files, composer, answered, client, owner };
   }, query);
 }
 
@@ -177,20 +177,37 @@ test('an image from +, paste and drop reaches the model as an image part with th
     images.map((parts) => parts.map(({ mimeType, data }) => ({ mimeType, data }))),
     sources.map(() => [{ mimeType: 'image/png', data: PNG }])
   );
-  const shown = await page.evaluate(() =>
-    globalThis.attach.model.agent
+  const shown = await page.until(() => {
+    const users = globalThis.attach.model.agent
       .messages('cone')
-      .filter((message) => message.role === 'user')
-      .map((message) => ({
-        text: message.text,
-        attachments: message.attachments.map(({ name, kind, url }) => ({ name, kind, url })),
-      }))
-  );
+      .filter((message) => message.role === 'user');
+    if (users.some((message) => !message.attachments?.[0]?.url)) return null;
+    return users.map((message) => ({
+      text: message.text,
+      attachments: message.attachments.map(({ name, kind, mimeType, size, url }) => ({
+        name,
+        kind,
+        mimeType,
+        size,
+        thumbnail: url.slice(0, 23),
+      })),
+    }));
+  });
+  const bytes =
+    Math.floor((PNG.length * 3) / 4) - (PNG.endsWith('==') ? 2 : PNG.endsWith('=') ? 1 : 0);
   assert.deepEqual(
     shown,
     sources.map((source) => ({
       text: `Look at the ${source} image.`,
-      attachments: [{ name: `${source}.png`, kind: 'image', url: `data:image/png;base64,${PNG}` }],
+      attachments: [
+        {
+          name: `${source}.png`,
+          kind: 'image',
+          mimeType: 'image/png',
+          size: bytes,
+          thumbnail: 'data:image/jpeg;base64,',
+        },
+      ],
     }))
   );
   const thumbnails = await page.until(() => {
@@ -203,7 +220,9 @@ test('an image from +, paste and drop reaches the model as an image part with th
     walk(transcript.shadowRoot ?? transcript);
     return found.length >= 3 && found;
   });
-  assert.ok(thumbnails.every((src) => src === `data:image/png;base64,${PNG}`));
+  assert.ok(
+    thumbnails.every((src) => src.startsWith('data:image/jpeg;base64,') && src.length < 64 * 1024)
+  );
   if (env.ATTACH_SHOTS) await writeFile(`${env.ATTACH_SHOTS}/sent-image.png`, await shot(page));
 });
 
@@ -315,4 +334,88 @@ test('a model without image input gets the image as a saved file and a note', as
     )
   );
   assert.equal(saved, PNG);
+});
+
+test('a conversation whose images pass one 16 MiB frame still attaches, with thumbnails, and Retry resends the full image', async (t) => {
+  const page = await chrome.page(t);
+  await boot(
+    page,
+    ['1', '2', '3', '4', '5'].map((answer) => ['answer', answer])
+  );
+  const sent = await page.evaluate(async () => {
+    const { model, answered } = globalThis.attach;
+    const canvas = new OffscreenCanvas(1100, 1000);
+    const draw = canvas.getContext('2d');
+    const pixels = draw.createImageData(1100, 1000);
+    const lengths = [];
+    for (let n = 0; n < 4; n++) {
+      for (let at = 0; at < pixels.data.length; at += 65536)
+        crypto.getRandomValues(pixels.data.subarray(at, Math.min(at + 65536, pixels.data.length)));
+      for (let at = 3; at < pixels.data.length; at += 4) pixels.data[at] = 255;
+      draw.putImageData(pixels, 0, 0);
+      const blob = await canvas.convertToBlob({ type: 'image/png' });
+      lengths.push(blob.size);
+      await model.agent.send('cone', {
+        text: `Noise ${n}`,
+        attachments: [
+          {
+            id: `n${n}`,
+            name: `noise-${n}.png`,
+            kind: 'image',
+            mimeType: 'image/png',
+            size: blob.size,
+            url: URL.createObjectURL(blob),
+          },
+        ],
+      });
+      for (let i = 0; i < 400 && !answered(n + 1); i++) await new Promise((r) => setTimeout(r, 25));
+    }
+    return lengths;
+  });
+  assert.ok(sent.reduce((sum, size) => sum + size, 0) * (4 / 3) > 16 * 1024 * 1024);
+  assert.ok(sent.every((size) => size < 5 * 1024 * 1024));
+  const fresh = await page.until(async () => {
+    const { owner } = globalThis.attach;
+    const connection = await owner.connect();
+    const { agent } = createAgentModel(connection);
+    await agent.ready();
+    const users = agent.messages('cone').filter((message) => message.role === 'user');
+    if (users.length < 4 || users.some((user) => !user.attachments?.[0]?.url)) return null;
+    const json = JSON.stringify(connection.transcript.value).length;
+    await connection.close();
+    return {
+      json,
+      attachments: users.map((user) => user.attachments[0]),
+    };
+  });
+  assert.ok(fresh.json < 2 * 1024 * 1024, `${fresh.json}`);
+  assert.deepEqual(
+    fresh.attachments.map((item) => [
+      item.name,
+      item.mimeType,
+      item.size,
+      item.url.slice(0, 23),
+      /^ref:/.test(item.id),
+    ]),
+    sent.map((size, n) => [`noise-${n}.png`, 'image/png', size, 'data:image/jpeg;base64,', true])
+  );
+  const retried = await page.evaluate(async () => {
+    const { model, answered, requests } = globalThis.attach;
+    const last = model.agent
+      .messages('cone')
+      .filter((message) => message.role === 'user')
+      .at(-1);
+    await model.agent.send('cone', { text: last.text, attachments: last.attachments });
+    for (let i = 0; i < 400 && !answered(5); i++) await new Promise((r) => setTimeout(r, 25));
+    const all = await requests();
+    const images = (request) =>
+      request.messages
+        .filter((message) => message.role === 'user')
+        .at(-1)
+        .content.filter((part) => part.type === 'image')
+        .map((part) => [part.mimeType, part.data.length]);
+    return { first: images(all.at(-2)), retry: images(all.at(-1)) };
+  });
+  assert.deepEqual(retried.retry, [['image/png', Math.ceil(sent[3] / 3) * 4]]);
+  assert.deepEqual(retried.retry, retried.first);
 });
