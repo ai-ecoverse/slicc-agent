@@ -338,10 +338,72 @@ function tools(messages: Message[]): Map<string, ToolCall> {
   return found;
 }
 
-function settle(calls: Map<string, ToolCall>, result: ModelMessage): void {
-  const call = calls.get(result.toolCallId ?? '');
+interface Diagnostic {
+  severity: string;
+  message: string;
+}
+
+interface Note {
+  severity: 'error' | 'warn' | 'info';
+  text: string;
+}
+
+type Card = ToolCall & { notes?: Note[] };
+
+const LINE = /^\[(error|warn|info)\] (.*)$/;
+
+function rendered(diagnostics: readonly Diagnostic[]): string {
+  return `<harness>\n${diagnostics.map((item) => `[${item.severity}] ${item.message}`).join('\n')}\n</harness>`;
+}
+
+function parsed(text: string): Diagnostic[] | undefined {
+  const body = /^<harness>\n([\s\S]*)\n<\/harness>$/.exec(text)?.[1];
+  if (body === undefined) return undefined;
+  const found = body.split('\n').map((line) => LINE.exec(line));
+  if (!found.every((match): match is RegExpExecArray => match !== null)) return undefined;
+  return found.map(([, severity, message]) => ({ severity, message }) as Diagnostic);
+}
+
+function harness(
+  content: ModelMessage['content'],
+  data: unknown
+): { content: ModelMessage['content']; diagnostics: Diagnostic[] } {
+  const last = Array.isArray(content) ? content.at(-1) : undefined;
+  const stored = (data as { diagnostics?: unknown } | undefined)?.diagnostics;
+  const listed = Array.isArray(stored) ? (stored as Diagnostic[]) : parsed(last?.text ?? '');
+  if (!listed?.length || last?.type !== 'text' || last.text !== rendered(listed))
+    return { content, diagnostics: [] };
+  return { content: (content as Block[]).slice(0, -1), diagnostics: listed };
+}
+
+const phrasings: [RegExp, (match: RegExpExecArray) => string][] = [
+  [/^Command exited with code (-?\d+)$/, (match) => `Exited with code ${match[1]}`],
+  [/^Command timed out after (.+)$/, (match) => `Timed out after ${match[1]}`],
+  [/^Command aborted$/, () => 'Aborted'],
+];
+
+function phrased(message: string): string {
+  const line = message
+    .replace(/\n[\s\S]*$/, '')
+    .trim()
+    .replace(/\.$/, '');
+  for (const [pattern, phrase] of phrasings) {
+    const match = pattern.exec(line);
+    if (match) return phrase(match);
+  }
+  return line;
+}
+
+function note(diagnostic: Diagnostic): Note {
+  return { severity: diagnostic.severity as Note['severity'], text: phrased(diagnostic.message) };
+}
+
+function settle(calls: Map<string, ToolCall>, result: ModelMessage, data?: unknown): void {
+  const call = calls.get(result.toolCallId ?? '') as Card | undefined;
   if (!call) return;
-  call.output = textOf(result.content);
+  const split = harness(result.content, data);
+  call.output = textOf(split.content);
+  if (split.diagnostics.length) call.notes = split.diagnostics.map(note);
   call.status = result.isError ? 'error' : 'done';
   const image = Array.isArray(result.content)
     ? (result.content as { type: string; data?: string; mimeType?: string }[]).find(
@@ -424,7 +486,7 @@ function entryMessage(
     const message = assistant(id, model);
     out.push(withoutLickTools(message));
     for (const [key, value] of tools([message])) calls.set(key, value);
-  } else if (entry.kind === 'pi.tool-result' && model) settle(calls, model);
+  } else if (entry.kind === 'pi.tool-result' && model) settle(calls, model, entry.data);
   else if (entry.kind === 'pi.compaction') out.push(system(id, entry, textOf(model?.content)));
 }
 
