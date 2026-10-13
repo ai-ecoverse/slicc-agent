@@ -1,6 +1,6 @@
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
 import { decodedSize, fromBase64 } from './attachments.ts';
-import { base64 } from './images/index.ts';
+import { base64 } from './images/fit.ts';
 
 export const KEEP = 48 * 1024;
 export const THUMB_EDGE = 256;

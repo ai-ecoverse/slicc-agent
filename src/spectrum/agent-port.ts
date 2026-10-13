@@ -14,7 +14,7 @@ import type {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
-import { shrink } from '../images/index.ts';
+import { shrink } from '../images/fit.ts';
 import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
 import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
