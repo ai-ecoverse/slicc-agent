@@ -226,7 +226,7 @@ test('an image from +, paste and drop reaches the model as an image part with th
   if (env.ATTACH_SHOTS) await writeFile(`${env.ATTACH_SHOTS}/sent-image.png`, await shot(page));
 });
 
-test('a text file arrives as text and a binary file as a saved file whose path is in the text', async (t) => {
+test('a text file arrives as text, and binary files from + and a drop on the chat pane as saved files whose paths are in the text', async (t) => {
   const page = await chrome.page(t);
   await boot(page, [
     ['answer', 'Read it.'],
@@ -248,22 +248,30 @@ test('a text file arrives as text and a binary file as a saved file whose path i
   });
   await page.until(() => globalThis.attach.answered(1));
   const bytes = [0, 1, 2, 250, 255, 7];
-  await page.evaluate(async (bytes) => {
-    const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' });
-    await globalThis.attach.model.agent.send('cone', {
-      text: 'Keep this.',
-      attachments: [
-        {
-          id: 'a1',
-          name: 'dummy.bin',
-          kind: 'file',
-          mimeType: 'application/octet-stream',
-          size: bytes.length,
-          url: URL.createObjectURL(blob),
-        },
-      ],
-    });
-  }, bytes);
+  const dropped = [9, 8, 7, 0, 255];
+  const encode = (list) => Buffer.from(list).toString('base64');
+  await page.evaluate(async (base64) => {
+    const { composer, files } = globalThis.attach;
+    const input = composer().shadowRoot.querySelector('input[type=file]');
+    input.files = files([{ name: 'dummy.bin', type: 'application/octet-stream', base64 }]).files;
+    input.dispatchEvent(new Event('change'));
+  }, encode(bytes));
+  await page.until(() => globalThis.attach.composer().attachments[0]?.url?.startsWith('blob:'));
+  await page.evaluate(async (base64) => {
+    const { find, files } = globalThis.attach;
+    const dt = files([{ name: 'dropped.bin', type: 'application/octet-stream', base64 }]);
+    const chat = find(document, 'slicc-chat');
+    for (const type of ['dragenter', 'dragover', 'drop'])
+      chat.dispatchEvent(
+        new DragEvent(type, { dataTransfer: dt, bubbles: true, composed: true, cancelable: true })
+      );
+  }, encode(dropped));
+  await page.until(() => globalThis.attach.composer().attachments.length === 2);
+  await page.evaluate(() => {
+    const composer = globalThis.attach.composer();
+    composer.value = 'Keep this.';
+    composer.send();
+  });
   await page.until(() => globalThis.attach.answered(2));
   const requests = await page.evaluate(() => globalThis.attach.requests());
   const [notes, binary] = requests
@@ -276,15 +284,19 @@ test('a text file arrives as text and a binary file as a saved file whose path i
     '<attachment kind="text" name="notes.md" type="text/markdown">\n# Dummy notes\nline two\n</attachment>'
   );
   assert.equal(binary[0].text, 'Keep this.');
-  const path = /path="([^"]+)"/.exec(binary[1].text)?.[1];
-  assert.equal(path, '/home/uploads/dummy.bin');
+  const paths = binary.slice(1).map((part) => /path="([^"]+)"/.exec(part.text)?.[1]);
+  assert.deepEqual(paths, ['/home/uploads/dummy.bin', '/home/uploads/dropped.bin']);
   assert.match(binary[1].text, /Saved at \/home\/uploads\/dummy\.bin\./);
+  assert.match(binary[2].text, /Saved at \/home\/uploads\/dropped\.bin\./);
   assert.ok(binary.every((part) => part.type === 'text'));
   const saved = await page.evaluate(
-    async (path) => [...(await globalThis.attach.client.fs.readFile(path))],
-    path
+    async (paths) =>
+      Promise.all(
+        paths.map(async (path) => [...(await globalThis.attach.client.fs.readFile(path))])
+      ),
+    paths
   );
-  assert.deepEqual(saved, bytes);
+  assert.deepEqual(saved, [bytes, dropped]);
   const shown = await page.evaluate(() =>
     globalThis.attach.model.agent
       .messages('cone')
@@ -295,7 +307,10 @@ test('a text file arrives as text and a binary file as a saved file whose path i
   );
   assert.deepEqual(shown, [
     [{ name: 'notes.md', kind: 'text', path: null }],
-    [{ name: 'dummy.bin', kind: 'file', path: '/home/uploads/dummy.bin' }],
+    [
+      { name: 'dummy.bin', kind: 'file', path: '/home/uploads/dummy.bin' },
+      { name: 'dropped.bin', kind: 'file', path: '/home/uploads/dropped.bin' },
+    ],
   ]);
 });
 
