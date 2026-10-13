@@ -56,6 +56,45 @@ export function modeOf(client: KernelClient): UsersMode {
   return mode === 'report' || mode === 'enforce' ? mode : 'off';
 }
 
+export async function missingSupport(
+  pool: UserClients | undefined,
+  client: KernelClient,
+  requested: boolean | undefined
+): Promise<string[]> {
+  if (!pool) return requested === true ? ['admin (the page passed no KernelSource.users)'] : [];
+  const missing: string[] = [];
+  if (
+    !(await pool.users.list().then(
+      () => true,
+      () => false
+    ))
+  )
+    missing.push('users');
+  if ((client as { users?: unknown }).users === undefined)
+    missing.push('the users mode (kernel 1.57)');
+  if (
+    !(await pool.groups.list().then(
+      () => true,
+      () => false
+    ))
+  )
+    missing.push('groups and homeMode (kernel 1.60 and KernelSource.groups)');
+  return missing;
+}
+
+export async function warnSupport(
+  pool: UserClients | undefined,
+  client: KernelClient,
+  requested: boolean | undefined,
+  report: (message: string) => void = (message) => console.error(message)
+): Promise<void> {
+  const missing = await missingSupport(pool, client, requested);
+  if (missing.length)
+    report(
+      `slicc-agent: kernel users were requested, but this kernel or page lacks ${missing.join(', ')}`
+    );
+}
+
 export function legacyCwd(state: Readonly<AgentsState>, agentId: string, cwd: string): boolean {
   if (cwd === HOME) return true;
   const record = state.scoops[agentId];
