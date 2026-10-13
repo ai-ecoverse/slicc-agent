@@ -1,4 +1,5 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
+import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' };
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -8,7 +9,7 @@ import { MemoryStorage } from '@earendil-works/pi-durable';
 import { adobeProvider, runAgentWorker } from '../../../src/index.ts';
 import { fakeVault } from '../fixtures/fake-vault.mjs';
 import { createMcpServer } from '../fixtures/mcp-server.mjs';
-import vectors from '../fixtures/scrub-vectors.json' with { type: 'json' };
+import { seeded } from '../fixtures/seeds.mjs';
 
 const params = new URL(self.location.href).searchParams;
 const fauxModels = [
@@ -152,7 +153,7 @@ void runAgentWorker(self, {
 });
 if (params.has('vault')) {
   const records = params.getAll('record').map((record) => JSON.parse(record));
-  const fake = fakeVault(params.has('scrub') ? vectors.values : [], 1, { records });
+  const fake = fakeVault(params.has('scrub') ? seeded(vectors).values : [], 1, { records });
   self.fakeVault = fake;
   self.dispatchEvent(new MessageEvent('message', { data: { vault: fake.port, scrub: fake.pair } }));
 }

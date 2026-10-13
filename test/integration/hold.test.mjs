@@ -9,8 +9,16 @@ import { launch } from './chrome.mjs';
 const types = { '.mjs': 'text/javascript' };
 const fixtures = createServer(async (request, response) => {
   const name = new URL(request.url, 'http://fixtures').pathname.slice(1);
-  const body = /^(fake-vault|scrub)\.mjs$/.test(name)
-    ? await readFile(new URL(`./fixtures/${name}`, import.meta.url))
+  const files = {
+    'fake-vault.mjs': new URL('./fixtures/fake-vault.mjs', import.meta.url),
+    'slicc-scrub.mjs': new URL(
+      '../../node_modules/@ai-ecoverse/slicc-scrub/dist/index.js',
+      import.meta.url
+    ),
+  };
+  const file = Object.hasOwn(files, name) ? files[name] : undefined;
+  const body = file
+    ? (await readFile(file, 'utf8')).replace("'@ai-ecoverse/slicc-scrub'", "'./slicc-scrub.mjs'")
     : null;
   if (!body) return response.writeHead(404).end();
   response
