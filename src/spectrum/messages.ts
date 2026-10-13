@@ -12,6 +12,7 @@ import type {
   UserMessage,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
+import { splitUser } from '../attachments.ts';
 import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import { mcpLabel } from '../mcp/label.ts';
@@ -271,7 +272,7 @@ function user(
   return {
     id,
     role: 'user',
-    text: textOf(message.content),
+    ...shownUser(message.content),
     createdAt: message.timestamp ?? 0,
     ...(delivered ? { delivered } : {}),
     ...(from ? { from: from.from } : {}),
@@ -562,6 +563,11 @@ export function toMessages(
   return out;
 }
 
+function shownUser(content: ModelMessage['content']): Pick<UserMessage, 'text' | 'attachments'> {
+  const { text, attachments } = splitUser(content);
+  return attachments.length ? { text, attachments } : { text };
+}
+
 export function isBusy(view: ConversationView | undefined): boolean {
   return Boolean((view?.docs['pi.live'] as Live | undefined)?.run);
 }
@@ -576,8 +582,8 @@ export function queued(view: ConversationView | undefined): UserMessage[] {
     .filter((item) => item.mode !== 'write' && !parseLick(textOf(item.content)))
     .map((item) => ({
       id: `q${item.id}`,
-      role: 'user',
-      text: textOf(item.content),
+      role: 'user' as const,
+      ...shownUser(item.content),
       createdAt: 0,
       queued: true,
       mode: item.mode === 'steer' ? 'steer' : 'queue',

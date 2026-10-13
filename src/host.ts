@@ -45,6 +45,7 @@ import {
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
+import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
 
@@ -174,6 +175,7 @@ export async function hostAgent(
     monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users' | 'secrets'>;
     pages?: Pages;
     secrets?: HostSecrets;
+    uploads?: Uploads;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -212,7 +214,8 @@ export async function hostAgent(
     options.freezer,
     options.changes,
     monitor,
-    options.secrets?.list
+    options.secrets?.list,
+    options.uploads
   );
   const remote = createRemote({
     harness: agent.harness,

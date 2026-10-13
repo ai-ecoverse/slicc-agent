@@ -9,7 +9,10 @@ import { EncryptedCredentialStore, runAgentWorker } from '../../../src/index.ts'
 import { createMcpServer } from '../fixtures/mcp-server.mjs';
 
 const params = new URL(self.location.href).searchParams;
-const fauxModels = params.getAll('model').map((id) => ({ id }));
+const fauxModels = [
+  ...params.getAll('model').map((id) => ({ id })),
+  ...params.getAll('blind').map((id) => ({ id, input: ['text'] })),
+];
 const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
 const requests = [];
 const recorded = (message) => (context) => {

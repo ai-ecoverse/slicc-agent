@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { SendAttachment } from '../attachments.ts';
 import type { AgentConnection } from '../client.ts';
 import type { Delivered, SendMode } from '../services.ts';
 import type { RemoteEvent } from './events.ts';
@@ -17,6 +18,7 @@ export interface RemoteControl {
     text: string;
     whenBusy?: SendMode;
     thinking?: boolean;
+    attachments?: SendAttachment[];
   }): Promise<{ delivered: Delivered; events: AsyncIterable<RemoteEvent> }>;
   watch(request?: {
     since?: string | null;
@@ -77,11 +79,16 @@ export function remoteControl(
     return remote;
   };
   return {
-    async prompt({ text, whenBusy = 'followUp', thinking = false }) {
+    async prompt({ text, whenBusy = 'followUp', thinking = false, attachments }) {
       const service = need();
-      const result = opened(
-        await service.prompt({ agentId: agent(), text, whenBusy, thinking }, BACKGROUND_CONTEXT)
-      );
+      const request = {
+        agentId: agent(),
+        text,
+        whenBusy,
+        thinking,
+        ...(attachments?.length ? { attachments } : {}),
+      };
+      const result = opened(await service.prompt(request, BACKGROUND_CONTEXT));
       return {
         delivered: result.delivered as Delivered,
         events: events(service, result.stream),

@@ -11,6 +11,15 @@ export {
   type Budget,
 } from './adobe.ts';
 export { type Agent, type AgentOptions, answerText, openAgent } from './agent.ts';
+export {
+  FILE_LIMIT,
+  IMAGE_LIMIT,
+  type SendAttachment,
+  type ShownAttachment,
+  splitUser,
+  TOTAL_LIMIT,
+  userParts,
+} from './attachments.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
 export { createAgentControl } from './control.ts';
 export { CREDENTIALS_DATABASE, EncryptedCredentialStore } from './credentials.ts';
@@ -105,6 +114,7 @@ export {
   WasmSqliteDatabase,
 } from './sqlite.ts';
 export { type SystemFacts, systemSection } from './system.ts';
+export { UPLOADS, type Uploads, upload } from './uploads.ts';
 export { PortChannel, type PortEndpoint, withUnrefTimers } from './wire.ts';
 export {
   type KernelPorts,

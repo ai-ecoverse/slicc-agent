@@ -20,6 +20,7 @@ import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts'
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
+import { sendAttachments } from './outgoing.ts';
 
 export const CONE = 'cone';
 
@@ -234,6 +235,13 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
 
   async send(agentId: string, input: string | Outgoing): Promise<void> {
     const outgoing = typeof input === 'string' ? { text: input } : input;
+    const attachments = outgoing.attachments?.length
+      ? await sendAttachments(outgoing.attachments).catch((error: Error) => {
+          this.notify(error.message, agentId);
+          return null;
+        })
+      : [];
+    if (!attachments) return;
     const target = this.#creating.has(agentId) ? await this.#creating.get(agentId) : agentId;
     if (target === null) throw new Error('The scoop could not be created.');
     const pending = target && this.#held(target) ? this.#pending(target, outgoing) : undefined;
@@ -246,6 +254,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
           whenBusy: outgoing.mode === 'queue' ? 'followUp' : 'steer',
           requestId: crypto.randomUUID(),
           agentId: target || null,
+          ...(attachments.length ? { attachments } : {}),
         },
         BACKGROUND_CONTEXT
       )
@@ -266,6 +275,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       role: 'user',
       text: outgoing.text,
       createdAt: Date.now(),
+      ...(outgoing.attachments?.length ? { attachments: [...outgoing.attachments] } : {}),
       queued: true,
       mode: outgoing.mode === 'queue' ? 'queue' : 'steer',
     };
@@ -287,7 +297,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       messageId,
       BACKGROUND_CONTEXT
     );
-    return rewound.done ? { text: rewound.text } : null;
+    if (!rewound.done) return null;
+    return rewound.attachments?.length
+      ? { text: rewound.text, attachments: rewound.attachments }
+      : { text: rewound.text };
   }
 
   stop(agentId: string = this.active()): void {
