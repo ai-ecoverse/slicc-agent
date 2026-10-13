@@ -26,7 +26,7 @@ import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { imageReads } from './images/index.ts';
 import { createActivity } from './kernel/activity.ts';
-import { agentUsers } from './kernel/agent-users.ts';
+import { agentUsers, warnSupport } from './kernel/agent-users.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
@@ -105,6 +105,7 @@ async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions
   const { kernel, admin } = await ports;
   const client = await attach(kernel);
   const users = usersOf(admin, options.users, attach);
+  await warnSupport(users, client, options.users);
   const home = new SliccKernelEnv(client, { cwd: HOME });
   await privateStore(home);
   return { client, users, home, at: { home: HOME, ...(users ? { agentDir: AGENT_DIR } : {}) } };
