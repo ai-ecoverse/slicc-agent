@@ -42,8 +42,6 @@ test('the spectrum adapter shows a conversation with the agent worker', async (t
 
 test('a view-only follower says why each refused fire-and-forget call failed, without a page error', async (t) => {
   const page = await chrome.page(t);
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
   await page.evaluate(() => import('/dist-test/page.js'));
   const notices = await page.evaluate(async () => {
@@ -88,5 +86,5 @@ test('a view-only follower says why each refused fire-and-forget call failed, wi
       .map((action) => `This page is view-only, so it can't ${action}.`)
       .sort()
   );
-  assert.deepEqual(errors, []);
+  assert.deepEqual(page.errors, []);
 });
