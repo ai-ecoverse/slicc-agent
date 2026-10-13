@@ -1,11 +1,12 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { Agents } from '../agents.ts';
+import type { Agents, AgentsState } from '../agents.ts';
 import { FIRST_CONE } from '../agents.ts';
 import type { GelatiereAttach } from '../gelatiere/index.ts';
 import {
   AGENT_DIR,
   type Layout,
+  LEGACY,
   ROOT_HOME,
   ROOT_USER,
   SESSIONS,
@@ -25,7 +26,7 @@ import {
   wanted,
 } from './accounts.ts';
 import type { KernelClient } from './client.ts';
-import { type EnvRoute, type EnvTargetLike, quote, SliccKernelEnv } from './env.ts';
+import { type EnvRoute, type EnvTargetLike, HOME, quote, SliccKernelEnv } from './env.ts';
 import type { UserClients } from './users.ts';
 
 export interface AgentUsers {
@@ -53,6 +54,12 @@ export interface AgentUsers {
 export function modeOf(client: KernelClient): UsersMode {
   const mode = (client as { users?: unknown }).users;
   return mode === 'report' || mode === 'enforce' ? mode : 'off';
+}
+
+export function legacyCwd(state: Readonly<AgentsState>, agentId: string, cwd: string): boolean {
+  if (cwd === HOME) return true;
+  const record = state.scoops[agentId];
+  return record !== undefined && cwd === LEGACY.workspace(record.folder);
 }
 
 export function spoolScript(user: string, dir: string): string {
@@ -160,7 +167,8 @@ export function agentUsers(
       const agentId = accounts.agentOf(target.conversationId);
       const home = agentId ? accounts.home(agentId) : undefined;
       if (!agentId || !home) return undefined;
-      return { client: await accounts.client(agentId), home };
+      const legacy = target.cwd !== undefined && legacyCwd(state(), agentId, target.cwd);
+      return { client: await accounts.client(agentId), home, ...(legacy ? { cwd: home } : {}) };
     },
     async start(opened) {
       await root.exec(

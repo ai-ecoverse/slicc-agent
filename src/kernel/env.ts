@@ -417,7 +417,7 @@ export const HOME = '/home';
 
 export type EnvTargetLike = { cwd?: string; conversationId?: number; read?: unknown };
 
-export type EnvRoute = { client: KernelClient; home: string };
+export type EnvRoute = { client: KernelClient; home: string; cwd?: string };
 
 export function kernelEnvironment(
   client: KernelClient,
@@ -430,7 +430,7 @@ export function kernelEnvironment(
   const make = (target: EnvTargetLike, exports?: Record<string, string>, routed?: EnvRoute) =>
     new SliccKernelEnv(routed?.client ?? client, {
       ...rest,
-      cwd: target.cwd ?? routed?.home ?? HOME,
+      cwd: routed?.cwd ?? target.cwd ?? routed?.home ?? HOME,
       ...(target.conversationId === undefined ? {} : { owner: target.conversationId }),
       ...(exports ? { exports } : {}),
     });
