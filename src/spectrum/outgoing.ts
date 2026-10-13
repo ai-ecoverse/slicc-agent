@@ -1,11 +1,13 @@
 import type { Attachment } from '@ai-ecoverse/slicc-spectrum/ui';
 import {
   type AttachmentKind,
+  FILE_LIMIT,
   limitOf,
   REF,
   type SendAttachment,
   TOGETHER,
   TOTAL_LIMIT,
+  textBytes,
   tooLarge,
 } from '../attachments.ts';
 import { base64, type Shrink, shrink } from '../images/fit.ts';
@@ -64,7 +66,10 @@ async function resolved(
   };
   const found = await kept(attachment, stored);
   if (found?.data) return { ...base, mimeType: found.mimeType, data: found.data };
-  if (kind === 'text' && attachment.text !== undefined) return { ...base, text: attachment.text };
+  if (kind === 'text' && attachment.text !== undefined) {
+    if (textBytes(attachment.text) > FILE_LIMIT) throw new Error(tooLarge(attachment.name, kind));
+    return { ...base, text: attachment.text };
+  }
   if (attachment.url) {
     const { bytes, mimeType } = await bytesOf(attachment, read, fit);
     return { ...base, mimeType, data: base64(bytes) };
@@ -84,7 +89,7 @@ export async function sendAttachments(
   for (const attachment of attachments) {
     if (attachment.error || !KINDS.has(attachment.kind)) continue;
     const item = await resolved(attachment, read, fit, stored);
-    total += (item.text?.length ?? 0) + ((item.data?.length ?? 0) * 3) / 4;
+    total += textBytes(item.text ?? '') + ((item.data?.length ?? 0) * 3) / 4;
     if (total > TOTAL_LIMIT) throw new Error(TOGETHER);
     out.push(item);
   }
