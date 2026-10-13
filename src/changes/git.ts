@@ -6,9 +6,9 @@ export const MAX_FILES = 200;
 export const SCAN_DEPTH = 3;
 export const SCAN_ENTRIES = 200;
 export const NO_GIT =
-  "Changes needs git, and git isn't installed. Install it with `pnpm add -g @ai-ecoverse/wasm-git`, then run `git init` in a folder under /home, or clone with slicc (`curl -fsSL https://get.sliccy.ai/slicc | sh`) or the extension connected.";
+  "Changes needs git, and git isn't installed. Install it with `pnpm add -g @ai-ecoverse/wasm-git`, then run `git init` in a folder under /home. To clone from the internet, link slicc or the SLICC extension.";
 export const NO_REPO =
-  'Changes lists the changes in git repositories, and there is none here yet. Run `git init` in a folder under /home, or clone one with slicc (`curl -fsSL https://get.sliccy.ai/slicc | sh`) or the extension connected.';
+  'Changes lists the changes in git repositories, and there are none here yet. Run `git init` in a folder under /home. To clone from the internet, link slicc or the SLICC extension.';
 
 export type ChangeStatus = 'added' | 'modified' | 'deleted';
 export type ChangeKind = 'tracked' | 'untracked' | 'conflict';
