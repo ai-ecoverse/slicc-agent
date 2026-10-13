@@ -5,6 +5,7 @@ export const MAX_TEXT = 1024 * 1024;
 export const MAX_FILES = 200;
 export const SCAN_DEPTH = 3;
 export const SCAN_ENTRIES = 200;
+export const CLONE_COMMAND = 'curl -fsSL https://get.sliccy.ai/slicc | sh';
 export const NO_GIT =
   "Changes needs git, and git isn't installed. Install it with `pnpm add -g @ai-ecoverse/wasm-git`, then run `git init` in a folder under /home. To clone from the internet, link slicc or the SLICC extension.";
 export const NO_REPO =
