@@ -2,17 +2,20 @@ import type { Memory, MemoryDraft, MemoryEvents, MemoryPort } from '@ai-ecoverse
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
 import { type MemoryScope, slugOf as slug } from '../memory/format.ts';
+import { attempt, type Report, warn } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 
 type Local = Memory & { source?: 'entry' | 'notes' };
 
 export class MemoryAdapter extends Emitter<MemoryEvents> implements MemoryPort {
   readonly #connection: AgentConnection;
+  readonly #report: Report;
   #pending = new Map<string, Local | null>();
 
-  constructor(connection: AgentConnection) {
+  constructor(connection: AgentConnection, report: Report = warn) {
     super();
     this.#connection = connection;
+    this.#report = report;
     connection.memories?.subscribe(() => {
       this.#pending.clear();
       this.emit('memories', this.list());
@@ -42,8 +45,8 @@ export class MemoryAdapter extends Emitter<MemoryEvents> implements MemoryPort {
     if (draft.id && draft.id !== memory.id) this.#pending.set(draft.id, null);
     this.#pending.set(memory.id, memory);
     this.emit('memories', this.list());
-    void this.#connection.control
-      .memorySave(
+    attempt(
+      this.#connection.control.memorySave(
         {
           id: draft.id ?? null,
           scope: draft.scope,
@@ -53,20 +56,28 @@ export class MemoryAdapter extends Emitter<MemoryEvents> implements MemoryPort {
           tag: draft.tag,
         },
         BACKGROUND_CONTEXT
-      )
-      .catch(() => {
+      ),
+      'save memories',
+      this.#report,
+      () => {
         this.#pending.clear();
         this.emit('memories', this.list());
-      });
+      }
+    );
     return memory;
   }
 
   remove(id: string): void {
     this.#pending.set(id, null);
     this.emit('memories', this.list());
-    void this.#connection.control.memoryRemove(id, BACKGROUND_CONTEXT).catch(() => {
-      this.#pending.delete(id);
-      this.emit('memories', this.list());
-    });
+    attempt(
+      this.#connection.control.memoryRemove(id, BACKGROUND_CONTEXT),
+      'remove memories',
+      this.#report,
+      () => {
+        this.#pending.delete(id);
+        this.emit('memories', this.list());
+      }
+    );
   }
 }

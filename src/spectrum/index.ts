@@ -57,6 +57,7 @@ export function createAgentModel(
   page: PageAdapter | null;
 } {
   const agent = new AgentAdapter(connection);
+  const report = (text: string) => agent.notify(text);
   const run = options.page?.run;
   return {
     agent,
@@ -68,9 +69,9 @@ export function createAgentModel(
       options.login ?? null
     ),
     tray: new TrayAdapter(connection.settings),
-    sprinkles: new SprinkleAdapter(connection),
-    memory: new MemoryAdapter(connection),
-    changes: new ChangesAdapter(connection),
+    sprinkles: new SprinkleAdapter(connection, report),
+    memory: new MemoryAdapter(connection, report),
+    changes: new ChangesAdapter(connection, report),
     monitor: new MonitorAdapter(
       connection,
       options.monitor?.extra ? { extra: options.monitor.extra } : {}

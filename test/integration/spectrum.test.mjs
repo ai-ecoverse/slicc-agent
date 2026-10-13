@@ -39,3 +39,52 @@ test('the spectrum adapter shows a conversation with the agent worker', async (t
   assert.equal(seen.model, 'faux/faux-1');
   assert.ok(seen.updates > 0);
 });
+
+test('a view-only follower says why each refused fire-and-forget call failed, without a page error', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(() => import('/dist-test/page.js'));
+  const notices = await page.evaluate(async () => {
+    const unhandled = [];
+    addEventListener('unhandledrejection', (event) => unhandled.push(String(event.reason)));
+    const owner = await startAgent({
+      worker: () => new Worker('/dist-test/agent-worker.js?answer=Hi.', { type: 'module' }),
+    });
+    const model = createAgentModel(await owner.connect({ readOnly: true }));
+    const { agent } = model;
+    await agent.ready();
+    agent.stop();
+    agent.clear();
+    agent.setModel(agent.active(), 'faux/faux-1');
+    agent.freeze();
+    model.sprinkles.send('welcome', { action: 'go' });
+    model.settings.disconnect('faux');
+    agent.compact();
+    const shown = () => agent.messages().filter((message) => message.kind === 'notice');
+    for (let i = 0; i < 100 && shown().length < 7; i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return {
+      texts: shown()
+        .map((message) => message.text)
+        .sort(),
+      unhandled,
+    };
+  });
+  assert.deepEqual(notices.unhandled, []);
+  assert.deepEqual(
+    notices.texts,
+    [
+      'stop agents',
+      'start new chats',
+      'change agent settings',
+      'freeze cones',
+      'send sprinkle actions',
+      'disconnect accounts',
+      'compact conversations',
+    ]
+      .map((action) => `This page is view-only, so it can't ${action}.`)
+      .sort()
+  );
+  assert.deepEqual(page.errors, []);
+});

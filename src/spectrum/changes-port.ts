@@ -1,6 +1,7 @@
 import type { Change, ChangesPort } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
+import { attempt, type Report, warn } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 
 export interface ChangesEvents {
@@ -9,11 +10,13 @@ export interface ChangesEvents {
 
 export class ChangesAdapter extends Emitter<ChangesEvents> implements ChangesPort {
   readonly #connection: AgentConnection;
+  readonly #report: Report;
   #opened = false;
 
-  constructor(connection: AgentConnection) {
+  constructor(connection: AgentConnection, report: Report = warn) {
     super();
     this.#connection = connection;
+    this.#report = report;
     connection.changes?.subscribe(() => this.emit('changes', this.#list()));
   }
 
@@ -45,7 +48,11 @@ export class ChangesAdapter extends Emitter<ChangesEvents> implements ChangesPor
   }
 
   accept(path: string): void {
-    void this.#connection.control.changeAccept(path, BACKGROUND_CONTEXT).catch(() => undefined);
+    attempt(
+      this.#connection.control.changeAccept(path, BACKGROUND_CONTEXT),
+      'accept changes',
+      this.#report
+    );
   }
 
   async revert(path: string): Promise<void> {

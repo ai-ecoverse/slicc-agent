@@ -8,6 +8,7 @@ import type {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentSettings, SettingsState, SignIn } from '../services.ts';
 import type { AgentAdapter } from './agent-port.ts';
+import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { mcpLogin } from './mcp-login.ts';
 
@@ -143,6 +144,8 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   }
 
   disconnect(id: string): void {
-    void this.#settings.disconnect(id, BACKGROUND_CONTEXT);
+    attempt(this.#settings.disconnect(id, BACKGROUND_CONTEXT), 'disconnect accounts', (text) =>
+      this.#agent.notify(text)
+    );
   }
 }
