@@ -26,7 +26,7 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
         await new Promise((resolve) => setTimeout(resolve, 50));
       return check();
     };
-    await connection.prompt('Fix the build');
+    await connection.prompt('Please fix the build');
     const coneTitle = () => model.agent.list().find((agent) => agent.id === 'cone')?.title;
     await until(() => /^Title \d$/.test(coneTitle() ?? ''));
     const liveTitle = coneTitle();
@@ -73,7 +73,7 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
     seen.listed.map(({ id, name, messages }) => ({ id, name, messages })),
     [{ id: 'frozen-1', name: 'sliccy', messages: 2 }]
   );
-  assert.match(seen.listed[0].title, /^(Fix the build|Title \d)$/);
+  assert.match(seen.listed[0].title, /^(Please fix the build|Title \d)$/);
   assert.deepEqual(seen.agentsWhileFrozen, ['cone-2']);
   assert.deepEqual(seen.agentsAfterThaw.sort(), ['cone', 'cone-2', seen.scoop].sort());
   assert.match(seen.answer, /^Answer \d\.$/);
