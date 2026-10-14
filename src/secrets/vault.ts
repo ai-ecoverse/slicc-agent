@@ -104,9 +104,10 @@ export class Vault implements Scrub {
     return this.#port !== undefined;
   }
 
-  connect(port: MessagePort | undefined, scrub: unknown): void {
+  connect(port: MessagePort | undefined, scrub: unknown, locked?: unknown): void {
     const pair = scrub === undefined ? undefined : pairOf(scrub);
     if (pair) this.#pair = pair;
+    if (typeof locked === 'boolean') this.#locked = locked ? 'passkey' : 'no';
     if (port && port !== this.#port) {
       if (this.#port) this.#port.onmessage = null;
       this.#port = port;
@@ -283,9 +284,9 @@ export function listenVault(
   vault: Vault
 ): void {
   scope.addEventListener('message', ({ data }) => {
-    const message = data as { vault?: MessagePort; scrub?: unknown } | null;
-    if (!message || typeof message !== 'object' || !('vault' in message || 'scrub' in message))
-      return;
-    vault.connect(message.vault, message.scrub);
+    const message = data as { vault?: MessagePort; scrub?: unknown; locked?: unknown } | null;
+    if (!message || typeof message !== 'object') return;
+    if (!('vault' in message || 'scrub' in message || 'locked' in message)) return;
+    vault.connect(message.vault, message.scrub, message.locked);
   });
 }
