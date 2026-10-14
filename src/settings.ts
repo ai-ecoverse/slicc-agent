@@ -14,6 +14,7 @@ import {
 } from './adobe.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
+import { BEDROCK, preferredModel } from './preferred.ts';
 import type { VaultRecords } from './secrets/records.ts';
 import type { PlainStore } from './secrets/store.ts';
 import type {
@@ -24,7 +25,8 @@ import type {
   SettingsState,
 } from './services.ts';
 
-export const BEDROCK = 'amazon-bedrock';
+export { BEDROCK, PREFERRED_MODELS, preferredModel } from './preferred.ts';
+
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
 export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
 
@@ -34,6 +36,23 @@ export const ACCOUNT_FIELDS: Readonly<Record<string, readonly AccountField[]>> =
 const FIELD_ENV: Readonly<Record<string, string>> = { region: 'AWS_REGION' };
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
 export const KEY_NEEDS_VAULT = "API keys are kept in seven's vault: update seven";
+
+export async function resolveDefaultModel(
+  credentials: CredentialStore,
+  providers: Provider[],
+  models: MutableModels
+): Promise<{ provider: string; modelId: string }> {
+  const stored = new Set((await credentials.list()).map((info) => info.providerId));
+  for (const provider of providers) {
+    if (!stored.has(provider.id)) continue;
+    if (!models.getModels(provider.id).length && provider.refreshModels) {
+      await models.refresh({ providers: [provider.id] }).catch(() => undefined);
+    }
+    const chosen = preferredModel(provider.id, models.getModels(provider.id));
+    if (chosen) return { provider: provider.id, modelId: chosen.id };
+  }
+  return DEFAULT_MODEL;
+}
 
 const corsFree = new Set([BEDROCK, ADOBE]);
 const signIn = new Set([ADOBE]);

@@ -88,7 +88,7 @@ async function roleDirs(
 export async function listPlaces(options: MemoryAttach, context: Context): Promise<Listed[]> {
   const { agents, env, home } = options;
   const state = agents.state();
-  const out: Listed[] = [{ ...(placeOf(home, GLOBAL) as Place), name: 'Everyone' }];
+  const out: Listed[] = [{ ...(placeOf(home, GLOBAL) as Place), name: 'Shared' }];
   const cones = new Set(Object.keys(state.cones));
   const stored = await env.listDir(memoryRoot(home), context);
   if (stored.ok)
