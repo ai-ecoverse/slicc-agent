@@ -27,6 +27,9 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
       return check();
     };
     await connection.prompt('Fix the build');
+    const coneTitle = () => model.agent.list().find((agent) => agent.id === 'cone')?.title;
+    await until(() => /^Answer \d$/.test(coneTitle() ?? ''));
+    const liveTitle = coneTitle();
     const scoop = await connection.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
     const other = await connection.control.createCone('other', BACKGROUND_CONTEXT);
     const frozen = await connection.control.freeze('cone', BACKGROUND_CONTEXT);
@@ -61,9 +64,11 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
       agentsAfterThaw,
       answer,
       kinds,
+      liveTitle,
     };
   });
   assert.equal(seen.frozen, 'frozen-1');
+  assert.match(seen.liveTitle, /^Answer \d$/);
   assert.deepEqual(
     seen.listed.map(({ id, name, messages }) => ({ id, name, messages })),
     [{ id: 'frozen-1', name: 'sliccy', messages: 2 }]

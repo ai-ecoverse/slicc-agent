@@ -35,6 +35,8 @@ export type ScoopRecord = {
   frozen?: string;
   removed?: boolean;
   thawedAs?: string;
+  title?: string;
+  titled?: number;
 };
 
 export type FrozenRecord = {
