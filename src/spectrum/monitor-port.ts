@@ -59,12 +59,23 @@ export interface MonitorInput {
   budget: BudgetState | null | undefined;
   models: readonly ModelChoice[];
   changes: readonly { path: string; status: string }[];
-  sprinkles: readonly { name: string; title: string }[];
+  sprinkles?: readonly { name: string; title: string }[];
   extra: readonly MonitorSection[];
   history: readonly Sample[];
   now: number;
   hot?: ReadonlyMap<number, number>;
   cpu?: readonly number[];
+  processes?: readonly number[];
+  memory?: readonly number[];
+}
+
+export function record<T>(list: T[], value: T, max: number): void {
+  list.push(value);
+  if (list.length > max) list.shift();
+}
+
+function trend(series: readonly number[] | undefined): { series?: number[] } {
+  return series && series.length > 1 ? { series: [...series] } : {};
 }
 
 const KINDS: Record<string, string> = {
@@ -127,15 +138,27 @@ function cpuVital(feed: MonitorFeed, history: readonly number[]): MonitorVital[]
       label: 'CPU',
       value: `${Math.round(share * 100)}%`,
       unit: 'of one core',
-      ...(history.length > 1 ? { series: history.map((value) => Math.round(value * 100)) } : {}),
+      ...trend(history.map((value) => Math.round(value * 100))),
     },
   ];
 }
 
-function memoryVital(processes: readonly MonitorProcess[]): MonitorVital[] {
-  const measured = processes.filter((row) => typeof row.rss === 'number');
-  if (!measured.length) return [];
-  const total = measured.reduce((sum, row) => sum + (row.rss as number), 0);
+function measuredOf(processes: readonly MonitorProcess[]): MonitorProcess[] {
+  return processes.filter((row) => typeof row.rss === 'number');
+}
+
+export function memoryTotal(processes: readonly MonitorProcess[]): number | null {
+  const measured = measuredOf(processes);
+  return measured.length ? measured.reduce((sum, row) => sum + (row.rss as number), 0) : null;
+}
+
+function memoryVital(
+  processes: readonly MonitorProcess[],
+  history: readonly number[] | undefined
+): MonitorVital[] {
+  const total = memoryTotal(processes);
+  if (total === null) return [];
+  const measured = measuredOf(processes);
   const agents = measured
     .filter((row) => row.agentId)
     .reduce((sum, row) => sum + (row.rss as number), 0);
@@ -145,6 +168,7 @@ function memoryVital(processes: readonly MonitorProcess[]): MonitorVital[] {
       label: 'Process memory',
       value: bytes(total),
       unit: `${bytes(agents)} by agents`,
+      ...trend(history),
     },
   ];
 }
@@ -255,17 +279,16 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
       value: free ? count(feed.usage.tokens) : money(feed.usage.cost),
       unit: free ? 'tokens' : `${count(feed.usage.tokens)} tokens`,
       ...(perHour === null ? {} : { delta: `${free ? count(perHour) : money(perHour)}/h` }),
-      ...(series.length > 1 ? { series } : {}),
+      ...trend(series),
     });
   }
   const active = feed.agents.filter((agent) => agent.running).length;
-  const actives = input.history.map((sample) => sample.active);
   out.push({
     id: 'agents',
     label: 'Active agents',
     value: String(active),
     unit: `of ${feed.agents.length}`,
-    ...(actives.length > 1 ? { series: actives } : {}),
+    ...trend(input.history.map((sample) => sample.active)),
   });
   const tools = feed.tasks.filter(
     (task) => task.kind === 'pi.tool' && task.status === 'running'
@@ -283,12 +306,13 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
           label: 'Processes',
           value: String(feed.processes.length),
           unit: `${feed.processes.filter((row) => row.agentId).length} by agents`,
+          ...trend(input.processes),
         }
       : feed.kernel === 'checking'
         ? { id: 'processes', label: 'Processes', value: '…', unit: 'checking' }
         : { id: 'processes', label: 'Processes', value: '—', unit: 'kernel not reachable' }
   );
-  out.push(...memoryVital(feed.processes ?? []));
+  out.push(...memoryVital(feed.processes ?? [], input.memory));
   out.push(...cpuVital(feed, input.cpu ?? []));
   const ratios = feed.agents
     .map((agent) => agentContext(agent, input.models))
@@ -539,46 +563,6 @@ function alerts(input: MonitorInput, feed: MonitorFeed): AgentMonitorAlert[] {
   ];
 }
 
-function agentRow(agent: MonitorAgent, depth: number, models: readonly ModelChoice[]): MonitorRow {
-  const ratio = agentContext(agent, models);
-  const word = agent.retry
-    ? 'retrying'
-    : agent.running
-      ? 'running'
-      : agent.failed
-        ? 'failed'
-        : 'idle';
-  const status: MonitorStatus = agent.retry
-    ? 'warn'
-    : agent.running
-      ? 'active'
-      : agent.failed
-        ? 'error'
-        : 'idle';
-  const model = models.find((choice) => choice.id === agent.model)?.label ?? agent.model;
-  const meta = [
-    word,
-    model,
-    ratio === null ? null : `${Math.round(ratio * 100)}% context`,
-    cpuText(agent.cpu),
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  const badges = [
-    ...(agent.queued ? [`${agent.queued} queued`] : []),
-    ...(agent.tool ? [agent.tool] : []),
-    ...(agent.retry ? [`retry ${agent.retry.attempt}`] : []),
-  ];
-  return {
-    id: agent.id,
-    name: agent.name,
-    meta,
-    status,
-    depth,
-    ...(badges.length ? { badges } : {}),
-  };
-}
-
 function taskRow(
   task: MonitorTask,
   depth: number,
@@ -642,31 +626,10 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
 
 const PROBLEM_KINDS = { task: 'task failed', retry: 'retry', turn: 'turn failed' } as const;
 
-function depthOf(agents: ReadonlyMap<string, MonitorAgent>, agent: MonitorAgent): number {
-  const visited = new Set<string>();
-  let depth = 0;
-  let current = agent;
-  while (current.parentId && !visited.has(current.id)) {
-    visited.add(current.id);
-    const parent = agents.get(current.parentId);
-    if (!parent) break;
-    depth++;
-    current = parent;
-  }
-  return depth;
-}
-
 function sections(input: MonitorInput, feed: MonitorFeed): MonitorSection[] {
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
   const nameOf = (id: string | null) => (id ? (agents.get(id)?.name ?? id) : 'session');
   return [
-    {
-      id: 'agents',
-      label: 'Cones and scoops',
-      rows: ordered(feed).map((agent) =>
-        agentRow(agent, Math.min(depthOf(agents, agent), DEPTH_MAX), input.models)
-      ),
-    },
     {
       id: 'tasks',
       label: 'Tasks',
@@ -698,15 +661,6 @@ function pageSections(input: MonitorInput): MonitorSection[] {
         name: change.path,
         meta: change.status,
         status: 'warn',
-      })),
-    },
-    {
-      id: 'sprinkles',
-      label: 'Sprinkles',
-      rows: input.sprinkles.map((sprinkle) => ({
-        name: sprinkle.title,
-        meta: sprinkle.name,
-        status: 'idle',
       })),
     },
     ...input.extra,
@@ -766,6 +720,8 @@ export class MonitorAdapter implements MonitorPort {
   #hot = new Map<number, number>();
   #hotAt = -1;
   #cpu: number[] = [];
+  #processes: number[] = [];
+  #memory: number[] = [];
 
   constructor(connection: AgentConnection, options: MonitorAdapterOptions = {}) {
     this.#connection = connection;
@@ -776,7 +732,6 @@ export class MonitorAdapter implements MonitorPort {
     connection.monitor?.subscribe(() => this.#update());
     connection.settings.state.subscribe(() => this.#update());
     connection.changes?.subscribe(() => this.#update());
-    connection.sprinkles?.subscribe(() => this.#update());
   }
 
   on<K extends keyof MonitorEvents>(
@@ -803,12 +758,13 @@ export class MonitorAdapter implements MonitorPort {
       budget: settings?.budget,
       models: settings?.models ?? [],
       changes: this.#connection.changes?.value?.changes ?? [],
-      sprinkles: this.#connection.sprinkles?.value ?? [],
       extra: this.#extra(),
       history: this.#history,
       now: this.#now(),
       hot: this.#hot,
       cpu: this.#cpu,
+      processes: this.#processes,
+      memory: this.#memory,
     });
   }
 
@@ -828,6 +784,8 @@ export class MonitorAdapter implements MonitorPort {
     this.#hot = new Map();
     this.#hotAt = -1;
     this.#cpu = [];
+    this.#processes = [];
+    this.#memory = [];
     void control.changesOpen(BACKGROUND_CONTEXT).catch(() => undefined);
     const lease = control.monitorOpen(null, true, BACKGROUND_CONTEXT).then(
       (opened) => opened.lease || null,
@@ -854,13 +812,16 @@ export class MonitorAdapter implements MonitorPort {
   #sample(): void {
     const feed = this.#connection.monitor?.value;
     if (!feed?.open || !feed.usage || this.#history.at(-1)?.at === feed.at) return;
-    this.#history.push({
-      at: feed.at,
-      cost: feed.usage.cost,
-      tokens: feed.usage.tokens,
-      active: feed.agents.filter((agent) => agent.running).length,
-    });
-    if (this.#history.length > HISTORY) this.#history.shift();
+    record(
+      this.#history,
+      {
+        at: feed.at,
+        cost: feed.usage.cost,
+        tokens: feed.usage.tokens,
+        active: feed.agents.filter((agent) => agent.running).length,
+      },
+      HISTORY
+    );
   }
 
   #track(): void {
@@ -868,10 +829,11 @@ export class MonitorAdapter implements MonitorPort {
     if (!feed?.open || feed.at === this.#hotAt) return;
     this.#hotAt = feed.at;
     this.#hot = hotGroups(feed.processes ?? [], feed.at, this.#hot);
+    if (feed.processes) record(this.#processes, feed.processes.length, CPU_HISTORY);
+    const memory = memoryTotal(feed.processes ?? []);
+    if (memory !== null) record(this.#memory, memory, CPU_HISTORY);
     const share = agentsCpu(feed);
-    if (share === null) return;
-    this.#cpu.push(share);
-    if (this.#cpu.length > CPU_HISTORY) this.#cpu.shift();
+    if (share !== null) record(this.#cpu, share, CPU_HISTORY);
   }
 
   #update(): void {
