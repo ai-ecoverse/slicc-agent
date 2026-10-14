@@ -60,13 +60,17 @@ export function modelRoute(
 ): ModelRoute {
   return (request) => {
     const url = request.url;
-    for (const { provider, urls } of bases())
-      if (urls.some((base) => pattern(base).test(url))) return provider;
+    const matched = bases()
+      .filter(({ urls }) => urls.some((base) => pattern(base).test(url)))
+      .map(({ provider }) => provider);
     const head = [url, ...[...request.headers].map(([, value]) => value)].join('\n');
-    const held = records().some(
-      (record) => record.kind === 'model' && head.includes(record.placeholder)
-    );
-    return held ? null : undefined;
+    const held = records()
+      .filter((record) => record.kind === 'model' && head.includes(record.placeholder))
+      .map((record) => record.provider);
+    const owned = matched.filter((provider) => held.includes(provider));
+    if (owned.length === 1) return owned[0];
+    if (matched.length === 1 && !held.length) return matched[0];
+    return matched.length || held.length ? null : undefined;
   };
 }
 
@@ -123,7 +127,10 @@ export function vaultEndpoints(vault: Pick<Vault, 'state' | 'connected' | 'endpo
     const key = JSON.stringify(set);
     if (!vault.connected || (!force && key === last)) return;
     last = key;
-    await vault.endpoints(set);
+    await vault.endpoints(set).catch((error: unknown) => {
+      if (last === key) last = '';
+      throw error;
+    });
   };
   let port = vault.state.value.port;
   const off = vault.state.subscribe((value) => {
