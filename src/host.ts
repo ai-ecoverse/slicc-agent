@@ -41,6 +41,7 @@ import {
   AgentSettings,
   AgentTranscript,
   type Command,
+  type PrivateRevision,
 } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
@@ -163,6 +164,8 @@ const idleVault = replicatedState<VaultState>({
   held: 0,
 });
 
+const noRevision = () => replicatedState<PrivateRevision>({ revision: 0 });
+
 export async function hostAgent(
   agent: Agent,
   options: {
@@ -247,6 +250,7 @@ export async function hostAgent(
     agents: mounted.agents,
     views: mounted.views,
     commands: options.skills?.commands ?? replicatedState<Command[]>([]),
+    privateRevision: options.skills?.privateRevision ?? noRevision(),
     sprinkles: options.sprinkles?.sprinkles ?? replicatedState<Sprinkle[]>([]),
     memories: options.memory?.memories ?? replicatedState<MemoryEntry[]>([]),
     memoryScopes: options.memory?.scopes ?? replicatedState<MemoryScope[]>([]),

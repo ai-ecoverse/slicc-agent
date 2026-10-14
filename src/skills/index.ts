@@ -9,7 +9,7 @@ import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { dirname } from '../kernel/paths.ts';
 import type { Licks } from '../licks/licks.ts';
 import { PACKAGE_ROOTS, type PiPackages, piPackages } from '../roles/roles.ts';
-import type { Command } from '../services.ts';
+import type { Command, PrivateRevision } from '../services.ts';
 import {
   type Diagnostic,
   expandSkillCommand,
@@ -42,7 +42,8 @@ export interface SkillsRuntime {
   skills(): readonly Skill[];
   dirs(): string[];
   templates(): readonly PromptTemplate[];
-  commandsFor(coneId: string): Command[];
+  readonly privateRevision: ReplicatedState<PrivateRevision>;
+  commandsFor(agentId: string): Command[];
   expand(text: string, context: Context, conversationId?: number): Promise<string>;
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
@@ -61,7 +62,7 @@ export interface SkillPeople {
   homes(): readonly string[];
   homeOf(conversationId: number | undefined): string | undefined;
   envOf(home: string): Promise<ExecutionEnv | undefined>;
-  cones(): ReadonlyMap<string, string>;
+  homeOfAgent(agentId: string): string | undefined;
 }
 
 export function userRoots(homes: readonly string[]): SkillRoot[] {
@@ -186,6 +187,8 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       await env.exec(`mkdir -p ${GLOBAL_DIR} && chmod 755 ${GLOBAL_DIR}`, undefined, context);
       let templates: PromptTemplate[] = [];
       const commands = replicatedState<Command[]>([]);
+      const privateRevision = replicatedState<PrivateRevision>({ revision: 0 });
+      let privateKey = '[]';
       const reported = new Set<string>();
       const reload = async (using: Context) => {
         const packages = await piPackages(env, PACKAGE_ROOTS, using);
@@ -210,6 +213,16 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           loaded.diagnostics.push(...found.diagnostics);
         }
         own = homesLoaded;
+        const key = JSON.stringify(
+          [...own].map(([at, skills]) => [
+            at,
+            skills.map((skill) => [skill.name, skill.description]),
+          ])
+        );
+        if (key !== privateKey) {
+          privateKey = key;
+          privateRevision.replace(using, { revision: privateRevision.value.revision + 1 });
+        }
         const prompts = await loadTemplates(
           env,
           [`${dir}/prompts`, PROMPTS_DIR, ...packaged(packages, 'prompts')],
@@ -284,11 +297,10 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         skills: () => current,
         dirs: () => current.map((skill) => skill.baseDir),
         templates: () => templates,
-        commandsFor(coneId) {
-          const coneMap = options.people?.cones() ?? new Map<string, string>();
-          const home = [...coneMap.entries()].find(([, id]) => id === coneId)?.[0];
-          const skills = home ? own.get(home) : undefined;
-          return skills ? commandsOf(skills, templates) : commandsOf(current, templates);
+        privateRevision,
+        commandsFor(agentId) {
+          const at = people?.homeOfAgent(agentId);
+          return commandsOf((at ? own.get(at) : undefined) ?? current, templates);
         },
         async expand(text, using, conversationId) {
           const at = people?.homeOf(conversationId);

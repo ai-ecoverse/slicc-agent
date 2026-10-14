@@ -240,6 +240,7 @@ export interface AgentTranscript {
   readonly agents: ReplicatedState<AgentsSummary>;
   readonly views: ReplicatedState<Record<string, ConversationView>>;
   readonly commands: ReplicatedState<Command[]>;
+  readonly privateRevision: ReplicatedState<PrivateRevision>;
   readonly sprinkles: ReplicatedState<Sprinkle[]>;
   readonly memories: ReplicatedState<MemoryEntry[]>;
   readonly memoryScopes: ReplicatedState<MemoryScope[]>;
@@ -247,6 +248,10 @@ export interface AgentTranscript {
   readonly changes: ReplicatedState<ChangesView>;
   readonly monitor: ReplicatedState<MonitorFeed>;
   readonly vault: ReplicatedState<VaultState>;
+}
+
+export interface PrivateRevision {
+  revision: number;
 }
 
 export interface Command {

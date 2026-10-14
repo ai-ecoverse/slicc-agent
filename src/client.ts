@@ -24,6 +24,7 @@ import {
   type Command,
   type Delivered,
   type MonitorFeed,
+  type PrivateRevision,
   type SendMode,
 } from './services.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
@@ -37,6 +38,7 @@ export interface AgentConnection {
   readonly agents?: ReplicatedState<AgentsSummary>;
   readonly views?: ReplicatedState<Record<string, ConversationView>>;
   readonly commands?: ReplicatedState<Command[]>;
+  readonly privateRevision?: ReplicatedState<PrivateRevision>;
   readonly sprinkles?: ReplicatedState<Sprinkle[]>;
   readonly memories?: ReplicatedState<MemoryEntry[]>;
   readonly memoryScopes?: ReplicatedState<MemoryScope[]>;
@@ -135,6 +137,7 @@ export async function connectAgent(
     agents,
     views,
     commands,
+    privateRevision,
     sprinkles,
     memories,
     memoryScopes,
@@ -168,6 +171,7 @@ export async function connectAgent(
     agents: hold(agents),
     views: hold(views),
     commands: hold(commands),
+    privateRevision: hold(privateRevision),
     sprinkles: hold(sprinkles),
     memories: hold(memories),
     memoryScopes: hold(memoryScopes),
