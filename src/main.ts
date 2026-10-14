@@ -53,13 +53,13 @@ import { secretNames } from './secrets/names.ts';
 import { type VaultRecords, vaultRecords } from './secrets/records.ts';
 import { scrubWith } from './secrets/scrub.ts';
 import { fileStore, type PlainStore } from './secrets/store.ts';
-import { listenVault, Vault } from './secrets/vault.ts';
+import { listenVault, Vault, WAITING_MS } from './secrets/vault.ts';
 import {
   BEDROCK,
   createAgentSettings,
   createSliccModels,
-  DEFAULT_MODEL,
   providerFields,
+  resolveDefaultModel,
   sliccProviders,
 } from './settings.ts';
 import { RELOAD_MS, setupSkills } from './skills/index.ts';
@@ -230,10 +230,11 @@ async function modelsOf(
   const { vault, home, transport, version } = given;
   const store = await (options.store ?? (async () => fileStore(home, ACCOUNTS_FILE)))();
   const records = vaultRecords(vault);
-  void records.refresh(BACKGROUND_CONTEXT).catch(() => undefined);
+  const loaded = records.refresh(BACKGROUND_CONTEXT).catch(() => undefined);
   const providers = options.providers ?? sliccProviders(version);
   const fields = await providerFields(store, providers);
-  const models = createSliccModels(vaultCredentials(records, fields.env), providers);
+  const credentials = vaultCredentials(records, fields.env);
+  const models = createSliccModels(credentials, providers);
   const bases = () => modelBases(providers, models);
   scope.fetch = vaultFetch(
     vault,
@@ -242,7 +243,11 @@ async function modelsOf(
   );
   const endpoints = vaultEndpoints(vault);
   void endpoints.models(bases()).catch(() => undefined);
-  return { store, records, providers, fields, models, bases, endpoints };
+  const defaultModel = async () => {
+    await Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, WAITING_MS))]);
+    return resolveDefaultModel(credentials, providers, models);
+  };
+  return { store, records, providers, fields, models, bases, endpoints, defaultModel };
 }
 
 function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>) {
@@ -347,7 +352,7 @@ async function start(
   registry.install(secretsExtension({ names, vault }));
   const titles = setupTitles(registry, models, home, at, () => opened);
   const [activity, groups] = [createActivity(), processGroups(client)];
-  const model = options.model ?? DEFAULT_MODEL;
+  const model = options.model ?? (await ready.defaultModel());
   let opened: Agent | undefined;
   const people = users ? agentUsers(users, client, home, () => opened?.agents) : undefined;
   const environment = kernelEnvironment(client, {

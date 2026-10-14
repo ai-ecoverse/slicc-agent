@@ -6,6 +6,7 @@ import type {
   SettingsPort,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { preferredModel } from '../preferred.ts';
 import type { AgentSettings, SettingsState, SignIn } from '../services.ts';
 import type { AgentAdapter } from './agent-port.ts';
 import { attempt } from './attempt.ts';
@@ -87,14 +88,29 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   }
 
   models(): readonly ModelOption[] {
-    return this.#state().models.map(({ id, label, provider, kind, reasoning, images }) => ({
-      id,
-      label,
-      provider,
-      kind,
-      reasoning,
-      ...(images === undefined ? {} : { images }),
-    }));
+    const choices = this.#state().models;
+    const groups = Map.groupBy(choices, ({ id }) => id.slice(0, id.indexOf('/')));
+    const chosen = new Set(
+      [...groups].map(
+        ([providerId, group]) =>
+          preferredModel(
+            providerId,
+            group.map((choice) => ({ id: choice.id.slice(providerId.length + 1), choice }))
+          )?.choice
+      )
+    );
+    return choices.map((choice) => {
+      const { id, label, provider, kind, reasoning, images } = choice;
+      return {
+        id,
+        label,
+        provider,
+        kind,
+        reasoning,
+        ...(images === undefined ? {} : { images }),
+        ...(chosen.has(choice) ? { default: true } : {}),
+      };
+    });
   }
 
   accounts(): readonly Account[] {

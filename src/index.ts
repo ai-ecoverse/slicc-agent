@@ -108,6 +108,9 @@ export {
   createSliccModels,
   DEFAULT_MODEL,
   DEFAULT_REGIONS,
+  PREFERRED_MODELS,
+  preferredModel,
+  resolveDefaultModel,
   sliccProviders,
   withDefaultRegions,
 } from './settings.ts';
