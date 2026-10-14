@@ -68,6 +68,10 @@ test('the live monitor through the production worker: it runs only while the pan
           return spin && typeof spin.cpu === 'number' && spin.cpu > 0 && feed;
         })
       : null;
+    const trended = await wait(() => {
+      const vitals = model.monitor.snapshot().vitals;
+      return vitals.find((vital) => vital.id === 'processes')?.series && vitals;
+    });
     const viewed = await wait(
       () => viewer.monitor.value?.processes?.length && viewer.monitor.value
     );
@@ -80,7 +84,9 @@ test('the live monitor through the production worker: it runs only while the pan
       idle,
       vitals: shown?.vitals.map((vital) => vital.id),
       rows: shown?.sections.find((section) => section.id === 'processes').rows,
-      agents: shown?.sections.find((section) => section.id === 'agents').rows,
+      sections: shown?.sections.map((section) => section.id),
+      trended: trended?.map((vital) => [vital.id, vital.series?.length ?? 0]),
+      agentName: full.agents[0].name,
       full: full.processes.map((row) => row.command),
       viewed: viewed?.processes.map((row) => row.command),
       usage: full.usage,
@@ -101,7 +107,12 @@ test('the live monitor through the production worker: it runs only while the pan
   assert.ok(sleeper);
   assert.ok(!sleeper.name.includes('sekrit123'));
   assert.ok(sleeper.badges?.includes('sliccy'));
-  assert.equal(seen.agents[0].name, 'sliccy');
+  assert.equal(seen.agentName, 'sliccy');
+  assert.ok(!seen.sections.includes('agents'));
+  assert.ok(!seen.sections.includes('sprinkles'));
+  const trended = Object.fromEntries(seen.trended);
+  assert.ok(trended.processes > 1);
+  if (trended.memory !== undefined) assert.ok(trended.memory > 1);
   assert.ok(
     seen.full.some(
       (command) =>
