@@ -137,6 +137,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     this.#active ??= this.#connection.agents?.value?.active ?? null;
     if (!this.#opened && (!this.#connection.agents || this.#connection.agents.value))
       this.#opened = new Set(this.#summary().map((summary) => summary.id));
+    for (const summary of this.#summary()) this.#stamp(summary.id, this.#view(summary.id));
     this.emit('agents', this.list());
     let unread = false;
     for (const summary of this.#summary()) unread = this.#update(summary.id) || unread;
@@ -190,7 +191,6 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   #update(agentId: string): boolean {
     const view = this.#view(agentId);
     if (!view) return false;
-    this.#stamp(agentId, view);
     const before = this.#messages.get(agentId) ?? [];
     const after = toMessages(view, this.#connection.deliveries.value);
     this.#messages.set(agentId, after);
@@ -292,7 +292,6 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     if (pending) await pending.released;
     if (pending?.dropped) return this.#settle(pending);
     const at = Date.now();
-    const busy = isBusy(this.#view(target || agentId));
     const sent = await this.#connection.control
       .send(
         {
@@ -306,7 +305,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       )
       .finally(() => pending && this.#settle(pending));
     if (!sent.accepted) throw new Error(sent.error.message);
-    if (busy) this.#sent(target || agentId, `q${sent.submissionId}`, at);
+    this.#sent(target || agentId, `q${sent.submissionId}`, at);
     if (pending?.dropped)
       attempt(
         this.#connection.control.unqueue(pending.agentId, sent.submissionId, BACKGROUND_CONTEXT),
@@ -327,7 +326,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     stamps.set(id, { at: Math.min(at, known?.at ?? at), seen: known?.seen ?? false });
   }
 
-  #stamp(agentId: string, view: ConversationView): void {
+  #stamp(agentId: string, view: ConversationView | undefined): void {
     const stamps = this.#stamps(agentId);
     const ids = new Set(queued(view).map((message) => message.id));
     const now = Date.now();
