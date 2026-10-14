@@ -47,7 +47,7 @@ import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 import { slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
-import { type LabelsRuntime, watchLabel } from './titles/labels.ts';
+import { type LabelsRuntime, visibleLabels, watchLabel } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
@@ -264,6 +264,9 @@ export async function hostAgent(
       return found;
     },
   });
+  const shownViews = () => [state.value, ...Object.values(mounted.views.value)];
+  const kept = options.labels?.labels ?? replicatedState<Record<string, string>>({});
+  const labels = visibleLabels(kept, [state, mounted.views], shownViews);
   const transcriptService = {
     state,
     deliveries: deliveries.state,
@@ -279,10 +282,9 @@ export async function hostAgent(
       options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
     monitor: monitor.state,
     vault: options.secrets?.vault ?? idleVault,
-    labels: options.labels?.labels ?? replicatedState<Record<string, string>>({}),
+    labels: labels.state,
   };
   const settings = options.settings ?? noSettings;
-  const shownViews = () => [state.value, ...Object.values(mounted.views.value)];
   const gates = gatedControls(control, slims.shown, shownViews, transcriptService.labels);
   const { trusted, viewed } = gates;
   const served = (served: AgentPages) => {
@@ -358,6 +360,7 @@ export async function hostAgent(
       deliveries.dispose();
       transcript.dispose();
       mounted.dispose();
+      labels.dispose();
       slims.dispose();
       for (const off of untouch) off();
       options.freezer?.close();
