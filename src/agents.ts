@@ -11,7 +11,7 @@ import type { RoleMemory } from './memory/store.ts';
 
 export const FIRST_CONE = 'cone';
 
-export type ConeRecord = { name: string; conversation: number };
+export type ConeRecord = { name: string; conversation: number; title?: string; titled?: number };
 
 export type Mark = { in: number; at: number };
 
@@ -190,7 +190,10 @@ export async function openAgents(
     async setConversation(coneId, conversation, using) {
       handles.set(conversation.id, conversation);
       await update(async (tx, doc) => {
-        (doc.cones[coneId] as ConeRecord).conversation = conversation.id;
+        const cone = doc.cones[coneId] as ConeRecord;
+        cone.conversation = conversation.id;
+        delete cone.title;
+        delete cone.titled;
         if (coneId === doc.active) (await tx.doc(ConeDoc)).conversation = conversation.id;
       }, using);
       if (coneId === state.active) await notifyCone(conversation);
