@@ -19,6 +19,7 @@ import { shrink } from '../images/fit.ts';
 import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
 import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
+import { shownLabel } from '../titles/shown.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { isBusy, queued, toMessages } from './messages.ts';
@@ -570,6 +571,14 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       contextFill: 0,
       unread: 0,
     };
+  }
+
+  async toolLabel(agentId: string, callIds: readonly string[]): Promise<string | null> {
+    const shown = shownLabel(this.#connection.labels?.value, callIds);
+    if (shown !== undefined) return shown;
+    return this.#connection.control
+      .toolLabel(agentId, [...callIds], BACKGROUND_CONTEXT)
+      .catch(() => null);
   }
 
   frozen(): readonly FrozenCone[] {

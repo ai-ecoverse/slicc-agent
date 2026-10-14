@@ -39,6 +39,7 @@ import type {
 } from './services.ts';
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
+import type { LabelsRuntime } from './titles/labels.ts';
 import { saverFor, type Uploads } from './uploads.ts';
 
 export interface HostLicks {
@@ -333,7 +334,8 @@ export function createAgentControl(
   changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>,
   monitor?: Pick<Monitor, 'open' | 'close'>,
   secrets?: () => readonly SecretName[],
-  uploads?: Uploads
+  uploads?: Uploads,
+  labels?: Pick<LabelsRuntime, 'label'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -518,5 +520,7 @@ export function createAgentControl(
     async agentCommands(agentId, _context) {
       return skills?.commandsFor(agentId) ?? [];
     },
+    toolLabel: async (agentId, callIds, context) =>
+      labels ? labels.label(agentId, callIds, context) : null,
   };
 }

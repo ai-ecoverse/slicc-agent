@@ -46,6 +46,7 @@ export interface AgentConnection {
   readonly changes?: ReplicatedState<ChangesView>;
   readonly monitor?: ReplicatedState<MonitorFeed>;
   readonly vault?: ReplicatedState<VaultState>;
+  readonly labels?: ReplicatedState<Record<string, string>>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
@@ -145,6 +146,7 @@ export async function connectAgent(
     changes,
     monitor,
     vault,
+    labels,
   } = session.use(AgentTranscript);
   const settings = session.use(AgentSettings);
   const remote = session.use(AgentRemoteService);
@@ -179,6 +181,7 @@ export async function connectAgent(
     changes: hold(changes),
     monitor: hold(monitor),
     vault: hold(vault),
+    labels: hold(labels),
     settings: lastingSettings(settings, hold),
     remote,
     pages,

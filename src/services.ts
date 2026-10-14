@@ -105,6 +105,7 @@ export interface AgentControl {
   monitorClose(lease: string, context: Context): Promise<void>;
   image(ref: ImageRef, context: Context): Promise<StoredImage>;
   agentCommands(agentId: string, context: Context): Promise<Command[]>;
+  toolLabel(agentId: string, callIds: string[], context: Context): Promise<string | null>;
 }
 
 export interface ImageRef {
@@ -248,6 +249,7 @@ export interface AgentTranscript {
   readonly changes: ReplicatedState<ChangesView>;
   readonly monitor: ReplicatedState<MonitorFeed>;
   readonly vault: ReplicatedState<VaultState>;
+  readonly labels: ReplicatedState<Record<string, string>>;
 }
 
 export interface PrivateRevision {

@@ -12,6 +12,7 @@ const READS = new Set<keyof AgentControl>([
   'monitorOpen',
   'monitorClose',
   'image',
+  'toolLabel',
 ]);
 
 function refuse(): Promise<never> {

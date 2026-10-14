@@ -436,6 +436,12 @@ pi durable keeps every conversation and entry in the session database, and has n
     - The title moves with the cone. Freeze and New conversation copy it into the frozen row, then the final call replaces it there. Thaw brings it back as final, also from a stopped scoop. A new conversation, or a scoop's reset, starts untitled.
     - The Agents panel shows it as each cone's and scoop's summary (spectrum's `title`).
     - The call goes through the same `Models` (and so `scope.fetch` and the vault) as every chat request.
+  - **Tool labels.** Spectrum groups tool runs into clusters and asks `AgentPort.toolLabel(agentId, callIds)` once a cluster closes, and again if it grows. The agent answers with an imperative label of three to eight words, or `null`, and spectrum keeps its own summary either way.
+    - The label comes from the cluster's tool inputs and outputs (each output cut at 600 characters), through the title model and the title scrubber. A vault that is locked or not ready gives `null`, so no unscrubbed text goes out.
+    - Each cluster, keyed by its joined call ids, costs one call, however many tabs ask, including calls still in flight. Labels live in the session's `slicc.labels` doc (the newest 500) and reach every tab through the transcript service's `labels`. A reload, freeze or thaw reads them without calling again, and a watch-only tab only waits for one.
+    - Only clusters that finished after the agent started are labelled; older ones get `null` unless already labelled. Each agent makes at most six label calls a minute.
+    - The spend goes into the conversation's `pi.usage`, so the Monitor counts it like any other model call.
+    - `"toolLabels": false` in `~/.pi/agent/settings.json` turns labels off, apart from `"titles"`.
   - It also has `kind` (`cone`, `scoop` or `agent`), `live` and `thawedAs`.
   - Live rows come first, then the newest. A stopped conversation's numbers are read once and cached.
 - **New conversation** (spectrum's `clear` and `/clear`, Lars's W9) gives the same cone, with its id and name, a fresh conversation with the same configuration, when the chat isn't empty. The old conversation becomes a frozen row. On a scoop, `clear` is a plain reset.

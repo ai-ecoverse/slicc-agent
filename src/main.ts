@@ -73,7 +73,8 @@ import {
   transportName,
 } from './system.ts';
 import { titlesExtension } from './titles/extension.ts';
-import { settingsText, titler } from './titles/generate.ts';
+import { labeler, settingsText, titler } from './titles/generate.ts';
+import { attachLabels } from './titles/labels.ts';
 import { type KernelPorts, kernelPorts, serveConnections, type WorkerScope } from './worker.ts';
 
 export interface AgentWorkerScope extends WorkerScope {
@@ -319,14 +320,15 @@ function setupTitles(
   at: { home: string; agentDir?: string },
   opened: () => Agent | undefined
 ) {
-  const titleFn = titler(models, settingsText(home, HOME, at.agentDir));
+  const settings = settingsText(home, HOME, at.agentDir);
+  const titleFn = titler(models, settings);
   const titles = titlesExtension({
     agents: () => opened()?.agents,
     harness: () => opened()?.harness,
     title: () => titleFn,
   });
   registry.install(titles.extension);
-  return { titleFn, cancel: titles.cancel };
+  return { titleFn, cancel: titles.cancel, label: labeler(models, settings) };
 }
 
 async function start(
@@ -337,8 +339,7 @@ async function start(
 ): Promise<AgentHost> {
   const { client, users, home, at } = await attached(ports, options);
   const ready = await prepare(scope, { client, home, vault }, options);
-  const { names, native, transport, facts, models, registry } = ready;
-  const { records, endpoints } = ready;
+  const { names, native, transport, facts, models, registry, records, endpoints } = ready;
   const memory = setupMemory(registry);
   const coding = CodingTools.tools as readonly ToolRegistration[];
   registry.install(browserGuard([scope.location.origin], coding));
@@ -490,6 +491,7 @@ async function start(
     freezer,
     changes,
     pages,
+    labels: await attachLabels({ ...agent, label: titles.label, vault: vault.state }),
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
     secrets: hostSecrets(vault, names, [names, records, endpoints]),

@@ -47,6 +47,7 @@ import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 import { slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
+import { type LabelsRuntime, watchLabel } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
 import type { PortEndpoint } from './wire.ts';
@@ -164,6 +165,23 @@ const idleVault = replicatedState<VaultState>({
   held: 0,
 });
 
+function gatedControls(
+  control: AgentControl,
+  shown: (entry: number) => boolean,
+  views: () => readonly ConversationView[],
+  labels: ReplicatedState<Record<string, string>>
+) {
+  const visible = (entry: number) =>
+    views().some((view) => view.entries.some((item) => item.id === entry));
+  const gated =
+    (allowed: (entry: number) => boolean): AgentControl['image'] =>
+    async (ref, using) =>
+      allowed(ref.entry) ? control.image(ref, using) : { data: null, mimeType: null };
+  const trusted: AgentControl = { ...control, image: gated(shown) };
+  const viewed: AgentControl = { ...control, image: gated(visible), toolLabel: watchLabel(labels) };
+  return { trusted, viewed };
+}
+
 const noRevision = () => replicatedState<PrivateRevision>({ revision: 0 });
 
 export async function hostAgent(
@@ -186,6 +204,7 @@ export async function hostAgent(
     secrets?: HostSecrets;
     uploads?: Uploads;
     thumbnail?: Thumbnail;
+    labels?: LabelsRuntime;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -231,7 +250,8 @@ export async function hostAgent(
     options.changes,
     monitor,
     options.secrets?.list,
-    options.uploads
+    options.uploads,
+    options.labels
   );
   const remote = createRemote({
     harness: agent.harness,
@@ -259,18 +279,12 @@ export async function hostAgent(
       options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
     monitor: monitor.state,
     vault: options.secrets?.vault ?? idleVault,
+    labels: options.labels?.labels ?? replicatedState<Record<string, string>>({}),
   };
   const settings = options.settings ?? noSettings;
-  const visible = (entry: number) =>
-    [state.value, ...Object.values(mounted.views.value)].some((view) =>
-      view.entries.some((item) => item.id === entry)
-    );
-  const gated =
-    (allowed: (entry: number) => boolean): AgentControl['image'] =>
-    async (ref, using) =>
-      allowed(ref.entry) ? control.image(ref, using) : { data: null, mimeType: null };
-  const trusted: AgentControl = { ...control, image: gated(slims.shown) };
-  const viewed: AgentControl = { ...control, image: gated(visible) };
+  const shownViews = () => [state.value, ...Object.values(mounted.views.value)];
+  const gates = gatedControls(control, slims.shown, shownViews, transcriptService.labels);
+  const { trusted, viewed } = gates;
   const served = (served: AgentPages) => {
     const made = catalogue();
     made.provide(AgentControl, trusted);
