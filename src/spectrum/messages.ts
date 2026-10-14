@@ -595,7 +595,10 @@ export function isBusy(view: ConversationView | undefined): boolean {
   return Boolean((view?.docs['pi.live'] as Live | undefined)?.run);
 }
 
-export function queued(view: ConversationView | undefined): UserMessage[] {
+export function queued(
+  view: ConversationView | undefined,
+  at: (id: string) => number = () => 0
+): UserMessage[] {
   const items = ((view?.docs['pi.inbox'] as { items?: Json[] } | undefined)?.items ?? []) as {
     id: number;
     mode: string;
@@ -607,7 +610,7 @@ export function queued(view: ConversationView | undefined): UserMessage[] {
       id: `q${item.id}`,
       role: 'user' as const,
       ...shownUser(item.content),
-      createdAt: 0,
+      createdAt: at(`q${item.id}`),
       queued: true,
       mode: item.mode === 'steer' ? 'steer' : 'queue',
     }));

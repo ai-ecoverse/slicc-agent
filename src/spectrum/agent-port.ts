@@ -87,6 +87,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   readonly #notices = new Map<string, { at: number; message: SystemMessage }[]>();
   readonly #unread = new Map<string, number>();
   readonly #seen = new Map<string, Set<string>>();
+  readonly #queuedAt = new Map<string, Map<string, { at: number; seen: boolean }>>();
   #opened: ReadonlySet<string> | null = null;
 
   constructor(connection: AgentConnection) {
@@ -145,6 +146,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
         this.#notices.delete(id);
         this.#seen.delete(id);
         this.#unread.delete(id);
+        this.#queuedAt.delete(id);
       }
     if (unread) this.emit('agents', this.list());
   }
@@ -188,6 +190,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   #update(agentId: string): boolean {
     const view = this.#view(agentId);
     if (!view) return false;
+    this.#stamp(agentId, view);
     const before = this.#messages.get(agentId) ?? [];
     const after = toMessages(view, this.#connection.deliveries.value);
     this.#messages.set(agentId, after);
@@ -288,6 +291,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const pending = target && this.#held(target) ? this.#pending(target, outgoing) : undefined;
     if (pending) await pending.released;
     if (pending?.dropped) return this.#settle(pending);
+    const at = Date.now();
+    const busy = isBusy(this.#view(target || agentId));
     const sent = await this.#connection.control
       .send(
         {
@@ -301,12 +306,34 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       )
       .finally(() => pending && this.#settle(pending));
     if (!sent.accepted) throw new Error(sent.error.message);
+    if (busy) this.#sent(target || agentId, `q${sent.submissionId}`, at);
     if (pending?.dropped)
       attempt(
         this.#connection.control.unqueue(pending.agentId, sent.submissionId, BACKGROUND_CONTEXT),
         'remove queued messages',
         this.#report(pending.agentId)
       );
+  }
+
+  #stamps(agentId: string): Map<string, { at: number; seen: boolean }> {
+    const stamps = this.#queuedAt.get(agentId) ?? new Map();
+    this.#queuedAt.set(agentId, stamps);
+    return stamps;
+  }
+
+  #sent(agentId: string, id: string, at: number): void {
+    const stamps = this.#stamps(agentId);
+    const known = stamps.get(id);
+    stamps.set(id, { at: Math.min(at, known?.at ?? at), seen: known?.seen ?? false });
+  }
+
+  #stamp(agentId: string, view: ConversationView): void {
+    const stamps = this.#stamps(agentId);
+    const ids = new Set(queued(view).map((message) => message.id));
+    const now = Date.now();
+    for (const id of ids) stamps.set(id, { at: stamps.get(id)?.at ?? now, seen: true });
+    for (const [id, stamp] of stamps)
+      if (!ids.has(id) && (stamp.seen || (!ids.size && !isBusy(view)))) stamps.delete(id);
   }
 
   #pending(agentId: string, outgoing: Outgoing): Pending {
@@ -368,7 +395,9 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const pending = [...this.#outbox.values()]
       .filter((item) => item.agentId === agentId && !item.dropped)
       .map((item) => item.message);
-    return [...queued(this.#view(agentId)), ...pending];
+    const stamps = this.#queuedAt.get(agentId);
+    const at = (id: string) => stamps?.get(id)?.at ?? 0;
+    return [...queued(this.#view(agentId), at), ...pending];
   }
 
   unqueue(agentId: string, messageId: string): void {
