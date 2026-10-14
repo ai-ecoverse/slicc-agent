@@ -28,7 +28,7 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
     };
     await connection.prompt('Fix the build');
     const coneTitle = () => model.agent.list().find((agent) => agent.id === 'cone')?.title;
-    await until(() => /^Answer \d$/.test(coneTitle() ?? ''));
+    await until(() => /^Title \d$/.test(coneTitle() ?? ''));
     const liveTitle = coneTitle();
     const scoop = await connection.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
     const other = await connection.control.createCone('other', BACKGROUND_CONTEXT);
@@ -68,12 +68,12 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
     };
   });
   assert.equal(seen.frozen, 'frozen-1');
-  assert.match(seen.liveTitle, /^Answer \d$/);
+  assert.match(seen.liveTitle, /^Title \d$/);
   assert.deepEqual(
     seen.listed.map(({ id, name, messages }) => ({ id, name, messages })),
     [{ id: 'frozen-1', name: 'sliccy', messages: 2 }]
   );
-  assert.match(seen.listed[0].title, /^(Fix the build|Answer \d)$/);
+  assert.match(seen.listed[0].title, /^(Fix the build|Title \d)$/);
   assert.deepEqual(seen.agentsWhileFrozen, ['cone-2']);
   assert.deepEqual(seen.agentsAfterThaw.sort(), ['cone', 'cone-2', seen.scoop].sort());
   assert.match(seen.answer, /^Answer \d\.$/);

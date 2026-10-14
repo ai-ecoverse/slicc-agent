@@ -43,7 +43,18 @@ const steps = [
   ),
   ...params.getAll('answer').map((answer) => fauxAssistantMessage(answer)),
 ];
-faux.setResponses(steps.map(recorded));
+const queued = steps.map(recorded);
+let titles = 0;
+const titling = (context) =>
+  context.messages.length === 1 &&
+  JSON.stringify(context.messages[0].content).includes('Give this chat a title');
+const dispatch = (context, ...rest) => {
+  if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
+  const step = queued.shift();
+  if (!step) throw new Error('No more faux responses queued');
+  return step(context, ...rest);
+};
+faux.setResponses(Array.from({ length: 2000 }, () => dispatch));
 const relayed = params.get('relay');
 const fake = relayed
   ? createMcpServer({
