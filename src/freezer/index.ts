@@ -11,6 +11,7 @@ import { answerText } from '../agent.ts';
 import {
   type Agents,
   type AgentsState,
+  type ConeRecord,
   type FrozenRecord,
   live,
   type ScoopRecord,
@@ -18,7 +19,9 @@ import {
 import { HOME } from '../kernel/env.ts';
 import { type Layout, LEGACY } from '../layout.ts';
 import type { LickTarget } from '../licks/lick.ts';
+import { redactSecrets } from '../memory/format.ts';
 import { pinned } from '../secrets/extension.ts';
+import { scrubText } from '../secrets/scrub.ts';
 
 export type Answer = { code: number; out: string };
 
@@ -77,6 +80,8 @@ Delete a cone, or start a new conversation, from the chat toolbar or the command
 `;
 
 const TITLE_LENGTH = 60;
+const TITLE_WORDS = 6;
+export const TITLE_TURNS = [1, 3];
 export const TOUCH_MS = 500;
 
 function textOf(entry: EntryRecord): string {
@@ -141,18 +146,59 @@ function lastAt(entries: readonly EntryRecord[]): number {
   return at;
 }
 
-async function statsOf(harness: Harness, id: number, context: Context): Promise<Stats> {
+type Inspected = { stats: Stats; entries: readonly EntryRecord[] };
+
+async function inspect(harness: Harness, id: number, context: Context): Promise<Inspected> {
   const conversation = await harness.conversation(id as ConversationId, context);
-  if (!conversation) return { title: firstLine([]), model: '', messages: 0, frozenAt: 0 };
+  if (!conversation)
+    return { stats: { title: firstLine([]), model: '', messages: 0, frozenAt: 0 }, entries: [] };
   const view = await conversation.context(context);
   const agent = await conversation.agent(context);
   return {
-    title: firstLine(view.entries),
-    model: modelName(agent.model),
-    messages: counted(view.entries),
-    frozenAt: lastAt(view.entries),
+    stats: {
+      title: firstLine(view.entries),
+      model: modelName(agent.model),
+      messages: counted(view.entries),
+      frozenAt: lastAt(view.entries),
+    },
+    entries: view.entries,
   };
 }
+
+export function titleDue(
+  cone: Pick<ConeRecord, 'titled'>,
+  entries: readonly EntryRecord[]
+): number | undefined {
+  const last = entries.at(-1);
+  const stop = (last?.model?.[0] as { stopReason?: unknown } | undefined)?.stopReason;
+  if (last?.kind !== 'pi.assistant' || stop !== 'stop') return undefined;
+  const turns = entries.filter((entry) => entry.kind === 'pi.user' && textOf(entry)).length;
+  const next = TITLE_TURNS.find((turn) => turn > (cone.titled ?? 0));
+  return next !== undefined && turns >= next ? turns : undefined;
+}
+
+export function cleanTitle(title: string | undefined): string | undefined {
+  const clean = title
+    ?.replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^["'“”]+|["'“”]+$/g, '')
+    .replace(/\.+$/, '')
+    .trim()
+    .split(' ')
+    .slice(0, TITLE_WORDS)
+    .join(' ');
+  return clean ? clean.slice(0, TITLE_LENGTH) : undefined;
+}
+
+function transcriptOf(entries: readonly EntryRecord[]): string {
+  return entries
+    .filter((entry) => entry.kind === 'pi.user' || entry.kind === 'pi.assistant')
+    .map((entry) => `${entry.kind === 'pi.user' ? 'User' : 'Agent'}: ${textOf(entry)}`)
+    .join('\n')
+    .slice(0, 4000);
+}
+
+type Seen = (id: string, cone: ConeRecord, entries: readonly EntryRecord[], model: string) => void;
 
 const kindOf = (scoop: ScoopRecord): ConversationKind =>
   scoop.kind === 'sync' ? 'agent' : 'scoop';
@@ -161,25 +207,30 @@ async function rows(
   harness: Harness,
   state: Readonly<AgentsState>,
   cache: Map<number, Stats>,
-  context: Context
+  context: Context,
+  seen?: Seen
 ): Promise<FrozenCone[]> {
   const stats = async (conversation: number, stopped: boolean) => {
     const cached = stopped ? cache.get(conversation) : undefined;
     if (cached) return cached;
-    const found = await statsOf(harness, conversation, context);
+    const found = (await inspect(harness, conversation, context)).stats;
     if (stopped) cache.set(conversation, found);
     return found;
   };
   const out: FrozenCone[] = [];
-  for (const [id, cone] of Object.entries(state.cones))
+  for (const [id, cone] of Object.entries(state.cones)) {
+    const { stats: found, entries } = await inspect(harness, cone.conversation, context);
+    seen?.(id, cone, entries, found.model);
     out.push({
       id,
       name: cone.name,
-      ...(await stats(cone.conversation, false)),
+      ...found,
+      ...(cone.title ? { title: cone.title } : {}),
       kind: 'cone',
       live: true,
       thawedAs: null,
     });
+  }
   for (const [id, record] of Object.entries(state.frozen ?? {}))
     out.push({
       id,
@@ -227,7 +278,8 @@ async function snapshot(
   conversation: Conversation,
   name: string,
   now: number,
-  context: Context
+  context: Context,
+  title?: string
 ): Promise<Snapshot> {
   const view = await conversation.context(context);
   const agent = await conversation.agent(context);
@@ -236,7 +288,7 @@ async function snapshot(
     record: {
       name,
       conversation: conversation.id,
-      title: firstLine(view.entries),
+      title: title ?? firstLine(view.entries),
       model: modelName(agent.model),
       messages: counted(view.entries),
       frozenAt: now,
@@ -414,7 +466,7 @@ async function removeScoop(
   );
 }
 
-function listing(harness: Harness, agents: Agents) {
+function listing(harness: Harness, agents: Agents, seen: Seen) {
   const frozen = replicatedState<FrozenCone[]>([]);
   const cache = new Map<number, Stats>();
   let lock: Promise<readonly FrozenCone[]> = Promise.resolve([]);
@@ -422,7 +474,7 @@ function listing(harness: Harness, agents: Agents) {
     lock = lock
       .catch(() => [])
       .then(async () => {
-        const listed = await rows(harness, agents.state(), cache, BACKGROUND_CONTEXT);
+        const listed = await rows(harness, agents.state(), cache, BACKGROUND_CONTEXT, seen);
         frozen.replace(BACKGROUND_CONTEXT, listed);
         return listed;
       });
@@ -450,7 +502,12 @@ async function thawFrozen(agents: Agents, id: string, context: Context): Promise
     const reuse = !doc.cones[record.cone];
     const target = reuse ? record.cone : `cone-${doc.next}`;
     if (!reuse) doc.next += 1;
-    doc.cones[target] = { name: record.name, conversation: record.conversation };
+    doc.cones[target] = {
+      name: record.name,
+      conversation: record.conversation,
+      title: record.title,
+      titled: TITLE_TURNS.at(-1) as number,
+    };
     for (const scoop of record.scoops) {
       const entry = doc.scoops[scoop];
       if (!entry) continue;
@@ -494,7 +551,31 @@ async function discardFrozen(options: FreezerAttach, id: string, context: Contex
 export function attachFreezer(options: FreezerAttach): FreezerRuntime {
   const { harness, agents } = options;
   const now = options.now ?? Date.now;
-  const { frozen, refresh, touch, off } = listing(harness, agents);
+  const pending = new Set<string>();
+  const named = (entries: readonly EntryRecord[], model: string, context: Context) =>
+    scrubText(redactSecrets(transcriptOf(entries)).text)
+      .then((transcript) =>
+        (options.title as NonNullable<FreezerAttach['title']>)(transcript, model, context)
+      )
+      .then(cleanTitle)
+      .catch(() => undefined);
+  const seen: Seen = (id, cone, entries, model) => {
+    const turns = titleDue(cone, entries);
+    if (turns === undefined || !options.title || pending.has(id)) return;
+    pending.add(id);
+    void named(entries, model, BACKGROUND_CONTEXT)
+      .then((title) =>
+        agents.update((_tx, doc) => {
+          const record = doc.cones[id];
+          if (record?.conversation !== cone.conversation) return;
+          record.titled = turns;
+          if (title) record.title = title;
+        }, BACKGROUND_CONTEXT)
+      )
+      .catch(() => undefined)
+      .finally(() => pending.delete(id));
+  };
+  const { frozen, refresh, touch, off } = listing(harness, agents, seen);
   const conversationOf = async (agentId: string, context: Context) => {
     const conversation = await agents.conversation(agentId, context);
     if (!conversation) throw new Error(`There is no cone ${agentId}.`);
@@ -516,23 +597,12 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
     context: Context
   ) => {
     if (!options.title) return;
-    const transcript = entries
-      .filter((entry) => entry.kind === 'pi.user' || entry.kind === 'pi.assistant')
-      .map((entry) => `${entry.kind === 'pi.user' ? 'User' : 'Agent'}: ${textOf(entry)}`)
-      .join('\n')
-      .slice(0, 4000);
-    void options
-      .title(transcript, model, context)
+    void named(entries, model, context)
       .then(async (title) => {
-        const clean = title
-          ?.replace(/\s+/g, ' ')
-          .replace(/^["'“”]+|["'“”]+$/g, '')
-          .replace(/\.+$/, '')
-          .trim();
-        if (!clean) return;
+        if (!title) return;
         await agents.update((_tx, doc) => {
           const record = doc.frozen?.[id];
-          if (record) record.title = clean.slice(0, TITLE_LENGTH);
+          if (record) record.title = title;
         }, context);
       })
       .catch(() => undefined);
@@ -557,7 +627,13 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       const cone = agents.state().cones[agentId];
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
       const conversation = await conversationOf(agentId, context);
-      const { entries, record } = await snapshot(conversation, cone.name, now(), context);
+      const { entries, record } = await snapshot(
+        conversation,
+        cone.name,
+        now(),
+        context,
+        cone.title
+      );
       await prepare(conversation, entries, agentId, context);
       await conversation.abort(context, { background: true }).catch(() => undefined);
       const next =
@@ -595,11 +671,12 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
       const conversation = await conversationOf(agentId, context);
       const before = (await conversation.context(context)).entries;
+      const title = cone.title;
       if (!before.some((entry) => entry.kind === 'pi.user')) return null;
       const fresh = await freshLike(harness, conversation, context);
       await agents.setConversation(agentId, fresh, context);
       await conversation.abort(context).catch(() => undefined);
-      const { entries, record } = await snapshot(conversation, cone.name, now(), context);
+      const { entries, record } = await snapshot(conversation, cone.name, now(), context, title);
       await prepare(conversation, entries, agentId, context);
       const id = await agents.update((_tx, doc) => {
         const frozenId = `frozen-${doc.frozenNext ?? 1}`;

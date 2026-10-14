@@ -423,7 +423,15 @@ pi core has no browser tooling, and Mario's pi-skills `browser-tools` launches i
 pi durable keeps every conversation and entry in the session database, and has no archive flag and no delete (#75). The `slicc.agents` registry is the index of which conversations exist and what they are, so the Freezer lists from it, as Lars put it: the list of sessions in the database.
 
 - **The list** (`frozen` on the transcript service): every cone, frozen cone, scoop and `agent` run the registry knows.
-  - Each row has its id, name (names needn't be unique), title (the first user line), model, message count and last activity.
+  - Each row has its id, name (names needn't be unique), title, model, message count and last activity.
+  - **Titles.** A conversation's title starts as its first user line. pi durable has no conversation name (pi-coding-agent's `setSessionName` writes a `session_info` entry in its own JSONL sessions, which slicc doesn't run), so a live cone keeps its title in its `slicc.agents` record as `title` and `titled`. That works like pi's `prompt-url-widget` extension: the name stays provisional until it's final.
+    - After the cone's first finished turn (the last entry is an assistant message that stopped normally), and once more after its third, one background call writes a title of at most six words, in the user's language.
+    - The call uses `memory.extractModel`, else the cone's model. Clef classifiers only answer choices, so they can't write a title.
+    - The transcript sent is the model-visible text, cut at 4000 characters. Vault values are scrubbed and secret-shaped text is redacted first.
+    - A failed or empty answer keeps the first line and isn't retried. So a live cone costs at most two calls, plus one at freeze.
+    - `"titles": false` in `~/.pi/agent/settings.json` turns every model title off.
+    - The title moves with the cone. Freeze and New conversation copy it into the frozen row, then the final call replaces it there. Thaw brings it back as final, and a new conversation starts untitled.
+    - The Agents panel shows it as the cone's summary (spectrum's `title`).
   - It also has `kind` (`cone`, `scoop` or `agent`), `live` and `thawedAs`.
   - Live rows come first, then the newest. A stopped conversation's numbers are read once and cached.
 - **New conversation** (spectrum's `clear` and `/clear`, Lars's W9) gives the same cone, with its id and name, a fresh conversation with the same configuration, when the chat isn't empty. The old conversation becomes a frozen row. On a scoop, `clear` is a plain reset.

@@ -5,7 +5,15 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { extractSettings } from '../memory/extract.ts';
 
 export const TITLE_PROMPT =
-  'Give this chat a title of three to six words that says what it was about. Answer with the title only, without quotes.';
+  'Give this chat a title of three to six words that says what it is about, in the language the user writes in. Answer with the title only, without quotes.';
+
+export function titlesOn(text: string | undefined): boolean {
+  try {
+    return (JSON.parse(text ?? '{}') as { titles?: unknown }).titles !== false;
+  } catch {
+    return true;
+  }
+}
 
 export function settingsText(
   env: Pick<ExecutionEnv, 'readTextFile'>,
@@ -27,7 +35,9 @@ export function titler(
     model: string,
     context: Context
   ): Promise<string | undefined> => {
-    const chosen = extractSettings(await settings(context)).model;
+    const text = await settings(context);
+    if (!titlesOn(text)) return undefined;
+    const chosen = extractSettings(text).model;
     const [provider, ...rest] = model.split('/');
     const ref = chosen ?? (provider && rest.length ? { provider, modelId: rest.join('/') } : null);
     const found = ref ? models.getModel(ref.provider, ref.modelId) : undefined;
