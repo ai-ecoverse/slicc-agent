@@ -325,9 +325,11 @@ test('secrets: a model call goes out prepared by the vault, with the key filled 
     ...seen.upstream.map((request, at) => ({ what: `upstream ${at}`, text: request.body })),
     { what: 'messages', text: seen.messages }
   );
-  assert.equal(seen.upstream.length, 1);
-  assert.equal(seen.upstream[0].authorization, `Bearer ${key}`);
-  assert.match(seen.upstream[0].body, /My key is fnox_proxy_000000000000000000000001\./);
+  const turns = seen.upstream.filter((request) => !request.body.includes('Give this chat a title'));
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].authorization, `Bearer ${key}`);
+  assert.match(turns[0].body, /My key is fnox_proxy_000000000000000000000001\./);
+  for (const request of seen.upstream) assert.ok(!request.body.includes(alpha));
   assert.ok(seen.vault.some((message) => message.op === 'model' && message.provider === 'adobe'));
   assert.ok(seen.vault.some((message) => message.op === 'endpoints'));
   assert.ok(!seen.messages.includes(key));
