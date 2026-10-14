@@ -12,7 +12,7 @@ import {
   type UserInput,
 } from '@earendil-works/pi-durable';
 import { answerText } from './agent.ts';
-import type { Agents } from './agents.ts';
+import type { Agents, ScoopRecord } from './agents.ts';
 import { type ShownAttachment, splitUser, userParts } from './attachments.ts';
 import type { ChangesRuntime } from './changes/index.ts';
 import type { Cones } from './cone.ts';
@@ -278,7 +278,10 @@ async function rewindAgent(
   );
   if (scoop && agents)
     await agents.update((_tx, state) => {
-      (state.scoops[agentId as string] as { conversation: number }).conversation = fork.id;
+      const record = state.scoops[agentId as string] as ScoopRecord;
+      record.conversation = fork.id;
+      delete record.title;
+      delete record.titled;
     }, context);
   else await cone.switchCone(fork, context);
   const { attachments } = found.turn;
