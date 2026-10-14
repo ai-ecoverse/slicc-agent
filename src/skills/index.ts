@@ -6,6 +6,7 @@ import {
   section,
 } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
+import { dirname } from '../kernel/paths.ts';
 import type { Licks } from '../licks/licks.ts';
 import { PACKAGE_ROOTS, type PiPackages, piPackages } from '../roles/roles.ts';
 import type { Command } from '../services.ts';
@@ -34,6 +35,7 @@ export const SKILLS_DIR = '/var/lib/slicc/agent/skills';
 export const PROMPTS_DIR = '/var/lib/slicc/agent/prompts';
 export const GLOBAL_DIR = '/usr/share/skills';
 export const RELOAD_MS = 300;
+const USER_PACKAGES = '/opt/user/node_modules';
 
 export interface SkillsRuntime {
   readonly commands: ReplicatedState<Command[]>;
@@ -227,12 +229,29 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
       };
       await reload(context);
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const refresh = async () => {
+        await watch(context);
+        await reload(context);
+      };
       const schedule = () => {
         clearTimeout(timer);
-        timer = setTimeout(() => void reload(context).catch(() => undefined), options.reloadMs);
+        timer = setTimeout(() => void refresh().catch(() => undefined), options.reloadMs);
       };
       let watcher: FileWatcher | undefined;
       let seen = '';
+      const userPackageTargets = async (using: Context) => {
+        const listed = await env.listDir(USER_PACKAGES, using);
+        if (listed.ok)
+          return [
+            { path: USER_PACKAGES },
+            ...listed.value
+              .filter((entry) => entry.name.startsWith('@'))
+              .map((entry) => ({ path: `${USER_PACKAGES}/${entry.name}` })),
+          ];
+        let path = dirname(USER_PACKAGES);
+        while (path !== '/' && !(await env.listDir(path, using)).ok) path = dirname(path);
+        return [{ path }];
+      };
       const watch = async (using: Context) => {
         const extra = options.people
           ? userRoots(homes()).map((root) => ({ path: root.dir, recursive: true }))
@@ -240,12 +259,18 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
               { path: `${dir}/skills`, recursive: true },
               { path: `${home}/.agents/skills`, recursive: true },
             ];
-        const key = JSON.stringify(extra);
+        const packageTargets = await userPackageTargets(using);
+        const key = JSON.stringify([extra, packageTargets]);
         if (key === seen) return;
         seen = key;
         await watcher?.close(using);
         const watched = await env.watch(
-          [{ path: GLOBAL_DIR, recursive: true }, { path: `${dir}/prompts` }, ...extra],
+          [
+            { path: GLOBAL_DIR, recursive: true },
+            { path: `${dir}/prompts` },
+            ...packageTargets,
+            ...extra,
+          ],
           schedule,
           using
         );
