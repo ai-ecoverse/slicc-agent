@@ -160,9 +160,9 @@ async function secretsFor(home: SliccKernelEnv, vault: Vault) {
   return names;
 }
 
-async function modelsOf(options: AgentWorkerOptions) {
+async function modelsOf(options: AgentWorkerOptions, version: string) {
   const credentials = await (options.credentials ?? (() => EncryptedCredentialStore.open()))();
-  const providers = options.providers ?? sliccProviders();
+  const providers = options.providers ?? sliccProviders(version);
   return { credentials, providers, models: createSliccModels(credentials, providers) };
 }
 
@@ -201,7 +201,13 @@ async function prepare(
   const names = await secretsFor(kernel.home, kernel.vault);
   const native = routeFetch(scope, kernel.client);
   const facts = await factsOf(kernel.client, native);
-  return { names, native, facts, ...(await modelsOf(options)), registry: baseRegistry(facts) };
+  return {
+    names,
+    native,
+    facts,
+    ...(await modelsOf(options, facts.version)),
+    registry: baseRegistry(facts),
+  };
 }
 
 async function start(

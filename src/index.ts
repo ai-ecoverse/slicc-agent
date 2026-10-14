@@ -5,10 +5,14 @@ export {
   type AdobeModelInfo,
   adobeClassifiers,
   adobeConfig,
+  adobeIdentity,
   adobeModel,
   adobeProvider,
   adobeUsage,
   type Budget,
+  SESSION_HEADER,
+  VERSION_HEADER,
+  withAdobeIdentity,
 } from './adobe.ts';
 export { type Agent, type AgentOptions, answerText, openAgent } from './agent.ts';
 export {

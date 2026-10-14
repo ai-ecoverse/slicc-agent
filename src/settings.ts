@@ -7,6 +7,7 @@ import {
   ADOBE,
   ADOBE_PROXY,
   adobeConfig,
+  adobeIdentity,
   adobeProvider,
   adobeUsage,
   type Budget,
@@ -23,8 +24,8 @@ const corsFree = new Set([BEDROCK, ADOBE]);
 const signIn = new Set([ADOBE]);
 const BUDGET_EVERY = 5 * 60 * 1000;
 
-export function sliccProviders(): Provider[] {
-  return [amazonBedrockProvider() as Provider, adobeProvider()];
+export function sliccProviders(version?: string): Provider[] {
+  return [amazonBedrockProvider() as Provider, adobeProvider({ version })];
 }
 
 export function withDefaultRegions(credentials: CredentialStore): CredentialStore {
@@ -111,8 +112,10 @@ export async function createAgentSettings(
 ): Promise<AgentSettings> {
   const { mcp } = options;
   const routed = (providerId: string) => (providerId.startsWith(MCP_ACCOUNT) ? mcp : undefined);
-  const endpoint = providers.find((provider) => provider.id === ADOBE)?.baseUrl ?? ADOBE_PROXY;
-  const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint }));
+  const adobe = providers.find((provider) => provider.id === ADOBE);
+  const endpoint = adobe?.baseUrl ?? ADOBE_PROXY;
+  const identity = (adobe?.headers as Record<string, string> | undefined) ?? adobeIdentity();
+  const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint, identity }));
   const snapshot = async (): Promise<SettingsState> => {
     const stored = new Set((await credentials.list()).map((info) => info.providerId));
     return {
@@ -167,8 +170,10 @@ export async function createAgentSettings(
       const server = routed(providerId);
       if (server) return shown(() => server.signIn(providerId));
       if (providerId !== ADOBE) return null;
-      const { clientId, scopes, imsEnvironment } = await adobeConfig(endpoint, (input, init) =>
-        globalThis.fetch(input, init)
+      const { clientId, scopes, imsEnvironment } = await adobeConfig(
+        endpoint,
+        (input, init) => globalThis.fetch(input, init),
+        identity
       );
       return { clientId, scopes, imsEnvironment: imsEnvironment || 'prod' };
     },
