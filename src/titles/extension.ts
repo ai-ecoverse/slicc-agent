@@ -1,6 +1,13 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { ConversationId, EntryRecord, Extension, Harness } from '@earendil-works/pi-durable';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
+import type {
+  Conversation,
+  ConversationId,
+  EntryRecord,
+  Extension,
+  Harness,
+} from '@earendil-works/pi-durable';
 import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
 import type { Agents, ConeRecord } from '../agents.ts';
@@ -79,7 +86,14 @@ function findAgent(
 export interface TitlesAttach {
   agents: () => Agents | undefined;
   harness: () => Harness | undefined;
-  title: TitleFn;
+  title: () => TitleFn | undefined;
+}
+
+function answered(entries: readonly EntryRecord[], answer: AssistantMessage): EntryRecord[] {
+  const last = entries.at(-1);
+  const stamp = (last?.model?.[0] as { timestamp?: unknown } | undefined)?.timestamp;
+  if (last?.kind === 'pi.assistant' && stamp === answer.timestamp) return [...entries];
+  return [...entries, { kind: 'pi.assistant', model: [answer] } as unknown as EntryRecord];
 }
 
 function modelName(model: { provider: string; modelId: string } | undefined): string {
@@ -97,55 +111,62 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
   const named = (
     entries: readonly EntryRecord[],
     model: string,
-    context: Context
+    context: Context,
+    title: TitleFn
   ): Promise<string | undefined> =>
     scrubTranscript(entries)
-      .then((transcript) => deps.title(transcript, model, context))
+      .then((transcript) => title(transcript, model, context))
       .then(cleanTitle)
       .catch(() => undefined);
 
-  const write = (id: string, titled: Titled, turns: number, title: string | undefined) => {
-    const agents = deps.agents();
-    if (!agents) return Promise.resolve();
-    return agents.update((_tx, doc) => {
+  const write = (
+    agents: Agents,
+    id: string,
+    titled: Titled,
+    turns: number,
+    title: string | undefined
+  ) =>
+    agents.update((_tx, doc) => {
       const record = doc.cones[id] ?? doc.scoops[id];
-      if (record?.conversation !== titled.conversation) return;
+      if (record?.conversation !== titled.conversation || (record.titled ?? 0) >= turns) return;
       record.titled = turns;
       if (title) record.title = title;
     }, BACKGROUND_CONTEXT);
-  };
 
   const extension = defineExtension({
     name: TITLES,
     hooks: [
       hook(GenerationTask, {
-        onYield(_answer, api, context) {
+        onYield(answer, api) {
           const agents = deps.agents();
           const harness = deps.harness();
-          if (!agents || !harness) return undefined;
+          const title = deps.title();
+          if (!agents || !harness || !title) return undefined;
           const found = findAgent(agents, api.conversationId);
           if (!found) return undefined;
           const { id, record } = found;
-          if (pending.get(id)?.conversation === record.conversation) return undefined;
+          const token = Symbol(id);
           void (async () => {
-            const conversation = await harness.conversation(api.conversationId, context);
-            if (!conversation) return;
-            const view = await conversation.context(context);
-            const entries = view.entries;
-            const agent = await conversation.agent(context);
-            const model = modelName(agent.model);
+            const conversation = (await harness.conversation(
+              api.conversationId,
+              BACKGROUND_CONTEXT
+            )) as Conversation;
+            const entries = answered(
+              (await conversation.context(BACKGROUND_CONTEXT)).entries,
+              answer
+            );
             const turns = titleDue(record, entries);
-            if (turns === undefined) return;
-            const token = Symbol(id);
+            if (turns === undefined || pending.get(id)?.conversation === record.conversation)
+              return;
             pending.set(id, { token, conversation: record.conversation });
-            try {
-              const title = await named(entries, model, BACKGROUND_CONTEXT);
-              if (pending.get(id)?.token === token) await write(id, record, turns, title);
-            } catch {
-            } finally {
+            const model = modelName((await conversation.agent(BACKGROUND_CONTEXT)).model);
+            const label = await named(entries, model, BACKGROUND_CONTEXT, title);
+            if (pending.get(id)?.token === token) await write(agents, id, record, turns, label);
+          })()
+            .catch(() => undefined)
+            .finally(() => {
               if (pending.get(id)?.token === token) pending.delete(id);
-            }
-          })();
+            });
           return undefined;
         },
       }),

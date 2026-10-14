@@ -318,7 +318,7 @@ function setupTitles(
   const titles = titlesExtension({
     agents: () => opened()?.agents,
     harness: () => opened()?.harness,
-    title: titleFn,
+    title: () => titleFn,
   });
   registry.install(titles.extension);
   return { titleFn, cancel: titles.cancel };
