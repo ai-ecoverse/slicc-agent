@@ -98,9 +98,10 @@ test('agents show their context fill, and a background cone counts its unread an
     const kernel = await bootKernel();
     const owner = await startAgent({
       worker: () =>
-        new Worker('/dist-test/main-worker.js?answer=First.&answer=From%20the%20background.', {
-          type: 'module',
-        }),
+        new Worker(
+          `/dist-test/main-worker.js?answer=First.&answer=From%20the%20background.&vault&record=${encodeURIComponent(JSON.stringify({ kind: 'model', name: 'FAUX_API_KEY', provider: 'faux', placeholder: 'fnox_proxy_faux', value: 'faux-model-key-0001' }))}`,
+          { type: 'module' }
+        ),
       kernel: { connect: () => kernel.connect() },
     });
     const model = createAgentModel(await owner.connect(), { storage: localStorage });
@@ -111,7 +112,7 @@ test('agents show their context fill, and a background cone counts its unread an
       return check();
     };
     await until(() => settings.accounts().length > 0);
-    await settings.connect('faux', 'not-a-real-key');
+    await settings.connect('faux');
     await until(() => settings.accounts()[0]?.status === 'connected');
     const row = (id) => agent.list().find((entry) => entry.id === id);
     const cone = agent.active();
