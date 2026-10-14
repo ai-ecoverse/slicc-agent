@@ -215,8 +215,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return this.#summary().map((summary) => {
       const view = this.#view(summary.id);
       const doc = view?.docs['pi.agent'] as AgentDoc | undefined;
-      const title =
-        summary.kind === 'cone' ? rows.find((row) => row.id === summary.id)?.title : undefined;
+      const title = rows.find((row) => row.id === summary.id)?.title;
       const model = doc?.model ? `${doc.model.provider}/${doc.model.modelId}` : '';
       const models = this.#connection.settings?.state.value?.models ?? [];
       return {

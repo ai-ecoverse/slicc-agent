@@ -198,7 +198,9 @@ function transcriptOf(entries: readonly EntryRecord[]): string {
     .slice(0, 4000);
 }
 
-type Seen = (id: string, cone: ConeRecord, entries: readonly EntryRecord[], model: string) => void;
+type Titled = Pick<ConeRecord, 'conversation' | 'title' | 'titled'>;
+
+type Seen = (id: string, record: Titled, entries: readonly EntryRecord[], model: string) => void;
 
 const kindOf = (scoop: ScoopRecord): ConversationKind =>
   scoop.kind === 'sync' ? 'agent' : 'scoop';
@@ -210,27 +212,28 @@ async function rows(
   context: Context,
   seen?: Seen
 ): Promise<FrozenCone[]> {
-  const stats = async (conversation: number, stopped: boolean) => {
-    const cached = stopped ? cache.get(conversation) : undefined;
+  const stopped = async (conversation: number) => {
+    const cached = cache.get(conversation);
     if (cached) return cached;
     const found = (await inspect(harness, conversation, context)).stats;
-    if (stopped) cache.set(conversation, found);
+    cache.set(conversation, found);
     return found;
   };
+  const running = async (id: string, record: Titled) => {
+    const { stats, entries } = await inspect(harness, record.conversation, context);
+    seen?.(id, record, entries, stats.model);
+    return { ...stats, ...(record.title ? { title: record.title } : {}) };
+  };
   const out: FrozenCone[] = [];
-  for (const [id, cone] of Object.entries(state.cones)) {
-    const { stats: found, entries } = await inspect(harness, cone.conversation, context);
-    seen?.(id, cone, entries, found.model);
+  for (const [id, cone] of Object.entries(state.cones))
     out.push({
       id,
       name: cone.name,
-      ...found,
-      ...(cone.title ? { title: cone.title } : {}),
+      ...(await running(id, cone)),
       kind: 'cone',
       live: true,
       thawedAs: null,
     });
-  }
   for (const [id, record] of Object.entries(state.frozen ?? {}))
     out.push({
       id,
@@ -245,13 +248,13 @@ async function rows(
     });
   for (const [id, scoop] of Object.entries(state.scoops)) {
     if (scoop.removed) continue;
-    const running = live(scoop);
+    const on = live(scoop);
     out.push({
       id,
       name: scoop.name,
-      ...(await stats(scoop.conversation, !running)),
+      ...(on ? await running(id, scoop) : await stopped(scoop.conversation)),
       kind: kindOf(scoop),
-      live: running,
+      live: on,
       thawedAs: scoop.thawedAs ?? null,
     });
   }
@@ -434,7 +437,11 @@ async function thawScoop(
   const coneId = await agents.update((_tx, doc) => {
     const target = `cone-${doc.next}`;
     doc.next += 1;
-    doc.cones[target] = { name: scoop.name, conversation: fork.id };
+    doc.cones[target] = {
+      name: scoop.name,
+      conversation: fork.id,
+      ...(scoop.title ? { title: scoop.title, titled: scoop.titled as number } : {}),
+    };
     (doc.scoops[id] as ScoopRecord).thawedAs = target;
     return target;
   }, context);
@@ -559,15 +566,15 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       )
       .then(cleanTitle)
       .catch(() => undefined);
-  const seen: Seen = (id, cone, entries, model) => {
-    const turns = titleDue(cone, entries);
+  const seen: Seen = (id, titled, entries, model) => {
+    const turns = titleDue(titled, entries);
     if (turns === undefined || !options.title || pending.has(id)) return;
     pending.add(id);
     void named(entries, model, BACKGROUND_CONTEXT)
       .then((title) =>
         agents.update((_tx, doc) => {
-          const record = doc.cones[id];
-          if (record?.conversation !== cone.conversation) return;
+          const record = doc.cones[id] ?? doc.scoops[id];
+          if (record?.conversation !== titled.conversation) return;
           record.titled = turns;
           if (title) record.title = title;
         }, BACKGROUND_CONTEXT)
@@ -666,6 +673,11 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       const scoop = agents.state().scoops[agentId];
       if (!cone && scoop && live(scoop)) {
         await (await agents.conversation(agentId, context))?.reset(undefined, context);
+        await agents.update((_tx, doc) => {
+          const record = doc.scoops[agentId] as ScoopRecord;
+          delete record.title;
+          delete record.titled;
+        }, context);
         return null;
       }
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
