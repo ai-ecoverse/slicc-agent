@@ -82,6 +82,7 @@ Delete a cone, or start a new conversation, from the chat toolbar or the command
 const TITLE_LENGTH = 60;
 const TITLE_WORDS = 6;
 export const TITLE_TURNS = [1, 3];
+const TRIVIAL_WORDS = 4;
 export const TOUCH_MS = 500;
 
 function textOf(entry: EntryRecord): string {
@@ -165,16 +166,28 @@ async function inspect(harness: Harness, id: number, context: Context): Promise<
   };
 }
 
+export function trivial(text: string): boolean {
+  const words = text
+    .split(/\s+/)
+    .map((word) => word.replace(/\p{P}|\p{S}|\u200d|\ufe0f/gu, ''))
+    .filter(Boolean);
+  return (
+    words.length < TRIVIAL_WORDS && !(words.length === 1 && [...(words[0] as string)].length >= 8)
+  );
+}
+
 export function titleDue(
-  cone: Pick<ConeRecord, 'titled'>,
-  entries: readonly EntryRecord[]
+  record: Pick<ConeRecord, 'titled'>,
+  entries: readonly EntryRecord[],
+  final = false
 ): number | undefined {
   const last = entries.at(-1);
   const stop = (last?.model?.[0] as { stopReason?: unknown } | undefined)?.stopReason;
   if (last?.kind !== 'pi.assistant' || stop !== 'stop') return undefined;
-  const turns = entries.filter((entry) => entry.kind === 'pi.user' && textOf(entry)).length;
-  const next = TITLE_TURNS.find((turn) => turn > (cone.titled ?? 0));
-  return next !== undefined && turns >= next ? turns : undefined;
+  const said = entries.filter((entry) => entry.kind === 'pi.user' && textOf(entry));
+  const greeting = !final && trivial(textOf(said[0] ?? ({} as EntryRecord)));
+  const next = TITLE_TURNS.find((turn) => turn > (record.titled ?? 0) && !(greeting && turn === 1));
+  return next !== undefined && said.length >= next ? said.length : undefined;
 }
 
 export function cleanTitle(title: string | undefined): string | undefined {
@@ -200,7 +213,13 @@ function transcriptOf(entries: readonly EntryRecord[]): string {
 
 type Titled = Pick<ConeRecord, 'conversation' | 'title' | 'titled'>;
 
-type Seen = (id: string, record: Titled, entries: readonly EntryRecord[], model: string) => void;
+type Seen = (
+  id: string,
+  record: Titled,
+  entries: readonly EntryRecord[],
+  model: string,
+  final?: boolean
+) => void;
 
 const kindOf = (scoop: ScoopRecord): ConversationKind =>
   scoop.kind === 'sync' ? 'agent' : 'scoop';
@@ -218,6 +237,14 @@ async function rows(
     const found = (await inspect(harness, conversation, context)).stats;
     cache.set(conversation, found);
     return found;
+  };
+  const ended = async (id: string, record: Titled) => {
+    const stats = await stopped(record.conversation);
+    if (seen && record.titled === undefined) {
+      const { entries } = await inspect(harness, record.conversation, context);
+      seen(id, record, entries, stats.model, true);
+    }
+    return { ...stats, ...(record.title ? { title: record.title } : {}) };
   };
   const running = async (id: string, record: Titled) => {
     const { stats, entries } = await inspect(harness, record.conversation, context);
@@ -252,7 +279,7 @@ async function rows(
     out.push({
       id,
       name: scoop.name,
-      ...(on ? await running(id, scoop) : await stopped(scoop.conversation)),
+      ...(on ? await running(id, scoop) : await ended(id, scoop)),
       kind: kindOf(scoop),
       live: on,
       thawedAs: scoop.thawedAs ?? null,
@@ -473,7 +500,7 @@ async function removeScoop(
   );
 }
 
-function listing(harness: Harness, agents: Agents, seen: Seen) {
+function listing(harness: Harness, agents: Agents, seen: Seen | undefined) {
   const frozen = replicatedState<FrozenCone[]>([]);
   const cache = new Map<number, Stats>();
   let lock: Promise<readonly FrozenCone[]> = Promise.resolve([]);
@@ -555,10 +582,9 @@ async function discardFrozen(options: FreezerAttach, id: string, context: Contex
     );
 }
 
-export function attachFreezer(options: FreezerAttach): FreezerRuntime {
-  const { harness, agents } = options;
-  const now = options.now ?? Date.now;
-  const pending = new Set<string>();
+function titling(options: FreezerAttach) {
+  const { agents } = options;
+  const pending = new Map<string, symbol>();
   const named = (entries: readonly EntryRecord[], model: string, context: Context) =>
     scrubText(redactSecrets(transcriptOf(entries)).text)
       .then((transcript) =>
@@ -566,23 +592,44 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       )
       .then(cleanTitle)
       .catch(() => undefined);
-  const seen: Seen = (id, titled, entries, model) => {
-    const turns = titleDue(titled, entries);
-    if (turns === undefined || !options.title || pending.has(id)) return;
-    pending.add(id);
+  const write = (id: string, titled: Titled, turns: number, title: string | undefined) =>
+    agents.update((_tx, doc) => {
+      const record = doc.cones[id] ?? doc.scoops[id];
+      if (record?.conversation !== titled.conversation) return;
+      record.titled = turns;
+      if (title) record.title = title;
+    }, BACKGROUND_CONTEXT);
+  const seen: Seen = (id, titled, entries, model, final) => {
+    if (pending.has(id)) return;
+    const turns = titleDue(titled, entries, final);
+    const last = TITLE_TURNS.at(-1) as number;
+    if (turns === undefined) {
+      if (final) void write(id, titled, last, undefined).catch(() => undefined);
+      return;
+    }
+    const token = Symbol(id);
+    pending.set(id, token);
     void named(entries, model, BACKGROUND_CONTEXT)
       .then((title) =>
-        agents.update((_tx, doc) => {
-          const record = doc.cones[id] ?? doc.scoops[id];
-          if (record?.conversation !== titled.conversation) return;
-          record.titled = turns;
-          if (title) record.title = title;
-        }, BACKGROUND_CONTEXT)
+        pending.get(id) === token ? write(id, titled, final ? last : turns, title) : undefined
       )
       .catch(() => undefined)
-      .finally(() => pending.delete(id));
+      .finally(() => {
+        if (pending.get(id) === token) pending.delete(id);
+      });
   };
-  const { frozen, refresh, touch, off } = listing(harness, agents, seen);
+  return { pending, named, seen };
+}
+
+export function attachFreezer(options: FreezerAttach): FreezerRuntime {
+  const { harness, agents } = options;
+  const now = options.now ?? Date.now;
+  const { pending, named, seen } = titling(options);
+  const { frozen, refresh, touch, off } = listing(
+    harness,
+    agents,
+    options.title ? seen : undefined
+  );
   const conversationOf = async (agentId: string, context: Context) => {
     const conversation = await agents.conversation(agentId, context);
     if (!conversation) throw new Error(`There is no cone ${agentId}.`);
@@ -672,6 +719,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       const cone = agents.state().cones[agentId];
       const scoop = agents.state().scoops[agentId];
       if (!cone && scoop && live(scoop)) {
+        pending.delete(agentId);
         await (await agents.conversation(agentId, context))?.reset(undefined, context);
         await agents.update((_tx, doc) => {
           const record = doc.scoops[agentId] as ScoopRecord;
