@@ -238,7 +238,7 @@ export class Vault implements Scrub {
 
   #welcome(status: unknown): void {
     const given = status as { scrub?: unknown; locked?: unknown } | null;
-    const pair = given?.scrub ? pairOf(given.scrub) : undefined;
+    const pair = given && 'scrub' in given ? pairOf(given.scrub) : undefined;
     if (pair) this.#pair = pair;
     if (typeof given?.locked === 'boolean') this.#locked = given.locked ? 'passkey' : 'no';
   }
