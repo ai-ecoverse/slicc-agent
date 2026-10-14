@@ -193,12 +193,19 @@ const missing = /no api key|missing|not configured|no credentials/i;
 const adobeAuth =
   /\b401\b|authenticat|unauthori[sz]ed|expired|invalid[_ ]?(?:token|credentials?|api[_ ]key)|token verification|no api key|not configured|no credentials/i;
 
-function proxyMessage(error: string): string {
+function proxyRefusal(error: string): { message: string; detail: string } {
   try {
-    const body = JSON.parse(error.match(/\{.*\}/s)?.[0] ?? '') as { error?: { message?: unknown } };
-    return typeof body.error?.message === 'string' ? body.error.message : error;
+    const body = JSON.parse(error.match(/\{.*\}/s)?.[0] ?? '') as {
+      error?: { type?: unknown; message?: unknown };
+    };
+    const { type, message } = body.error ?? {};
+    const status = error.match(/^\s*(\d{3})\b/)?.[1];
+    return {
+      message: typeof message === 'string' ? message : error,
+      detail: typeof type === 'string' ? [status, type].filter(Boolean).join(' ') : error,
+    };
   } catch {
-    return error;
+    return { message: error, detail: error };
   }
 }
 
@@ -222,7 +229,7 @@ export function errorPart(error: string, provider?: string): MessagePart {
           detail: error,
           action: 'login',
         }
-      : { type: 'error', message: proxyMessage(error), detail: error, action: 'retry' };
+      : { type: 'error', ...proxyRefusal(error), action: 'retry' };
   }
   const name = providerNames[provider ?? ''] ?? 'The provider';
   const lead =

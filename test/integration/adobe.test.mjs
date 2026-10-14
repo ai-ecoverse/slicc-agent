@@ -31,5 +31,6 @@ test('every request to a proxy that refuses requests without X-Session-Id carrie
   }
   assert.equal(result.seen.at(-1).session, null);
   assert.equal(result.refused.message, 'Missing required header: x-session-id');
+  assert.equal(result.refused.detail, '403 missing_required_header');
   assert.equal(result.refused.action, 'retry');
 });
