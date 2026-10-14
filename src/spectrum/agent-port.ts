@@ -87,6 +87,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   readonly #notices = new Map<string, { at: number; message: SystemMessage }[]>();
   readonly #unread = new Map<string, number>();
   readonly #seen = new Map<string, Set<string>>();
+  #opened: ReadonlySet<string> | null = null;
 
   constructor(connection: AgentConnection) {
     super();
@@ -133,6 +134,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
 
   #refresh(): void {
     this.#active ??= this.#connection.agents?.value?.active ?? null;
+    if (!this.#opened && (!this.#connection.agents || this.#connection.agents.value))
+      this.#opened = new Set(this.#summary().map((summary) => summary.id));
     this.emit('agents', this.list());
     let unread = false;
     for (const summary of this.#summary()) unread = this.#update(summary.id) || unread;
@@ -148,11 +151,13 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
 
   #count(agentId: string, view: ConversationView, messages: readonly Message[]): boolean {
     const ids = answers(messages);
-    const seen = this.#seen.get(agentId);
-    if (!seen || agentId === this.active()) {
+    const known = this.#seen.get(agentId);
+    if (agentId === this.active() || (!known && (!this.#opened || this.#opened.has(agentId)))) {
       this.#seen.set(agentId, new Set(ids));
       return false;
     }
+    const seen = known ?? new Set<string>();
+    this.#seen.set(agentId, seen);
     const fresh = isBusy(view) ? [] : ids.filter((id) => !seen.has(id));
     if (!fresh.length) return false;
     for (const id of fresh) seen.add(id);
