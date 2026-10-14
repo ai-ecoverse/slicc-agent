@@ -22,6 +22,7 @@ import type {
 import { Emitter } from './emitter.ts';
 
 export const RENEW_MS = 10000;
+export const SAMPLE_MS = 2000;
 export const ROWS_MAX = 200;
 export const HISTORY = 24;
 export const CPU_HISTORY = 30;
@@ -336,6 +337,10 @@ function stale(process: MonitorProcess, agents: ReadonlyMap<string, MonitorAgent
   return now - process.started > STALE_MS;
 }
 
+function zombied(process: MonitorProcess, now: number): boolean {
+  return process.zombie !== null && now - process.zombie > ZOMBIE_MS;
+}
+
 function groups(processes: readonly MonitorProcess[]): Map<number, MonitorProcess[]> {
   const out = new Map<number, MonitorProcess[]>();
   for (const process of processes) {
@@ -506,7 +511,7 @@ function processAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): A
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
   const out = [...crowdAlerts(processes, nameOf), ...cpuAlerts(input, processes, nameOf)];
   for (const process of processes) {
-    if (process.zombie !== null && input.now - process.zombie > ZOMBIE_MS)
+    if (zombied(process, input.now))
       out.push({
         id: `zombie-${process.pid}`,
         title: `Process ${process.pid} is a zombie`,
@@ -590,17 +595,27 @@ function taskRow(
   };
 }
 
+function drivers(members: readonly MonitorProcess[]): MonitorProcess[] {
+  const hot = members.filter((row) => (row.cpu ?? 0) >= CPU_SHARE);
+  if (hot.length) return hot;
+  const top = members.reduce((best, row) => ((row.cpu ?? 0) > (best.cpu ?? 0) ? row : best));
+  return [top];
+}
+
 function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
+  const members = groups(feed.processes ?? []);
   const flagged = new Map<number, 'warn' | 'error'>();
-  for (const [pgid, members] of groups(feed.processes ?? []))
-    if (members.length > GROUP_MAX) flagged.set(pgid, crowdSeverity(members));
   for (const group of busy(input, feed.processes ?? []))
-    flagged.set(group.pgid, worse(flagged.get(group.pgid), cpuSeverity(group)) as 'warn' | 'error');
+    for (const row of drivers(members.get(group.pgid) as MonitorProcess[]))
+      flagged.set(row.pid, cpuSeverity(group));
   return (feed.processes ?? []).map((process) => {
     const runaway = worse(
-      flagged.get(process.pgid),
-      stale(process, agents, input.now) ? staleSeverity(process, input.now) : undefined
+      worse(
+        flagged.get(process.pid),
+        stale(process, agents, input.now) ? staleSeverity(process, input.now) : undefined
+      ),
+      zombied(process, input.now) ? 'warn' : undefined
     );
     const badges = [
       ...(process.agentId ? [agents.get(process.agentId)?.name ?? process.agentId] : []),
@@ -618,7 +633,7 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
       ]
         .filter(Boolean)
         .join(' · '),
-      status: runaway ?? (process.state === 'Z' ? 'warn' : 'idle'),
+      status: runaway ?? 'idle',
       ...(badges.length ? { badges } : {}),
     };
   });
@@ -698,6 +713,7 @@ export const globalIntervals: Intervals = {
 export interface MonitorAdapterOptions {
   extra?: () => readonly MonitorSection[];
   renewMs?: number;
+  sampleMs?: number;
   intervals?: Intervals;
   now?: () => number;
 }
@@ -705,6 +721,7 @@ export interface MonitorAdapterOptions {
 interface Open {
   lease: Promise<string | null>;
   timer: unknown;
+  sampler: unknown;
 }
 
 export class MonitorAdapter implements MonitorPort {
@@ -712,6 +729,7 @@ export class MonitorAdapter implements MonitorPort {
   readonly #emitter = new Emitter<MonitorEvents>();
   readonly #extra: () => readonly MonitorSection[];
   readonly #renewMs: number;
+  readonly #sampleMs: number;
   readonly #intervals: Intervals;
   readonly #now: () => number;
   #listeners = 0;
@@ -727,6 +745,7 @@ export class MonitorAdapter implements MonitorPort {
     this.#connection = connection;
     this.#extra = options.extra ?? (() => []);
     this.#renewMs = options.renewMs ?? RENEW_MS;
+    this.#sampleMs = options.sampleMs ?? SAMPLE_MS;
     this.#intervals = options.intervals ?? globalIntervals;
     this.#now = options.now ?? Date.now;
     connection.monitor?.subscribe(() => this.#update());
@@ -795,7 +814,11 @@ export class MonitorAdapter implements MonitorPort {
       void lease
         .then((held) => (held ? control.monitorOpen(held, false, BACKGROUND_CONTEXT) : undefined))
         .catch(() => undefined);
-    this.#open = { lease, timer: this.#intervals.every(renew, this.#renewMs) };
+    this.#open = {
+      lease,
+      timer: this.#intervals.every(renew, this.#renewMs),
+      sampler: this.#intervals.every(() => this.#poll(), this.#sampleMs),
+    };
   }
 
   #stop(): void {
@@ -803,6 +826,7 @@ export class MonitorAdapter implements MonitorPort {
     if (!open) return;
     this.#open = undefined;
     this.#intervals.stop(open.timer);
+    this.#intervals.stop(open.sampler);
     const control = this.#connection.control;
     void open.lease
       .then((held) => (held ? control.monitorClose(held, BACKGROUND_CONTEXT) : undefined))
@@ -829,11 +853,17 @@ export class MonitorAdapter implements MonitorPort {
     if (!feed?.open || feed.at === this.#hotAt) return;
     this.#hotAt = feed.at;
     this.#hot = hotGroups(feed.processes ?? [], feed.at, this.#hot);
-    if (feed.processes) record(this.#processes, feed.processes.length, CPU_HISTORY);
-    const memory = memoryTotal(feed.processes ?? []);
-    if (memory !== null) record(this.#memory, memory, CPU_HISTORY);
     const share = agentsCpu(feed);
     if (share !== null) record(this.#cpu, share, CPU_HISTORY);
+  }
+
+  #poll(): void {
+    const feed = this.#connection.monitor?.value;
+    if (!feed?.open || !feed.processes) return;
+    record(this.#processes, feed.processes.length, CPU_HISTORY);
+    const memory = memoryTotal(feed.processes);
+    if (memory !== null) record(this.#memory, memory, CPU_HISTORY);
+    this.#emitter.emit('snapshot', this.snapshot());
   }
 
   #update(): void {
