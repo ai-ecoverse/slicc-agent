@@ -10,6 +10,7 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
+import { contextRatio } from '../context.ts';
 import type {
   BudgetState,
   ModelChoice,
@@ -217,10 +218,8 @@ function capped(rows: MonitorRow[]): MonitorRow[] {
   ];
 }
 
-function contextRatio(agent: MonitorAgent, models: readonly ModelChoice[]): number | null {
-  const window = models.find((model) => model.id === agent.model)?.contextWindow;
-  if (!agent.context || !window) return null;
-  return Math.min(1, agent.context / window);
+function agentContext(agent: MonitorAgent, models: readonly ModelChoice[]): number | null {
+  return contextRatio(agent.context, agent.model, models);
 }
 
 function rate(history: readonly Sample[], pick: (sample: Sample) => number): number | null {
@@ -292,7 +291,7 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
   out.push(...memoryVital(feed.processes ?? []));
   out.push(...cpuVital(feed, input.cpu ?? []));
   const ratios = feed.agents
-    .map((agent) => contextRatio(agent, input.models))
+    .map((agent) => agentContext(agent, input.models))
     .filter((ratio): ratio is number => ratio !== null);
   if (ratios.length) {
     const fullest = Math.max(...ratios);
@@ -509,7 +508,7 @@ function processAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): A
 function contextAlerts(input: MonitorInput, feed: MonitorFeed): AgentMonitorAlert[] {
   const out: AgentMonitorAlert[] = [];
   for (const agent of feed.agents) {
-    const ratio = contextRatio(agent, input.models);
+    const ratio = agentContext(agent, input.models);
     if (ratio !== null && ratio >= CONTEXT_WARN)
       out.push({
         id: `context-${agent.id}`,
@@ -541,7 +540,7 @@ function alerts(input: MonitorInput, feed: MonitorFeed): AgentMonitorAlert[] {
 }
 
 function agentRow(agent: MonitorAgent, depth: number, models: readonly ModelChoice[]): MonitorRow {
-  const ratio = contextRatio(agent, models);
+  const ratio = agentContext(agent, models);
   const word = agent.retry
     ? 'retrying'
     : agent.running

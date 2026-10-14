@@ -16,6 +16,7 @@ import type {
   UsageState,
 } from '@earendil-works/pi-durable';
 import { type AgentsState, live } from '../agents.ts';
+import { contextTokens } from '../context.ts';
 import type {
   MonitorAgent,
   MonitorFeed,
@@ -151,7 +152,6 @@ interface Live {
 interface ModelMessage {
   stopReason?: string;
   errorMessage?: string;
-  usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
 }
 
 export function totals(usage: UsageState): { tokens: number; cost: number; free: boolean } {
@@ -167,14 +167,6 @@ export function totals(usage: UsageState): { tokens: number; cost: number; free:
 
 function phaseOf(node: TaskGraphNode): string {
   return 'phase' in node.state ? node.state.phase : node.state.outcome;
-}
-
-function contextOf(message: ModelMessage): number | null {
-  const usage = message.usage;
-  if (!usage) return null;
-  const parts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
-  const total = parts.reduce<number>((sum, part) => sum + (part ?? 0), 0);
-  return total > 0 ? total : null;
 }
 
 function lastAssistant(view: ConversationView | undefined) {
@@ -469,7 +461,7 @@ class Session {
       tool: liveDoc?.tools?.find((slot) => slot.status === 'running')?.name ?? null,
       retry,
       failed,
-      context: last ? contextOf(last.message) : null,
+      context: contextTokens(view),
     };
   }
 

@@ -14,6 +14,7 @@ import type {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
+import { contextRatio, contextTokens } from '../context.ts';
 import { shrink } from '../images/fit.ts';
 import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
@@ -49,6 +50,12 @@ function status(view: ConversationView | undefined, messages: readonly Message[]
   return last?.role === 'assistant' && last.status === 'error' ? 'error' : 'idle';
 }
 
+function answers(messages: readonly Message[]): string[] {
+  return messages
+    .filter((message) => message.role === 'assistant' && message.status !== 'streaming')
+    .map((message) => message.id);
+}
+
 export function slashCommand({ kind, ...command }: Command): SlashCommand {
   return kind === 'action' ? command : { ...command, kind };
 }
@@ -78,6 +85,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   #hold: AgentHold | null = null;
   readonly #outbox = new Map<string, Pending>();
   readonly #notices = new Map<string, { at: number; message: SystemMessage }[]>();
+  readonly #unread = new Map<string, number>();
+  readonly #seen = new Map<string, Set<string>>();
 
   constructor(connection: AgentConnection) {
     super();
@@ -104,6 +113,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       connection.views?.subscribe(() => this.#refresh());
       connection.agents?.subscribe(() => this.#refresh());
     });
+    connection.settings?.state.subscribe(() => this.emit('agents', this.list()));
   }
 
   #summary(): readonly AgentSummary[] {
@@ -124,12 +134,30 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   #refresh(): void {
     this.#active ??= this.#connection.agents?.value?.active ?? null;
     this.emit('agents', this.list());
-    for (const summary of this.#summary()) this.#update(summary.id);
-    for (const id of [...this.#messages.keys(), ...this.#notices.keys()])
+    let unread = false;
+    for (const summary of this.#summary()) unread = this.#update(summary.id) || unread;
+    for (const id of [...this.#messages.keys(), ...this.#notices.keys(), ...this.#seen.keys()])
       if (!this.#summary().some((summary) => summary.id === id)) {
         this.#messages.delete(id);
         this.#notices.delete(id);
+        this.#seen.delete(id);
+        this.#unread.delete(id);
       }
+    if (unread) this.emit('agents', this.list());
+  }
+
+  #count(agentId: string, view: ConversationView, messages: readonly Message[]): boolean {
+    const ids = answers(messages);
+    const seen = this.#seen.get(agentId);
+    if (!seen || agentId === this.active()) {
+      this.#seen.set(agentId, new Set(ids));
+      return false;
+    }
+    const fresh = isBusy(view) ? [] : ids.filter((id) => !seen.has(id));
+    if (!fresh.length) return false;
+    for (const id of fresh) seen.add(id);
+    this.#unread.set(agentId, (this.#unread.get(agentId) ?? 0) + fresh.length);
+    return true;
   }
 
   notify(text: string, agentId: string = this.active()): void {
@@ -152,21 +180,21 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return (text) => this.notify(text, agentId);
   }
 
-  #update(agentId: string): void {
+  #update(agentId: string): boolean {
     const view = this.#view(agentId);
-    if (!view) return;
+    if (!view) return false;
     const before = this.#messages.get(agentId) ?? [];
     const after = toMessages(view, this.#connection.deliveries.value);
     this.#messages.set(agentId, after);
-    if (before.length !== after.length) {
-      this.emit('messages', agentId);
-      return;
+    if (before.length !== after.length) this.emit('messages', agentId);
+    else {
+      const changed = after.filter(
+        (message, index) => JSON.stringify(message) !== JSON.stringify(before[index])
+      );
+      if (changed.length === 1) this.emit('message', { agentId, message: changed[0] as Message });
+      else if (changed.length > 1) this.emit('messages', agentId);
     }
-    const changed = after.filter(
-      (message, index) => JSON.stringify(message) !== JSON.stringify(before[index])
-    );
-    if (changed.length === 1) this.emit('message', { agentId, message: changed[0] as Message });
-    else if (changed.length > 1) this.emit('messages', agentId);
+    return this.#count(agentId, view, after);
   }
 
   ready(): Promise<void> {
@@ -184,15 +212,17 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       const doc = view?.docs['pi.agent'] as AgentDoc | undefined;
       const title =
         summary.kind === 'cone' ? rows.find((row) => row.id === summary.id)?.title : undefined;
+      const model = doc?.model ? `${doc.model.provider}/${doc.model.modelId}` : '';
+      const models = this.#connection.settings?.state.value?.models ?? [];
       return {
         id: summary.id,
         name: summary.role ? `${summary.name} · ${summary.role}` : summary.name,
         kind: summary.kind,
         parentId: summary.parentId,
         status: this.#status(summary.id, status(view, this.#messages.get(summary.id) ?? [])),
-        model: doc?.model ? `${doc.model.provider}/${doc.model.modelId}` : '',
-        contextFill: 0,
-        unread: 0,
+        model,
+        contextFill: contextRatio(contextTokens(view), model, models) ?? 0,
+        unread: this.#unread.get(summary.id) ?? 0,
         thinking: thinking[doc?.thinkingLevel ?? 'off'] ?? 'off',
         ...(title ? { title } : {}),
       };
@@ -215,6 +245,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const found = this.#summary().find((summary) => summary.id === id);
     if (!found) return;
     this.#active = id;
+    this.#seen.set(id, new Set(answers(this.#messages.get(id) ?? [])));
+    const read = this.#unread.delete(id);
     if (found.kind === 'cone')
       attempt(
         this.#connection.control.selectCone(id, BACKGROUND_CONTEXT),
@@ -223,6 +255,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       );
     this.emit('active', id);
     this.emit('messages', id);
+    if (read) this.emit('agents', this.list());
   }
 
   messages(agentId: string = this.active()): readonly Message[] {

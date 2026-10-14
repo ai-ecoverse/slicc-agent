@@ -88,3 +88,49 @@ test('a view-only follower says why each refused fire-and-forget call failed, wi
   );
   assert.deepEqual(page.errors, []);
 });
+
+test('agents show their context fill, and a background cone counts its unread answers until selected', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const owner = await startAgent({
+      worker: () =>
+        new Worker('/dist-test/main-worker.js?answer=First.&answer=From%20the%20background.', {
+          type: 'module',
+        }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const model = createAgentModel(await owner.connect(), { storage: localStorage });
+    const { agent, settings } = model;
+    await agent.ready();
+    const until = async (check) => {
+      for (let n = 0; n < 250 && !check(); n++) await new Promise((r) => setTimeout(r, 20));
+      return check();
+    };
+    await until(() => settings.accounts().length > 0);
+    await settings.connect('faux', 'not-a-real-key');
+    await until(() => settings.accounts()[0]?.status === 'connected');
+    const row = (id) => agent.list().find((entry) => entry.id === id);
+    const cone = agent.active();
+    await agent.send(cone, 'Hi there');
+    await until(() => row(cone).status === 'idle' && row(cone).contextFill > 0);
+    const fill = row(cone).contextFill;
+    const other = await agent.createCone('other');
+    await until(() => row(other.id));
+    await agent.send(other.id, 'Work in the background');
+    await until(() => row(other.id).unread > 0 && row(other.id).status === 'idle');
+    const background = { unread: row(other.id).unread, active: agent.active() };
+    agent.select(other.id);
+    const afterSelect = row(other.id).unread;
+    await owner.release();
+    return { fill, background, afterSelect, cone, coneUnread: row(cone).unread };
+  });
+  assert.ok(seen.fill > 0 && seen.fill < 1, `contextFill ${seen.fill}`);
+  assert.deepEqual(seen.background, { unread: 1, active: seen.cone });
+  assert.equal(seen.afterSelect, 0);
+  assert.equal(seen.coneUnread, 0);
+  assert.deepEqual(page.errors, []);
+});
