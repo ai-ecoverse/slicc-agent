@@ -140,6 +140,9 @@ export function agentUsers(
     enforced: mode === 'enforce',
     people: {
       homes,
+      cones() {
+        return new Map(wanted(state()).map((entry) => [homeOf(entry.spec.name), entry.spec.name]));
+      },
       homeOf(conversationId) {
         const agentId = accounts.agentOf(conversationId);
         return agentId ? accounts.home(agentId) : undefined;
