@@ -20,7 +20,6 @@ import {
   sandboxFactory,
 } from './codemode/index.ts';
 import { attachFreezer } from './freezer/index.ts';
-import { settingsText, titler } from './freezer/title.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { imageReads } from './images/index.ts';
@@ -73,6 +72,8 @@ import {
   kernelBoot,
   transportName,
 } from './system.ts';
+import { titlesExtension } from './titles/extension.ts';
+import { settingsText, titler } from './titles/generate.ts';
 import { type KernelPorts, kernelPorts, serveConnections, type WorkerScope } from './worker.ts';
 
 export interface AgentWorkerScope extends WorkerScope {
@@ -306,6 +307,23 @@ async function settingsOf(made: Awaited<ReturnType<typeof modelsOf>>, mcp: McpAc
   return settings;
 }
 
+function setupTitles(
+  registry: ReturnType<typeof createRegistry>,
+  models: Models,
+  home: SliccKernelEnv,
+  at: { home: string; agentDir?: string },
+  opened: () => Agent | undefined
+) {
+  const titleFn = titler(models, settingsText(home, HOME, at.agentDir));
+  const titles = titlesExtension({
+    agents: () => opened()?.agents,
+    harness: () => opened()?.harness,
+    title: titleFn,
+  });
+  registry.install(titles.extension);
+  return { titleFn, cancel: titles.cancel };
+}
+
 async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
@@ -327,8 +345,8 @@ async function start(
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
   const skills = setupSkills(registry, licks.licks);
   registry.install(secretsExtension({ names, vault }));
-  const activity = createActivity();
-  const groups = processGroups(client);
+  const titles = setupTitles(registry, models, home, at, () => opened);
+  const [activity, groups] = [createActivity(), processGroups(client)];
   const model = options.model ?? DEFAULT_MODEL;
   let opened: Agent | undefined;
   const people = users ? agentUsers(users, client, home, () => opened?.agents) : undefined;
@@ -412,7 +430,8 @@ async function start(
     agents: agent.agents,
     env: home,
     extract: memory.extract,
-    title: titler(models, settingsText(home, HOME, at.agentDir)),
+    title: titles.titleFn,
+    cancelTitle: titles.cancel,
     ...(people ? { layout: people.layout } : {}),
   });
   licks.licks.guard(freezer.frozenTarget);
