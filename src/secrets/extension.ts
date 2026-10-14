@@ -12,6 +12,7 @@ import {
   type ToolExecutionResult,
   ToolTask,
 } from '@earendil-works/pi-durable';
+import { TITLES } from '../titles/extension.ts';
 import type { Names, SecretName } from './names.ts';
 import type { Scrub } from './scrub.ts';
 import type { Vault } from './vault.ts';
@@ -123,10 +124,16 @@ export function shellGrants(names: Pick<Names, 'state'>) {
     names.state.value.some((name) => name.exec === 'shell') ? [...SHELL_GRANTS, ...argv] : argv;
 }
 
+const missing = (list: readonly { name: string }[]) =>
+  [SECRETS, TITLES].filter((name) => !list.some((extension) => extension.name === name));
+
 export function pinned<T extends AgentChange>(change: T): T {
   const list = change.extensions;
-  if (!Array.isArray(list) || list.some((extension) => extension.name === SECRETS)) return change;
-  return { ...change, extensions: [...list, { name: SECRETS }] };
+  if (!Array.isArray(list)) return change;
+  const added = missing(list);
+  return added.length
+    ? { ...change, extensions: [...list, ...added.map((name) => ({ name }))] }
+    : change;
 }
 
 export async function repin(
@@ -142,7 +149,7 @@ export async function repin(
       const conversation = await harness.conversation(record.id, context);
       if (!conversation) continue;
       const agent = await conversation.agent(context);
-      if (agent.extensions.some((extension) => extension.name === SECRETS)) continue;
+      if (!missing(agent.extensions).length) continue;
       await conversation.configure(pinned({ extensions: agent.extensions }), context);
       fixed++;
     }
