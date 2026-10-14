@@ -91,6 +91,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   #opened: ReadonlySet<string> | null = null;
   readonly #agentCommandsCache = new Map<string, Command[]>();
   readonly #agentCommandsLoading = new Set<string>();
+  #agentCommandsGeneration = 0;
 
   constructor(connection: AgentConnection) {
     super();
@@ -118,10 +119,14 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       connection.agents?.subscribe(() => this.#refresh());
     });
     connection.settings?.state.subscribe(() => this.emit('agents', this.list()));
-    connection.commands?.subscribe(() => {
+    const stale = () => {
+      this.#agentCommandsGeneration += 1;
+      this.#agentCommandsLoading.clear();
       this.#agentCommandsCache.clear();
       this.emit('agents', this.list());
-    });
+    };
+    connection.commands?.subscribe(stale);
+    connection.privateRevision?.subscribe(stale);
   }
 
   #summary(): readonly AgentSummary[] {
@@ -494,34 +499,29 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return [];
   }
 
-  #coneOf(agentId: string): string {
-    const summary = this.#summary().find((s) => s.id === agentId);
-    if (!summary || summary.kind === 'cone') return agentId;
-    const parent = summary.parentId;
-    if (!parent) return this.#connection.agents?.value?.active ?? CONE;
-    const parentSummary = this.#summary().find((s) => s.id === parent);
-    return parentSummary?.kind === 'cone' ? parent : this.#coneOf(parent);
-  }
-
-  #fetchCommands(coneId: string): void {
-    if (this.#agentCommandsLoading.has(coneId)) return;
+  #fetchCommands(agentId: string): void {
+    if (this.#agentCommandsLoading.has(agentId)) return;
     if (typeof this.#connection.control.agentCommands !== 'function') return;
-    this.#agentCommandsLoading.add(coneId);
+    this.#agentCommandsLoading.add(agentId);
+    const generation = this.#agentCommandsGeneration;
     this.#connection.control
-      .agentCommands(coneId, BACKGROUND_CONTEXT)
+      .agentCommands(agentId, BACKGROUND_CONTEXT)
       .then((commands) => {
-        this.#agentCommandsCache.set(coneId, commands);
+        if (generation !== this.#agentCommandsGeneration) return;
+        this.#agentCommandsCache.set(agentId, commands);
         this.emit('agents', this.list());
       })
       .catch(() => undefined)
-      .finally(() => this.#agentCommandsLoading.delete(coneId));
+      .finally(() => {
+        if (generation === this.#agentCommandsGeneration)
+          this.#agentCommandsLoading.delete(agentId);
+      });
   }
 
   commands(agentId: string = this.active()): readonly SlashCommand[] {
-    const coneId = this.#coneOf(agentId);
-    const cached = this.#agentCommandsCache.get(coneId);
+    const cached = this.#agentCommandsCache.get(agentId);
     if (cached) return cached.map(slashCommand);
-    this.#fetchCommands(coneId);
+    this.#fetchCommands(agentId);
     return (this.#connection.commands?.value ?? []).map(slashCommand);
   }
 
