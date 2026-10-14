@@ -83,6 +83,7 @@ const TITLE_LENGTH = 60;
 const TITLE_WORDS = 6;
 export const TITLE_TURNS = [1, 3];
 const TRIVIAL_WORDS = 4;
+const TRANSCRIPT_LENGTH = 4000;
 export const TOUCH_MS = 500;
 
 function textOf(entry: EntryRecord): string {
@@ -207,8 +208,7 @@ function transcriptOf(entries: readonly EntryRecord[]): string {
   return entries
     .filter((entry) => entry.kind === 'pi.user' || entry.kind === 'pi.assistant')
     .map((entry) => `${entry.kind === 'pi.user' ? 'User' : 'Agent'}: ${textOf(entry)}`)
-    .join('\n')
-    .slice(0, 4000);
+    .join('\n');
 }
 
 type Titled = Pick<ConeRecord, 'conversation' | 'title' | 'titled'>;
@@ -240,7 +240,7 @@ async function rows(
   };
   const ended = async (id: string, record: Titled) => {
     const stats = await stopped(record.conversation);
-    if (seen && record.titled === undefined) {
+    if (seen && (record.titled ?? 0) < (TITLE_TURNS.at(-1) as number)) {
       const { entries } = await inspect(harness, record.conversation, context);
       seen(id, record, entries, stats.model, true);
     }
@@ -584,11 +584,15 @@ async function discardFrozen(options: FreezerAttach, id: string, context: Contex
 
 function titling(options: FreezerAttach) {
   const { agents } = options;
-  const pending = new Map<string, symbol>();
+  const pending = new Map<string, { token: symbol; conversation: number }>();
   const named = (entries: readonly EntryRecord[], model: string, context: Context) =>
     scrubText(redactSecrets(transcriptOf(entries)).text)
       .then((transcript) =>
-        (options.title as NonNullable<FreezerAttach['title']>)(transcript, model, context)
+        (options.title as NonNullable<FreezerAttach['title']>)(
+          transcript.slice(0, TRANSCRIPT_LENGTH),
+          model,
+          context
+        )
       )
       .then(cleanTitle)
       .catch(() => undefined);
@@ -599,8 +603,11 @@ function titling(options: FreezerAttach) {
       record.titled = turns;
       if (title) record.title = title;
     }, BACKGROUND_CONTEXT);
-  const seen: Seen = (id, titled, entries, model, final) => {
-    if (pending.has(id)) return;
+  const seen: Seen = (id, seenAs, entries, model, final) => {
+    const state = agents.state();
+    const titled = state.cones[id] ?? state.scoops[id];
+    if (titled?.conversation !== seenAs.conversation) return;
+    if (pending.get(id)?.conversation === titled.conversation) return;
     const turns = titleDue(titled, entries, final);
     const last = TITLE_TURNS.at(-1) as number;
     if (turns === undefined) {
@@ -608,14 +615,16 @@ function titling(options: FreezerAttach) {
       return;
     }
     const token = Symbol(id);
-    pending.set(id, token);
+    pending.set(id, { token, conversation: titled.conversation });
     void named(entries, model, BACKGROUND_CONTEXT)
       .then((title) =>
-        pending.get(id) === token ? write(id, titled, final ? last : turns, title) : undefined
+        pending.get(id)?.token === token
+          ? write(id, titled, final ? last : turns, title)
+          : undefined
       )
       .catch(() => undefined)
       .finally(() => {
-        if (pending.get(id) === token) pending.delete(id);
+        if (pending.get(id)?.token === token) pending.delete(id);
       });
   };
   return { pending, named, seen };
