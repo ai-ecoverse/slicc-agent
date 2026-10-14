@@ -42,6 +42,7 @@ export interface SkillsRuntime {
   skills(): readonly Skill[];
   dirs(): string[];
   templates(): readonly PromptTemplate[];
+  commandsFor(coneId: string): Command[];
   expand(text: string, context: Context, conversationId?: number): Promise<string>;
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
@@ -60,6 +61,7 @@ export interface SkillPeople {
   homes(): readonly string[];
   homeOf(conversationId: number | undefined): string | undefined;
   envOf(home: string): Promise<ExecutionEnv | undefined>;
+  cones(): ReadonlyMap<string, string>;
 }
 
 export function userRoots(homes: readonly string[]): SkillRoot[] {
@@ -282,6 +284,12 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         skills: () => current,
         dirs: () => current.map((skill) => skill.baseDir),
         templates: () => templates,
+        commandsFor(coneId) {
+          const coneMap = options.people?.cones() ?? new Map<string, string>();
+          const home = [...coneMap.entries()].find(([, id]) => id === coneId)?.[0];
+          const skills = home ? own.get(home) : undefined;
+          return skills ? commandsOf(skills, templates) : commandsOf(current, templates);
+        },
         async expand(text, using, conversationId) {
           const at = people?.homeOf(conversationId);
           const files = at ? await people?.envOf(at) : env;

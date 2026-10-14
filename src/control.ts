@@ -28,6 +28,7 @@ import type { SecretName } from './secrets/names.ts';
 import { scrubItems, scrubText } from './secrets/scrub.ts';
 import type {
   AgentControl,
+  Command,
   Created,
   ImageRef,
   LickResolved,
@@ -320,13 +321,24 @@ async function contentOf(
   return scrubItems(await userParts(text, request.attachments, saver));
 }
 
+function agentCommandsOf(
+  skills: Pick<SkillsRuntime, 'commandsFor'> | undefined,
+  agents: Agents | undefined,
+  agentId: string
+): Command[] {
+  if (!skills?.commandsFor) return [];
+  const state = agents?.state();
+  const scoop = state?.scoops[agentId];
+  return skills.commandsFor(scoop ? scoop.cone : agentId);
+}
+
 export function createAgentControl(
   harness: Harness,
   target: Conversation | Cones,
   deliveries?: Deliveries,
   licks?: HostLicks,
   scoops?: HostScoops,
-  skills?: Pick<SkillsRuntime, 'expand'>,
+  skills?: Pick<SkillsRuntime, 'expand' | 'commandsFor'>,
   sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>,
   memory?: Pick<MemoryRuntime, 'save' | 'remove'>,
   freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>,
@@ -515,5 +527,8 @@ export function createAgentControl(
         },
         context
       ),
+    async agentCommands(agentId, _context) {
+      return agentCommandsOf(skills, agents, agentId);
+    },
   };
 }

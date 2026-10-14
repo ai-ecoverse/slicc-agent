@@ -89,6 +89,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   readonly #seen = new Map<string, Set<string>>();
   readonly #queuedAt = new Map<string, Map<string, { at: number; seen: boolean }>>();
   #opened: ReadonlySet<string> | null = null;
+  readonly #agentCommandsCache = new Map<string, Command[]>();
+  readonly #agentCommandsLoading = new Set<string>();
 
   constructor(connection: AgentConnection) {
     super();
@@ -116,6 +118,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       connection.agents?.subscribe(() => this.#refresh());
     });
     connection.settings?.state.subscribe(() => this.emit('agents', this.list()));
+    connection.commands?.subscribe(() => {
+      this.#agentCommandsCache.clear();
+      this.emit('agents', this.list());
+    });
   }
 
   #summary(): readonly AgentSummary[] {
@@ -488,7 +494,34 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return [];
   }
 
-  commands(): readonly SlashCommand[] {
+  #coneOf(agentId: string): string {
+    const summary = this.#summary().find((s) => s.id === agentId);
+    if (!summary || summary.kind === 'cone') return agentId;
+    const parent = summary.parentId;
+    if (!parent) return this.#connection.agents?.value?.active ?? CONE;
+    const parentSummary = this.#summary().find((s) => s.id === parent);
+    return parentSummary?.kind === 'cone' ? parent : this.#coneOf(parent);
+  }
+
+  #fetchCommands(coneId: string): void {
+    if (this.#agentCommandsLoading.has(coneId)) return;
+    if (typeof this.#connection.control.agentCommands !== 'function') return;
+    this.#agentCommandsLoading.add(coneId);
+    this.#connection.control
+      .agentCommands(coneId, BACKGROUND_CONTEXT)
+      .then((commands) => {
+        this.#agentCommandsCache.set(coneId, commands);
+        this.emit('agents', this.list());
+      })
+      .catch(() => undefined)
+      .finally(() => this.#agentCommandsLoading.delete(coneId));
+  }
+
+  commands(agentId: string = this.active()): readonly SlashCommand[] {
+    const coneId = this.#coneOf(agentId);
+    const cached = this.#agentCommandsCache.get(coneId);
+    if (cached) return cached.map(slashCommand);
+    this.#fetchCommands(coneId);
     return (this.#connection.commands?.value ?? []).map(slashCommand);
   }
 

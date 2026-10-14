@@ -104,6 +104,7 @@ export interface AgentControl {
   monitorOpen(lease: string | null, resync: boolean, context: Context): Promise<MonitorLease>;
   monitorClose(lease: string, context: Context): Promise<void>;
   image(ref: ImageRef, context: Context): Promise<StoredImage>;
+  agentCommands(agentId: string, context: Context): Promise<Command[]>;
 }
 
 export interface ImageRef {
