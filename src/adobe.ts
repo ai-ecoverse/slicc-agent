@@ -1,4 +1,10 @@
-import type { ClassifierModel, Provider, ProviderClassifier } from '@earendil-works/pi-ai';
+import type {
+  ClassifierModel,
+  Provider,
+  ProviderClassifier,
+  ProviderHeaders,
+  ProviderStreams,
+} from '@earendil-works/pi-ai';
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy';
 import { cloudflareWorkersAISystemOneApi } from '@earendil-works/pi-ai/api/cloudflare-workers-ai-system-one.lazy';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
@@ -34,6 +40,46 @@ export interface Budget {
 
 type Fetch = typeof fetch;
 
+export const SESSION_HEADER = 'X-Session-Id';
+export const VERSION_HEADER = 'X-Slicc-Version';
+
+export function adobeIdentity({
+  session = crypto.randomUUID(),
+  version = 'unknown',
+}: {
+  session?: string;
+  version?: string;
+} = {}): Record<string, string> {
+  return { [SESSION_HEADER]: session, [VERSION_HEADER]: version };
+}
+
+export function withAdobeIdentity(
+  identity: Record<string, string>,
+  headers: ProviderHeaders = {}
+): ProviderHeaders {
+  const ours = new Set(Object.keys(identity).map((name) => name.toLowerCase()));
+  const kept = Object.entries(headers).filter(([name]) => !ours.has(name.toLowerCase()));
+  return { ...Object.fromEntries(kept), ...identity };
+}
+
+function identified<T extends { headers?: ProviderHeaders }>(
+  identity: Record<string, string>,
+  options: T | undefined
+): T {
+  return { ...options, headers: withAdobeIdentity(identity, options?.headers) } as T;
+}
+
+type Call = (model: unknown, input: unknown, options?: { headers?: ProviderHeaders }) => unknown;
+
+function identifiedApi(api: ProviderStreams, identity: Record<string, string>): ProviderStreams {
+  const calls = Object.entries(api as unknown as Record<string, Call>).map(([name, call]) => [
+    name,
+    (model: unknown, input: unknown, options?: { headers?: ProviderHeaders }) =>
+      call(model, input, identified(identity, options)),
+  ]);
+  return Object.fromEntries(calls) as ProviderStreams;
+}
+
 const free = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 export const CLASSIFIER_API = 'cloudflare-workers-ai-system-one';
@@ -65,12 +111,12 @@ function bearer(headers: Record<string, string | null> = {}): string | undefined
   return value?.replace(/^Bearer\s+/i, '');
 }
 
-function clef(fetcher: Fetch): ProviderClassifier {
+function clef(fetcher: Fetch, identity: Record<string, string>): ProviderClassifier {
   const transport = cloudflareWorkersAISystemOneApi();
   return {
     classify: (model, context, options = {}) =>
       transport.classify(model, context, {
-        ...options,
+        ...identified(identity, options),
         fetch: options.fetch ?? fetcher,
         apiKey: bearer(options.headers) ?? options.apiKey,
         onPayload: async (payload, sent) => {
@@ -100,9 +146,13 @@ export function adobeModel(info: AdobeModelInfo, endpoint: string) {
   };
 }
 
-export async function adobeConfig(endpoint: string, fetcher: Fetch): Promise<AdobeConfig> {
+export async function adobeConfig(
+  endpoint: string,
+  fetcher: Fetch,
+  identity = adobeIdentity()
+): Promise<AdobeConfig> {
   const response = await fetcher(`${endpoint}/v1/config`, {
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', ...identity },
   });
   if (!response.ok) throw new Error(`the Adobe proxy answered /v1/config with ${response.status}`);
   return (await response.json()) as AdobeConfig;
@@ -113,10 +163,11 @@ export async function adobeUsage(
   {
     endpoint = ADOBE_PROXY,
     fetch: fetcher = globalThis.fetch,
-  }: { endpoint?: string; fetch?: Fetch } = {}
+    identity = adobeIdentity(),
+  }: { endpoint?: string; fetch?: Fetch; identity?: Record<string, string> } = {}
 ): Promise<Budget | null> {
   const response = await fetcher(`${endpoint}/v1/usage`, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    headers: { Accept: 'application/json', ...identity, Authorization: `Bearer ${token}` },
   });
   if (!response.ok) return null;
   const weekly = (
@@ -128,18 +179,21 @@ export async function adobeUsage(
 
 export function adobeProvider({
   endpoint = ADOBE_PROXY,
-  session = crypto.randomUUID(),
+  session,
+  version,
   fetch: fetcher = (input, init) => globalThis.fetch(input, init),
 }: {
   endpoint?: string;
   session?: string;
+  version?: string;
   fetch?: Fetch;
 } = {}): Provider {
+  const identity = adobeIdentity({ session, version });
   return createProvider({
     id: ADOBE,
     name: 'Adobe',
     baseUrl: endpoint,
-    headers: { 'X-Session-Id': session },
+    headers: identity,
     auth: {
       apiKey: {
         name: 'Adobe IMS',
@@ -155,13 +209,13 @@ export function adobeProvider({
     },
     models: adobeClassifiers(endpoint),
     fetchModels: async () =>
-      (await adobeConfig(endpoint, fetcher)).models
+      (await adobeConfig(endpoint, fetcher, identity)).models
         .filter((info) => !info.hidden)
         .map((info) => adobeModel(info, endpoint)),
     api: {
-      'anthropic-messages': anthropicMessagesApi(),
-      'openai-completions': openAICompletionsApi(),
+      'anthropic-messages': identifiedApi(anthropicMessagesApi(), identity),
+      'openai-completions': identifiedApi(openAICompletionsApi(), identity),
     },
-    classifiers: { [CLASSIFIER_API]: clef(fetcher) },
+    classifiers: { [CLASSIFIER_API]: clef(fetcher, identity) },
   }) as Provider;
 }

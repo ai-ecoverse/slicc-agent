@@ -190,6 +190,17 @@ const filtered =
 const refused =
   /refused to complete the request|Provider (?:stopped with|finish_reason): refusal|\bstop_?reason\W+refusal\b/i;
 const missing = /no api key|missing|not configured|no credentials/i;
+const adobeAuth =
+  /\b401\b|authenticat|unauthori[sz]ed|expired|invalid[_ ]?(?:token|credentials?|api[_ ]key)|token verification|no api key|not configured|no credentials/i;
+
+function proxyMessage(error: string): string {
+  try {
+    const body = JSON.parse(error.match(/\{.*\}/s)?.[0] ?? '') as { error?: { message?: unknown } };
+    return typeof body.error?.message === 'string' ? body.error.message : error;
+  } catch {
+    return error;
+  }
+}
 
 export function errorPart(error: string, provider?: string): MessagePart {
   const action = errorAction(error);
@@ -204,12 +215,14 @@ export function errorPart(error: string, provider?: string): MessagePart {
     };
   }
   if (action === 'settings' && provider === 'adobe') {
-    return {
-      type: 'error',
-      message: 'Your Adobe session has expired.',
-      detail: error,
-      action: 'login',
-    };
+    return adobeAuth.test(error)
+      ? {
+          type: 'error',
+          message: 'Your Adobe session has expired.',
+          detail: error,
+          action: 'login',
+        }
+      : { type: 'error', message: proxyMessage(error), detail: error, action: 'retry' };
   }
   const name = providerNames[provider ?? ''] ?? 'The provider';
   const lead =
