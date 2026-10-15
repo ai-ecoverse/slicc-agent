@@ -9,7 +9,7 @@
       "labels": ["patched-dependency"]
     },
     {
-      "description": "The kernel, pnpm, slicc-cdp and the wasm command packages move only after the homescoop coordinator certifies them, as in slicc-bios, so Renovate opens their PRs but never merges them.",
+      "description": "The kernel, pnpm, slicc-cdp and the wasm command packages move only after the homescoop coordinator certifies them, as in slicc-bios, so Renovate opens their PRs but never merges them; a PR merges once the cert lane has certified that version. The kernel and wasm-* devDependencies are the versions CI tests.",
       "matchPackageNames": [
         "@ai-ecoverse/slicc-cdp",
         "@ai-ecoverse/slicc-kernel",
@@ -17,12 +17,6 @@
         "@ai-ecoverse/wasm-*"
       ],
       "automerge": false
-    },
-    {
-      "description": "The kernel devDependency is the floor of the peer range, so it moves by hand with the range; the newest certified kernel is NEWEST_CERTIFIED_KERNEL in ci.yml.",
-      "matchPackageNames": ["@ai-ecoverse/slicc-kernel"],
-      "matchDepTypes": ["devDependencies"],
-      "enabled": false
     }
   ]
 }

@@ -1,16 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
 import { launch } from './chrome.mjs';
-
-const kernelVersion = JSON.parse(
-  await readFile(
-    new URL('../../node_modules/@ai-ecoverse/slicc-kernel/package.json', import.meta.url)
-  )
-)
-  .version.split('.')
-  .map(Number);
-const timesKernel = kernelVersion[0] > 1 || (kernelVersion[0] === 1 && kernelVersion[1] >= 67);
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -94,7 +84,6 @@ test('the live monitor through the production worker: it runs only while the pan
       closed: Boolean(closed),
       timed,
       keys: [...new Set(full.processes.flatMap((row) => Object.keys(row)))],
-      agentKeys: Object.keys(full.agents[0]),
       spin: measured?.processes.find((row) => row.command.includes('while :')),
       cone: measured?.agents[0],
     };
@@ -127,17 +116,12 @@ test('the live monitor through the production worker: it runs only while the pan
   assert.ok(seen.usage);
   assert.ok(seen.snapshots > 0);
   assert.ok(seen.closed);
-  assert.equal(seen.timed, timesKernel);
-  if (timesKernel) {
-    assert.ok(seen.keys.includes('utime') && seen.keys.includes('stime'));
-    assert.equal(typeof seen.spin.utime, 'number');
-    assert.ok(seen.spin.cpu > 0);
-    assert.equal(seen.spin.agentId, 'cone');
-    assert.ok(seen.cone.cpu >= seen.spin.cpu);
-  } else {
-    assert.ok(!['utime', 'stime', 'cpu'].some((key) => seen.keys.includes(key)));
-    assert.ok(!seen.agentKeys.includes('cpu'));
-  }
+  assert.equal(seen.timed, true);
+  assert.ok(seen.keys.includes('utime') && seen.keys.includes('stime'));
+  assert.equal(typeof seen.spin.utime, 'number');
+  assert.ok(seen.spin.cpu > 0);
+  assert.equal(seen.spin.agentId, 'cone');
+  assert.ok(seen.cone.cpu >= seen.spin.cpu);
 });
 
 test('the budget card says when the weekly budget resets in calendar days, with the exact time as its tooltip', async (t) => {
