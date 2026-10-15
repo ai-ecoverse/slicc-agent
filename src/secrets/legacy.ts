@@ -54,12 +54,12 @@ async function legacyKeys(factory: IDBFactory): Promise<string[]> {
   }
 }
 
-function deleted(factory: IDBFactory): Promise<void> {
+function deleted(factory: IDBFactory): Promise<boolean> {
   return new Promise((resolve) => {
     const deleting = factory.deleteDatabase(LEGACY_DATABASE);
-    deleting.onsuccess = () => resolve();
-    deleting.onerror = () => resolve();
-    deleting.onblocked = () => resolve();
+    deleting.onsuccess = () => resolve(true);
+    deleting.onerror = () => resolve(false);
+    deleting.onblocked = () => resolve(true);
   });
 }
 
@@ -70,7 +70,7 @@ export async function wipeLegacy(
   const listed = await factory.databases().catch(() => []);
   if (!listed.some((database) => database.name === LEGACY_DATABASE)) return [];
   const keys = await legacyKeys(factory).catch(() => []);
-  await deleted(factory);
+  if (!(await deleted(factory))) return [];
   const found = new Map(keys.map(movedAccount).map((account) => [accountId(account), account]));
   return [...found.values()];
 }
