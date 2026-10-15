@@ -261,7 +261,7 @@ test('a follower of a SLICC on an older agent shows a banner to update that stay
     shown.banners.map((notice) => [notice.id, notice.body, notice.dismissible]),
     [['agent-mismatch', shown.mismatch, false]]
   );
-  assert.equal(shown.readOnly, shown.mismatch);
+  assert.equal(shown.readOnly, 'Watch only.');
   assert.deepEqual(shown.heard, [{ t: 'bye', reason: 'link protocol mismatch' }, { close: true }]);
   if (env.FOLLOW_SHOT) await page.screenshot(env.FOLLOW_SHOT);
 });

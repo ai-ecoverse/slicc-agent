@@ -78,7 +78,7 @@ test('a follower of a SLICC on a newer agent shows a banner to update that stays
   assert.deepEqual(shown.heard, [{ t: 'bye', reason: 'link protocol mismatch' }, { close: true }]);
   assert.ok(shown.banner.includes(shown.mismatch), shown.banner);
   assert.equal(shown.closable, false);
-  assert.deepEqual(shown.watch, [shown.mismatch]);
+  assert.deepEqual(shown.watch, ['Watch only.']);
   assert.equal(shown.composers, 0);
   assert.equal(shown.coneActions, 0);
   if (env.MISMATCH_SHOT) await page.screenshot(env.MISMATCH_SHOT);
