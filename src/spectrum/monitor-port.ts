@@ -257,9 +257,11 @@ function rate(history: readonly Sample[], pick: (sample: Sample) => number): num
 
 const RELATIVE = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 
-function resetsIn(ms: number): string {
+function resetsIn(at: number, now: number): string {
+  const ms = at - now;
   if (ms <= 0) return 'resets soon';
-  if (ms >= DAY) return `resets ${RELATIVE.format(Math.floor(ms / DAY), 'day')}`;
+  if (ms >= DAY)
+    return `resets ${RELATIVE.format(Math.floor(at / DAY) - Math.floor(now / DAY), 'day')}`;
   if (ms >= HOUR) return `resets ${RELATIVE.format(Math.floor(ms / HOUR), 'hour')}`;
   return `resets ${RELATIVE.format(Math.ceil(ms / MINUTE), 'minute')}`;
 }
@@ -273,7 +275,7 @@ function budgetVital(budget: BudgetState, now: number): MonitorVital {
     ...(Number.isNaN(resets.getTime())
       ? {}
       : {
-          unit: resetsIn(resets.getTime() - now),
+          unit: resetsIn(resets.getTime(), now),
           hint: `resets ${resets.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
         }),
     ratio: Math.min(1, Math.max(0, budget.percent / 100)),
