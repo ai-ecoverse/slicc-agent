@@ -9,6 +9,7 @@ import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
+import { mismatched } from './mismatch.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
@@ -28,7 +29,7 @@ import {
   type SendMode,
 } from './services.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import { PortChannel, type PortEndpoint } from './wire.ts';
+import { greeted, LINK_PROTOCOL, PortChannel, type PortEndpoint } from './wire.ts';
 
 export interface AgentConnection {
   readonly serverId: string;
@@ -51,6 +52,7 @@ export interface AgentConnection {
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
   readonly closed: Promise<Error | undefined>;
+  readonly mismatch?: string;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   webhook(
     name: string,
@@ -117,7 +119,14 @@ export async function connectAgent(
 ): Promise<AgentConnection> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const channel = new PortChannel(endpoint);
-  const serverId = await channel.hello;
+  const hello = await channel.hello;
+  const peer = greeted(hello);
+  if (peer.protocol !== LINK_PROTOCOL) {
+    endpoint.postMessage({ close: true });
+    endpoint.close?.();
+    return mismatched(peer.serverId);
+  }
+  const serverId = hello;
   const client = await Client.connect({ serverId, transportFactory: channel.transport });
   const server = createRemoteServiceBinding({
     services: [AgentSessions],

@@ -13,6 +13,22 @@ export interface PortEndpoint {
 
 export type Frame = { hello: string } | { close: true } | Uint8Array;
 
+export const LINK_PROTOCOL = 1;
+
+const GREETING = /^slicc-agent-link\/(\d+) (.+)$/;
+
+export interface Greeting {
+  protocol: number;
+  serverId: string;
+}
+
+export function greeted(hello: string): Greeting {
+  const found = GREETING.exec(hello);
+  return found
+    ? { protocol: Number(found[1]), serverId: found[2] as string }
+    : { protocol: LINK_PROTOCOL, serverId: hello };
+}
+
 export function post(endpoint: PortEndpoint, chunk: Uint8Array): void {
   const copy = chunk.slice();
   endpoint.postMessage(copy, [copy.buffer]);
