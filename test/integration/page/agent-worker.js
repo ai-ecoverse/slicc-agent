@@ -1,4 +1,5 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createModels } from '@earendil-works/pi-ai/models';
 import {
   fauxAssistantMessage,
@@ -52,4 +53,14 @@ async function start() {
   return hostAgent(agent);
 }
 
-serveConnections(self, start());
+const host = start();
+self.addEventListener('message', ({ data }) => {
+  if (!data?.approve) return;
+  host
+    .then((ready) => ready.approvals.request(data.approve, BACKGROUND_CONTEXT))
+    .then(
+      (item) => data.reply.postMessage({ item }),
+      (error) => data.reply.postMessage({ error: error.message })
+    );
+});
+serveConnections(self, host);

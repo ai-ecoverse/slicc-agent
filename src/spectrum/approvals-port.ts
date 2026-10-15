@@ -1,0 +1,185 @@
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { Approval as Item } from '../approvals/record.ts';
+import type { AgentConnection } from '../client.ts';
+import { Emitter } from './emitter.ts';
+
+export type ApprovalDecision = 'once' | 'always' | 'deny';
+
+export interface ApprovalRequester {
+  kind: 'agent' | 'user' | 'guest';
+  name: string;
+  agentId?: string;
+  where?: string;
+}
+
+export interface ApprovalVerdict {
+  decision: 'allow' | 'deny';
+  reason: string;
+}
+
+export interface SudoApproval {
+  id: string;
+  kind: 'sudo';
+  requester: ApprovalRequester;
+  command: string;
+  target?: string;
+  cwd?: string;
+  createdAt: number;
+  expiresAt: number;
+  always: boolean;
+  alwaysScope?: 'cwd';
+}
+
+interface GuestApproval {
+  id: string;
+  requester: ApprovalRequester;
+  agentId: string;
+  agentName?: string;
+  createdAt: number;
+  expiresAt: number;
+  always: false;
+  verdict?: ApprovalVerdict;
+}
+
+export interface GuestMessageApproval extends GuestApproval {
+  kind: 'guest-message';
+  text: string;
+  attachments?: readonly { name: string; mimeType: string; size: number }[];
+}
+
+export interface GuestToolApproval extends GuestApproval {
+  kind: 'guest-tool';
+  tool: string;
+  summary: string;
+}
+
+export type Approval = SudoApproval | GuestMessageApproval | GuestToolApproval;
+
+export type ApprovalEnd = 'answered' | 'withdrawn' | 'expired';
+
+export interface ApprovalsEvents {
+  approvals: readonly Approval[];
+  ended: { id: string; reason: ApprovalEnd };
+}
+
+const ENDS: Record<string, ApprovalEnd> = {
+  approved: 'answered',
+  rejected: 'answered',
+  unanswered: 'expired',
+  withdrawn: 'withdrawn',
+};
+
+function requesterOf(item: Item): ApprovalRequester {
+  const { kind, name, agentId, where } = item.requester;
+  return {
+    kind,
+    name,
+    ...(agentId ? { agentId } : {}),
+    ...(where ? { where } : {}),
+  };
+}
+
+export function shown(item: Item, agentName: string | undefined): Approval {
+  const base = {
+    id: item.id,
+    requester: requesterOf(item),
+    createdAt: item.createdAt,
+    expiresAt: item.expiresAt,
+  };
+  if (item.kind === 'sudo') {
+    const { command, target, cwd, alwaysScope } = item.detail;
+    return {
+      ...base,
+      kind: 'sudo',
+      command,
+      ...(target ? { target } : {}),
+      ...(cwd ? { cwd } : {}),
+      always: item.always,
+      ...(alwaysScope ? { alwaysScope } : {}),
+    };
+  }
+  const guest = {
+    ...base,
+    agentId: item.agentId,
+    ...(agentName ? { agentName } : {}),
+    always: false as const,
+    ...(item.verdict ? { verdict: { ...item.verdict } } : {}),
+  };
+  if (item.kind === 'guest-tool')
+    return { ...guest, kind: 'guest-tool', tool: item.detail.tool, summary: item.detail.summary };
+  return {
+    ...guest,
+    kind: 'guest-message',
+    text: item.detail.text,
+    ...(item.detail.attachments.length
+      ? { attachments: item.detail.attachments.map((file) => ({ ...file })) }
+      : {}),
+  };
+}
+
+const asked = (item: Item) => item.state === 'pending' && item.tier === 'user';
+
+export class ApprovalsAdapter extends Emitter<ApprovalsEvents> {
+  readonly #connection: AgentConnection;
+  readonly #mine = new Set<string>();
+  readonly #deciding = new Set<string>();
+  #listed = new Set<string>();
+  readonly decide?: (id: string, decision: ApprovalDecision, reason?: string) => Promise<void>;
+
+  constructor(connection: AgentConnection) {
+    super();
+    this.#connection = connection;
+    if (!connection.readOnly && !connection.mismatch)
+      this.decide = (...args) => this.#decide(...args);
+    this.#listed = new Set(this.list().map((approval) => approval.id));
+    connection.approvals?.subscribe(() => this.#changed());
+  }
+
+  #items(): readonly Item[] {
+    return this.#connection.approvals?.value ?? [];
+  }
+
+  list(): readonly Approval[] {
+    const names = new Map(
+      (this.#connection.agents?.value?.agents ?? []).map((agent) => [agent.id, agent.name])
+    );
+    return this.#items()
+      .filter((item) => asked(item) && !this.#mine.has(item.id))
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((item) => shown(item, names.get(item.agentId)));
+  }
+
+  #changed(): void {
+    const items = new Map(this.#items().map((item) => [item.id, item]));
+    const listed = this.list();
+    const now = new Set(listed.map((approval) => approval.id));
+    for (const id of this.#listed) {
+      if (now.has(id) || this.#mine.has(id) || this.#deciding.has(id)) continue;
+      const state = items.get(id)?.state;
+      this.emit('ended', { id, reason: (state && ENDS[state]) || 'answered' });
+    }
+    for (const id of this.#mine) {
+      const item = items.get(id);
+      if (!item || !asked(item)) this.#mine.delete(id);
+    }
+    this.#listed = now;
+    this.emit('approvals', listed);
+  }
+
+  async #decide(id: string, decision: ApprovalDecision, reason?: string): Promise<void> {
+    this.#deciding.add(id);
+    try {
+      const answer = await this.#connection.control.decide(
+        id,
+        decision,
+        reason ?? null,
+        BACKGROUND_CONTEXT
+      );
+      if (!answer.done) throw new Error(answer.error);
+      this.#mine.add(id);
+    } finally {
+      this.#deciding.delete(id);
+    }
+    this.#changed();
+  }
+}
