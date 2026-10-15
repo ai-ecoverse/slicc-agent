@@ -128,6 +128,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     };
     connection.commands?.subscribe(stale);
     connection.privateRevision?.subscribe(stale);
+    if (connection.mismatch) this.notify(connection.mismatch);
   }
 
   #summary(): readonly AgentSummary[] {

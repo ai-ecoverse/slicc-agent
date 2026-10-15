@@ -36,6 +36,7 @@ await agent.prompt('What is in /home?');
   - **What it can't:** every other `AgentControl` method, settings action and remote-control `prompt` or `abort` is refused with `EACCES` ("this follower can watch, but not send, steer or abort"). Send and compact answer `accepted: false` with that code. The worker serves view-only ports from a second pi-server whose session gets these narrowed services.
   - **Carrying the connection over a byte stream:** `linkEndpoint({ write, close })` is a `PortEndpoint` that `connectAgent` accepts. Feed it the stream's bytes with `receive(bytes)` and its end with `end(error?)`. On the owner's side, `bridgePort(port, { write, close })` does the same for the `MessagePort` from `port()`.
   - **The bytes:** each `PortChannel` message becomes a frame: a `u32` big-endian length, then a tag (0 data, 1 hello with the server id, 2 close), then the payload. A frame is at most 16 MiB, and a malformed one ends the link.
+  - **A newer owner:** agent 5.0 greets with `slicc-agent-link/2 <server id>` and speaks Chord frames instead of pi-protocol. A follower that gets such a hello closes the port at once and gets a connection whose `mismatch` is "That SLICC runs a newer version of the agent than this one, so this tab can't follow it. Update this SLICC, then reload this page." Its states are empty, every call rejects with `EPROTO` and that sentence, and `closed` stays pending, so a follower that retries on close doesn't loop. The spectrum adapter shows the sentence as a notice in the follower's chat.
 
 ### Bash and files on slicc-kernel
 
