@@ -45,6 +45,7 @@ export const CONTEXT_WARN = 0.8;
 export const DEPTH_MAX = 6;
 const MINUTE = 60000;
 const HOUR = 3600000;
+const DAY = 86400000;
 
 export type AgentMonitorAlert = MonitorAlert & { command?: string; commandLabel?: string };
 
@@ -254,7 +255,16 @@ function rate(history: readonly Sample[], pick: (sample: Sample) => number): num
   return ((pick(last) - pick(first)) / (last.at - first.at)) * HOUR;
 }
 
-function budgetVital(budget: BudgetState): MonitorVital {
+const RELATIVE = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
+function resetsIn(ms: number): string {
+  if (ms <= 0) return 'resets soon';
+  if (ms >= DAY) return `resets ${RELATIVE.format(Math.floor(ms / DAY), 'day')}`;
+  if (ms >= HOUR) return `resets ${RELATIVE.format(Math.floor(ms / HOUR), 'hour')}`;
+  return `resets ${RELATIVE.format(Math.ceil(ms / MINUTE), 'minute')}`;
+}
+
+function budgetVital(budget: BudgetState, now: number): MonitorVital {
   const resets = new Date(budget.resets);
   return {
     id: 'budget',
@@ -262,7 +272,10 @@ function budgetVital(budget: BudgetState): MonitorVital {
     value: `${budget.percent}%`,
     ...(Number.isNaN(resets.getTime())
       ? {}
-      : { unit: `resets ${resets.toISOString().slice(0, 16).replace('T', ' ')} UTC` }),
+      : {
+          unit: resetsIn(resets.getTime() - now),
+          hint: `resets ${resets.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+        }),
     ratio: Math.min(1, Math.max(0, budget.percent / 100)),
   };
 }
@@ -683,7 +696,7 @@ function pageSections(input: MonitorInput): MonitorSection[] {
 }
 
 export function monitorSnapshot(input: MonitorInput): MonitorSnapshot {
-  const budget = input.budget ? [budgetVital(input.budget)] : [];
+  const budget = input.budget ? [budgetVital(input.budget, input.now)] : [];
   const feed = input.feed;
   if (!feed?.at)
     return {
