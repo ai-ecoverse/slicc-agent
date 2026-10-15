@@ -131,7 +131,6 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     };
     connection.commands?.subscribe(stale);
     connection.privateRevision?.subscribe(stale);
-    if (connection.mismatch) this.notify(connection.mismatch);
   }
 
   #summary(): readonly AgentSummary[] {
@@ -261,6 +260,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
 
   hold(): AgentHold | null {
     return vaultHold(this.#connection.vault?.value);
+  }
+
+  readOnly(): string | null {
+    return this.#connection.mismatch ?? null;
   }
 
   list(): readonly Agent[] {

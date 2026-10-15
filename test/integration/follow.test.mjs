@@ -214,7 +214,7 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
   assert.equal(seen.stillBusy, true);
 });
 
-test('a follower of a SLICC on another agent version shows a notice to update, and nothing else happens', async (t) => {
+test('a follower of a SLICC on an older agent shows a banner to update that stays, watches only, and nothing else happens', async (t) => {
   const page = await chrome.page(t);
   await page.send('Emulation.setDeviceMetricsOverride', {
     width: 1280,
@@ -247,6 +247,8 @@ test('a follower of a SLICC on another agent version shows a notice to update, a
     return {
       mismatch: connection.mismatch,
       notices: notices.map((message) => message.text),
+      banners: model.notices.list(),
+      readOnly: model.agent.readOnly(),
       heard: heard.map((frame) =>
         frame instanceof Uint8Array ? JSON.parse(new TextDecoder().decode(frame)) : frame
       ),
@@ -254,7 +256,12 @@ test('a follower of a SLICC on another agent version shows a notice to update, a
     };
   });
   assert.match(shown.mismatch, /older version of the agent/);
-  assert.deepEqual(shown.notices, [shown.mismatch]);
+  assert.deepEqual(shown.notices, []);
+  assert.deepEqual(
+    shown.banners.map((notice) => [notice.id, notice.body, notice.dismissible]),
+    [['agent-mismatch', shown.mismatch, false]]
+  );
+  assert.equal(shown.readOnly, shown.mismatch);
   assert.deepEqual(shown.heard, [{ t: 'bye', reason: 'link protocol mismatch' }, { close: true }]);
   if (env.FOLLOW_SHOT) await page.screenshot(env.FOLLOW_SHOT);
 });
