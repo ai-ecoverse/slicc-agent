@@ -101,6 +101,8 @@ function model(request) {
       imsEnvironment: 'prod',
       models: [{ id: 'e2e-1', name: 'E2E', api: 'openai' }],
     });
+  if (path === '/v1/usage' && params.has('resets'))
+    return json({ usage: { weekly: { percent: 40, resetsAt: params.get('resets') } } });
   if (path !== '/v1/chat/completions')
     return { status: 404, headers: [], body: (async function* () {})() };
   upstream.push({
