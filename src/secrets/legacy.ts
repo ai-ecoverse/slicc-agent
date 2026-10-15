@@ -59,20 +59,33 @@ function deleted(factory: IDBFactory): Promise<boolean> {
     const deleting = factory.deleteDatabase(LEGACY_DATABASE);
     deleting.onsuccess = () => resolve(true);
     deleting.onerror = () => resolve(false);
-    deleting.onblocked = () => resolve(true);
   });
 }
 
+export const WIPE_WAIT_MS = 3000;
+
+export interface Wiped {
+  now: MovedAccount[];
+  later: Promise<MovedAccount[]>;
+}
+
+const nothing = (): Wiped => ({ now: [], later: Promise.resolve([]) });
+
 export async function wipeLegacy(
-  factory: IDBFactory | undefined = globalThis.indexedDB
-): Promise<MovedAccount[]> {
-  if (!factory) return [];
+  factory: IDBFactory | undefined = globalThis.indexedDB,
+  wait = WIPE_WAIT_MS
+): Promise<Wiped> {
+  if (!factory) return nothing();
   const listed = await factory.databases().catch(() => []);
-  if (!listed.some((database) => database.name === LEGACY_DATABASE)) return [];
+  if (!listed.some((database) => database.name === LEGACY_DATABASE)) return nothing();
   const keys = await legacyKeys(factory).catch(() => []);
-  if (!(await deleted(factory))) return [];
   const found = new Map(keys.map(movedAccount).map((account) => [accountId(account), account]));
-  return [...found.values()];
+  const done = deleted(factory).then((ok) => (ok ? [...found.values()] : []));
+  const { promise: bound, resolve } = Promise.withResolvers<undefined>();
+  const timer = setTimeout(() => resolve(undefined), wait);
+  const first = await Promise.race([done, bound]);
+  clearTimeout(timer);
+  return first ? { now: first, later: Promise.resolve([]) } : { now: [], later: done };
 }
 
 export interface KeysMoved {
@@ -85,16 +98,19 @@ type Records = Pick<VaultRecords, 'state' | 'model' | 'mcp' | 'refresh'>;
 export async function keysMoved(
   harness: Pick<Harness, 'commit'>,
   sources: { records: Records; vault: Pick<Vault, 'connected'> },
-  wiped: readonly MovedAccount[],
+  wiped: Wiped,
   context: Context = BACKGROUND_CONTEXT
 ): Promise<KeysMoved> {
   const { records, vault } = sources;
-  let saved = await harness.commit(async (tx) => {
-    const doc = await tx.doc(MovedDoc);
-    const known = new Set(doc.accounts.map(accountId));
-    for (const account of wiped) if (!known.has(accountId(account))) doc.accounts.push(account);
-    return JSON.parse(JSON.stringify(doc)) as MovedState;
-  }, context);
+  const add = (accounts: readonly MovedAccount[], using: Context) =>
+    harness.commit(async (tx) => {
+      const doc = await tx.doc(MovedDoc);
+      const known = new Set(doc.accounts.map(accountId));
+      for (const account of accounts)
+        if (!known.has(accountId(account))) doc.accounts.push(account);
+      return JSON.parse(JSON.stringify(doc)) as MovedState;
+    }, using);
+  let saved = await add(wiped.now, context);
   let read = false;
   const missing = (account: MovedAccount) =>
     account.kind === 'mcp' ? !records.mcp(account.server) : !records.model(account.provider);
@@ -110,6 +126,13 @@ export async function keysMoved(
     update(using);
   };
   records.state.subscribe((_value, using) => mark(using));
+  wiped.later
+    .then(async (late) => {
+      if (!late.length) return;
+      saved = await add(late, context);
+      update(context);
+    })
+    .catch(() => undefined);
   void records.refresh(context).then(
     () => mark(context),
     () => undefined

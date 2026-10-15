@@ -49,7 +49,7 @@ import {
 } from './secrets/endpoints.ts';
 import { repin, secretsExtension, shellGrants } from './secrets/extension.ts';
 import { grantFetch, mcpFetch, vaultFetch } from './secrets/fetch.ts';
-import { keysMoved, type MovedAccount, wipeLegacy } from './secrets/legacy.ts';
+import { keysMoved, type Wiped, wipeLegacy } from './secrets/legacy.ts';
 import { secretNames } from './secrets/names.ts';
 import { type VaultRecords, vaultRecords } from './secrets/records.ts';
 import { scrubWith } from './secrets/scrub.ts';
@@ -317,7 +317,7 @@ function modelsOfAgent(
 async function settingsOf(
   made: Awaited<ReturnType<typeof modelsOf>>,
   mcp: McpAccounts,
-  moved: { agent: Agent; vault: Vault; wiped: readonly MovedAccount[] }
+  moved: { agent: Agent; vault: Vault; wiped: Wiped }
 ) {
   const { models, records, fields, providers, bases, endpoints } = made;
   const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
