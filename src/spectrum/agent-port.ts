@@ -119,7 +119,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       connection.views?.subscribe(() => this.#refresh());
       connection.agents?.subscribe(() => this.#refresh());
     });
-    connection.settings?.state.subscribe(() => this.emit('agents', this.list()));
+    connection.settings?.state.subscribe(() => {
+      this.emit('agents', this.list());
+      this.#refresh();
+    });
     const stale = () => {
       this.#agentCommandsGeneration += 1;
       this.#agentCommandsLoading.clear();
@@ -224,7 +227,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const view = this.#view(agentId);
     if (!view) return false;
     const before = this.#messages.get(agentId) ?? [];
-    const after = toMessages(view, this.#connection.deliveries.value);
+    const after = this.#labelled(toMessages(view, this.#connection.deliveries.value));
     this.#messages.set(agentId, after);
     if (before.length !== after.length) this.emit('messages', agentId);
     else {
@@ -235,6 +238,20 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       else if (changed.length > 1) this.emit('messages', agentId);
     }
     return this.#count(agentId, view, after);
+  }
+
+  #labelled(messages: Message[]): Message[] {
+    const state = this.#connection.settings?.state.value;
+    const labels = state?.labels ?? {};
+    const known = new Set((state?.models ?? []).map((model) => model.id));
+    return messages.map((message) =>
+      message.role === 'assistant' &&
+      message.model &&
+      !known.has(message.model) &&
+      labels[message.model]
+        ? { ...message, model: labels[message.model] as string }
+        : message
+    );
   }
 
   ready(): Promise<void> {

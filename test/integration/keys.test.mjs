@@ -148,7 +148,10 @@ test('a 3.x credential store is wiped at the 4.x start, with one dismissible not
   await start(page);
   const text = await page.until(() => window.noticeText());
   assert.match(text, /Your keys moved to seven's vault\./);
-  assert.match(text, /Add them again in Settings › Accounts: Adobe, Bedrock, github\./);
+  assert.match(
+    text,
+    /Add them again in Settings › Accounts: Adobe, Bedrock, and the MCP server github\./
+  );
   assert.ok(!text.includes(SEALED));
   const databases = await page.evaluate(async () =>
     (await indexedDB.databases()).map((database) => database.name)
@@ -237,13 +240,19 @@ test('a 3.x credential store is wiped at the 4.x start, with one dismissible not
     const card = window.deep('slicc-chat')?.shadowRoot?.querySelectorAll('.error-card');
     return card && [...card].some((node) => node.textContent.includes("Adobe isn't connected."));
   });
+  const header = await page.evaluate(() => window.deep('slicc-chat').shadowRoot.textContent);
+  assert.match(header, /Claude Haiku 4\.5 \(US\) on Bedrock/);
+  assert.doesNotMatch(header, /amazon-bedrock\/us\.anthropic/);
   await shoot(page, 'not-connected', 1280);
   await shoot(page, 'not-connected', 420);
   await release(page);
 
   await boot(page);
   await start(page);
-  assert.match(await page.until(() => window.noticeText()), /Adobe, Bedrock, github/);
+  assert.match(
+    await page.until(() => window.noticeText()),
+    /Adobe, Bedrock, and the MCP server github/
+  );
   await page.evaluate(() =>
     window.deep('slicc-notices').shadowRoot.querySelector('[data-dismiss]').click()
   );

@@ -328,7 +328,8 @@ export interface SettingsState {
   models: ModelChoice[];
   accounts: AccountState[];
   budget?: BudgetState | null;
-  moved?: string[];
+  moved?: { kind: 'model' | 'mcp'; label: string }[];
+  labels?: Record<string, string>;
 }
 
 export interface AgentSettings {

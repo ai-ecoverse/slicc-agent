@@ -1,17 +1,31 @@
 import type { Notice, NoticesPort } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { MovedName } from '../secrets/legacy.ts';
 import type { AgentSettings } from '../services.ts';
 import { attempt, type Report } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 
 export const KEYS_MOVED = 'keys-moved';
 
-export function movedNotice(accounts: readonly string[]): Notice {
+function servers(names: readonly string[], lead: boolean): string {
+  if (names.length > 1) return `MCP servers: ${names.join(', ')}`;
+  return `${lead ? 'the' : 'and the'} MCP server ${names[0]}`;
+}
+
+export function movedList(accounts: readonly MovedName[]): string {
+  const models = accounts.filter((name) => name.kind === 'model').map((name) => name.label);
+  const mcp = accounts.filter((name) => name.kind === 'mcp').map((name) => name.label);
+  if (!mcp.length) return models.join(', ');
+  if (!models.length) return servers(mcp, true);
+  return `${models.join(', ')}${mcp.length > 1 ? '; ' : ', '}${servers(mcp, false)}`;
+}
+
+export function movedNotice(accounts: readonly MovedName[]): Notice {
   return {
     id: KEYS_MOVED,
     tone: 'info',
     title: "Your keys moved to seven's vault.",
-    body: `Add them again in Settings › Accounts: ${accounts.join(', ')}.`,
+    body: `Add them again in Settings › Accounts: ${movedList(accounts)}.`,
     actions: [],
   };
 }
