@@ -362,7 +362,7 @@ export function allowed(
 }
 
 function refusal(value: string) {
-  return { content: [{ type: 'text' as const, text: value }], isError: true };
+  return { output: [{ type: 'text' as const, text: value }], isError: true };
 }
 
 export function guardExtension(lookup: Lookup, tools: readonly ToolRegistration[]): Extension {

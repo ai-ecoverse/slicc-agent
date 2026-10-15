@@ -190,7 +190,7 @@ export function memoryWriteTool(ready: Promise<Host>) {
     replay: 'unsafe',
     async execute(args, api, context) {
       const fail = (text: string) => ({
-        content: [{ type: 'text' as const, text: `${MEMORY_WRITE}: ${text}` }],
+        output: [{ type: 'text' as const, text: `${MEMORY_WRITE}: ${text}` }],
         isError: true,
       });
       const host = await ready;
@@ -218,7 +218,7 @@ export function memoryWriteTool(ready: Promise<Host>) {
         );
         await host.changed(context).catch(() => undefined);
         return {
-          content: [{ type: 'text', text: writeAnswer(args, place, written) }],
+          output: [{ type: 'text', text: writeAnswer(args, place, written) }],
           details: {
             scope: place.scope,
             file: written.file,

@@ -1,55 +1,28 @@
-import { ServerError } from '@earendil-works/pi-server';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
-import type { AgentControl, AgentSettings } from './services.ts';
 import { VIEW_ONLY } from './view-only.ts';
 
 export { VIEW_ONLY };
 
-const READS = new Set<keyof AgentControl>([
-  'wait',
-  'changesOpen',
-  'monitorOpen',
-  'monitorClose',
-  'image',
-  'toolLabel',
-]);
+type Answer = (...args: unknown[]) => Promise<unknown>;
 
-function refuse(): Promise<never> {
-  return Promise.reject(new ServerError('EACCES' as never, VIEW_ONLY));
-}
+const refuse: Answer = () =>
+  Promise.reject(Object.assign(new Error(VIEW_ONLY), { code: 'EACCES' }));
 
-const refused = async () => ({
+const refused: Answer = async () => ({
   accepted: false as const,
   submissionId: null,
   error: { code: 'EACCES', message: VIEW_ONLY },
 });
 
-const ANSWERS: Partial<Record<keyof AgentControl, () => Promise<unknown>>> = {
-  send: refused,
-  compact: refused,
-  compactAgent: refused,
-};
+const sends = new Set(['send', 'compact', 'compactAgent']);
 
-export function viewControl(control: AgentControl): AgentControl {
-  const view: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(control))
-    view[key] =
-      typeof value !== 'function' || READS.has(key as keyof AgentControl)
-        ? value
-        : (ANSWERS[key as keyof AgentControl] ?? refuse);
-  return view as unknown as AgentControl;
-}
+export const controlAnswer = (name: string): Answer => (sends.has(name) ? refused : refuse);
 
-export function viewSettings(settings: AgentSettings): AgentSettings {
-  return {
-    state: settings.state,
-    connect: refuse,
-    disconnect: refuse,
-    signIn: refuse,
-    dismissMoved: refuse,
-  };
-}
+export const settingsAnswer = (): Answer => refuse;
+
+export const remoteAnswer = (name: string): Answer =>
+  name === 'prompt' ? async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY }) : refuse;
 
 export function viewPages(): AgentPages {
   return {
@@ -61,10 +34,12 @@ export function viewPages(): AgentPages {
   };
 }
 
-export function viewRemote(remote: AgentRemote): AgentRemote {
+export const pageAnswer = (name: string): Answer =>
+  (viewPages() as unknown as Record<string, Answer>)[name] as Answer;
+
+export function viewRemote(remote: AgentRemote): Pick<AgentRemote, 'watch' | 'next' | 'close'> {
   const mine = new Set<string>();
   return {
-    prompt: async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY }),
     async watch(request, context) {
       const opened = await remote.watch(request, context);
       if (opened.ok) mine.add(opened.stream);
@@ -80,6 +55,5 @@ export function viewRemote(remote: AgentRemote): AgentRemote {
       if (!mine.delete(stream)) return;
       await remote.close(stream, context);
     },
-    abort: refuse,
   };
 }

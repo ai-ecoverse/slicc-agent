@@ -131,21 +131,17 @@ export async function callNested(
     output: (chunk) => {
       output += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
     },
+    retainedOutput: () => ({ text: output, truncated: false }),
     diagnostic: () => undefined,
     details: async () => undefined,
   };
   const bash = tool.name === 'bash';
-  try {
-    const result = await tool.execute(valid, nested, context);
-    const text = result.content ? textOf(result.content) : output;
-    if (result.isError) throw new Error(text || `Tool "${tool.name}" failed`);
-    return bash ? { output: text, exit_code: 0 } : text;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const exit = /exited with code (\d+)/.exec(message);
-    if (bash && exit) return { output, exit_code: Number(exit[1]) };
-    throw new Error(message);
-  }
+  const result = await tool.execute(valid, nested, context);
+  const text = result.output ? textOf(result.output) : output;
+  const exit = (result.structuredOutput as { exitCode?: unknown } | undefined)?.exitCode;
+  if (bash && typeof exit === 'number') return { output: text, exit_code: exit };
+  if (result.isError) throw new Error(text || `Tool "${tool.name}" failed`);
+  return bash ? { output: text, exit_code: 0 } : text;
 }
 
 function valueText(value: unknown): string {
@@ -297,7 +293,7 @@ export function codemodeTool(options: CodemodeOptions): ToolRegistration {
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
       const header = `${result.ok ? 'Script completed' : 'Script failed'}\nWall time ${seconds} seconds\nOutput:\n`;
       return {
-        content: [{ type: 'text', text: header }, ...joinText([...cut.items, ...note])],
+        output: [{ type: 'text', text: header }, ...joinText([...cut.items, ...note])],
         ...(result.ok ? {} : { isError: true }),
       };
     },

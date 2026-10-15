@@ -23,12 +23,7 @@ test('a follower of a SLICC on a newer agent shows a notice to update in its cha
     const { port1, port2 } = new MessageChannel();
     const heard = [];
     port1.onmessage = ({ data }) => heard.push(data);
-    port1.postMessage({ hello: `slicc-agent-link/2 ${crypto.randomUUID()}` });
-    port1.postMessage(
-      new TextEncoder().encode(
-        JSON.stringify({ t: 'hello', name: 'agent', kind: 'host', epoch: 1 })
-      )
-    );
+    port1.postMessage({ hello: `slicc-agent-link/3 ${crypto.randomUUID()}` });
     const connection = await connectAgent(port2);
     const model = createAgentModel(connection, { storage: localStorage });
     const app = document.createElement('slicc-app');
@@ -56,7 +51,9 @@ test('a follower of a SLICC on a newer agent shows a notice to update in its cha
         .messages('cone')
         .filter((message) => message.kind === 'notice')
         .map((message) => message.text),
-      heard,
+      heard: heard.map((frame) =>
+        frame instanceof Uint8Array ? JSON.parse(new TextDecoder().decode(frame)) : frame
+      ),
       rendered: log?.innerText ?? '',
     };
   });
@@ -65,7 +62,7 @@ test('a follower of a SLICC on a newer agent shows a notice to update in its cha
     /newer version of the agent.*Update this SLICC, then reload this page\./
   );
   assert.deepEqual(shown.notices, [shown.mismatch]);
-  assert.deepEqual(shown.heard, [{ close: true }]);
+  assert.deepEqual(shown.heard, [{ t: 'bye', reason: 'link protocol mismatch' }, { close: true }]);
   assert.ok(shown.rendered.includes(shown.mismatch.split(',')[0]), shown.rendered);
   if (env.MISMATCH_SHOT) await page.screenshot(env.MISMATCH_SHOT);
 });

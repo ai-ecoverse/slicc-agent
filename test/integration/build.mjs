@@ -18,7 +18,6 @@ await build({
   target: 'es2024',
   sourcemap: 'linked',
   alias: {
-    'node:crypto': './test/integration/shims/node-crypto.js',
     'node:worker_threads': './test/integration/shims/node-worker-threads.js',
     'node:fs/promises': './test/integration/shims/node-only.js',
     'node:module': './test/integration/shims/node-only.js',
@@ -50,7 +49,6 @@ await build({
   sourcemap: 'linked',
   logLevel: 'warning',
   alias: {
-    'node:crypto': './test/integration/shims/node-crypto.js',
     'node:worker_threads': './test/integration/shims/node-worker-threads.js',
     'node:fs/promises': './test/integration/shims/node-only.js',
     'node:module': './test/integration/shims/node-only.js',
