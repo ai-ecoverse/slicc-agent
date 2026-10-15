@@ -1,9 +1,4 @@
-import {
-  type Context,
-  defineService,
-  type JsonValue,
-  type ReplicatedState,
-} from '@earendil-works/chord';
+import type { Context, JsonValue, RemoteContract, ReplicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
@@ -12,6 +7,7 @@ import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
+import { contract } from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 
 export type SendMode = 'steer' | 'followUp' | 'reject';
@@ -231,7 +227,59 @@ export interface AgentSettingsChange {
   agentId?: string | null;
 }
 
-export const AgentControl = defineService<AgentControl>('slicc.agent.control');
+const keys = <T>(record: Record<keyof T, true>) => Object.keys(record) as (keyof T & string)[];
+
+export const CONTROL_METHODS = keys<AgentControl>({
+  send: true,
+  wait: true,
+  withdraw: true,
+  abort: true,
+  compact: true,
+  compactAgent: true,
+  reset: true,
+  configure: true,
+  rewind: true,
+  rewindAgent: true,
+  resolveLick: true,
+  resolveAgentLick: true,
+  webhook: true,
+  stopAgent: true,
+  selectCone: true,
+  createCone: true,
+  createScoop: true,
+  drop: true,
+  unqueue: true,
+  sprinkleSend: true,
+  sprinkleCall: true,
+  memorySave: true,
+  memoryRemove: true,
+  freeze: true,
+  newChat: true,
+  thaw: true,
+  discard: true,
+  changesOpen: true,
+  changeAccept: true,
+  changeRevert: true,
+  monitorOpen: true,
+  monitorClose: true,
+  image: true,
+  agentCommands: true,
+  toolLabel: true,
+});
+
+export const CONTROL_READS: readonly (keyof AgentControl & string)[] = [
+  'wait',
+  'changesOpen',
+  'monitorOpen',
+  'monitorClose',
+  'image',
+  'toolLabel',
+];
+
+export const AgentControl: RemoteContract = contract('slicc.agent.control', {
+  control: { methods: CONTROL_METHODS },
+  view: { methods: CONTROL_READS },
+});
 
 export type Delivered = 'run' | 'steer' | 'follow-up';
 
@@ -262,20 +310,54 @@ export interface Command {
   kind: 'prompt' | 'skill' | 'action';
 }
 
-export const AgentTranscript = defineService<AgentTranscript>('slicc.agent.transcript');
+export const TRANSCRIPT_STATES = keys<AgentTranscript>({
+  state: true,
+  deliveries: true,
+  agents: true,
+  views: true,
+  commands: true,
+  privateRevision: true,
+  sprinkles: true,
+  memories: true,
+  memoryScopes: true,
+  frozen: true,
+  changes: true,
+  monitor: true,
+  vault: true,
+  labels: true,
+});
 
-export interface AgentSessions {
-  attach(sessionId: string, context: Context): Promise<void>;
-  detach(context: Context): Promise<void>;
-}
+export const AgentTranscript: RemoteContract = contract('slicc.agent.transcript', {
+  transcript: { state: TRANSCRIPT_STATES },
+});
 
-export const AgentSessions = defineService<AgentSessions>('slicc.agent.sessions');
+export const REMOTE_METHODS = keys<AgentRemote>({
+  prompt: true,
+  watch: true,
+  next: true,
+  close: true,
+  abort: true,
+});
 
-export const AgentRemoteService = defineService<AgentRemote>('slicc.agent.remote');
+export const REMOTE_READS: readonly (keyof AgentRemote & string)[] = ['watch', 'next', 'close'];
 
-export const AgentPagesService = defineService<AgentPages>('slicc.agent.pages');
+export const AgentRemoteService: RemoteContract = contract('slicc.agent.remote', {
+  remote: { methods: REMOTE_METHODS },
+  watch: { methods: REMOTE_READS },
+});
 
-export const AGENT_SESSION = 'agent';
+export const PAGE_METHODS = keys<AgentPages>({
+  open: true,
+  report: true,
+  next: true,
+  answer: true,
+  close: true,
+});
+
+export const AgentPagesService: RemoteContract = contract('slicc.agent.pages', {
+  pages: { methods: PAGE_METHODS },
+  none: {},
+});
 
 export interface ModelChoice {
   id: string;
@@ -345,4 +427,14 @@ export interface AgentSettings {
   dismissMoved(context: Context): Promise<void>;
 }
 
-export const AgentSettings = defineService<AgentSettings>('slicc.agent.settings');
+export const SETTINGS_METHODS = keys<Omit<AgentSettings, 'state'>>({
+  connect: true,
+  disconnect: true,
+  signIn: true,
+  dismissMoved: true,
+});
+
+export const AgentSettings: RemoteContract = contract('slicc.agent.settings', {
+  settings: { state: ['state'], methods: SETTINGS_METHODS },
+  view: { state: ['state'] },
+});

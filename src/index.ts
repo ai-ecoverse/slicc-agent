@@ -49,7 +49,6 @@ export {
   type UserSpec,
   userClients,
 } from './kernel/users.ts';
-export { PortListener } from './listener.ts';
 export {
   type AgentWorkerOptions,
   type AgentWorkerScope,
@@ -70,7 +69,6 @@ export {
   type OwnerOptions,
   startAgent,
 } from './owner.ts';
-export { applyPatches, patchServerAccept } from './patches.ts';
 export { SliccPrompt, sliccPrompt } from './prompt.ts';
 export {
   type AgentPages,
@@ -85,10 +83,8 @@ export {
 } from './remote/pages.ts';
 export {
   type AccountState,
-  AGENT_SESSION,
   AgentControl,
   AgentPagesService,
-  AgentSessions,
   AgentSettings,
   type AgentSettingsChange,
   AgentTranscript,
@@ -123,7 +119,7 @@ export {
 } from './sqlite.ts';
 export { type SystemFacts, systemSection } from './system.ts';
 export { UPLOADS, type Uploads, upload } from './uploads.ts';
-export { PortChannel, type PortEndpoint, withUnrefTimers } from './wire.ts';
+export { LINK_PROTOCOL, type PortEndpoint, PortLink } from './wire.ts';
 export {
   type KernelPorts,
   kernelPort,

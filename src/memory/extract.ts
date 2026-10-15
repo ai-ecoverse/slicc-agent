@@ -161,7 +161,9 @@ export function extractTask(
         if (!(await settings(context)).extract) return done({ saved: 0, skipped: 'turned off' });
         const host = await ready;
         const place = placeOf(host.home, cone);
-        const view = await runtime.context(runtime.conversationId, context, tail as EntryId);
+        const view = await runtime.context(runtime.conversationId, context, {
+          at: tail as EntryId,
+        });
         const fresh = view.entries.flatMap((entry, index) =>
           entry.id > after ? (view.contributions[index] as readonly Message[]) : []
         );

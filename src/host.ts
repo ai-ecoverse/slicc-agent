@@ -1,20 +1,14 @@
 import {
   type Context,
-  createRemoteServiceEndpoint,
-  RemoteServiceProvider,
+  createHost,
+  type Host,
   type ReplicatedState,
   replicatedState,
+  resource,
+  type Self,
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
-import {
-  type RoutedServerServiceHost,
-  type RoutedSessionAttachment,
-  type RoutedSessionHandle,
-  Server,
-  type ServerHost,
-  SessionNotFoundError,
-} from '@earendil-works/pi-server';
 import type { Agent } from './agent.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { ChangesRuntime } from './changes/index.ts';
@@ -22,27 +16,40 @@ import { createAgentControl, type HostLicks, type HostScoops } from './control.t
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
 import type { UserClients } from './kernel/users.ts';
-import { PortListener } from './listener.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import { createMonitor, type MonitorOptions } from './monitor/index.ts';
-import { viewControl, viewPages, viewRemote, viewSettings } from './readonly.ts';
-import { createRemote } from './remote/host.ts';
-import { type AgentPages, createPages, ownedPages, type Pages } from './remote/pages.ts';
+import { viewRemote } from './readonly.ts';
+import { type AgentRemote, createRemote } from './remote/host.ts';
+import { createPages, ownedPages, type Pages } from './remote/pages.ts';
 import type { SecretName } from './secrets/names.ts';
 import type { VaultState } from './secrets/vault.ts';
 import {
-  AGENT_SESSION,
   AgentControl,
   AgentPagesService,
   AgentRemoteService,
-  AgentSessions,
   AgentSettings,
   AgentTranscript,
+  CONTROL_METHODS,
+  CONTROL_READS,
   type Command,
+  PAGE_METHODS,
   type PrivateRevision,
+  REMOTE_METHODS,
+  REMOTE_READS,
+  SETTINGS_METHODS,
 } from './services.ts';
+import {
+  AGENT_HOST,
+  type AgentPrincipal,
+  principalKey,
+  readable,
+  readablesOf,
+  type Seat,
+  seatOf,
+  served,
+} from './serving.ts';
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
@@ -50,7 +57,7 @@ import { slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
 import { type LabelsRuntime, visibleLabels, watchLabel } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
-import type { PortEndpoint } from './wire.ts';
+import { type PortEndpoint, PortLink } from './wire.ts';
 
 export interface ConnectOptions {
   readOnly?: boolean;
@@ -64,54 +71,6 @@ export interface AgentHost {
   readonly pages: Pages;
   connect(endpoint: PortEndpoint, options?: ConnectOptions): void;
   close(): Promise<void>;
-}
-
-function endpointFor(provider: RemoteServiceProvider): RoutedSessionAttachment {
-  const endpoint = createRemoteServiceEndpoint(provider);
-  return {
-    invokeService: (call, publish, context) =>
-      endpoint.invoke(call, (id, update) => publish(id, update, context), context),
-    release: () => endpoint.dispose(),
-  };
-}
-
-type Attached = { provider: RemoteServiceProvider; release(): void };
-
-function sessionServices(attach: () => Attached): RoutedSessionHandle {
-  return {
-    attachClient() {
-      const attached = attach();
-      const endpoint = endpointFor(attached.provider);
-      return {
-        invokeService: endpoint.invokeService,
-        release(context) {
-          endpoint.release(context);
-          attached.release();
-        },
-      };
-    },
-    close: async () => {},
-  };
-}
-
-function serverServices(): RoutedServerServiceHost {
-  return {
-    attachClient(presentation) {
-      const provider = new RemoteServiceProvider([{ service: AgentSessions, mode: 'singleton' }]);
-      provider.provide(AgentSessions, {
-        attach: (sessionId, context) => presentation.attachSession(sessionId, context),
-        detach: (context) => presentation.detachSession(context),
-      });
-      const attachment = endpointFor(provider);
-      return {
-        invokeService: attachment.invokeService,
-        release(context) {
-          attachment.release(context);
-          provider.dispose();
-        },
-      };
-    },
-  };
 }
 
 const noSettings: AgentSettings = {
@@ -221,14 +180,6 @@ export async function hostAgent(
   };
   const touch = () => options.freezer?.touch();
   const untouch = [state.subscribe(touch), mounted.views.subscribe(touch)];
-  const catalogue = () =>
-    new RemoteServiceProvider([
-      { service: AgentControl, mode: 'singleton' },
-      { service: AgentTranscript, mode: 'singleton' },
-      { service: AgentSettings, mode: 'singleton' },
-      { service: AgentRemoteService, mode: 'singleton' },
-      { service: AgentPagesService, mode: 'singleton' },
-    ]);
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
   const monitor = createMonitor({
@@ -288,73 +239,34 @@ export async function hostAgent(
   const settings = options.settings ?? noSettings;
   const gates = gatedControls(control, slims.shown, shownViews, transcriptService.labels);
   const { trusted, viewed } = gates;
-  const served = (served: AgentPages) => {
-    const made = catalogue();
-    made.provide(AgentControl, trusted);
-    made.provide(AgentTranscript, transcriptService);
-    made.provide(AgentSettings, settings);
-    made.provide(AgentRemoteService, remote);
-    made.provide(AgentPagesService, served);
-    return made;
-  };
-  const owned = (): Attached => {
-    const mine = ownedPages(pages);
-    const made = served(mine);
-    return {
-      provider: made,
-      release() {
-        made.dispose();
-        mine.release();
-      },
-    };
-  };
-  const follower = served(viewPages());
-  const viewer = catalogue();
-  viewer.provide(AgentControl, viewControl(viewed));
-  viewer.provide(AgentTranscript, { ...transcriptService, monitor: monitor.viewState });
-  viewer.provide(AgentSettings, viewSettings(settings));
-  viewer.provide(AgentRemoteService, viewRemote(remote));
-  viewer.provide(AgentPagesService, viewPages());
-  const shared = (services: RemoteServiceProvider) => () => ({
-    provider: services,
-    release: () => undefined,
+  const host = serveAgent({
+    trusted,
+    viewed,
+    transcript: transcriptService,
+    viewMonitor: monitor.viewState,
+    settings,
+    remote,
+    pages,
   });
-  const serve = async (id: string, attach: () => Attached) => {
-    const host: ServerHost = {
-      serverServices: serverServices(),
-      async resolveSession(sessionId) {
-        if (sessionId !== AGENT_SESSION)
-          throw new SessionNotFoundError(`unknown session ${sessionId}`);
-        return { id: sessionId };
-      },
-      openSession: async () => sessionServices(attach),
-    };
-    const listener = new PortListener(id);
-    const server = await new Server(host, { serverId: id, listeners: [listener] }).start();
-    return { listener, server };
-  };
-  const full = await serve(serverId, owned);
-  const view = await serve(crypto.randomUUID(), shared(viewer));
-  const linked = await serve(crypto.randomUUID(), shared(follower));
+  let links = 0;
   return {
     serverId,
     agent,
     pages,
     ...(options.users ? { users: options.users } : {}),
     connect(endpoint, connectOptions) {
-      const chosen = connectOptions?.readOnly
-        ? view
+      const seat: Seat = connectOptions?.readOnly
+        ? 'view'
         : connectOptions?.pages === false
-          ? linked
-          : full;
-      chosen.listener.connect(endpoint);
+          ? 'control'
+          : 'owner';
+      links += 1;
+      const link = new PortLink(endpoint);
+      link.greet(serverId);
+      host.accept(link, { principal: { seat, link: links } satisfies AgentPrincipal });
     },
     async close() {
-      await full.server.close();
-      await view.server.close();
-      await linked.server.close();
-      viewer.dispose();
-      follower.dispose();
+      await host.close();
       await pages.dispose();
       await monitor.dispose();
       await remote.dispose();
@@ -377,4 +289,50 @@ export async function hostAgent(
       await options.users?.close();
     },
   };
+}
+
+interface Served {
+  trusted: AgentControl;
+  viewed: AgentControl;
+  transcript: Record<keyof AgentTranscript, ReplicatedState<unknown>>;
+  viewMonitor: ReplicatedState<unknown>;
+  settings: AgentSettings;
+  remote: AgentRemote;
+  pages: Pages;
+}
+
+export function serveAgent(serving: Served): Host {
+  const host = createHost({ name: AGENT_HOST, principalKey });
+  const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
+  host.serve(AgentControl, ((_input: unknown, principal: unknown) =>
+    seatOf(principal) === 'view'
+      ? { kind: 'view', ...served(() => serving.viewed, CONTROL_READS) }
+      : { kind: 'control', ...served(() => serving.trusted, CONTROL_METHODS) }) as never);
+  host.serve(AgentTranscript, ((_input: unknown, principal: unknown) => ({
+    kind: 'transcript',
+    ...readablesOf(seatOf(principal) === 'view' ? viewing : serving.transcript),
+  })) as never);
+  host.serve(AgentSettings, ((_input: unknown, principal: unknown) => ({
+    kind: seatOf(principal) === 'view' ? 'view' : 'settings',
+    state: readable(serving.settings.state),
+    ...(seatOf(principal) === 'view' ? {} : served(() => serving.settings, SETTINGS_METHODS)),
+  })) as never);
+  host.serve(AgentRemoteService, ((_input: unknown, principal: unknown) => {
+    if (seatOf(principal) !== 'view')
+      return { kind: 'remote', ...served(() => serving.remote, REMOTE_METHODS) };
+    const scoped = viewRemote(serving.remote);
+    return { kind: 'watch', ...served(() => scoped, REMOTE_READS) };
+  }) as never);
+  host.serve(AgentPagesService, ((_input: unknown, principal: unknown, self: Self) => {
+    if (seatOf(principal) !== 'owner') return { kind: 'none' };
+    const held = self.resources({
+      mine: resource({
+        rev: 1,
+        open: () => ownedPages(serving.pages),
+        close: (mine) => mine.release(),
+      }),
+    });
+    return { kind: 'pages', ...served(() => held.mine.value, PAGE_METHODS) };
+  }) as never);
+  return host;
 }

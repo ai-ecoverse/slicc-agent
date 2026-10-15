@@ -1,4 +1,4 @@
-import type { ByteTransportFactory, ByteTransportHandlers } from '@earendil-works/pi-client';
+import type { Frame as ChordFrame, Link } from '@earendil-works/chord';
 
 export interface PortEndpoint {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -13,7 +13,7 @@ export interface PortEndpoint {
 
 export type Frame = { hello: string } | { close: true } | Uint8Array;
 
-export const LINK_PROTOCOL = 1;
+export const LINK_PROTOCOL = 2;
 
 const GREETING = /^slicc-agent-link\/(\d+) (.+)$/;
 
@@ -22,54 +22,35 @@ export interface Greeting {
   serverId: string;
 }
 
+export const greeting = (serverId: string): string =>
+  `slicc-agent-link/${LINK_PROTOCOL} ${serverId}`;
+
 export function greeted(hello: string): Greeting {
   const found = GREETING.exec(hello);
   return found
     ? { protocol: Number(found[1]), serverId: found[2] as string }
-    : { protocol: LINK_PROTOCOL, serverId: hello };
+    : { protocol: 1, serverId: hello };
 }
 
-export function post(endpoint: PortEndpoint, chunk: Uint8Array): void {
-  const copy = chunk.slice();
-  endpoint.postMessage(copy, [copy.buffer]);
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function parse(chunk: Uint8Array): ChordFrame {
+  const frame = JSON.parse(decoder.decode(chunk)) as { t?: unknown } | null;
+  if (frame === null || typeof frame !== 'object' || typeof frame.t !== 'string')
+    throw new TypeError('not a chord frame');
+  return frame as ChordFrame;
 }
 
-function unrefable(id: number): object {
-  return {
-    unref() {
-      return this;
-    },
-    ref() {
-      return this;
-    },
-    [Symbol.toPrimitive]: () => id,
-  };
-}
-
-export function withUnrefTimers<T>(
-  run: () => T,
-  scope: { setTimeout: typeof setTimeout } = globalThis
-): T {
-  const original = scope.setTimeout;
-  scope.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
-    const id: unknown = original(...args);
-    return typeof id === 'number' ? unrefable(id) : id;
-  }) as typeof setTimeout;
-  try {
-    return run();
-  } finally {
-    scope.setTimeout = original;
-  }
-}
-
-export class PortChannel {
+export class PortLink implements Link {
   readonly hello: Promise<string>;
   readonly ended: Promise<Error | undefined>;
   readonly #endpoint: PortEndpoint;
   readonly #queue: Uint8Array[] = [];
-  #handlers: ByteTransportHandlers | undefined;
-  #ended: 'close' | Error | undefined;
-  #greet!: (serverId: string) => void;
+  readonly #closers = new Set<(reason: string) => void>();
+  #handler: ((frame: ChordFrame) => void) | undefined;
+  #closed = false;
+  #greet!: (hello: string) => void;
   #refuse!: (error: Error) => void;
   #finish!: (reason: Error | undefined) => void;
 
@@ -79,62 +60,79 @@ export class PortChannel {
       this.#greet = greet;
       this.#refuse = refuse;
     });
+    this.hello.catch(() => undefined);
     this.ended = new Promise((finish) => {
       this.#finish = finish;
     });
     endpoint.addEventListener('message', ({ data }) => this.#receive(data as Frame));
-    endpoint.addEventListener('messageerror', (event) =>
-      this.#end(new Error(`agent port ${event.type}`))
-    );
-    endpoint.addEventListener('error', (event) => this.#end(new Error(`agent port ${event.type}`)));
-    endpoint.addEventListener('close', () => this.#end('close'));
+    const failed = (event: Event) => this.#end(`agent port ${event.type}`, true);
+    endpoint.addEventListener('messageerror', failed);
+    endpoint.addEventListener('error', failed);
+    endpoint.addEventListener('close', () => this.#end('peer closed', false));
     endpoint.start?.();
   }
 
-  readonly transport: ByteTransportFactory = (handlers) => {
-    this.#handlers = handlers;
-    for (const chunk of this.#queue.splice(0)) handlers.onData(chunk);
-    if (this.#ended) this.#deliver(this.#ended);
-    return {
-      send: async (chunk) => {
-        if (this.#ended) throw new Error('agent port is closed');
-        post(this.#endpoint, chunk);
-      },
-      close: () => {
-        if (this.#ended) return;
-        this.#ended = 'close';
-        this.#refuse(new Error('agent port closed before hello'));
-        this.#finish(undefined);
-        this.#endpoint.postMessage({ close: true } satisfies Frame);
-        this.#endpoint.close?.();
-      },
-    };
-  };
+  get closed(): boolean {
+    return this.#closed;
+  }
+
+  greet(serverId: string): void {
+    this.#endpoint.postMessage({ hello: greeting(serverId) } satisfies Frame);
+  }
+
+  send(frame: ChordFrame): void {
+    if (this.#closed) return;
+    const bytes = encoder.encode(JSON.stringify(frame));
+    this.#endpoint.postMessage(bytes, [bytes.buffer]);
+  }
+
+  receive(handler: (frame: ChordFrame) => void): void {
+    this.#handler = handler;
+    for (const chunk of this.#queue.splice(0)) this.#deliver(chunk);
+  }
+
+  onClose(handler: (reason: string) => void): void {
+    if (this.#closed) handler('closed');
+    else this.#closers.add(handler);
+  }
+
+  close(reason = 'closed'): void {
+    if (this.#closed) return;
+    this.send({ t: 'bye', reason });
+    this.#endpoint.postMessage({ close: true } satisfies Frame);
+    this.#end(reason, false);
+  }
 
   #receive(frame: Frame): void {
+    if (this.#closed) return;
     if (frame instanceof Uint8Array) {
-      if (this.#handlers) this.#handlers.onData(frame);
+      if (this.#handler) this.#deliver(frame);
       else this.#queue.push(frame);
-    } else if ('hello' in frame) {
-      this.#greet(frame.hello);
-    } else {
-      this.#end('close');
+    } else if ('hello' in frame) this.#greet(frame.hello);
+    else this.#end('peer closed', false);
+  }
+
+  #deliver(chunk: Uint8Array): void {
+    let frame: ChordFrame;
+    try {
+      frame = parse(chunk);
+    } catch {
+      this.close('protocol error');
+      return;
     }
+    if (frame.t === 'bye') this.#end(frame.reason ?? 'peer closed', false);
+    else this.#handler?.(frame);
   }
 
-  #end(reason: 'close' | Error): void {
-    if (this.#ended) return;
-    this.#ended = reason;
-    this.#refuse(reason === 'close' ? new Error('agent port closed before hello') : reason);
-    this.#finish(reason === 'close' ? undefined : reason);
-    this.#deliver(reason);
-  }
-
-  #deliver(reason: 'close' | Error): void {
-    const handlers = this.#handlers;
-    if (!handlers) return;
-    this.#handlers = undefined;
-    if (reason === 'close') handlers.onClose();
-    else handlers.onError(reason);
+  #end(reason: string, failed: boolean): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#queue.length = 0;
+    this.#endpoint.close?.();
+    const error = new Error(reason);
+    this.#refuse(new Error(`agent port closed before hello: ${reason}`));
+    this.#finish(failed ? error : undefined);
+    for (const handler of [...this.#closers]) handler(reason);
+    this.#closers.clear();
   }
 }

@@ -39,12 +39,12 @@ function decisionTool(licks: Licks, action: LickAction, conversation: Conversati
         const target = await conversation(api.conversationId, context);
         const text = await licks.decide(target, args.lick_id, action, args.reason, context);
         return {
-          content: [{ type: 'text', text }],
+          output: [{ type: 'text', text }],
           details: { lick: args.lick_id, state: confirm ? 'confirmed' : 'dismissed' },
         };
       } catch (error) {
         return {
-          content: [{ type: 'text', text: (error as Error).message }],
+          output: [{ type: 'text', text: (error as Error).message }],
           isError: true,
         };
       }

@@ -94,7 +94,7 @@ export function browserGuard(
         ...inner,
         execute(args, api, context) {
           if (!refused(commandOf(args), matcher)) return inner.execute(args, api, context);
-          return Promise.resolve({ content: [{ type: 'text', text: REFUSAL }], isError: true });
+          return Promise.resolve({ output: [{ type: 'text', text: REFUSAL }], isError: true });
         },
       })),
     ],

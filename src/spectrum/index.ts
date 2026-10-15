@@ -28,7 +28,14 @@ export {
   type MonitorInput,
   monitorSnapshot,
 } from './monitor-port.ts';
-export { KEYS_MOVED, movedList, movedNotice, NoticesAdapter } from './notices-port.ts';
+export {
+  KEYS_MOVED,
+  MISMATCH,
+  mismatchBanner,
+  movedList,
+  movedNotice,
+  NoticesAdapter,
+} from './notices-port.ts';
 export {
   PageAdapter,
   type PageDocument,
@@ -75,7 +82,7 @@ export function createAgentModel(
     sprinkles: new SprinkleAdapter(connection, report),
     memory: new MemoryAdapter(connection, report),
     changes: new ChangesAdapter(connection, report),
-    notices: new NoticesAdapter(connection.settings, report),
+    notices: new NoticesAdapter(connection.settings, report, connection.mismatch),
     monitor: new MonitorAdapter(
       connection,
       options.monitor?.extra ? { extra: options.monitor.extra } : {}

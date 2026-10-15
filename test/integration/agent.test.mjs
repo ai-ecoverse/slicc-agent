@@ -18,7 +18,7 @@ const own = (query) =>
     return true;
   });
 
-test('prompts an owned agent worker over pi-protocol', async (t) => {
+test('prompts an owned agent worker over a Chord link', async (t) => {
   const page = await chrome.page(t);
   await open(page);
   await page.evaluate(own, 'answer=Paris.');

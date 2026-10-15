@@ -1,32 +1,8 @@
 {
-  "pi-server-handshake-unref": {
-    "kind": "monkeypatch",
-    "package": "@earendil-works/pi-server",
-    "patchedVersion": "1.0.4",
-    "marker": {
-      "file": "dist/server.js",
-      "includes": "handshakeTimeout.unref()"
-    },
-    "reason": "Server.accept calls unref() on its handshake timer, but browser setTimeout returns a number, so every connection in a worker throws. applyPatches() wraps accept so the timer id gets no-op unref and ref methods.",
-    "removeWhen": "pi-server stops calling unref() on timers, or guards the call.",
-    "verify": "npm test"
-  },
-  "pi-server-node-crypto": {
-    "kind": "environment",
-    "package": "@earendil-works/pi-server",
-    "patchedVersion": "1.0.4",
-    "marker": {
-      "file": "dist/session-router.js",
-      "includes": "from \"node:crypto\""
-    },
-    "reason": "The session router imports randomUUID from node:crypto. In SLICC the bios service worker serves a node:crypto stub backed by globalThis.crypto; the integration bundles alias it to test/integration/shims/node-crypto.js.",
-    "removeWhen": "pi-server uses globalThis.crypto.randomUUID instead of node:crypto.",
-    "verify": "npm test"
-  },
   "pi-codemode-worker-threads": {
     "kind": "environment",
     "package": "@earendil-works/pi-codemode",
-    "patchedVersion": "1.1.0",
+    "patchedVersion": "1.2.0",
     "marker": {
       "file": "dist/runtime/host.js",
       "includes": "import { Worker } from \"node:worker_threads\""
@@ -38,7 +14,7 @@
   "pi-ai-google-genai-lazy": {
     "kind": "environment",
     "package": "@earendil-works/pi-ai",
-    "patchedVersion": "1.0.4",
+    "patchedVersion": "1.2.0",
     "marker": {
       "file": "dist/api/google-generative-ai.lazy.js",
       "includes": "import(\"./google-generative-ai.js\")"
@@ -47,22 +23,10 @@
     "removeWhen": "seven adds a Google provider (drop the bios override first), or pi-ai stops depending on @google/genai.",
     "verify": "npm test"
   },
-  "chord-esbuild-node-only": {
-    "kind": "environment",
-    "package": "@earendil-works/chord",
-    "patchedVersion": "1.0.4",
-    "marker": {
-      "file": "dist/node/bundle.js",
-      "includes": "from \"esbuild\""
-    },
-    "reason": "chord depends on esbuild only for its Node-only dist/node/bundle.js, which the browser never loads, so slicc-bios removes esbuild from /opt/agent with a pnpm override (esbuild: '-' in src/packages/agent/pnpm-workspace.yaml).",
-    "removeWhen": "chord drops the esbuild dependency, or the agent starts using chord's Node bundler in the browser (drop the bios override first).",
-    "verify": "npm test"
-  },
   "pi-ai-google-vertex-lazy": {
     "kind": "environment",
     "package": "@earendil-works/pi-ai",
-    "patchedVersion": "1.0.4",
+    "patchedVersion": "1.2.0",
     "marker": {
       "file": "dist/api/google-vertex.lazy.js",
       "includes": "import(\"./google-vertex.js\")"
@@ -74,7 +38,7 @@
   "pi-mcp-stdio-node-only": {
     "kind": "environment",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.1.0",
+    "patchedVersion": "1.2.0",
     "marker": {
       "file": "dist/index.js",
       "includes": "export { StdioTransport } from \"./transports/stdio.js\""
@@ -86,7 +50,7 @@
   "pi-mcp-sse-buffer": {
     "kind": "monkeypatch",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.1.0",
+    "patchedVersion": "1.2.0",
     "marker": {
       "file": "dist/transports/streamable-http.js",
       "includes": "Buffer.byteLength(value)"
@@ -98,7 +62,7 @@
   "pi-mcp-oauth-browser": {
     "kind": "environment",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.1.0",
+    "patchedVersion": "1.2.0",
     "marker": {
       "file": "dist/oauth/flow.js",
       "includes": "Buffer.from(bytes).toString(\"base64url\")"

@@ -121,7 +121,7 @@ export function directTool(entry: McpToolEntry, readable: () => boolean): ToolRe
         ...(converted.fullOutputPath ? { fullOutputPath: converted.fullOutputPath } : {}),
       };
       return {
-        content: converted.content,
+        output: converted.content,
         details: details as JsonValue,
         ...(converted.isError ? { isError: true } : {}),
       };
@@ -320,7 +320,7 @@ export function resourceTools(servers: ServersFor): ToolRegistration[] {
           [{ type: 'text', text: JSON.stringify(payload) }],
           apiSaver(api, '', context)
         );
-        return { content: limited.content };
+        return { output: limited.content };
       },
     }) as ToolRegistration;
   return [
@@ -338,7 +338,7 @@ export function resourceTools(servers: ServersFor): ToolRegistration[] {
           signalOf(context),
           apiSaver(api, '', context)
         );
-        return { content: read.content };
+        return { output: read.content };
       },
     }) as ToolRegistration,
   ];

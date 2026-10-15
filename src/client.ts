@@ -1,35 +1,42 @@
 import {
   type Context,
-  createRemoteServiceBinding,
+  createHost,
+  isChordError,
+  type Readable,
   type ReplicatedState,
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { Client, createClientServiceTransport } from '@earendil-works/pi-client';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import { mismatched } from './mismatch.ts';
+import { controlAnswer, pageAnswer, remoteAnswer, settingsAnswer } from './readonly.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
 import {
-  AGENT_SESSION,
   AgentControl,
   AgentPagesService,
   AgentRemoteService,
-  AgentSessions,
   AgentSettings,
   type AgentsSummary,
   AgentTranscript,
+  CONTROL_METHODS,
   type Command,
   type Delivered,
   type MonitorFeed,
+  PAGE_METHODS,
   type PrivateRevision,
+  REMOTE_METHODS,
+  SETTINGS_METHODS,
   type SendMode,
+  type SettingsState,
+  TRANSCRIPT_STATES,
 } from './services.ts';
+import { AGENT_HOST, bound, kept, type Remote, type Root, replicated } from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import { greeted, LINK_PROTOCOL, PortChannel, type PortEndpoint } from './wire.ts';
+import { greeted, LINK_PROTOCOL, type PortEndpoint, PortLink } from './wire.ts';
 
 export interface AgentConnection {
   readonly serverId: string;
@@ -104,94 +111,105 @@ function lastingSettings(
   };
 }
 
-function attached(client: Client): Promise<void> {
-  return new Promise((resolve) => {
-    const stop = client.onAttachmentChange(() => {
-      stop();
-      resolve();
-    });
+const MISMATCHES = new Set(['contract_mismatch', 'upgrade_required']);
+
+const ended = (link: PortLink): Promise<never> =>
+  link.ended.then((reason) => {
+    throw reason ?? new Error('the agent closed the link');
   });
-}
 
 export async function connectAgent(
   endpoint: PortEndpoint,
   options: { context?: Context } = {}
 ): Promise<AgentConnection> {
   const context = options.context ?? BACKGROUND_CONTEXT;
-  const channel = new PortChannel(endpoint);
-  const hello = await channel.hello;
-  const peer = greeted(hello);
+  const link = new PortLink(endpoint);
+  const peer = greeted(await link.hello);
   if (peer.protocol !== LINK_PROTOCOL) {
-    endpoint.postMessage({ close: true });
-    endpoint.close?.();
-    return mismatched(peer.serverId);
+    link.close('link protocol mismatch');
+    return mismatched(peer.serverId, peer.protocol);
   }
-  const serverId = hello;
-  const client = await Client.connect({ serverId, transportFactory: channel.transport });
-  const server = createRemoteServiceBinding({
-    services: [AgentSessions],
-    transport: createClientServiceTransport(client, () => ({ serverId })),
-    bound: true,
-  });
-  const ready = attached(client);
-  await server.use(AgentSessions).attach(AGENT_SESSION, context);
-  await ready;
-  const session = createRemoteServiceBinding({
-    services: [AgentControl, AgentTranscript, AgentSettings, AgentRemoteService, AgentPagesService],
-    transport: createClientServiceTransport(client, () => client.attachment),
-    bound: true,
-  });
-  const control = session.use(AgentControl);
-  const {
-    state: transcript,
-    deliveries,
-    agents,
-    views,
-    commands,
-    privateRevision,
-    sprinkles,
-    memories,
-    memoryScopes,
-    frozen,
-    changes,
-    monitor,
-    vault,
-    labels,
-  } = session.use(AgentTranscript);
-  const settings = session.use(AgentSettings);
-  const remote = session.use(AgentRemoteService);
-  const pages = session.use(AgentPagesService);
-  await session.ready(context);
+  const host = createHost({ name: `follower:${crypto.randomUUID()}`, kind: 'client' });
+  host.connect(link);
+  const get = (contract: Parameters<typeof host.get>[0]) =>
+    host.get(contract, {}, { at: AGENT_HOST }) as unknown as Remote;
+  const handles = [
+    AgentControl,
+    AgentTranscript,
+    AgentSettings,
+    AgentRemoteService,
+    AgentPagesService,
+  ].map(get);
+  const [controlHandle, transcriptHandle, settingsHandle, remoteHandle, pagesHandle] = handles as [
+    Remote,
+    Remote,
+    Remote,
+    Remote,
+    Remote,
+  ];
+  const release = () => {
+    for (const handle of handles) handle.release();
+  };
+  try {
+    await Promise.race([Promise.all(handles.map((handle) => handle.ready)), ended(link)]);
+  } catch (error) {
+    release();
+    link.close('handshake failed');
+    if (isChordError(error) && MISMATCHES.has(error.code))
+      return mismatched(peer.serverId, peer.protocol);
+    throw error;
+  }
+  const root: Root = (run, rootOptions) => host.root(run, rootOptions);
+  const control = bound<AgentControl>(controlHandle, root, CONTROL_METHODS, controlAnswer);
+  const members = Object.fromEntries(
+    TRANSCRIPT_STATES.map((name) => [name, transcriptHandle[name] as Readable<unknown>])
+  ) as Record<(typeof TRANSCRIPT_STATES)[number], Readable<unknown>>;
+  const settingsState = settingsHandle.state as Readable<unknown>;
+  const keeping = [...Object.values(members), settingsState].map(kept);
+  await Promise.race([Promise.all(keeping.map((keep) => keep.ready)), ended(link)]);
+  const settings: AgentSettings = {
+    ...bound<Omit<AgentSettings, 'state'>>(settingsHandle, root, SETTINGS_METHODS, settingsAnswer),
+    state: replicated(settingsState as Readable<SettingsState | undefined>),
+  };
+  const remote = bound<AgentRemote>(remoteHandle, root, REMOTE_METHODS, remoteAnswer);
+  const pages = bound<AgentPages>(pagesHandle, root, PAGE_METHODS, pageAnswer);
+  const state = <K extends keyof typeof members>(name: K) =>
+    replicated(members[name] as Readable<never>);
   const held: Lasting<unknown>[] = [];
   const hold = <T>(state: ReplicatedState<T>): ReplicatedState<T> => {
     const kept = lasting(state);
     held.push(kept as Lasting<unknown>);
     return kept.state;
   };
-  const freeze = () => {
+  let open = true;
+  const finish = () => {
+    if (!open) return;
+    open = false;
     for (const kept of held) kept.freeze();
+    for (const keep of keeping) keep.stop();
+    release();
   };
-  const closed = channel.ended.then((reason) => {
-    freeze();
+  const closed = link.ended.then((reason) => {
+    finish();
     return reason;
   });
   return {
-    serverId,
+    serverId: peer.serverId,
     control,
-    transcript: hold(transcript),
-    deliveries: hold(deliveries),
-    agents: hold(agents),
-    views: hold(views),
-    commands: hold(commands),
-    privateRevision: hold(privateRevision),
-    sprinkles: hold(sprinkles),
-    memories: hold(memories),
-    memoryScopes: hold(memoryScopes),
-    frozen: hold(frozen),
-    changes: hold(changes),
-    monitor: hold(monitor),
-    vault: hold(vault),
-    labels: hold(labels),
+    transcript: hold<ConversationView>(state('state')),
+    deliveries: hold<Record<string, Delivered>>(state('deliveries')),
+    agents: hold<AgentsSummary>(state('agents')),
+    views: hold<Record<string, ConversationView>>(state('views')),
+    commands: hold<Command[]>(state('commands')),
+    privateRevision: hold<PrivateRevision>(state('privateRevision')),
+    sprinkles: hold<Sprinkle[]>(state('sprinkles')),
+    memories: hold<MemoryEntry[]>(state('memories')),
+    memoryScopes: hold<MemoryScope[]>(state('memoryScopes')),
+    frozen: hold<FrozenCone[]>(state('frozen')),
+    changes: hold<ChangesView>(state('changes')),
+    monitor: hold<MonitorFeed>(state('monitor')),
+    vault: hold<VaultState>(state('vault')),
+    labels: hold<Record<string, string>>(state('labels')),
     settings: lastingSettings(settings, hold),
     remote,
     pages,
@@ -211,11 +229,10 @@ export async function connectAgent(
       return settled.text;
     },
     async close() {
-      freeze();
-      await server.use(AgentSessions).detach(context);
-      await session.dispose(context);
-      await server.dispose(context);
-      await client.dispose();
+      finish();
+      link.close('closed');
+      await closed;
+      await host.close();
     },
   };
 }

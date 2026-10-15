@@ -7,6 +7,19 @@ import { Emitter } from './emitter.ts';
 
 export const KEYS_MOVED = 'keys-moved';
 
+export const MISMATCH = 'agent-mismatch';
+
+export function mismatchBanner(text: string): Notice {
+  return {
+    id: MISMATCH,
+    tone: 'warning',
+    title: "This tab can't follow that SLICC",
+    body: text,
+    actions: [],
+    dismissible: false,
+  };
+}
+
 function servers(names: readonly string[], lead: boolean): string {
   if (names.length > 1) return `MCP servers: ${names.join(', ')}`;
   return `${lead ? 'the' : 'and the'} MCP server ${names[0]}`;
@@ -33,18 +46,20 @@ export function movedNotice(accounts: readonly MovedName[]): Notice {
 export class NoticesAdapter extends Emitter<{ notices: readonly Notice[] }> implements NoticesPort {
   readonly #settings: AgentSettings;
   readonly #report: Report;
+  readonly #mismatch: readonly Notice[];
   #hidden = false;
 
-  constructor(settings: AgentSettings, report: Report) {
+  constructor(settings: AgentSettings, report: Report, mismatch?: string) {
     super();
     this.#settings = settings;
     this.#report = report;
+    this.#mismatch = mismatch ? [mismatchBanner(mismatch)] : [];
     settings.state.subscribe(() => this.emit('notices', this.list()));
   }
 
   list(): readonly Notice[] {
     const moved = this.#settings.state.value?.moved;
-    return moved?.length && !this.#hidden ? [movedNotice(moved)] : [];
+    return [...this.#mismatch, ...(moved?.length && !this.#hidden ? [movedNotice(moved)] : [])];
   }
 
   async act(): Promise<void> {}

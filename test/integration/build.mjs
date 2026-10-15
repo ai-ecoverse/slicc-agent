@@ -10,6 +10,7 @@ await build({
     'test/integration/page/main-worker.js',
     'test/integration/page/codemode-worker.js',
     'test/integration/page/adobe-worker.js',
+    'test/integration/page/old-follower.js',
   ],
   outdir: 'dist-test',
   bundle: true,
@@ -18,7 +19,6 @@ await build({
   target: 'es2024',
   sourcemap: 'linked',
   alias: {
-    'node:crypto': './test/integration/shims/node-crypto.js',
     'node:worker_threads': './test/integration/shims/node-worker-threads.js',
     'node:fs/promises': './test/integration/shims/node-only.js',
     'node:module': './test/integration/shims/node-only.js',
@@ -28,6 +28,19 @@ await build({
     'node:http': './test/integration/shims/node-only.js',
   },
   plugins: [
+    {
+      name: 'agent-4-chord',
+      setup(build) {
+        build.onResolve({ filter: /^@earendil-works\/chord(\/|$)/ }, (args) =>
+          /node_modules\/@earendil-works\/pi-(client|protocol)\//.test(args.importer)
+            ? build.resolve(args.path, {
+                kind: args.kind,
+                resolveDir: 'node_modules/slicc-agent-4',
+              })
+            : undefined
+        );
+      },
+    },
     {
       name: 'lazy-bedrock',
       setup(build) {
@@ -50,7 +63,6 @@ await build({
   sourcemap: 'linked',
   logLevel: 'warning',
   alias: {
-    'node:crypto': './test/integration/shims/node-crypto.js',
     'node:worker_threads': './test/integration/shims/node-worker-threads.js',
     'node:fs/promises': './test/integration/shims/node-only.js',
     'node:module': './test/integration/shims/node-only.js',

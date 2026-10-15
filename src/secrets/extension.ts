@@ -53,10 +53,12 @@ export async function scrubResult(
   result: ToolExecutionResult,
   scrub: Pick<Scrub, 'texts'>
 ): Promise<ToolExecutionResult | undefined> {
-  const content = [...(result.content ?? [])];
+  const content = [...(result.output ?? [])];
   const diagnostics = [...(result.diagnostics ?? [])];
-  const details =
-    result.details === undefined ? undefined : (structuredClone(result.details) as JsonValue);
+  const copy = (value: JsonValue | undefined) =>
+    value === undefined ? undefined : (structuredClone(value) as JsonValue);
+  const details = copy(result.details);
+  const structured = copy(result.structuredOutput);
   const found: Leaf[] = [];
   content.forEach((item, at) => {
     if (item.type === 'text')
@@ -73,19 +75,25 @@ export async function scrubResult(
     leaves(details, found, (next) => {
       replaced = next;
     });
+  let output = structured;
+  if (structured !== undefined)
+    leaves(structured, found, (next) => {
+      output = next;
+    });
   const before = found.map((leaf) => leaf.get());
   const after = await scrub.texts(before);
   if (after.every((text, at) => text === before[at])) return undefined;
   found.forEach((leaf, at) => {
     leaf.set(after[at] as string);
   });
-  const kept = result.content as ToolExecutionResult['content'] & unknown[];
+  const kept = result.output as ToolExecutionResult['output'] & unknown[];
   if (kept) kept.splice(0, kept.length, ...content);
   return {
     ...result,
-    ...(kept ? { content: kept } : {}),
+    ...(kept ? { output: kept } : {}),
     ...(result.diagnostics ? { diagnostics } : {}),
     ...(replaced === undefined ? {} : { details: replaced }),
+    ...(output === undefined ? {} : { structuredOutput: output }),
   };
 }
 

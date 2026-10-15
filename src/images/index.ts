@@ -18,7 +18,7 @@ function unsupportedImage(result: Result): boolean {
 }
 
 function refuse(text: string): Result {
-  return { content: [{ type: 'text', text }], isError: true } as Result;
+  return { output: [{ type: 'text', text }], isError: true } as Result;
 }
 
 export function imageReads(read: ToolRegistration, fit: Shrink = shrink): Extension {
@@ -44,7 +44,7 @@ export function imageReads(read: ToolRegistration, fit: Shrink = shrink): Extens
               `${path} is too large to read as an image (${image.bytes.length} bytes after fitting it to ${MAX_WIDTH} px). Take a smaller screenshot, for example with --max-width ${MAX_WIDTH}.`
             );
           return {
-            content: [
+            output: [
               { type: 'text', text: `${path} (${image.mimeType}, ${image.bytes.length} bytes)` },
               { type: 'image', data, mimeType: image.mimeType },
             ],
