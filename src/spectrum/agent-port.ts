@@ -22,7 +22,7 @@ import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts'
 import { shownLabel } from '../titles/shown.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
-import { isBusy, providerName, queued, toMessages } from './messages.ts';
+import { CONNECT_IT, isBusy, providerName, queued, toMessages } from './messages.ts';
 import { readUrl, sendAttachments } from './outgoing.ts';
 
 export const CONE = 'cone';
@@ -208,7 +208,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
           this.#note(agentId, {
             kind: 'error',
             title,
-            text: 'Connect it in Settings › Accounts.',
+            text: CONNECT_IT,
             action: 'settings',
           });
       },

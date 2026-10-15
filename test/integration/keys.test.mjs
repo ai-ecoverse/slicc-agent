@@ -212,7 +212,14 @@ test('a 3.x credential store is wiped at the 4.x start, with one dismissible not
             .slice(before)
             .flatMap((message) =>
               message.role === 'system' && message.kind === 'error'
-                ? [{ type: 'error', message: message.title, action: message.action }]
+                ? [
+                    {
+                      type: 'error',
+                      message: message.title,
+                      detail: message.text,
+                      action: message.action,
+                    },
+                  ]
                 : (message.parts ?? [])
             )
             .find((part) => part.type === 'error')
@@ -223,6 +230,7 @@ test('a 3.x credential store is wiped at the 4.x start, with one dismissible not
     );
     assert.equal(error?.message, `${name} isn't connected.`, JSON.stringify(error));
     assert.equal(error.action, 'settings');
+    assert.equal(error.detail, 'Connect it in Settings › Accounts.');
     assert.doesNotMatch(JSON.stringify(error), /expired|rejected/);
   }
   await page.until(() => {
