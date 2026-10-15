@@ -32,8 +32,8 @@ async function boot(page, steps) {
       channel.onbufferedamountlow = pump;
       return {
         write(bytes) {
-          for (let at = 0; at < bytes.length; at += 16 * 1024)
-            queue.push(bytes.slice(at, at + 16 * 1024));
+          for (let at = 0; at < bytes.length; at += 64 * 1024)
+            queue.push(bytes.slice(at, at + 64 * 1024));
           pump();
         },
         close() {
@@ -105,15 +105,18 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
     { answer: 'Steered.' },
     { tool: { name: 'bash', args: { command: 'sleep 120' } } },
   ]);
-  const seen = await page.evaluate(async () => {
-    const { owner, follow: join, until, said, busy } = globalThis.follow;
-    const ctx = BACKGROUND_CONTEXT;
+  await page.evaluate(async () => {
+    const { owner, follow: join, until, said } = globalThis.follow;
     const { connection: follower } = await join(false);
     const { connection: viewer } = await join(true);
     const local = await owner.connect();
     await local.prompt('Owner speaking.');
     await until(() => said(follower).includes('Watched.'), 'the follower to watch');
     await until(() => said(viewer).includes('Watched.'), 'the viewer to watch');
+    globalThis.joined = { follower, viewer, local };
+  });
+  const sent = await page.evaluate(async () => {
+    const { follower } = globalThis.joined;
     const random = (size) => {
       const bytes = new Uint8Array(size);
       for (let at = 0; at < size; at += 65536)
@@ -123,25 +126,30 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
         text += String.fromCharCode(...bytes.subarray(at, at + 32768));
       return btoa(text);
     };
-    const attachments = [
-      {
-        name: 'one.bin',
-        mimeType: 'application/octet-stream',
-        kind: 'file',
-        data: random(5 * 1024 * 1024),
-      },
-      {
-        name: 'two.bin',
-        mimeType: 'application/octet-stream',
-        kind: 'file',
-        data: random(5 * 1024 * 1024),
-      },
-    ];
+    const attachments = ['one.bin', 'two.bin'].map((name) => ({
+      name,
+      mimeType: 'application/octet-stream',
+      kind: 'file',
+      data: random(5 * 1024 * 1024),
+    }));
     const big = await follower.control.send(
       { text: 'Two files.', whenBusy: 'followUp', requestId: null, attachments },
-      ctx
+      BACKGROUND_CONTEXT
     );
-    const files = await follower.control.wait(big.submissionId, ctx);
+    globalThis.joined.big = big.submissionId;
+    return {
+      accepted: big.accepted,
+      sentBytes: attachments.reduce((sum, item) => sum + item.data.length, 0),
+    };
+  });
+  const files = await page.evaluate(async () => {
+    const { follower, big } = globalThis.joined;
+    return follower.control.wait(big, BACKGROUND_CONTEXT);
+  });
+  const steering = await page.evaluate(async () => {
+    const { until, busy } = globalThis.follow;
+    const { follower } = globalThis.joined;
+    const ctx = BACKGROUND_CONTEXT;
     const slow = await follower.control.send(
       { text: 'Take your time.', whenBusy: 'followUp', requestId: null },
       ctx
@@ -153,6 +161,12 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
     );
     const steered = await follower.control.wait(slow.submissionId, ctx);
     await until(() => Object.values(follower.deliveries.value).includes('steer'), 'the steer');
+    return { steer: steer.accepted, steered };
+  });
+  const ending = await page.evaluate(async () => {
+    const { owner, until, busy } = globalThis.follow;
+    const { follower, viewer, local } = globalThis.joined;
+    const ctx = BACKGROUND_CONTEXT;
     const long = await follower.control.send(
       { text: 'Never mind.', whenBusy: 'followUp', requestId: null },
       ctx
@@ -179,17 +193,10 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
     await follower.close();
     await local.close();
     await owner.release();
-    return {
-      files,
-      sentBytes: attachments.reduce((sum, item) => sum + item.data.length, 0),
-      steer: steer.accepted,
-      steered,
-      aborted: aborted.status,
-      refusals,
-      stillBusy,
-      users,
-    };
+    return { aborted: aborted.status, refusals, stillBusy, users };
   });
+  const seen = { files, ...sent, ...steering, ...ending };
+  assert.equal(seen.accepted, true);
   assert.ok(seen.sentBytes > 13 * MIB);
   assert.deepEqual(seen.files, { status: 'done', text: 'Got the files.', reason: null });
   assert.ok(
