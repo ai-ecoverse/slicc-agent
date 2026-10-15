@@ -213,6 +213,29 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
       expiresAt: null,
       gates: { messages: 'user', tools: 'user' },
     });
+    const unreviewed = [];
+    for (const tools of ['off', 'cone'])
+      unreviewed.push(
+        await model.guests
+          .mint('cone', { label: 'Eve', expiresAt: null, gates: { messages: 'off', tools } })
+          .then(
+            () => 'minted',
+            (error) => error.message
+          ),
+        (
+          await local.control.guestOpen(
+            {
+              id: `direct-${tools}`,
+              label: 'Eve',
+              agentId: 'cone',
+              expiresAt: null,
+              gates: { messages: 'off', tools },
+            },
+            BACKGROUND_CONTEXT
+          )
+        ).error
+      );
+    const listedAfterUnreviewed = model.guests.list().map((listed) => listed.label);
     const asks = { guest: { id: seat.id, label: 'Mallory' }, readOnly: false, pages: true };
     const asFollower = await join(asks, connectAgent).then(
       () => 'connected',
@@ -239,7 +262,7 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
             label: 'x',
             agentId: 'cone',
             expiresAt: null,
-            gates: { messages: 'off', tools: 'off' },
+            gates: { messages: 'off', tools: 'user' },
           },
           BACKGROUND_CONTEXT
         )
@@ -253,6 +276,9 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
       pages: guest.pages ?? null,
       remote: guest.remote ?? null,
       views: guest.views ?? null,
+      unreviewed,
+      listedAfterUnreviewed,
+      hubRevoked: globalThis.seats.revoked,
     };
     await guest.close();
     return out;
@@ -268,6 +294,18 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
   assert.equal(result.pages, null);
   assert.equal(result.remote, null);
   assert.equal(result.views, null);
+  const review = "A guest's tool calls need a review: by a person, the judge or a scoop.";
+  assert.deepEqual(
+    result.unreviewed,
+    [review, review, review, review],
+    'tools off and cone are refused at mint, through the port and directly'
+  );
+  assert.deepEqual(result.listedAfterUnreviewed, ['Mallory']);
+  assert.deepEqual(
+    result.hubRevoked,
+    ['seat-2', 'seat-3'],
+    'the hub seats minted for a refused draft are revoked again'
+  );
 });
 
 test('seats survive a worker restart: a revoked seat stays refused with its epoch bumped, a live one admits again, and an expiring one closes its guest and leaves the list', async (t) => {

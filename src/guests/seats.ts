@@ -65,6 +65,8 @@ export function checkDraft(draft: GuestDraft, now: number): string | null {
   if (!cleanLabel(draft.label)) return 'A guest seat needs a label.';
   if (!isGate(draft.gates?.messages) || !isGate(draft.gates?.tools))
     return 'A guest seat needs a known gate for messages and for tools.';
+  if (draft.gates.tools === 'off' || draft.gates.tools === 'cone')
+    return "A guest's tool calls need a review: by a person, the judge or a scoop.";
   const { expiresAt } = draft;
   if (expiresAt !== null && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)))
     return 'A guest seat expires at a time, or never.';
