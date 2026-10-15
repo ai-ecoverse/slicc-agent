@@ -88,8 +88,10 @@ export async function wipeLegacy(
   return first ? { now: first, later: Promise.resolve([]) } : { now: [], later: done };
 }
 
+export type MovedName = { kind: 'model' | 'mcp'; label: string };
+
 export interface KeysMoved {
-  readonly state: ReplicatedState<string[]>;
+  readonly state: ReplicatedState<MovedName[]>;
   dismiss(context: Context): Promise<void>;
 }
 
@@ -115,11 +117,13 @@ export async function keysMoved(
   const missing = (account: MovedAccount) =>
     account.kind === 'mcp' ? !records.mcp(account.server) : !records.model(account.provider);
   const pending = () =>
-    read && !saved.dismissed ? saved.accounts.filter(missing).map((account) => account.label) : [];
-  const state = replicatedState<string[]>(pending());
+    read && !saved.dismissed
+      ? saved.accounts.filter(missing).map(({ kind, label }) => ({ kind, label }))
+      : [];
+  const state = replicatedState<MovedName[]>(pending());
   const update = (using: Context) => {
     const next = pending();
-    if (next.join('\n') !== state.value.join('\n')) state.replace(using, next);
+    if (JSON.stringify(next) !== JSON.stringify(state.value)) state.replace(using, next);
   };
   const mark = (using: Context) => {
     if (vault.connected) read = true;

@@ -28,7 +28,7 @@ export {
   type MonitorInput,
   monitorSnapshot,
 } from './monitor-port.ts';
-export { KEYS_MOVED, movedNotice, NoticesAdapter } from './notices-port.ts';
+export { KEYS_MOVED, movedList, movedNotice, NoticesAdapter } from './notices-port.ts';
 export {
   PageAdapter,
   type PageDocument,

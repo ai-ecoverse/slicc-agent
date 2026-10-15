@@ -88,6 +88,27 @@ export function createSliccModels(
   return models;
 }
 
+const SHORT: Record<string, string> = { [BEDROCK]: 'Bedrock', [ADOBE]: 'Adobe' };
+
+function labels(
+  models: MutableModels,
+  providers: Provider[],
+  stored: ReadonlySet<string>
+): Record<string, string> {
+  return Object.fromEntries(
+    providers
+      .filter((provider) => !stored.has(provider.id))
+      .flatMap((provider) =>
+        models
+          .getModels(provider.id)
+          .map((model) => [
+            `${provider.id}/${model.id}`,
+            `${model.name} on ${SHORT[provider.id] ?? provider.name ?? provider.id}`,
+          ])
+      )
+  );
+}
+
 function choices(
   models: MutableModels,
   providers: Provider[],
@@ -209,9 +230,12 @@ export async function createAgentSettings(
     );
     return {
       models: choices(models, providers, stored),
+      labels: labels(models, providers, stored),
       accounts: [...accounts(records, providers), ...((await mcp?.accounts()) ?? [])],
       budget: await budget(records, usage),
-      ...(moved?.state.value?.length ? { moved: [...moved.state.value] } : {}),
+      ...(moved?.state.value?.length
+        ? { moved: moved.state.value.map((name) => ({ ...name })) }
+        : {}),
     };
   };
   const state = replicatedState<SettingsState>(await snapshot());
