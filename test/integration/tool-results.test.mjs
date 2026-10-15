@@ -5,18 +5,12 @@ import { launch } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-test('the model gets the text of MCP resource tools in a script, lick decisions, refused scoop reads and fitted wide images', async (t) => {
+test('the model gets the text of MCP resource tools, lick decisions, refused scoop reads and fitted wide images', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const steps = [
-    {
-      tool: {
-        name: 'codemode',
-        args: {
-          code: 'const listed = await tools.list_mcp_resources({}); const read = await tools.read_mcp_resource({ server: "docs", uri: "note://1" }); text(listed); text(read);',
-        },
-      },
-    },
+    { tool: { name: 'list_mcp_resources', args: {} } },
+    { tool: { name: 'read_mcp_resource', args: { server: 'docs', uri: 'note://1' } } },
     { tool: { name: 'lick_confirm', args: { lick_id: 'lk-nope', reason: 'fine' } } },
     { tool: { name: 'read', args: { path: '/tmp/wide.png' } } },
     { answer: 'Cone done.' },
@@ -35,7 +29,7 @@ test('the model gets the text of MCP resource tools in a script, lick decisions,
     };
     await write(
       '/home/.pi/agent/mcp.json',
-      JSON.stringify({ mcpServers: { docs: { url: 'https://mcp.test/mcp' } } })
+      JSON.stringify({ mcpServers: { docs: { url: 'https://mcp.test/mcp', exposure: 'direct' } } })
     );
     const { bootKernel } = await import('/kernel.js');
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
@@ -86,10 +80,11 @@ test('the model gets the text of MCP resource tools in a script, lick decisions,
     await owner.release();
     return result;
   }, steps);
-  const [scripted, decided, image] = seen.cone;
-  assert.equal(scripted.name, 'codemode');
-  assert.match(scripted.text, /"uri":"note:\/\/1"/);
-  assert.match(scripted.text, /contents of note:\/\/1/);
+  const [listed, read, decided, image] = seen.cone;
+  assert.equal(listed.name, 'list_mcp_resources');
+  assert.match(listed.text, /"uri":"note:\/\/1"/);
+  assert.equal(read.name, 'read_mcp_resource');
+  assert.match(read.text, /contents of note:\/\/1/);
   assert.equal(decided.name, 'lick_confirm');
   assert.match(decided.text, /There is no lick lk-nope in this conversation\./);
   assert.equal(image.name, 'read');
