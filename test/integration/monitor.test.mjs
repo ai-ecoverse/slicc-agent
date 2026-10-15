@@ -139,3 +139,44 @@ test('the live monitor through the production worker: it runs only while the pan
     assert.ok(!seen.agentKeys.includes('cpu'));
   }
 });
+
+test('the budget card says when the weekly budget resets in calendar days, with the exact time as its tooltip', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const day = 86400000;
+  const resets = new Date((Math.floor(Date.now() / day) + 2) * day + 60000).toISOString();
+  const record = {
+    kind: 'model',
+    name: 'ADOBE_IMS_TOKEN',
+    provider: 'adobe',
+    placeholder: 'fnox_proxy_adobe',
+    value: 'budget-key-0001',
+  };
+  const query = [
+    'relay=mcp.test',
+    'e2e',
+    'vault',
+    `resets=${encodeURIComponent(resets)}`,
+    `record=${encodeURIComponent(JSON.stringify(record))}`,
+  ].join('&');
+  const vital = await page.evaluate(async (query) => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const owner = await startAgent({
+      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const model = createAgentModel(await owner.connect());
+    await model.agent.ready();
+    const card = () => model.monitor.snapshot().vitals.find((entry) => entry.id === 'budget');
+    for (let tries = 0; tries < 500 && !card(); tries++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    const found = card() ?? null;
+    await owner.release();
+    return found;
+  }, query);
+  assert.equal(vital?.value, '40%');
+  assert.equal(vital.unit, 'resets in 2 days');
+  assert.equal(vital.hint, `resets ${resets.slice(0, 16).replace('T', ' ')} UTC`);
+});
