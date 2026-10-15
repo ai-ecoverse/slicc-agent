@@ -660,3 +660,5 @@ npm run lint
 ```
 
 `npm test` builds `dist/`, bundles a test worker that runs the agent on pi's faux provider, and runs the integration tests in Chromium through the [slicc-shared-web harness](https://github.com/ai-ecoverse/slicc-shared-web#integration-test-harness). Unit tests live in `test/unit/`, which stays out of git; the pre-commit hook requires every changed line in `src/` to be covered. No test calls a real model.
+
+Releases are cut by semantic-release on every push to `main`, and only there, in two jobs. `main` only takes merges that the merge queue tested on that same commit, so the release runs no tests. The `tag` job runs on the bench pool, so it starts within a minute of the push. It computes the version, tags the commit and creates the GitHub release, with `npmPublish: false`. A run that starts after `main` has moved on skips, and the run for the newer commit releases it. The `publish` job runs on a GitHub-hosted runner, because npm's trusted publishing and provenance accept no self-hosted runner. It builds the tagged commit and publishes it, unless npm already has that version. Re-running a failed `publish` job completes the version.
