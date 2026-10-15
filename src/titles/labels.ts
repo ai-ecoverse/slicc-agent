@@ -166,6 +166,7 @@ export async function attachLabels(
   );
   const labels = replicatedState<Record<string, string>>(loaded);
   const flying = new Map<string, Promise<string | null>>();
+  const waiting = new Set<string>();
   const spent = new Map<string, number[]>();
   const pollMs = options.pollMs ?? POLL_MS;
   const rounds = Math.ceil((options.settleMs ?? SETTLE_MS) / pollMs);
@@ -219,12 +220,16 @@ export async function attachLabels(
     return label || null;
   };
   const longer = (key: string) =>
-    [...flying.keys(), ...Object.keys(labels.value)].some((other) => other.startsWith(`${key} `));
+    [...flying.keys(), ...waiting, ...Object.keys(labels.value)].some((other) =>
+      other.startsWith(`${key} `)
+    );
   const prefixOf = (callIds: readonly string[]) => {
     for (let size = callIds.length - 1; size > 0; size--) {
       const part = callIds.slice(0, size);
-      const shown = flying.get(labelKey(part)) ?? shownLabel(labels.value, part);
+      const key = labelKey(part);
+      const shown = flying.get(key) ?? shownLabel(labels.value, part);
       if (shown !== undefined) return Promise.resolve(shown);
+      if (waiting.has(key)) return Promise.resolve(null);
     }
     return undefined;
   };
@@ -252,7 +257,10 @@ export async function attachLabels(
       return (await relabel(agentId, callIds, key)) ?? shown;
     }
     const first = await ask(agentId, key, found, false);
-    void relabel(agentId, callIds, key).catch(() => undefined);
+    waiting.add(key);
+    void relabel(agentId, callIds, key)
+      .catch(() => undefined)
+      .finally(() => waiting.delete(key));
     return first;
   };
   return {
