@@ -1,7 +1,7 @@
 import type { MonitorSection } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { AgentConnection } from '../client.ts';
 import { AgentAdapter } from './agent-port.ts';
-import { ApprovalsAdapter } from './approvals-port.ts';
+import { ApprovalsAdapter, type HostApprovals } from './approvals-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { MonitorAdapter } from './monitor-port.ts';
@@ -22,6 +22,8 @@ export {
   type ApprovalVerdict,
   type GuestMessageApproval,
   type GuestToolApproval,
+  type HostApprovals,
+  NOT_HERE,
   type SudoApproval,
   shown as shownApproval,
 } from './approvals-port.ts';
@@ -68,6 +70,7 @@ export function createAgentModel(
     login?: Login;
     monitor?: { extra?: () => readonly MonitorSection[] };
     page?: PageOptions;
+    approvals?: HostApprovals;
   } = {}
 ): {
   agent: AgentAdapter;
@@ -86,7 +89,7 @@ export function createAgentModel(
   const run = options.page?.run;
   return {
     agent,
-    approvals: new ApprovalsAdapter(connection),
+    approvals: new ApprovalsAdapter(connection, options.approvals),
     page: options.page && run ? new PageAdapter(connection, agent, { ...options.page, run }) : null,
     settings: new SettingsAdapter(
       connection.settings,

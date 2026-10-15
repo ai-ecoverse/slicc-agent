@@ -259,3 +259,56 @@ test('a pending approval survives a reload, and one answered before it stays ans
   assert.equal(seen.late, 'Someone else already answered this.');
   assert.equal(seen.states[seen.ids[1]], 'rejected');
 });
+
+test("bios's own sudo approvals and the agent's guest approvals show together, and each answer reaches its owner", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  const seen = await page.evaluate(async () => {
+    const { owner, ask, until, record, listed, message } = globalThis.t;
+    const listeners = { approvals: new Set(), ended: new Set() };
+    const decided = [];
+    const bios = {
+      waiting: [
+        {
+          id: 'sudo-1',
+          kind: 'sudo',
+          requester: { kind: 'user', name: 'you', where: 'Terminal 1' },
+          command: 'apt install jq',
+          createdAt: Date.now() - 1000,
+          expiresAt: Date.now() + 300_000,
+          always: true,
+        },
+      ],
+      list: () => bios.waiting,
+      on(type, listener) {
+        listeners[type].add(listener);
+        return () => listeners[type].delete(listener);
+      },
+      async decide(id, decision) {
+        decided.push([id, decision]);
+        bios.waiting = bios.waiting.filter((approval) => approval.id !== id);
+        for (const listener of listeners.approvals) listener(bios.waiting);
+      },
+    };
+    const local = await owner.connect();
+    const model = createAgentModel(local, { approvals: bios });
+    const guest = await ask(message());
+    await until(() => listed(model, guest.id), 'the guest approval');
+    const both = model.approvals.list().map(({ id, kind }) => ({ id, kind }));
+    await model.approvals.decide('sudo-1', 'once');
+    const afterSudo = model.approvals.list().map(({ id }) => id);
+    await model.approvals.decide(guest.id, 'deny');
+    await until(() => record(local, guest.id)?.state === 'rejected', 'the guest answer');
+    const left = model.approvals.list().length;
+    await local.close();
+    await owner.release();
+    return { both, afterSudo, decided, left, guest: guest.id };
+  });
+  assert.deepEqual(seen.both, [
+    { id: 'sudo-1', kind: 'sudo' },
+    { id: seen.guest, kind: 'guest-message' },
+  ]);
+  assert.deepEqual(seen.decided, [['sudo-1', 'once']]);
+  assert.deepEqual(seen.afterSudo, [seen.guest]);
+  assert.equal(seen.left, 0);
+});
