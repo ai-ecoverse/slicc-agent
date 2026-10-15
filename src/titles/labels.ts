@@ -5,15 +5,14 @@ import {
   type ConversationId,
   type ConversationView,
   defineDoc,
-  type EntryRecord,
   type Harness,
   type Tx,
   UsageDoc,
 } from '@earendil-works/pi-durable';
-import { answerText } from '../agent.ts';
 import type { Agents } from '../agents.ts';
 import type { VaultState } from '../secrets/vault.ts';
 import { vaultHold } from '../secrets/view.ts';
+import { callIdsOf, clusterOf, describe } from './cluster.ts';
 import { type Labeler, scrubbed } from './generate.ts';
 import { labelKey, shownLabel } from './shown.ts';
 
@@ -31,21 +30,11 @@ export const LABELS_PER_MINUTE = 6;
 const MINUTE = 60_000;
 const LABEL_WORDS = 8;
 const LABEL_LENGTH = 80;
-const OUTPUT_LENGTH = 600;
+const RESERVED = 2;
+const POLL_MS = 1000;
+const SETTLE_MS = 600_000;
 
 export const LABEL_WAIT_MS = 30_000;
-
-function callIdsOf(views: readonly ConversationView[]): Set<string> {
-  const ids = new Set<string>();
-  for (const view of views)
-    for (const entry of view.entries) {
-      const content = (entry.model?.[0] as Said | undefined)?.content;
-      if (entry.kind === 'pi.assistant' && Array.isArray(content))
-        for (const block of content as Block[])
-          if (block.type === 'toolCall' && block.id) ids.add(block.id);
-    }
-  return ids;
-}
 
 export function visibleLabels(
   labels: ReplicatedState<Record<string, string>>,
@@ -121,49 +110,6 @@ export function cleanLabel(text: string): string {
     .slice(0, LABEL_LENGTH);
 }
 
-export type Run = { name: string; input: string; output: string; at: number };
-
-type Block = { type?: string; id?: string; name?: string; arguments?: unknown };
-
-type Said = { content?: unknown; toolCallId?: string; timestamp?: number };
-
-export function clusterOf(
-  entries: readonly EntryRecord[],
-  callIds: readonly string[]
-): Run[] | undefined {
-  const calls = new Map<string, Pick<Run, 'name' | 'input'>>();
-  const results = new Map<string, Pick<Run, 'output' | 'at'>>();
-  for (const entry of entries) {
-    const said = entry.model?.[0] as Said | undefined;
-    if (entry.kind === 'pi.assistant' && Array.isArray(said?.content))
-      for (const block of said.content as Block[])
-        if (block.type === 'toolCall' && block.id)
-          calls.set(block.id, {
-            name: block.name ?? 'tool',
-            input: JSON.stringify(block.arguments ?? {}),
-          });
-    if (entry.kind === 'pi.tool-result' && said?.toolCallId)
-      results.set(said.toolCallId, {
-        output: answerText(said.content),
-        at: said.timestamp ?? 0,
-      });
-  }
-  const runs: Run[] = [];
-  for (const id of callIds) {
-    const call = calls.get(id);
-    const result = results.get(id);
-    if (!call || !result) return undefined;
-    runs.push({ ...call, ...result });
-  }
-  return runs;
-}
-
-export function describe(runs: readonly Run[]): string {
-  return runs
-    .map((run) => `${run.name}: ${run.input}\n=> ${run.output.slice(0, OUTPUT_LENGTH)}`)
-    .join('\n\n');
-}
-
 type Counted = Record<'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'totalTokens', number> & {
   cost: Record<'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'total', number>;
 };
@@ -193,6 +139,8 @@ export interface LabelsAttach {
   vault?: Pick<ReplicatedState<VaultState>, 'value'>;
   now?: () => number;
   perMinute?: number;
+  pollMs?: number;
+  settleMs?: number;
 }
 
 export interface LabelsRuntime {
@@ -219,13 +167,23 @@ export async function attachLabels(
   const labels = replicatedState<Record<string, string>>(loaded);
   const flying = new Map<string, Promise<string | null>>();
   const spent = new Map<string, number[]>();
-  const admit = (agentId: string) => () => {
+  const pollMs = options.pollMs ?? POLL_MS;
+  const rounds = Math.ceil((options.settleMs ?? SETTLE_MS) / pollMs);
+  const sleep = () => new Promise((resolve) => setTimeout(resolve, pollMs));
+  const used = (agentId: string) => {
     const at = now();
     const recent = (spent.get(agentId) ?? []).filter((time) => at - time < MINUTE);
     spent.set(agentId, recent);
-    if (recent.length >= cap) return false;
-    recent.push(at);
+    return recent;
+  };
+  const admit = (agentId: string, settle: boolean) => () => {
+    const recent = used(agentId);
+    if (recent.length >= (settle ? cap : cap - RESERVED)) return false;
+    recent.push(now());
     return true;
+  };
+  const room = async (agentId: string) => {
+    for (let round = 0; round < rounds && used(agentId).length >= cap; round++) await sleep();
   };
   const keep = (
     key: string,
@@ -242,19 +200,60 @@ export async function attachLabels(
       await spend(tx, conversation, answer);
       return { ...doc.labels };
     }, BACKGROUND_CONTEXT);
-  const make = async (agentId: string, callIds: readonly string[], key: string) => {
+  const read = async (agentId: string, callIds: readonly string[]) => {
     const conversation = await agents.conversation(agentId, BACKGROUND_CONTEXT);
-    if (!conversation) return null;
-    const runs = clusterOf((await conversation.context(BACKGROUND_CONTEXT)).entries, callIds);
-    if (!runs || Math.max(...runs.map((run) => run.at)) < started) return null;
+    if (!conversation) return undefined;
+    const cluster = clusterOf((await conversation.context(BACKGROUND_CONTEXT)).entries, callIds);
+    return cluster ? { conversation, cluster } : undefined;
+  };
+  type Read = NonNullable<Awaited<ReturnType<typeof read>>>;
+  const ask = async (agentId: string, key: string, found: Read, settle: boolean) => {
     if (vaultHold(options.vault?.value)) return null;
-    const text = await scrubbed(describe(runs));
-    const model = modelName((await conversation.agent(BACKGROUND_CONTEXT)).model);
-    const asked = await options.label(text, model, BACKGROUND_CONTEXT, admit(agentId));
+    if (settle) await room(agentId);
+    const text = await scrubbed(describe(found.cluster.runs));
+    const model = modelName((await found.conversation.agent(BACKGROUND_CONTEXT)).model);
+    const asked = await options.label(text, model, BACKGROUND_CONTEXT, admit(agentId, settle));
     if (!asked) return null;
     const label = cleanLabel(asked.text);
-    labels.replace(BACKGROUND_CONTEXT, await keep(key, label, conversation.id, asked.answer));
+    labels.replace(BACKGROUND_CONTEXT, await keep(key, label, found.conversation.id, asked.answer));
     return label || null;
+  };
+  const longer = (key: string) =>
+    [...flying.keys(), ...Object.keys(labels.value)].some((other) => other.startsWith(`${key} `));
+  const prefixOf = (callIds: readonly string[]) => {
+    for (let size = callIds.length - 1; size > 0; size--) {
+      const part = callIds.slice(0, size);
+      const shown = flying.get(labelKey(part)) ?? shownLabel(labels.value, part);
+      if (shown !== undefined) return Promise.resolve(shown);
+    }
+    return undefined;
+  };
+  const settled = async (agentId: string, callIds: readonly string[], key: string) => {
+    for (let round = 0; round < rounds; round++) {
+      await sleep();
+      if (longer(key)) return undefined;
+      const found = await read(agentId, callIds);
+      if (found?.cluster.settled) return found;
+    }
+    return undefined;
+  };
+  const relabel = async (agentId: string, callIds: readonly string[], key: string) => {
+    const found = await settled(agentId, callIds, key);
+    return found ? ask(agentId, key, found, true) : undefined;
+  };
+  const make = async (agentId: string, callIds: readonly string[], key: string) => {
+    const found = await read(agentId, callIds);
+    if (!found || found.cluster.at < started) return null;
+    const prefix = prefixOf(callIds);
+    if (longer(key)) return (await prefix) ?? null;
+    if (found.cluster.settled) return ask(agentId, key, found, prefix !== undefined);
+    if (prefix !== undefined) {
+      const shown = await prefix;
+      return (await relabel(agentId, callIds, key)) ?? shown;
+    }
+    const first = await ask(agentId, key, found, false);
+    void relabel(agentId, callIds, key).catch(() => undefined);
+    return first;
   };
   return {
     labels,
