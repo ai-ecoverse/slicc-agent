@@ -126,11 +126,8 @@ async function boot(page, width = 1280) {
   await page.evaluate(helpers);
 }
 
-async function start(page, width = 1280) {
-  await page.evaluate(({ query, width }) => window.bootAgent(query, width), {
-    query: QUERY,
-    width,
-  });
+async function start(page, width = 1280, query = QUERY) {
+  await page.evaluate(({ query, width }) => window.bootAgent(query, width), { query, width });
 }
 
 async function release(page) {
@@ -275,5 +272,39 @@ test('a 3.x credential store is wiped at the 4.x start, with one dismissible not
     };
   });
   assert.deepEqual(shown, { notices: 0, text: null, moved: false });
+  await release(page);
+});
+
+test('while an open 3.x tab blocks the wipe there is no notice, and it shows once the tab lets go and the store is gone', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  await page.evaluate(
+    async ({ name, sealed }) => {
+      await window.seedLegacy(name, ['amazon-bedrock'], sealed);
+      window.oldTab = await new Promise((resolve, reject) => {
+        const opening = indexedDB.open(name);
+        opening.onsuccess = () => resolve(opening.result);
+        opening.onerror = () => reject(opening.error);
+      });
+    },
+    { name: LEGACY, sealed: SEALED }
+  );
+  await start(page, 1280, 'vault&bedrock&persist=/.slicc/keys-blocked');
+  const blocked = await page.evaluate(async (name) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return {
+      notice: window.noticeText(),
+      present: (await indexedDB.databases()).some((database) => database.name === name),
+    };
+  }, LEGACY);
+  assert.deepEqual(blocked, { notice: null, present: true });
+  await page.evaluate(() => window.oldTab.close());
+  const text = await page.until(() => window.noticeText());
+  assert.match(text, /Add them again in Settings › Accounts: Bedrock\./);
+  const gone = await page.evaluate(
+    async (name) => !(await indexedDB.databases()).some((database) => database.name === name),
+    LEGACY
+  );
+  assert.equal(gone, true);
   await release(page);
 });
