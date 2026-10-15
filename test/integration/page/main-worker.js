@@ -1,12 +1,13 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
 import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' };
+import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
 import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
 import { MemoryStorage } from '@earendil-works/pi-durable';
-import { adobeProvider, runAgentWorker } from '../../../src/index.ts';
+import { adobeProvider, openOpfsSqliteStorage, runAgentWorker } from '../../../src/index.ts';
 import { fakeVault } from '../fixtures/fake-vault.mjs';
 import { createMcpServer } from '../fixtures/mcp-server.mjs';
 import { seeded } from '../fixtures/seeds.mjs';
@@ -144,8 +145,10 @@ void runAgentWorker(self, {
     ? { mcpRedirect: new URL(params.get('redirect'), self.location.origin).href }
     : {}),
   model: { provider: 'faux', modelId: 'faux-1' },
-  providers: [faux.provider, ...e2e],
-  storage: async () => new MemoryStorage(),
+  providers: [faux.provider, ...e2e, ...(params.has('bedrock') ? [amazonBedrockProvider()] : [])],
+  storage: params.has('persist')
+    ? () => openOpfsSqliteStorage({ directory: params.get('persist') })
+    : async () => new MemoryStorage(),
   codemodeWorker: new URL('./codemode-worker.js', import.meta.url),
   ...(params.get('catalog')
     ? { catalog: new URL(params.get('catalog'), self.location.href).href }

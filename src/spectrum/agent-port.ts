@@ -22,7 +22,7 @@ import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts'
 import { shownLabel } from '../titles/shown.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
-import { isBusy, queued, toMessages } from './messages.ts';
+import { isBusy, providerName, queued, toMessages } from './messages.ts';
 import { readUrl, sendAttachments } from './outgoing.ts';
 
 export const CONE = 'cone';
@@ -181,19 +181,39 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   }
 
   notify(text: string, agentId: string = this.active()): void {
+    this.#note(agentId, { kind: 'notice', text });
+  }
+
+  #note(agentId: string, shown: Pick<SystemMessage, 'kind' | 'text' | 'title' | 'action'>): void {
     const notes = this.#notices.get(agentId) ?? [];
     notes.push({
       at: this.#messages.get(agentId)?.length ?? 0,
-      message: {
-        id: `n${crypto.randomUUID()}`,
-        role: 'system',
-        kind: 'notice',
-        text,
-        createdAt: Date.now(),
-      },
+      message: { id: `n${crypto.randomUUID()}`, role: 'system', ...shown, createdAt: Date.now() },
     });
     this.#notices.set(agentId, notes);
     this.emit('messages', agentId);
+  }
+
+  #unconnected(agentId: string, submissionId: string): void {
+    const provider = this.list()
+      .find((row) => row.id === agentId)
+      ?.model.split('/')[0];
+    const accounts = this.#connection.settings?.state.value?.accounts ?? [];
+    const account = accounts.find((item) => item.id === provider);
+    if (!account || account.status === 'connected') return;
+    const title = `${providerName(account.id, account.provider)} isn't connected.`;
+    this.#connection.control.wait(submissionId, BACKGROUND_CONTEXT).then(
+      (settled) => {
+        if (settled.status === 'unanswered' && settled.reason === 'no_model')
+          this.#note(agentId, {
+            kind: 'error',
+            title,
+            text: 'Connect it in Settings › Accounts.',
+            action: 'settings',
+          });
+      },
+      () => undefined
+    );
   }
 
   #report(agentId: string): (text: string) => void {
@@ -317,6 +337,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       .finally(() => pending && this.#settle(pending));
     if (!sent.accepted) throw new Error(sent.error.message);
     this.#sent(target || agentId, `q${sent.submissionId}`, at);
+    this.#unconnected(target || agentId, sent.submissionId);
     if (pending?.dropped)
       attempt(
         this.#connection.control.unqueue(pending.agentId, sent.submissionId, BACKGROUND_CONTEXT),

@@ -49,6 +49,7 @@ import {
 } from './secrets/endpoints.ts';
 import { repin, secretsExtension, shellGrants } from './secrets/extension.ts';
 import { grantFetch, mcpFetch, vaultFetch } from './secrets/fetch.ts';
+import { keysMoved, type MovedAccount, wipeLegacy } from './secrets/legacy.ts';
 import { secretNames } from './secrets/names.ts';
 import { type VaultRecords, vaultRecords } from './secrets/records.ts';
 import { scrubWith } from './secrets/scrub.ts';
@@ -115,6 +116,7 @@ export const STORE_DIR = '/.slicc';
 export const ACCOUNTS_FILE = `${STORE_DIR}/accounts.json`;
 
 async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions) {
+  const wiped = await wipeLegacy();
   const attach: KernelAttach = options.attach ?? attachKernel;
   const { kernel, admin } = await ports;
   const client = await attach(kernel);
@@ -122,7 +124,13 @@ async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions
   await warnSupport(users, client, options.users);
   const home = new SliccKernelEnv(client, { cwd: HOME });
   await privateStore(home);
-  return { client, users, home, at: { home: HOME, ...(users ? { agentDir: AGENT_DIR } : {}) } };
+  return {
+    client,
+    users,
+    home,
+    wiped,
+    at: { home: HOME, ...(users ? { agentDir: AGENT_DIR } : {}) },
+  };
 }
 
 function privateStore(env: SliccKernelEnv): Promise<unknown> {
@@ -306,9 +314,17 @@ function modelsOfAgent(
   return modelsCommand({ agents: agent.agents, settings, catalog, locked });
 }
 
-async function settingsOf(made: Awaited<ReturnType<typeof modelsOf>>, mcp: McpAccounts) {
+async function settingsOf(
+  made: Awaited<ReturnType<typeof modelsOf>>,
+  mcp: McpAccounts,
+  moved: { agent: Agent; vault: Vault; wiped: readonly MovedAccount[] }
+) {
   const { models, records, fields, providers, bases, endpoints } = made;
-  const settings = await createAgentSettings(models, { records, fields }, providers, { mcp });
+  const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
+  const settings = await createAgentSettings(models, { records, fields }, providers, {
+    mcp,
+    moved: keys,
+  });
   settings.state.subscribe(() => void endpoints.models(bases()).catch(() => undefined));
   return settings;
 }
@@ -337,7 +353,7 @@ async function start(
   options: AgentWorkerOptions,
   vault: Vault
 ): Promise<AgentHost> {
-  const { client, users, home, at } = await attached(ports, options);
+  const { client, users, home, at, wiped } = await attached(ports, options);
   const ready = await prepare(scope, { client, home, vault }, options);
   const { names, native, transport, facts, models, registry, records, endpoints } = ready;
   const memory = setupMemory(registry);
@@ -441,7 +457,7 @@ async function start(
     ...(people ? { layout: people.layout } : {}),
   });
   licks.licks.guard(freezer.frozenTarget);
-  const settings = await settingsOf(ready, mcpRuntime);
+  const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped });
   const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(
     {

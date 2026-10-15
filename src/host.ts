@@ -121,6 +121,7 @@ const noSettings: AgentSettings = {
   },
   disconnect: async () => {},
   signIn: async () => null,
+  dismissMoved: async () => {},
 };
 
 async function follow(
