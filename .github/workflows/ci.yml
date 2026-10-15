@@ -64,6 +64,7 @@ jobs:
     with:
       runs-on: ${{ needs.runner.outputs.runner }}
       timeout-minutes: 35
+      test: TEST_CONCURRENCY=4 npm test
 
   newest-kernel:
     name: integration on the newest certified kernel
@@ -72,6 +73,7 @@ jobs:
     timeout-minutes: 35
     env:
       LEFTHOOK: '0'
+      TEST_CONCURRENCY: '4'
       NEWEST_CERTIFIED_KERNEL: 1.86.0
       NEWEST_CERTIFIED_WASM: '@ai-ecoverse/wasm-git@2.55.0-15 @ai-ecoverse/wasm-bash@5.3.0-18 @ai-ecoverse/wasm-coreutils@9.12.0-5'
     steps:
@@ -93,9 +95,6 @@ jobs:
           else
             echo "::notice title=Chromium system dependencies::No root on $RUNNER_NAME, so install-deps is skipped and the runner image's system libraries serve Chromium."
           fi
-
-      - run: |
-          nproc; node -p 'os.availableParallelism() + " " + os.cpus().length + " " + os.totalmem()'; cat /sys/fs/cgroup/cpu.max 2>/dev/null || true; free -m || true
 
       - run: npm test
 
