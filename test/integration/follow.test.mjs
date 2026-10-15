@@ -251,3 +251,28 @@ test('a follower of a SLICC on another agent version shows a notice to update, a
   assert.deepEqual(shown.heard, [{ t: 'bye', reason: 'link protocol mismatch' }, { close: true }]);
   if (env.FOLLOW_SHOT) await page.screenshot(env.FOLLOW_SHOT);
 });
+
+test('a 4.x follower of a 5.x owner is refused at once, not left hanging', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const refused = await page.evaluate(async () => {
+    await import('/dist-test/page.js');
+    await import('/dist-test/old-follower.js');
+    const owner = await startAgent({
+      worker: () => new Worker('/dist-test/agent-worker.js?answer=Hi.', { type: 'module' }),
+    });
+    const started = performance.now();
+    const outcome = await Promise.race([
+      oldConnectAgent(await owner.port({ pages: false })).then(
+        () => 'connected',
+        (error) => error.message
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 5000)),
+    ]);
+    const ms = performance.now() - started;
+    await owner.release();
+    return { outcome, ms };
+  });
+  assert.equal(refused.outcome, 'serverId must be a canonical lowercase UUIDv4');
+  assert.ok(refused.ms < 2000, `${refused.ms}`);
+});
