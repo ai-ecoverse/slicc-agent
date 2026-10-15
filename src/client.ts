@@ -9,6 +9,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
+import type { GuestSeat } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import { mismatched } from './mismatch.ts';
 import { controlAnswer, pageAnswer, remoteAnswer, settingsAnswer } from './readonly.ts';
@@ -25,6 +26,7 @@ import {
   CONTROL_METHODS,
   type Command,
   type Delivered,
+  type GuestShown,
   type MonitorFeed,
   PAGE_METHODS,
   type PrivateRevision,
@@ -55,6 +57,9 @@ export interface AgentConnection {
   readonly monitor?: ReplicatedState<MonitorFeed>;
   readonly vault?: ReplicatedState<VaultState>;
   readonly labels?: ReplicatedState<Record<string, string>>;
+  readonly guests?: ReplicatedState<GuestSeat[]>;
+  readonly viewOnly?: boolean;
+  readonly guest?: GuestShown;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
@@ -210,6 +215,8 @@ export async function connectAgent(
     monitor: hold<MonitorFeed>(state('monitor')),
     vault: hold<VaultState>(state('vault')),
     labels: hold<Record<string, string>>(state('labels')),
+    guests: hold<GuestSeat[]>(state('guests')),
+    viewOnly: controlHandle.kind === 'view',
     settings: lastingSettings(settings, hold),
     remote,
     pages,

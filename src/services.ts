@@ -3,6 +3,8 @@ import type { ConversationView } from '@earendil-works/pi-durable';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
+import type { GuestOpened, Proposed, ProposeRequest } from './guests/index.ts';
+import type { GuestDraft, GuestGates, GuestSeat } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
@@ -102,6 +104,8 @@ export interface AgentControl {
   image(ref: ImageRef, context: Context): Promise<StoredImage>;
   agentCommands(agentId: string, context: Context): Promise<Command[]>;
   toolLabel(agentId: string, callIds: string[], context: Context): Promise<string | null>;
+  guestOpen(draft: GuestDraft, context: Context): Promise<GuestOpened>;
+  guestRevoke(id: string, context: Context): Promise<{ revoked: boolean }>;
 }
 
 export interface ImageRef {
@@ -265,6 +269,8 @@ export const CONTROL_METHODS = keys<AgentControl>({
   image: true,
   agentCommands: true,
   toolLabel: true,
+  guestOpen: true,
+  guestRevoke: true,
 });
 
 export const CONTROL_READS: readonly (keyof AgentControl & string)[] = [
@@ -298,6 +304,7 @@ export interface AgentTranscript {
   readonly monitor: ReplicatedState<MonitorFeed>;
   readonly vault: ReplicatedState<VaultState>;
   readonly labels: ReplicatedState<Record<string, string>>;
+  readonly guests: ReplicatedState<GuestSeat[]>;
 }
 
 export interface PrivateRevision {
@@ -325,6 +332,7 @@ export const TRANSCRIPT_STATES = keys<AgentTranscript>({
   monitor: true,
   vault: true,
   labels: true,
+  guests: true,
 });
 
 export const AgentTranscript: RemoteContract = contract('slicc.agent.transcript', {
@@ -340,6 +348,30 @@ export const REMOTE_METHODS = keys<AgentRemote>({
 });
 
 export const REMOTE_READS: readonly (keyof AgentRemote & string)[] = ['watch', 'next', 'close'];
+
+export interface GuestShown {
+  id: string;
+  label: string;
+  agentId: string;
+  name: string;
+  expiresAt: number | null;
+  gates: GuestGates;
+}
+
+export interface AgentGuest {
+  readonly transcript: ReplicatedState<ConversationView>;
+  readonly seat: ReplicatedState<GuestShown>;
+  propose(request: ProposeRequest, context: Context): Promise<Proposed>;
+}
+
+export const GUEST_STATES = ['transcript', 'seat'] as const;
+
+export const GUEST_METHODS = ['propose'] as const;
+
+export const AgentGuestService: RemoteContract = contract('slicc.agent.guest', {
+  guest: { state: GUEST_STATES, methods: GUEST_METHODS },
+  none: {},
+});
 
 export const AgentRemoteService: RemoteContract = contract('slicc.agent.remote', {
   remote: { methods: REMOTE_METHODS },

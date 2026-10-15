@@ -26,10 +26,17 @@ const script = params
   .map((command) =>
     fauxAssistantMessage([fauxToolCall('bash', { command })], { stopReason: 'toolUse' })
   );
-faux.setResponses([
-  ...script,
-  ...params.getAll('answer').map((answer) => fauxAssistantMessage([fauxText(answer)])),
-]);
+const seen = [];
+const recorded = (message) => (context) => {
+  seen.push(JSON.stringify(context.messages.at(-1)?.content ?? ''));
+  return message;
+};
+faux.setResponses(
+  [
+    ...script,
+    ...params.getAll('answer').map((answer) => fauxAssistantMessage([fauxText(answer)])),
+  ].map(recorded)
+);
 const kernel = params.has('kernel');
 const port = kernelPort(self);
 
@@ -52,4 +59,10 @@ async function start() {
   return hostAgent(agent);
 }
 
-serveConnections(self, start());
+const hosted = start();
+serveConnections(self, hosted);
+self.addEventListener('message', ({ data }) => {
+  if (data?.seen) data.seen.postMessage(seen);
+  if (data?.seat)
+    void hosted.then((host) => data.reply.postMessage(host.guests.record(data.seat) ?? null));
+});

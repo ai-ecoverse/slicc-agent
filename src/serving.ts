@@ -15,17 +15,31 @@ import { Type } from 'typebox';
 
 export const AGENT_HOST = 'agent';
 
-export type Seat = 'owner' | 'control' | 'view';
+export type Seat = 'owner' | 'control' | 'view' | 'guest';
+
+export interface GuestPrincipal {
+  id: string;
+  name: string;
+  epoch: number;
+}
 
 export interface AgentPrincipal {
   seat: Seat;
   link: number;
+  guest?: GuestPrincipal;
 }
 
 export const seatOf = (principal: Principal): Seat => (principal as AgentPrincipal).seat;
 
+export const guestOf = (principal: Principal): GuestPrincipal | undefined => {
+  const found = principal as Partial<AgentPrincipal> | undefined;
+  return found?.seat === 'guest' ? found.guest : undefined;
+};
+
 export const principalKey = (principal: Principal): string => {
   const { seat, link } = (principal ?? {}) as Partial<AgentPrincipal>;
+  const guest = guestOf(principal);
+  if (guest) return `guest:${guest.id}:e${guest.epoch}:${link}`;
   return seat ? `${seat}:${link}` : 'host';
 };
 
