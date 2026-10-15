@@ -94,6 +94,9 @@ jobs:
             echo "::notice title=Chromium system dependencies::No root on $RUNNER_NAME, so install-deps is skipped and the runner image's system libraries serve Chromium."
           fi
 
+      - run: |
+          nproc; node -p 'os.availableParallelism() + " " + os.cpus().length + " " + os.totalmem()'; cat /sys/fs/cgroup/cpu.max 2>/dev/null || true; free -m || true
+
       - run: npm test
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
