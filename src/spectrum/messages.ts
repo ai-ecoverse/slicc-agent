@@ -210,6 +210,8 @@ function proxyRefusal(error: string): { message: string; detail: string } {
   }
 }
 
+export const CONNECT_IT = 'Connect it in Settings › Accounts.';
+
 export function providerName(provider: string | undefined, fallback = 'The provider'): string {
   return providerNames[provider ?? ''] ?? fallback;
 }
@@ -231,7 +233,7 @@ export function errorPart(error: string, provider?: string): MessagePart {
     return {
       type: 'error',
       message: `${name} isn't connected.`,
-      detail: error,
+      detail: CONNECT_IT,
       action: 'settings',
     };
   if (action === 'settings' && provider === 'adobe') {
