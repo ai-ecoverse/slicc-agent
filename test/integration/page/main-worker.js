@@ -21,7 +21,7 @@ const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
 const requests = [];
 const recorded = (message) => (context) => {
   requests.push(JSON.stringify(context));
-  return message;
+  return { ...message, timestamp: Date.now() };
 };
 const upstream = [];
 self.addEventListener('message', ({ data }) => {
@@ -59,8 +59,13 @@ let titles = 0;
 const titling = (context) =>
   context.messages.length === 1 &&
   JSON.stringify(context.messages[0].content).includes('Give this chat a title');
+let labels = 0;
+const labelling = (context) =>
+  context.messages.length === 1 &&
+  JSON.stringify(context.messages[0].content).includes('Label this group of tool runs');
 const dispatch = (context, ...rest) => {
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
+  if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
   const step = queued.shift();
   if (!step) throw new Error('No more faux responses queued');
   return step(context, ...rest);
