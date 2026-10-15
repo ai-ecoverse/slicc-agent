@@ -244,7 +244,18 @@ test('a follower of a SLICC on an older agent shows a banner to update that stay
     await model.agent.ready();
     await new Promise((resolve) => setTimeout(resolve, 300));
     const notices = model.agent.messages('cone').filter((message) => message.kind === 'notice');
+    const all = (root, selector, found = []) => {
+      found.push(...root.querySelectorAll(selector));
+      for (const node of root.querySelectorAll('*'))
+        if (node.shadowRoot) all(node.shadowRoot, selector, found);
+      return found;
+    };
+    const banner = all(document, '[data-notice="agent-mismatch"]')[0];
     return {
+      banner: banner?.innerText ?? '',
+      closable: Boolean(banner?.querySelector('[data-dismiss]')),
+      watch: all(document, '.watch-only').map((node) => node.innerText),
+      composers: all(document, 'slicc-composer').length,
       mismatch: connection.mismatch,
       notices: notices.map((message) => message.text),
       banners: model.notices.list(),
@@ -252,10 +263,17 @@ test('a follower of a SLICC on an older agent shows a banner to update that stay
       heard: heard.map((frame) =>
         frame instanceof Uint8Array ? JSON.parse(new TextDecoder().decode(frame)) : frame
       ),
-      rendered: document.body.innerText,
     };
   });
-  assert.match(shown.mismatch, /older version of the agent/);
+  assert.equal(
+    shown.mismatch,
+    "That SLICC runs an older version of the agent than this one, so this tab can't follow it. Update that SLICC, then reload this page."
+  );
+  assert.match(shown.banner, /This tab can't follow that SLICC/);
+  assert.ok(shown.banner.includes(shown.mismatch), shown.banner);
+  assert.equal(shown.closable, false);
+  assert.deepEqual(shown.watch, ['Watch only.']);
+  assert.equal(shown.composers, 0);
   assert.deepEqual(shown.notices, []);
   assert.deepEqual(
     shown.banners.map((notice) => [notice.id, notice.body, notice.dismissible]),
