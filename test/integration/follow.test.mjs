@@ -259,7 +259,7 @@ test('a follower of a SLICC on another agent version shows a notice to update, a
   if (env.FOLLOW_SHOT) await page.screenshot(env.FOLLOW_SHOT);
 });
 
-test('a 4.x follower of a 5.x owner is refused at once, not left hanging', async (t) => {
+test('a 4.x follower of a 5.x owner shows the notice to update at once and leaves the link', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const refused = await page.evaluate(async () => {
@@ -268,18 +268,31 @@ test('a 4.x follower of a 5.x owner is refused at once, not left hanging', async
     const owner = await startAgent({
       worker: () => new Worker('/dist-test/agent-worker.js?answer=Hi.', { type: 'module' }),
     });
+    const port = await owner.port({ pages: false });
+    const { port1, port2 } = new MessageChannel();
+    const told = [];
+    port.onmessage = ({ data }) => port1.postMessage(data);
+    port1.onmessage = ({ data }) => {
+      told.push(data);
+      port.postMessage(data);
+    };
     const started = performance.now();
     const outcome = await Promise.race([
-      oldConnectAgent(await owner.port({ pages: false })).then(
-        () => 'connected',
-        (error) => error.message
+      oldConnectAgent(port2).then(
+        (connection) => ({ mismatch: connection.mismatch }),
+        (error) => ({ error: error.message })
       ),
       new Promise((resolve) => setTimeout(() => resolve('pending'), 5000)),
     ]);
     const ms = performance.now() - started;
+    await new Promise((resolve) => setTimeout(resolve, 100));
     await owner.release();
-    return { outcome, ms };
+    return { outcome, ms, told };
   });
-  assert.equal(refused.outcome, 'serverId must be a canonical lowercase UUIDv4');
+  assert.deepEqual(refused.outcome, {
+    mismatch:
+      "That SLICC runs a newer version of the agent than this one, so this tab can't follow it. Update this SLICC, then reload this page.",
+  });
+  assert.deepEqual(refused.told, [{ close: true }]);
   assert.ok(refused.ms < 2000, `${refused.ms}`);
 });
