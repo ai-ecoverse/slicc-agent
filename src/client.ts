@@ -98,6 +98,7 @@ function lastingSettings(
       settings.connect(providerId, secret, fields, context),
     disconnect: (providerId, context) => settings.disconnect(providerId, context),
     signIn: (providerId, context) => settings.signIn(providerId, context),
+    dismissMoved: (context) => settings.dismissMoved(context),
   };
 }
 

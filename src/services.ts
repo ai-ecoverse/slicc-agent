@@ -328,6 +328,7 @@ export interface SettingsState {
   models: ModelChoice[];
   accounts: AccountState[];
   budget?: BudgetState | null;
+  moved?: string[];
 }
 
 export interface AgentSettings {
@@ -340,6 +341,7 @@ export interface AgentSettings {
   ): Promise<void>;
   disconnect(providerId: string, context: Context): Promise<void>;
   signIn(providerId: string, context: Context): Promise<SignIn | McpSignIn | null>;
+  dismissMoved(context: Context): Promise<void>;
 }
 
 export const AgentSettings = defineService<AgentSettings>('slicc.agent.settings');

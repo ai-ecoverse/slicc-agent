@@ -15,6 +15,7 @@ import {
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import { BEDROCK, preferredModel } from './preferred.ts';
+import type { KeysMoved } from './secrets/legacy.ts';
 import type { VaultRecords } from './secrets/records.ts';
 import type { PlainStore } from './secrets/store.ts';
 import type {
@@ -193,9 +194,9 @@ export async function createAgentSettings(
   models: MutableModels,
   sources: SettingsSources,
   providers = sliccProviders(),
-  options: { usage?: UsageReader; every?: number; mcp?: McpAccounts } = {}
+  options: { usage?: UsageReader; every?: number; mcp?: McpAccounts; moved?: KeysMoved } = {}
 ): Promise<AgentSettings> {
-  const { mcp } = options;
+  const { mcp, moved } = options;
   const { records, fields } = sources;
   const routed = (providerId: string) => (providerId.startsWith(MCP_ACCOUNT) ? mcp : undefined);
   const adobe = providers.find((provider) => provider.id === ADOBE);
@@ -210,6 +211,7 @@ export async function createAgentSettings(
       models: choices(models, providers, stored),
       accounts: [...accounts(records, providers), ...((await mcp?.accounts()) ?? [])],
       budget: await budget(records, usage),
+      ...(moved?.state.value?.length ? { moved: [...moved.state.value] } : {}),
     };
   };
   const state = replicatedState<SettingsState>(await snapshot());
@@ -237,6 +239,7 @@ export async function createAgentSettings(
     (timer as { unref?: () => void }).unref?.();
   }
   mcp?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
+  moved?.state.subscribe((_value, context) => void refresh(context).catch(() => undefined));
   const held = () => signedIn.filter((id) => records.model(id)).join(' ');
   let seen = held();
   records.state.subscribe(() => {
@@ -276,6 +279,10 @@ export async function createAgentSettings(
         identity
       );
       return { clientId, scopes, imsEnvironment: imsEnvironment || 'prod' };
+    },
+    async dismissMoved(context) {
+      await moved?.dismiss(context);
+      await refresh(context);
     },
     async disconnect(providerId, context) {
       const server = routed(providerId);

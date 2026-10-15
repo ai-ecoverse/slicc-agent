@@ -184,14 +184,15 @@ const models = /model/i;
 const unavailable =
   /access|invalid|not found|identifier|unsupported|not supported|isn['’]t supported|not available|isn['’]t available/i;
 
-const providerNames: Record<string, string> = { 'amazon-bedrock': 'Bedrock' };
+const providerNames: Record<string, string> = { 'amazon-bedrock': 'Bedrock', adobe: 'Adobe' };
 const filtered =
   /Provider (?:stopped with|finish_reason): (?:content_filter(?:ed)?|guardrail_intervened|sensitive)|content[_ ]filter(?:ed|ing)?\b|guardrail[_ ]intervened/i;
 const refused =
   /refused to complete the request|Provider (?:stopped with|finish_reason): refusal|\bstop_?reason\W+refusal\b/i;
-const missing = /no api key|missing|not configured|no credentials/i;
+const unconnected = /no api key|not configured|no credentials/i;
+const missing = /missing/i;
 const adobeAuth =
-  /\b401\b|authenticat|unauthori[sz]ed|expired|invalid[_ ]?(?:token|credentials?|api[_ ]key)|token verification|no api key|not configured|no credentials/i;
+  /\b401\b|authenticat|unauthori[sz]ed|expired|invalid[_ ]?(?:token|credentials?|api[_ ]key)|token verification/i;
 
 function proxyRefusal(error: string): { message: string; detail: string } {
   try {
@@ -209,6 +210,10 @@ function proxyRefusal(error: string): { message: string; detail: string } {
   }
 }
 
+export function providerName(provider: string | undefined, fallback = 'The provider'): string {
+  return providerNames[provider ?? ''] ?? fallback;
+}
+
 export function errorPart(error: string, provider?: string): MessagePart {
   const action = errorAction(error);
   if (action === 'drop-turn') {
@@ -221,6 +226,14 @@ export function errorPart(error: string, provider?: string): MessagePart {
       action,
     };
   }
+  const name = providerName(provider);
+  if (unconnected.test(error))
+    return {
+      type: 'error',
+      message: `${name} isn't connected.`,
+      detail: error,
+      action: 'settings',
+    };
   if (action === 'settings' && provider === 'adobe') {
     return adobeAuth.test(error)
       ? {
@@ -231,7 +244,6 @@ export function errorPart(error: string, provider?: string): MessagePart {
         }
       : { type: 'error', ...proxyRefusal(error), action: 'retry' };
   }
-  const name = providerNames[provider ?? ''] ?? 'The provider';
   const lead =
     action === 'settings'
       ? missing.test(error)

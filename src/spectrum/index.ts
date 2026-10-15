@@ -4,6 +4,7 @@ import { AgentAdapter } from './agent-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { MonitorAdapter } from './monitor-port.ts';
+import { NoticesAdapter } from './notices-port.ts';
 import { PageAdapter, type PageOptions } from './page-port.ts';
 import { type Login, SettingsAdapter } from './settings-port.ts';
 import { SprinkleAdapter } from './sprinkle-port.ts';
@@ -27,6 +28,7 @@ export {
   type MonitorInput,
   monitorSnapshot,
 } from './monitor-port.ts';
+export { KEYS_MOVED, movedNotice, NoticesAdapter } from './notices-port.ts';
 export {
   PageAdapter,
   type PageDocument,
@@ -54,6 +56,7 @@ export function createAgentModel(
   memory: MemoryAdapter;
   changes: ChangesAdapter;
   monitor: MonitorAdapter;
+  notices: NoticesAdapter;
   page: PageAdapter | null;
 } {
   const agent = new AgentAdapter(connection);
@@ -72,6 +75,7 @@ export function createAgentModel(
     sprinkles: new SprinkleAdapter(connection, report),
     memory: new MemoryAdapter(connection, report),
     changes: new ChangesAdapter(connection, report),
+    notices: new NoticesAdapter(connection.settings, report),
     monitor: new MonitorAdapter(
       connection,
       options.monitor?.extra ? { extra: options.monitor.extra } : {}

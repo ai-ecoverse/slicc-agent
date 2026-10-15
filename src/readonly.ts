@@ -42,7 +42,13 @@ export function viewControl(control: AgentControl): AgentControl {
 }
 
 export function viewSettings(settings: AgentSettings): AgentSettings {
-  return { state: settings.state, connect: refuse, disconnect: refuse, signIn: refuse };
+  return {
+    state: settings.state,
+    connect: refuse,
+    disconnect: refuse,
+    signIn: refuse,
+    dismissMoved: refuse,
+  };
 }
 
 export function viewPages(): AgentPages {
