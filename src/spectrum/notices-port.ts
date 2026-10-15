@@ -43,28 +43,48 @@ export function movedNotice(accounts: readonly MovedName[]): Notice {
   };
 }
 
+export type HostNotices = Pick<NoticesPort, 'list' | 'act' | 'dismiss' | 'on'>;
+
 export class NoticesAdapter extends Emitter<{ notices: readonly Notice[] }> implements NoticesPort {
   readonly #settings: AgentSettings;
   readonly #report: Report;
   readonly #mismatch: readonly Notice[];
+  readonly #host: HostNotices | undefined;
   #hidden = false;
 
-  constructor(settings: AgentSettings, report: Report, mismatch?: string) {
+  constructor(settings: AgentSettings, report: Report, mismatch?: string, host?: HostNotices) {
     super();
     this.#settings = settings;
     this.#report = report;
     this.#mismatch = mismatch ? [mismatchBanner(mismatch)] : [];
+    this.#host = host;
     settings.state.subscribe(() => this.emit('notices', this.list()));
+    host?.on('notices', () => this.emit('notices', this.list()));
   }
 
   list(): readonly Notice[] {
+    return [...(this.#host?.list() ?? []), ...this.#agent()];
+  }
+
+  #agent(): readonly Notice[] {
     const moved = this.#settings.state.value?.moved;
     return [...this.#mismatch, ...(moved?.length && !this.#hidden ? [movedNotice(moved)] : [])];
   }
 
-  async act(): Promise<void> {}
+  #hosts(id: string): Notice | undefined {
+    return this.#host?.list().find((notice) => notice.id === id);
+  }
+
+  async act(id: string, action: string): Promise<void> {
+    if (this.#hosts(id)) await this.#host?.act(id, action);
+  }
 
   dismiss(id: string): void {
+    const hosted = this.#hosts(id);
+    if (hosted) {
+      if (hosted.dismissible !== false) this.#host?.dismiss(id);
+      return;
+    }
     if (id !== KEYS_MOVED) return;
     this.#hidden = true;
     this.emit('notices', this.list());
