@@ -36,6 +36,8 @@ test('a conversation stored with a copied extension list gets a built-in it lack
     const bin = `${pnpm || '/home/.local/share/pnpm'}/bin`;
     await client.fs.mkdir(bin, { recursive: true });
     await client.fs.writeFile(`${bin}/playwright-cli`, '#!/bin/bash\necho "opened $*"\n');
+    await client.fs.mkdir('/home/.pi/agent', { recursive: true });
+    await client.fs.writeFile('/home/.pi/agent/settings.json', '{"memory":{"extract":false}}');
     const open = `chmod +x ${bin}/playwright-cli && playwright-cli open ${location.origin}/home/x.html`;
     const bash = { tool: { name: 'bash', args: { command: open } } };
     const steps = [
@@ -64,6 +66,7 @@ test('a conversation stored with a copied extension list gets a built-in it lack
     });
     const connection = await owner.connect();
     const ctx = BACKGROUND_CONTEXT;
+    const shown = (agentId) => Boolean(connection.views.value?.[agentId]);
     const entries = (agentId) => connection.views.value?.[agentId]?.entries ?? [];
     const results = (agentId) =>
       entries(agentId)
@@ -91,7 +94,7 @@ test('a conversation stored with a copied extension list gets a built-in it lack
       await connection.control.wait(sent.submissionId, ctx);
       return until(() => results(agentId).at(before), `the result in ${agentId}`);
     };
-    await until(() => entries('cone').length && entries(seeded.kept).length, 'both cones');
+    await until(() => entries('cone').length && shown(seeded.kept), 'both cones');
     const out = {};
     out.old = await run('cone', 'Open it.');
     out.kept = await run(seeded.kept, 'Open it.');
@@ -105,8 +108,9 @@ test('a conversation stored with a copied extension list gets a built-in it lack
     await until(() => !entries('cone').some((entry) => entry.kind === 'pi.user'), 'the new chat');
     out.fresh = await run('cone', 'Open it.');
     const frozen = await connection.control.freeze('cone', ctx);
+    await until(() => !shown('cone'), 'the frozen cone');
     await connection.control.thaw(frozen.id, ctx);
-    await until(() => entries('cone').length, 'the thawed cone');
+    await until(() => shown('cone'), 'the thawed cone');
     out.thawed = await run('cone', 'Open it.');
     await connection.control.newChat(seeded.kept, ctx);
     await until(
