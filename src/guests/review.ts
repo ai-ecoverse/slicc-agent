@@ -157,6 +157,12 @@ async function turn(id: string, runtime: Runtime, context: Context) {
 }
 
 async function ask(id: string, runtime: Runtime, host: ReviewHost, context: Context) {
+  const first = (await runtime.snapshot(GuestReviewsDoc, context))?.reviews[id];
+  if (!first) return runtime.commit(async () => DONE, context);
+  return host.line(first.seat, () => asking(id, runtime, host, context));
+}
+
+async function asking(id: string, runtime: Runtime, host: ReviewHost, context: Context) {
   const review = (await runtime.snapshot(GuestReviewsDoc, context))?.reviews[id];
   const seat = review && (await runtime.snapshot(GuestsDoc, context))?.seats[review.seat];
   if (seat?.gates.messages === 'off')
