@@ -77,11 +77,10 @@
     "monocart-coverage-reports": "2.13.2",
     "playwright-core": "1.64.0",
     "semantic-release": "25.0.9",
-    "slicc-agent-4": "npm:@ai-ecoverse/slicc-agent@4.3.5",
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@ai-ecoverse/slicc-browsers": "1.7.1",
+    "@ai-ecoverse/slicc-browsers": "1.7.3",
     "@ai-ecoverse/slicc-vault": "1.9.1",
     "@earendil-works/chord": "1.2.0",
     "@earendil-works/pi-ai": "1.2.0",

@@ -47,8 +47,6 @@ export {
 export {
   type HostNotices,
   KEYS_MOVED,
-  MISMATCH,
-  mismatchBanner,
   movedList,
   movedNotice,
   NoticesAdapter,
@@ -123,7 +121,7 @@ export function createAgentModel(
     sprinkles: new SprinkleAdapter(connection, report),
     memory: new MemoryAdapter(connection, report),
     changes: new ChangesAdapter(connection, report),
-    notices: new NoticesAdapter(connection.settings, report, connection.mismatch, options.notices),
+    notices: new NoticesAdapter(connection.settings, report, options.notices),
     monitor: new MonitorAdapter(
       connection,
       options.monitor?.extra ? { extra: options.monitor.extra } : {}

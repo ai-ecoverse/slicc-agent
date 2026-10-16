@@ -62,8 +62,6 @@ export function slashCommand({ kind, ...command }: Command): SlashCommand {
   return kind === 'action' ? command : { ...command, kind };
 }
 
-export const WATCH_ONLY = 'Watch only.';
-
 export type AgentHold = VaultHold;
 
 export type AgentAdapterEvents = AgentEvents & { hold: AgentHold | null };
@@ -267,10 +265,6 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
 
   hold(): AgentHold | null {
     return vaultHold(this.#connection.vault?.value);
-  }
-
-  readOnly(): string | null {
-    return this.#connection.mismatch ? WATCH_ONLY : null;
   }
 
   list(): readonly Agent[] {
