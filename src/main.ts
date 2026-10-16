@@ -57,7 +57,7 @@ import {
   modelRoute,
   vaultEndpoints,
 } from './secrets/endpoints.ts';
-import { repin, secretsExtension, shellGrants } from './secrets/extension.ts';
+import { secretsExtension, shellGrants } from './secrets/extension.ts';
 import { grantFetch, mcpFetch, vaultFetch } from './secrets/fetch.ts';
 import { keysMoved, type Wiped, wipeLegacy } from './secrets/legacy.ts';
 import { secretNames } from './secrets/names.ts';
@@ -65,6 +65,7 @@ import { type VaultRecords, vaultRecords } from './secrets/records.ts';
 import { scrubWith } from './secrets/scrub.ts';
 import { fileStore, type PlainStore } from './secrets/store.ts';
 import { listenVault, Vault, WAITING_MS } from './secrets/vault.ts';
+import { type Choosable, unfreeze, unfreezeCreated } from './selection.ts';
 import {
   BEDROCK,
   createAgentSettings,
@@ -173,15 +174,17 @@ export function seesImages(models: Pick<Models, 'getModel'>, ref: ModelRef | und
 
 export const MCP_CALLBACK = '/oauth/mcp-callback';
 
-async function openRepinned(
+async function openUnfrozen(
   options: AgentWorkerOptions,
-  base: Omit<AgentOptions, 'storage' | 'beforeResume'>
+  { choosable: chosen }: { choosable: Choosable },
+  base: Omit<AgentOptions, 'storage' | 'beforeResume' | 'conversationCreated'>
 ): Promise<Agent> {
   const storage = await (options.storage ?? (() => openOpfsSqliteStorage()))();
   return openAgent({
     ...base,
     storage,
-    beforeResume: (harness, using) => repin(harness, storage, using),
+    conversationCreated: unfreezeCreated(chosen),
+    beforeResume: (harness, using) => unfreeze(harness, storage, chosen, using),
   });
 }
 
@@ -417,7 +420,7 @@ async function start(
     spawn: shellGrants(names),
     ...(people ? { route: people.route } : {}),
   });
-  const agent = await openRepinned(options, { models, model, registry, env: environment });
+  const agent = await openUnfrozen(options, scoops, { models, model, registry, env: environment });
   opened = agent;
   await people?.start(agent.agents);
   const sources = licks.attach(agent, {

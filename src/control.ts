@@ -1,6 +1,5 @@
 import type { Context } from '@earendil-works/chord';
 import {
-  type AgentChange,
   AssistantEntry,
   type Conversation,
   ConversationBusy,
@@ -24,9 +23,10 @@ import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import type { Monitor } from './monitor/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
-import { pinned, SECRETS_COMMAND, secretsEntry } from './secrets/extension.ts';
+import { SECRETS_COMMAND, secretsEntry } from './secrets/extension.ts';
 import type { SecretName } from './secrets/names.ts';
 import { scrubItems, scrubText } from './secrets/scrub.ts';
+import { copyAgent, storedAgent } from './selection.ts';
 import type {
   AgentControl,
   Created,
@@ -268,16 +268,8 @@ async function forkAt(
 ): Promise<Conversation> {
   const ownership = { kind: 'ownerless' } as const;
   if (found.turn.at !== null) return conversation.fork(found.turn.at, { ownership }, context);
-  const agent = await conversation.agent(context);
-  const change: AgentChange = {
-    model: agent.model ?? null,
-    thinkingLevel: agent.thinkingLevel,
-    extensions: agent.extensions,
-    tools: agent.tools,
-    instructions: agent.instructions ?? null,
-    cwd: agent.cwd ?? null,
-  };
-  return harness.createConversation({ ownership, agent: pinned(change) }, context);
+  const init = copyAgent(await storedAgent(harness, conversation.id, context));
+  return harness.createConversation({ ownership, init }, context);
 }
 
 async function rewindAgent(

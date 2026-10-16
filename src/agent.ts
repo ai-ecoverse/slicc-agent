@@ -24,6 +24,7 @@ export interface AgentOptions {
   registry?: Registry;
   settings?: HarnessOptions['settings'];
   env?: HarnessOptions['env'];
+  conversationCreated?: HarnessOptions['conversationCreated'];
   context?: Context;
   beforeResume?: (harness: Harness, context: Context) => Promise<unknown>;
 }
@@ -72,6 +73,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
       registry,
       ...(options.settings ? { settings: options.settings } : {}),
       ...(options.env ? { env: options.env } : {}),
+      ...(options.conversationCreated ? { conversationCreated: options.conversationCreated } : {}),
     },
     context
   );

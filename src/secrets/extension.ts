@@ -1,19 +1,13 @@
-import type { Context, JsonValue } from '@earendil-works/chord';
+import type { JsonValue } from '@earendil-works/chord';
 import {
-  type AgentChange,
-  type Cursor,
   defineExtension,
   type Extension,
   GenerationTask,
-  type Harness,
   hook,
-  type Storage,
   section,
   type ToolExecutionResult,
   ToolTask,
 } from '@earendil-works/pi-durable';
-import { GUEST_GUARD } from '../guests/guard.ts';
-import { TITLES } from '../titles/extension.ts';
 import type { Names, SecretName } from './names.ts';
 import type { Scrub } from './scrub.ts';
 import type { Vault } from './vault.ts';
@@ -131,42 +125,6 @@ export function secretsEntry(names: readonly SecretName[]) {
 export function shellGrants(names: Pick<Names, 'state'>) {
   return (argv: readonly string[]): readonly string[] =>
     names.state.value.some((name) => name.exec === 'shell') ? [...SHELL_GRANTS, ...argv] : argv;
-}
-
-const missing = (list: readonly { name: string }[]) =>
-  [SECRETS, TITLES, GUEST_GUARD].filter(
-    (name) => !list.some((extension) => extension.name === name)
-  );
-
-export function pinned<T extends AgentChange>(change: T): T {
-  const list = change.extensions;
-  if (!Array.isArray(list)) return change;
-  const added = missing(list);
-  return added.length
-    ? { ...change, extensions: [...list, ...added.map((name) => ({ name }))] }
-    : change;
-}
-
-export async function repin(
-  harness: Pick<Harness, 'conversation'>,
-  storage: Pick<Storage, 'scanConversations'>,
-  context: Context
-): Promise<number> {
-  let fixed = 0;
-  let cursor: Cursor | undefined;
-  do {
-    const page = await storage.scanConversations({}, 100, cursor, context);
-    for (const record of page.items) {
-      const conversation = await harness.conversation(record.id, context);
-      if (!conversation) continue;
-      const agent = await conversation.agent(context);
-      if (!missing(agent.extensions).length) continue;
-      await conversation.configure(pinned({ extensions: agent.extensions }), context);
-      fixed++;
-    }
-    cursor = page.next;
-  } while (cursor);
-  return fixed;
 }
 
 export function secretsExtension(deps: {

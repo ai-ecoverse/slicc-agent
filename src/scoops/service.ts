@@ -27,6 +27,7 @@ import { type Layout, LEGACY } from '../layout.ts';
 import type { Licks } from '../licks/licks.ts';
 import { McpAllowDoc, mcpEntries } from '../mcp/index.ts';
 import type { Role } from '../roles/roles.ts';
+import type { Choosable } from '../selection.ts';
 import { visible } from './visible.ts';
 
 export { SCOOPS_ROOT } from '../layout.ts';
@@ -223,6 +224,11 @@ async function addFeed(core: Core, tx: Tx, parent: number, feed: NewFeed): Promi
     agent: feed.agent,
   };
   return Number(task);
+}
+
+export function choosable(tools: readonly ToolRegistration[]): Choosable {
+  const names = new Set(tools.map((tool) => tool.name));
+  return (name) => names.has(name) || (mcpEntries([name]) ?? []).length > 0;
 }
 
 function selection(
