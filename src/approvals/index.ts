@@ -72,8 +72,11 @@ const withdrawIn =
 
 const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: ApprovalsState) => {
   const item = doc.items.find((entry) => entry.id === id);
-  if (item?.state !== 'pending' || item.tier !== 'agent') return undefined;
+  if (item?.tier !== 'agent') return undefined;
+  const late = item.state === 'unanswered' && item.reason === REASONS.timeout && !item.verdict;
+  if (item.state !== 'pending' && !(late && judgement.verdict)) return undefined;
   if (judgement.verdict) item.verdict = judgement.verdict;
+  if (late) return copy([item])[0] as Approval;
   if (judgement.outcome === 'ask') item.tier = 'user';
   else {
     const at = now();

@@ -101,11 +101,11 @@ function lean(low: number, high: number, aligned: number): ApprovalVerdict {
   const fits = aligned >= JUDGE_ALLOW;
   if (low > high)
     return {
-      decision: 'allow',
+      decision: 'unsure',
       reason: fits ? VERDICT_REASONS.alignedUnsure : VERDICT_REASONS.lowUnaligned,
     };
   return {
-    decision: 'deny',
+    decision: 'unsure',
     reason: fits ? VERDICT_REASONS.risky : VERDICT_REASONS.riskyUnaligned,
   };
 }

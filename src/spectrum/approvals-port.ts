@@ -52,7 +52,7 @@ export function shown(item: Item, agentName: string | undefined): Approval {
     agentId: item.agentId,
     ...(agentName ? { agentName } : {}),
     always: false as const,
-    ...(item.verdict
+    ...(item.verdict && item.verdict.decision !== 'unsure'
       ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } }
       : {}),
   };

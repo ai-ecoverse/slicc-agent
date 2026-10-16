@@ -250,6 +250,7 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
   const steps = [
     { low: 0.9, aligned: 0.4 },
     { stop: 'error', error: 'Request timed out' },
+    { low: 0.97, aligned: 0.95, delay: 900 },
     { low: 0.99, aligned: 0.99 },
   ];
   await boot(page, {
@@ -257,7 +258,7 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
     files: { [SETTINGS]: judgeSettings('judge/j-2') },
   });
   const seen = await page.evaluate(async () => {
-    const { owner, ask, judged, until, message, settled, verdicts } = globalThis.t;
+    const { owner, ask, judged, until, message, settled, verdicts, record } = globalThis.t;
     const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
     await import(`${spectrum}/slicc-ui.js`);
     const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
@@ -279,6 +280,11 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
       (await ask(message('Could you add a dark mode toggle to the settings page?'))).id
     );
     const failed = await settled(local, (await ask(message('Fix the heading on the FAQ.'))).id);
+    const slow = await ask(message('Fix the alt text.', { expiresAt: Date.now() + 300 }));
+    const late = await until(
+      () => record(local, slow.id)?.verdict && record(local, slow.id),
+      'the late verdict'
+    );
     await window.write(
       '/home/.pi/agent/settings.json',
       JSON.stringify({ approvals: { judgeModel: 'judge/missing' } })
@@ -307,6 +313,7 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
     return {
       unsure,
       failed,
+      late,
       missing,
       listed,
       line: find(document, '.verdict')?.textContent.replace(/\s+/g, ' ').trim(),
@@ -320,8 +327,17 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
     assert.equal(item.tier, 'user');
     assert.equal(item.decidedBy, null);
   }
-  assert.deepEqual(seen.unsure.verdict, {
+  assert.equal(seen.late.state, 'unanswered');
+  assert.equal(seen.late.reason, 'timeout');
+  assert.deepEqual(seen.late.verdict, {
     decision: 'allow',
+    reason: 'it looks low-risk and in line with what the owner asked for.',
+    risk: 1 - 0.97,
+    aligned: 0.95,
+    model: 'judge/j-2',
+  });
+  assert.deepEqual(seen.unsure.verdict, {
+    decision: 'unsure',
     reason: "it looks low-risk, but it isn't clear it serves what the owner asked for.",
     risk: 1 - 0.9,
     aligned: 0.4,
@@ -329,28 +345,20 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
   });
   assert.equal(seen.failed.verdict, undefined);
   assert.equal(seen.missing.verdict, undefined);
-  assert.deepEqual(seen.calls, ['judge/j-2', 'judge/j-2']);
+  assert.deepEqual(seen.calls, ['judge/j-2', 'judge/j-2', 'judge/j-2']);
   assert.deepEqual(seen.listed, [
-    [
-      seen.unsure.id,
-      {
-        decision: 'allow',
-        reason: "it looks low-risk, but it isn't clear it serves what the owner asked for.",
-      },
-    ],
+    [seen.unsure.id, null],
     [seen.failed.id, null],
     [seen.missing.id, null],
   ]);
-  assert.equal(
-    seen.line,
-    "The automatic check would allow this: it looks low-risk, but it isn't clear it serves what the owner asked for."
-  );
+  assert.equal(seen.line, undefined);
   assert.match(seen.dialogText, /dark mode toggle/);
   assert.deepEqual(
     seen.notes.map((note) => [note.outcome, note.error ?? null]),
     [
       ['escalated', null],
       ['escalated', 'Request timed out'],
+      ['unanswered', null],
       ['escalated', 'there is no judge model judge/missing'],
     ]
   );

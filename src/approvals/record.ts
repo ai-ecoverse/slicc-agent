@@ -19,7 +19,7 @@ export type ApprovalRequester = {
 };
 
 export type ApprovalVerdict = {
-  decision: 'allow' | 'deny';
+  decision: 'allow' | 'deny' | 'unsure';
   reason: string;
   risk?: number;
   aligned?: number;

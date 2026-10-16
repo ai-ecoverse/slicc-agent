@@ -174,6 +174,7 @@ async function classify(model, context, options) {
     seen.aborted = true;
     return { ...base, answers: {}, stopReason: 'aborted', errorMessage: 'aborted' };
   }
+  if (step.delay) await new Promise((resolve) => setTimeout(resolve, step.delay));
   if (step.stop) return { ...base, answers: {}, stopReason: step.stop, errorMessage: step.error };
   if (step.low === undefined) throw new Error('no judge answer queued');
   return { ...base, answers: answers(step.low, step.aligned), stopReason: 'stop' };
