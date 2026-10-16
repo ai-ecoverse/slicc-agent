@@ -12,6 +12,7 @@ import {
   type DecidedBy,
   guestKind,
   knownTier,
+  MAX_DELAY,
   prune,
   REASONS,
   routable,
@@ -97,6 +98,8 @@ export async function attachApprovals(
   };
   const expire = (id: string) => {
     timers.delete(id);
+    const due = (state.value as Approval[]).find((entry) => entry.id === id);
+    if (due?.state === 'pending' && due.expiresAt > now()) return arm(state.value as Approval[]);
     void serial((doc) => {
       const item = doc.items.find((entry) => entry.id === id);
       if (item?.state === 'pending' && item.expiresAt <= now())
@@ -111,7 +114,7 @@ export async function attachApprovals(
       if (timers.has(item.id) || closed) continue;
       timers.set(
         item.id,
-        setTimeout(() => expire(item.id), Math.max(0, item.expiresAt - now()))
+        setTimeout(() => expire(item.id), Math.min(MAX_DELAY, Math.max(0, item.expiresAt - now())))
       );
     }
     for (const [id, timer] of timers)

@@ -79,6 +79,7 @@ export const ApprovalsDoc = defineDoc<ApprovalsState>({
 
 export const APPROVAL_MS = 300_000;
 export const APPROVALS_KEPT = 100;
+export const MAX_DELAY = 2_147_483_647;
 export const REASON_LENGTH = 500;
 
 export const REASONS = {
@@ -125,8 +126,11 @@ export function cleanReason(reason: unknown): string | undefined {
   return text || undefined;
 }
 
+const decided = (item: Approval) => item.decidedAt ?? item.createdAt;
+
 export function prune(items: Approval[], kept = APPROVALS_KEPT): Approval[] {
   const settled = items.filter((item) => item.state !== 'pending');
+  settled.sort((a, b) => decided(a) - decided(b));
   const drop = new Set(settled.slice(0, Math.max(0, settled.length - kept)));
   return items.filter((item) => !drop.has(item));
 }

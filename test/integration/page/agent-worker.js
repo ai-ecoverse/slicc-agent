@@ -10,6 +10,7 @@ import {
 import { createRegistry } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import {
+  attachApprovals,
   hostAgent,
   kernelEnvironment,
   kernelPort,
@@ -33,6 +34,7 @@ faux.setResponses([
 ]);
 const kernel = params.has('kernel');
 const port = kernelPort(self);
+let commits = 0;
 
 async function start() {
   const directory = params.get('directory');
@@ -50,11 +52,18 @@ async function start() {
     registry,
     env,
   });
-  return hostAgent(agent);
+  const harness = {
+    commit(...args) {
+      commits += 1;
+      return agent.harness.commit(...args);
+    },
+  };
+  return hostAgent(agent, { approvals: await attachApprovals({ harness }) });
 }
 
 const host = start();
 self.addEventListener('message', ({ data }) => {
+  if (data?.commits) data.commits.postMessage(commits);
   if (!data?.approve) return;
   host
     .then((ready) => ready.approvals.request(data.approve, BACKGROUND_CONTEXT))

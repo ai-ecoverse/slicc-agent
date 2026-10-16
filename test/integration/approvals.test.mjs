@@ -102,7 +102,25 @@ async function boot(page, directory) {
       detail: { text: 'Can I help?', attachments: [] },
       ...extra,
     });
-    globalThis.t = { owner, ask, follow, until, record, listed, ended, failed, guest, message };
+    const commits = () =>
+      new Promise((resolve) => {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = ({ data }) => resolve(data);
+        worker.postMessage({ commits: port2 }, [port2]);
+      });
+    globalThis.t = {
+      owner,
+      ask,
+      commits,
+      follow,
+      until,
+      record,
+      listed,
+      ended,
+      failed,
+      guest,
+      message,
+    };
   }, directory ?? null);
 }
 
@@ -463,4 +481,46 @@ test('a follower without Control shows a guest message as a notice to answer on 
   assert.equal(shown.dialog, false);
   await shoot(page, 'guest-notice');
   await page.evaluate(() => globalThis.t.release());
+});
+
+test('an approval due further off than a timer can wait stays pending and quiet', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  const seen = await page.evaluate(async () => {
+    const { owner, ask, until, record, message, commits } = globalThis.t;
+    const local = await owner.connect();
+    const far = await ask(message({ expiresAt: Date.now() + 2 ** 31 + 60_000 }));
+    await until(() => record(local, far.id), 'the far approval');
+    const before = await commits();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const written = (await commits()) - before;
+    const state = record(local, far.id).state;
+    await local.close();
+    await owner.release();
+    return { written, state };
+  });
+  assert.equal(seen.state, 'pending');
+  assert.equal(seen.written, 0);
+});
+
+test('an old approval answered after more than 100 newer ones settled keeps its answer', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  const seen = await page.evaluate(async () => {
+    const { owner, ask, until, record, listed, message } = globalThis.t;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    const old = await ask(message({ expiresAt: Date.now() + 120_000 }));
+    for (let i = 0; i < 101; i++) await ask(message({ tier: 'nobody' }));
+    await until(() => listed(model, old.id), 'the old approval');
+    await model.approvals.decide(old.id, 'deny');
+    await until(() => record(local, old.id)?.state !== 'pending', 'the answer');
+    const kept = record(local, old.id)?.state ?? null;
+    const count = local.approvals.value.length;
+    await local.close();
+    await owner.release();
+    return { kept, count };
+  });
+  assert.equal(seen.kept, 'rejected');
+  assert.equal(seen.count, 100);
 });
