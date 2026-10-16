@@ -412,15 +412,15 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
     };
     globalThis.ui = { model, local, find: (selector) => all(document, selector)[0] ?? null, all };
   });
-  await page.until(() => globalThis.ui.find('[data-network]'));
+  await page.until(() => Boolean(globalThis.ui.find('[data-network]')));
   await page.evaluate(() => globalThis.ui.find('[data-network]').click());
-  await page.until(() => globalThis.ui.find('section[data-guests] [data-guests-empty]'));
+  await page.until(() => Boolean(globalThis.ui.find('section[data-guests] [data-guests-empty]')));
   await page.evaluate(() => globalThis.ui.find('[data-action="invite-guest"]').click());
-  await page.until(() => globalThis.ui.find('slicc-guest-invite #guest-name'));
-  await page.evaluate(() => globalThis.ui.find('slicc-guest-invite #guest-name').focus());
+  await page.until(() => Boolean(globalThis.ui.find('#guest-name')));
+  await page.evaluate(() => globalThis.ui.find('#guest-name').focus());
   await page.insert('Anna');
   await page.evaluate(() => globalThis.ui.find('[data-action="create-guest-link"]').click());
-  await page.until(() => globalThis.ui.find('[data-guest-invite="link"]'));
+  await page.until(() => Boolean(globalThis.ui.find('[data-guest-invite="link"]')));
   const link = await page.evaluate(() => {
     const field = globalThis.ui.find('[data-copy="guest-url"]');
     return { url: field?.value ?? '', minted: globalThis.seats.minted };
@@ -432,22 +432,26 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
   assert.deepEqual(link.minted[0].gates, { messages: 'user', tools: 'user' });
   if (env.GUESTS_LINK_SHOT) await page.screenshot(env.GUESTS_LINK_SHOT);
   await page.evaluate(() => globalThis.ui.find('[data-action="done-guest"]').click());
-  await page.until(() => globalThis.ui.find('li[data-seat="seat-1"][data-connected="false"]'));
+  await page.until(() =>
+    Boolean(globalThis.ui.find('li[data-seat="seat-1"][data-connected="false"]'))
+  );
   await page.evaluate(async () => {
     globalThis.guest = await globalThis.seats.join({ guest: { id: 'seat-1', label: 'Anna' } });
   });
-  await page.until(() => globalThis.ui.find('li[data-seat="seat-1"][data-connected="true"]'));
+  await page.until(() =>
+    Boolean(globalThis.ui.find('li[data-seat="seat-1"][data-connected="true"]'))
+  );
   const row = await page.evaluate(() => globalThis.ui.find('li[data-seat="seat-1"]').innerText);
   assert.match(row, /Anna/);
   assert.match(row, /sliccy/);
   assert.match(row, /Expires in 7 days/);
   if (env.GUESTS_SHOT) await page.screenshot(env.GUESTS_SHOT);
   await page.evaluate(() => globalThis.ui.find('[data-action="revoke-guest"]').click());
-  await page.until(() => globalThis.ui.find('slicc-confirm'));
+  await page.until(() => Boolean(globalThis.ui.find('slicc-confirm')));
   await page.evaluate(() =>
     globalThis.ui.all(globalThis.ui.find('slicc-confirm').shadowRoot, '[data-action]')[0].click()
   );
-  await page.until(() => globalThis.ui.find('section[data-guests] [data-guests-empty]'));
+  await page.until(() => Boolean(globalThis.ui.find('section[data-guests] [data-guests-empty]')));
   const after = await page.evaluate(async () => {
     await globalThis.guest.closed;
     return { revoked: globalThis.seats.revoked, seats: globalThis.ui.model.guests.list() };
