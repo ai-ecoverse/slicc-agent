@@ -114,3 +114,55 @@ test('a pnpm-linked package in /opt/user/node_modules adds its skills, and one t
   assert.ok(seen.includes('skill:sys-skill'));
   assert.ok(!seen.includes('skill:twin-skill'));
 });
+
+test('with per-user kernel clients, a scoop report is written as the cone, so the cone keeps its ~/.slicc and can add its own files there', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    window.owner = await startAgent({
+      worker: () => new Worker('/dist-test/main-worker.js?answer=Reported.', { type: 'module' }),
+      kernel: {
+        connect: (options) => kernel.connect(options?.user ? { user: options.user } : undefined),
+        users: kernel.users,
+      },
+    });
+    await createAgentModel(await window.owner.connect(), { storage: localStorage }).agent.ready();
+    window.sh = (command, user) => kernel.run(['bash', '-c', command], user ? { user } : {});
+  });
+  await page.within(
+    60000,
+    async () => (await window.sh('test -d /var/lib/slicc/agent/requests/cone/in')).status === 0
+  );
+  const spawned = await page.evaluate(() =>
+    window.sh('agent --async --name helper --prompt "Report back"', 'cone')
+  );
+  assert.equal(spawned.status, 0, spawned.stderr);
+  const handle = spawned.stdout.trim();
+  const reports = await page.within(
+    60000,
+    async (handle) => (await window.sh(`ls /home/cone/.slicc/reports/${handle}`)).stdout.trim(),
+    handle
+  );
+  assert.match(reports, /\.md$/);
+  const seen = await page.evaluate(async (handle) => {
+    const owners = (
+      await window.sh(
+        `cd /home/cone/.slicc && stat -c "%U %n" . reports reports/${handle} reports/${handle}/*.md`
+      )
+    ).stdout;
+    const own = await window.sh(
+      'mkdir -p ~/.slicc/watches && echo "{}" > ~/.slicc/watches/mine.json && echo ok',
+      'cone'
+    );
+    await window.owner.release();
+    return { owners, own };
+  }, handle);
+  assert.equal(
+    seen.owners,
+    `cone .\ncone reports\ncone reports/${handle}\ncone reports/${handle}/${reports}\n`
+  );
+  assert.deepEqual([seen.own.status, seen.own.stdout], [0, 'ok\n'], seen.own.stderr);
+});
