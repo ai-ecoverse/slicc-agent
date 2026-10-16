@@ -6,13 +6,15 @@ case "$as" in subagent|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; 
 [ -d "$dir/in" ] && [ -d "$dir/out" ] || mkdir -p "$dir/in" "$dir/out" 2>/dev/null
 who="${SLICC_AGENT:-}"
 if [ -z "$who" ] && [ -n "${SLICC_TAB:-}" ]; then who="tab:$SLICC_TAB"; fi
+cron=""
+if [ "${SLICC_CRON:-}" = 1 ]; then cron="${SLICC_CRON_JOB:-} ${SLICC_CRON_DUE:-} ${SLICC_CRON_MISSED:-0}"; fi
 
 submit() {
   local id="$1"
   shift
   local tmp="$dir/in/.tmp-$id"
   {
-    printf '%s\0' "slicc-agent/1" "$as" "$who" "$PWD" "$$" "$#"
+    printf '%s\0' "slicc-agent/2" "$as" "$who" "$PWD" "$$" "$cron" "$#"
     if [ $# -gt 0 ]; then printf '%s\0' "$@"; fi
     if [ "$stdin" = 1 ]; then cat; fi
   } > "$tmp" && mv "$tmp" "$dir/in/$id"

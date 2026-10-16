@@ -3,7 +3,7 @@ import type { Conversation, ConversationId, Harness, Registry } from '@earendil-
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
 import type { Activity } from '../kernel/activity.ts';
-import { cronTask, licksExtension } from './extension.ts';
+import { licksExtension } from './extension.ts';
 import type { LickChannel, LickTarget } from './lick.ts';
 import { createLicks, type Licks, type LicksHost } from './licks.ts';
 import { createLickSources, type LickDir, type LickSources } from './sources.ts';
@@ -37,10 +37,10 @@ export interface LicksSetup {
     options: {
       env: ExecutionEnv;
       home: string;
-      now?: () => number;
       flushEvery?: number;
       activity?: Activity;
       dirs?: () => Promise<readonly LickDir[]>;
+      cronUser?: (target: LickTarget, place: LickDir) => string | undefined;
     }
   ): LickSources;
 }
@@ -51,13 +51,12 @@ export function setupLicks(registry: Registry): LicksSetup {
     bind = resolve;
   });
   const licks = createLicks(host);
-  const cron = cronTask(licks);
   const lookup = async (id: ConversationId, context: Context) => {
     const found = await (await host).harness.conversation(id, context);
     if (!found) throw new Error(`conversation ${id} is gone`);
     return found;
   };
-  registry.install(licksExtension(licks, lookup, cron));
+  registry.install(licksExtension(licks, lookup));
   return {
     licks,
     attach(agent, options) {
@@ -69,7 +68,6 @@ export function setupLicks(registry: Registry): LicksSetup {
         root,
         cone: () => agent.cone(),
         licks,
-        cron,
       });
     },
   };

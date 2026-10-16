@@ -1,7 +1,26 @@
 import type { Context } from '@earendil-works/chord';
-import type { Conversation, EntryRecord, Harness } from '@earendil-works/pi-durable';
+import {
+  type Conversation,
+  defineDoc,
+  type EntryRecord,
+  type Harness,
+} from '@earendil-works/pi-durable';
 import type { Deliver } from './fswatch.ts';
-import { LicksHostDoc } from './schedules.ts';
+
+type HostState = {
+  cron: Record<string, { task: number }>;
+  agent: string | null;
+  boot: string | null;
+  mark: number;
+  upgrades: number;
+};
+
+export const LicksHostDoc = defineDoc<HostState>({
+  kind: 'slicc.licks.host',
+  version: 1,
+  scope: 'session',
+  initial: () => ({ cron: {}, agent: null, boot: null, mark: 0, upgrades: 0 }),
+});
 
 export interface BootFacts {
   version: string;

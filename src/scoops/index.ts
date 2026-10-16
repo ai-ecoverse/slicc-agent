@@ -20,7 +20,7 @@ import {
   type ControlPlane,
   controlPlane,
   type PlaneOptions,
-  PROTOCOL,
+  PROTOCOL_MARK,
 } from './requests.ts';
 import { choosable, createScoops, type EnvOf, type Scoops, type ScoopsHost } from './service.ts';
 
@@ -110,7 +110,7 @@ async function theirs(env: ExecutionEnv, path: string, context: Context): Promis
   if (!found.ok) return found.error.code !== 'not_found';
   if (found.value.kind !== 'file') return true;
   const read = await env.readTextFile(path, context);
-  return !read.ok || !read.value.includes(PROTOCOL);
+  return !read.ok || !read.value.includes(PROTOCOL_MARK);
 }
 
 async function install(
@@ -134,7 +134,7 @@ async function install(
   }
   for (const name of RETIRED_COMMANDS) {
     const text = await env.readTextFile(`${binDir}/${name}`, context);
-    if (text.ok && text.value.includes(PROTOCOL))
+    if (text.ok && text.value.includes(PROTOCOL_MARK))
       await env.remove(`${binDir}/${name}`, { force: true }, context);
   }
   return { done: true, skipped };
@@ -164,7 +164,8 @@ export async function retire(env: ExecutionEnv, binDir: string, context: Context
   for (const name of [...COMMANDS, ...RETIRED_COMMANDS]) {
     const path = `${old}/${name}`;
     const text = await env.readTextFile(path, context);
-    if (text.ok && text.value.includes(PROTOCOL)) await env.remove(path, { force: true }, context);
+    if (text.ok && text.value.includes(PROTOCOL_MARK))
+      await env.remove(path, { force: true }, context);
   }
 }
 
@@ -345,6 +346,7 @@ export function setupScoops(
         ...(options.models ? { models: options.models } : {}),
         layout,
         ...(options.panel ? { panel: options.panel } : {}),
+        licks,
       });
       const plane = planeOf(env, cli, options, context);
       await plane.start(context);

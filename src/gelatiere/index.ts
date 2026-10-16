@@ -2,6 +2,8 @@ import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
+import { ROOT_USER } from '../layout.ts';
+import { installJobs, readTable, scheduleOf, sendCommand } from '../licks/crontab.ts';
 import type { Licks } from '../licks/licks.ts';
 import type { Roles } from '../roles/roles.ts';
 import type { Scoops } from '../scoops/service.ts';
@@ -55,6 +57,7 @@ export interface GelatiereAttach {
   profile?: string;
   shared?: string;
   as?: (caller: string | null, context: Context) => Promise<Caller | undefined>;
+  cronUser?: (folder: string) => Promise<string>;
 }
 
 export interface Caller {
@@ -83,15 +86,7 @@ export const USAGE = `usage:
 The store is ${STORE}; the suggestions sprinkle shows it.
 `;
 
-function line(handle: string): string {
-  return `${SCHEDULE} ${ROLE} scoop:${handle} Nightly pass: read ~/.pi/agent/GELATIERE.md and follow it.`;
-}
-
-const JOB = new RegExp(`^((?:\\S+\\s+){4}\\S+|@\\w+)\\s+${ROLE}(?:\\s|$)`);
-
-export function scheduleOf(entry: string): string | undefined {
-  return JOB.exec(entry.trim())?.[1]?.replace(/\s+/g, ' ');
-}
+export const PASS = 'Nightly pass: read ~/.pi/agent/GELATIERE.md and follow it.';
 
 function handleOf(agents: Agents): string | undefined {
   const found = Object.entries(agents.state().scoops).find(
@@ -109,7 +104,6 @@ type G = {
   serial: <T>(work: () => Promise<T>) => Promise<T>;
   options: GelatiereAttach;
   now: () => number;
-  crontab: string;
   procedure: string;
   pending: string;
   load: (context: Context) => Promise<Suggestion[]>;
@@ -126,15 +120,16 @@ async function callerOf(g: G, context: Context): Promise<Caller> {
 
 const fail = (out: string): Answer => ({ code: 1, out: `gelatiere: ${out}\n` });
 
-async function schedule(g: G, handle: string, context: Context): Promise<void> {
-  const { home } = g.options;
-  const env = g.files;
-  const read = await env.readTextFile(g.crontab, context);
-  const kept = (read.ok ? read.value : '')
-    .split('\n')
-    .filter((entry) => entry.trim() && !scheduleOf(entry));
-  await env.createDir(`${home}/.slicc`, { recursive: true }, context);
-  await env.writeFile(g.crontab, `${[...kept, line(handle)].join('\n')}\n`, context);
+async function cronUserOf(g: G, handle: string): Promise<string> {
+  return (await g.options.cronUser?.(handle)) ?? ROOT_USER;
+}
+
+async function schedule(g: G, handle: string, context: Context): Promise<string | undefined> {
+  const command = sendCommand(`scoop:${handle}`, PASS);
+  const user = await cronUserOf(g, handle);
+  const job = { name: ROLE, schedule: SCHEDULE, command };
+  const problems = await installJobs(g.options.env, user, [job], context);
+  return problems.length ? problems.map((problem) => problem.error).join('; ') : undefined;
 }
 
 export const SHIPPED = [
@@ -202,7 +197,8 @@ async function init(g: G, context: Context): Promise<Answer> {
     if (spawned.code !== 0) return { code: 1, out: `gelatiere: ${spawned.out}` };
     handle = spawned.out.trim();
   }
-  await schedule(g, handle, context);
+  const refused = await schedule(g, handle, context);
+  if (refused) return fail(`couldn't install the crontab line of scoop ${handle}: ${refused}`);
   return {
     code: 0,
     out: `the gelatiere is scoop ${handle}; it runs at ${SCHEDULE} (crontab) and with gelatiere run, following ${g.procedure}\n`,
@@ -480,8 +476,8 @@ async function status(g: G, context: Context): Promise<Answer> {
   const { env, agents } = g.options;
   const store = await readStore(env, context, g.store);
   const handle = handleOf(agents);
-  const read = await g.files.readTextFile(g.crontab, context);
-  const scheduled = (read.ok ? read.value : '').split('\n').map(scheduleOf).find(Boolean);
+  const table = handle ? await readTable(env, await cronUserOf(g, handle), context) : '';
+  const scheduled = typeof table === 'string' ? scheduleOf(table, ROLE) : undefined;
   const counts = store
     ? `${open(store).length} open, ${store.filter((item) => item.takenAt).length} taken, ${store.filter((item) => item.dismissedAt).length} dismissed`
     : 'none yet';
@@ -533,7 +529,6 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
     serial,
     options,
     now,
-    crontab: `${home}/.slicc/crontab`,
     procedure: `${home}/.pi/agent/GELATIERE.md`,
     pending: `${home}/.pi/agent/GELATIERE.new.md`,
     files: options.files ?? env,

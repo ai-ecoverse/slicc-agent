@@ -1,20 +1,14 @@
 import type { Context } from '@earendil-works/chord';
-import type { Conversation, Harness } from '@earendil-works/pi-durable';
+import type { Conversation, Harness, TaskId } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Activity } from '../kernel/activity.ts';
-import { type BootFacts, bootLicks } from './boot.ts';
-import {
-  type ConfigError,
-  type CronEntry,
-  parseCrontab,
-  parseWebhook,
-  type WebhookEntry,
-} from './config.ts';
-import type { cronTask } from './extension.ts';
+import { ROOT_USER } from '../layout.ts';
+import { type BootFacts, bootLicks, LicksHostDoc } from './boot.ts';
+import { type ConfigError, parseWebhook, type WebhookEntry } from './config.ts';
+import { type CronJob, installJobs, legacyJobs, sendCommand } from './crontab.ts';
 import { type ConfigFiles, configFiles, Watches } from './fswatch.ts';
 import type { LickChannel, LickTarget } from './lick.ts';
 import type { LickEvent, Licks } from './licks.ts';
-import { reconcileCron } from './schedules.ts';
 
 export const SLICC_DIR = '.slicc';
 
@@ -25,11 +19,10 @@ export interface LickSourcesOptions {
   env: ExecutionEnv;
   home: string;
   licks: Licks;
-  cron: ReturnType<typeof cronTask>;
-  now?: () => number;
   flushEvery?: number;
   activity?: Activity;
   dirs?: () => readonly LickDir[] | Promise<readonly LickDir[]>;
+  cronUser?: (target: LickTarget, place: LickDir) => string | undefined;
 }
 
 export interface LickDir {
@@ -92,7 +85,10 @@ export function configLick(
     source: `config:${file}`,
     title: `Invalid ${file}`,
     text,
-    body: 'Ignored until the file is fixed.\nThe formats are in the slicc-agent README.',
+    body:
+      channel === 'cron'
+        ? 'Not moved into the kernel crontab until the file is fixed; the installed crontab is unchanged.\nThe format is in the slicc-agent README.'
+        : 'Ignored until the file is fixed.\nThe formats are in the slicc-agent README.',
     target: scopedTarget('cone', cone),
     severity: 'error',
     eventId: hash(`${file}\n${text}`),
@@ -145,7 +141,6 @@ async function webhooksIn(
 
 export function createLickSources(options: LickSourcesOptions): LickSources {
   const { harness, env, licks, home } = options;
-  const now = options.now ?? Date.now;
   const files = configFiles(env);
   const deliver = (event: LickEvent, context: Context) => licks.deliver(event, context);
   const dirsOf = options.dirs ?? (() => [{ dir: `${home}/${SLICC_DIR}`, home, cone: null }]);
@@ -176,20 +171,17 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
   async function reconcileNow(context: Context): Promise<void> {
     if (closed) return;
     const places = await dirsOf();
-    const entries: CronEntry[] = [];
     const errors: { error: ConfigError; place: LickDir }[] = [];
     const hooks = new Map<string, WebhookEntry>();
     for (const place of places) {
-      const crontabFile = `${place.dir}/crontab`;
-      const crontab = parseCrontab(crontabFile, (await files.read(crontabFile, context)) ?? '');
-      entries.push(...crontab.entries.map((entry) => scoped(entry, place.cone)));
+      const crontab = await migrate(place, context);
       const watchErrors = await watchesOf(place).reconcile(`${place.dir}/watches`, context);
       const found = await webhooksIn(files, `${place.dir}/webhooks`, context);
       for (const entry of found.entries.values()) {
         const named = scoped(entry, place.cone);
         hooks.set(named.name, named);
       }
-      for (const error of [...crontab.errors, ...watchErrors, ...found.errors])
+      for (const error of [...crontab, ...watchErrors, ...found.errors])
         errors.push({ error, place });
     }
     for (const [dir, watches] of [...watching])
@@ -197,11 +189,46 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
         watching.delete(dir);
         await watches.close(context);
       }
-    await reconcileCron({ ...options, now }, entries, context);
     webhooks = hooks;
     for (const { error, place } of errors)
       await deliver(configLick(error, place.home, place.cone), context);
     await watchControl(places, context);
+  }
+
+  async function migrate(place: LickDir, context: Context): Promise<ConfigError[]> {
+    const file = `${place.dir}/crontab`;
+    const text = await files.read(file, context);
+    if (text === undefined) return [];
+    const { jobs, problems } = legacyJobs(text);
+    if (problems.length) return problems.map((problem) => ({ file, ...problem }));
+    const users = new Map<string, CronJob[]>();
+    for (const job of jobs) {
+      const user = options.cronUser?.(job.target, place) ?? place.cone ?? ROOT_USER;
+      const command = sendCommand(job.target, job.message);
+      users.set(user, [
+        ...(users.get(user) ?? []),
+        { name: job.name, schedule: job.schedule, command, line: job.line },
+      ]);
+    }
+    const errors: ConfigError[] = [];
+    for (const [user, list] of users)
+      for (const problem of await installJobs(env, user, list, context))
+        errors.push({ file, ...problem });
+    if (errors.length) return errors;
+    await env.writeFile(`${file}.migrated`, text, context);
+    await env.remove(file, { force: true }, context);
+    return [];
+  }
+
+  async function retire(context: Context): Promise<void> {
+    const stored = (await harness.snapshot(LicksHostDoc, context))?.cron ?? {};
+    const records = Object.values(stored);
+    if (!records.length) return;
+    for (const record of records)
+      await harness.abortTask(record.task as TaskId, context).catch(() => undefined);
+    await harness.commit(async (tx) => {
+      (await tx.doc(LicksHostDoc)).cron = {};
+    }, context);
   }
 
   async function watchControl(places: readonly LickDir[], context: Context): Promise<void> {
@@ -233,6 +260,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
   return {
     async start(context) {
       await licks.flush(context);
+      await retire(context);
       await reconcile(context);
       flushTimer = setInterval(() => {
         void flushIfWaiting(context).catch(() => undefined);

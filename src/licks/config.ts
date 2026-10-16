@@ -1,12 +1,4 @@
-import { parseSchedule } from './cron.ts';
 import type { LickTarget } from './lick.ts';
-
-export interface CronEntry {
-  name: string;
-  schedule: string;
-  target: LickTarget;
-  message: string;
-}
 
 export interface WatchEntry {
   name: string;
@@ -47,46 +39,6 @@ export function isName(value: string): boolean {
 
 export function isTarget(value: string): value is LickTarget {
   return TARGET.test(value);
-}
-
-function scheduleOf(tokens: string[]): [string, string[]] {
-  if (tokens[0]?.startsWith('@')) return [tokens[0], tokens.slice(1)];
-  return [tokens.slice(0, 5).join(' '), tokens.slice(5)];
-}
-
-function cronLine(text: string): CronEntry {
-  const [schedule, rest] = scheduleOf(text.trim().split(/\s+/));
-  parseSchedule(schedule);
-  const [name, maybeTarget, ...words] = rest;
-  if (name === undefined) throw new Error('a name must follow the schedule');
-  if (!isName(name))
-    throw new Error(
-      `name "${name}" must be 1–64 of a-z, 0-9, ".", "_" or "-", starting with a letter or digit`
-    );
-  const target = maybeTarget !== undefined && isTarget(maybeTarget) ? maybeTarget : 'cone';
-  const message = (target === maybeTarget ? words : [maybeTarget, ...words])
-    .filter(Boolean)
-    .join(' ');
-  return { name, schedule, target, message };
-}
-
-export function parseCrontab(file: string, text: string): Parsed<CronEntry> {
-  const entries: CronEntry[] = [];
-  const errors: ConfigError[] = [];
-  const seen = new Set<string>();
-  text.split('\n').forEach((raw, index) => {
-    const line = raw.trim();
-    if (line === '' || line.startsWith('#')) return;
-    try {
-      const entry = cronLine(line);
-      if (seen.has(entry.name)) throw new Error(`name "${entry.name}" is used twice`);
-      seen.add(entry.name);
-      entries.push(entry);
-    } catch (error) {
-      errors.push({ file, line: index + 1, error: (error as Error).message });
-    }
-  });
-  return { entries, errors };
 }
 
 type Json = Record<string, unknown>;

@@ -13,8 +13,10 @@ import {
   SHARED_DIR,
   usersLayout,
 } from '../layout.ts';
+import type { LickTarget } from '../licks/lick.ts';
 import type { LickDir } from '../licks/sources.ts';
 import type { Spools } from '../scoops/index.ts';
+import { findScoop } from '../scoops/service.ts';
 import type { SkillPeople } from '../skills/index.ts';
 import type { SprinklePlace, SprinklesAttach } from '../sprinkles/index.ts';
 import {
@@ -22,6 +24,7 @@ import {
   CONE_PREFIX,
   createAccounts,
   homeOf,
+  scoopUser,
   type UsersMode,
   wanted,
 } from './accounts.ts';
@@ -42,6 +45,7 @@ export interface AgentUsers {
     }[]
   ): void;
   lickDirs(): Promise<LickDir[]>;
+  cronUser(target: LickTarget, place: LickDir): string | undefined;
   sprinklePlaces(): SprinklePlace[];
   sprinkles(): Partial<SprinklesAttach>;
   envOfAgent(agentId: string): Promise<SliccKernelEnv | undefined>;
@@ -182,6 +186,10 @@ export function agentUsers(
           const home = caller ? accounts.home(caller) : undefined;
           return env && home ? { env, home } : { env: root, home: ROOT_HOME };
         },
+        cronUser: async (folder) => {
+          await this.envOfAgent(`scoop:${folder}`);
+          return scoopUser(folder);
+        },
       };
     },
     async lickDirs() {
@@ -193,6 +201,11 @@ export function agentUsers(
         out.push({ dir: `${home}/.slicc`, home, cone: entry.spec.name, ...(env ? { env } : {}) });
       }
       return out;
+    },
+    cronUser(target, place) {
+      if (!target.startsWith('scoop:')) return undefined;
+      const found = findScoop(state(), target, place.cone);
+      return found ? scoopUser(found[1].folder) : undefined;
     },
     follow(runtimes) {
       listeners.add(() => {
