@@ -17,6 +17,7 @@ import { type Agents, openAgents } from './agents.ts';
 import type { Cones } from './cone.ts';
 import { type GuestToolGate, guestToolGate } from './guests/guard.ts';
 import { type GuestReviews, guestReviews } from './guests/review.ts';
+import { type ScoopReviews, scoopReviews } from './guests/scoop.ts';
 
 export interface AgentOptions {
   models: Models;
@@ -36,6 +37,7 @@ export interface Agent extends Cones {
   readonly agents: Agents;
   readonly reviews: GuestReviews;
   readonly gate: GuestToolGate;
+  readonly scoopReviews: ScoopReviews;
   onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
   prompt(text: string): Promise<string>;
   close(): Promise<void>;
@@ -72,6 +74,8 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   registry.install(gate.extension);
   const reviews = guestReviews();
   registry.install(reviews.extension);
+  const scooped = scoopReviews();
+  registry.install(scooped.extension);
   const harness = await Harness.open(
     options.storage ?? new MemoryStorage(),
     {
@@ -94,6 +98,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     agents,
     reviews,
     gate,
+    scoopReviews: scooped,
     cone: () => agents.cone(),
     switchCone: (conversation, switching) => agents.switchCone(conversation, switching),
     onCone: (listener) => agents.onCone(listener),

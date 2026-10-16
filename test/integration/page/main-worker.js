@@ -23,21 +23,35 @@ const fauxModels = [
 ];
 const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
 const requests = [];
-const recorded = (message) => (context) => {
+const served = [];
+const recorded = (message) => (context, _options, _state, model) => {
   requests.push(JSON.stringify(context));
+  served.push(model?.id ?? null);
   return { ...message, timestamp: Date.now() };
 };
 const upstream = [];
 self.addEventListener('message', ({ data }) => {
   data?.requests?.postMessage(requests);
+  data?.served?.postMessage(served);
   data?.upstream?.postMessage({
     upstream,
     vault: self.fakeVault?.log.map(({ op, provider, server }) => ({ op, provider, server })) ?? [],
   });
 });
+const HOLD = Symbol('hold');
+const held = (_context, options) =>
+  new Promise((resolve) => {
+    const done = () => {
+      requests.push(JSON.stringify({ held: 'aborted' }));
+      resolve(fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' }));
+    };
+    if (options?.signal?.aborted) done();
+    options?.signal?.addEventListener('abort', done, { once: true });
+  });
 const steps = [
   ...params.getAll('step').map((spec) => {
-    const { tool, answer, think, error } = JSON.parse(spec);
+    const { tool, answer, think, error, hold } = JSON.parse(spec);
+    if (hold) return HOLD;
     if (error) return fauxAssistantMessage([], { stopReason: 'error', errorMessage: error });
     if (think) return fauxAssistantMessage([fauxThinking(think), fauxText(answer)]);
     return tool
@@ -60,7 +74,7 @@ const steps = [
   ),
   ...params.getAll('answer').map((answer) => fauxAssistantMessage(answer)),
 ];
-const queued = steps.map(recorded);
+const queued = steps.map((step) => (step === HOLD ? held : recorded(step)));
 let titles = 0;
 const titling = (context) =>
   context.messages.length === 1 &&
@@ -242,6 +256,7 @@ const running = runAgentWorker(self, {
     ? { mcpRedirect: new URL(params.get('redirect'), self.location.origin).href }
     : {}),
   model: { provider: 'faux', modelId: 'faux-1' },
+  ...(params.has('ttl') ? { approvalMs: Number(params.get('ttl')) } : {}),
   providers: [
     faux.provider,
     ...judges,

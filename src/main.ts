@@ -108,6 +108,7 @@ export interface AgentWorkerOptions {
   catalog?: string;
   users?: boolean;
   mcpRedirect?: string;
+  approvalMs?: number;
 }
 
 export function usersOf(
@@ -350,24 +351,29 @@ async function settingsOf(
   return settings;
 }
 
-async function setupJudge(
+async function setupApprovals(
   models: Models,
   home: SliccKernelEnv,
   at: { home: string; agentDir?: string },
   agent: Agent,
-  memories: () => readonly MemoryEntry[] | undefined
-): Promise<ApprovalJudge> {
+  stored: { readonly value: readonly MemoryEntry[] | undefined },
+  options: Pick<AgentWorkerOptions, 'approvalMs'>
+) {
+  const memories = () => stored.value;
+  const { approvalMs } = options;
   await seedPolicy(home, BACKGROUND_CONTEXT).catch(() => false);
   const settings = settingsText(home, HOME, at.agentDir);
-  return {
+  const intent = ownerIntent({ env: home, agents: agent.agents, memories });
+  const judge: ApprovalJudge = {
     judge: approvalJudge({
       models,
       model: async (context) => judgeModelOf(await settings(context)),
-      intent: ownerIntent({ env: home, agents: agent.agents, memories }),
+      intent,
       spend: judgeSpender((agentId, context) => agent.agents.conversation(agentId, context)),
     }),
     record: verdictRecorder((agentId, context) => agent.agents.conversation(agentId, context)),
   };
+  return { judge, intent, ...(approvalMs ? { approvalMs } : {}) };
 }
 
 function setupTitles(
@@ -538,7 +544,7 @@ async function start(
   });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
   return hostAgent(agent, {
-    judge: await setupJudge(models, home, at, agent, () => memoryRuntime.memories.value),
+    ...(await setupApprovals(models, home, at, agent, memoryRuntime.memories, options)),
     settings,
     licks: { licks: licks.licks, sources },
     scoops: { scoops: scoops.scoops, runtime },

@@ -26,6 +26,7 @@ import { createAgentControl, type HostLicks, type HostScoops } from './control.t
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
 import { createGuests, type Guests } from './guests/index.ts';
+import type { ScoopReviewHost } from './guests/scoop.ts';
 import { admitGuest, guestOpener } from './guests/serve.ts';
 import type { UserClients } from './kernel/users.ts';
 import type { McpRuntime } from './mcp/index.ts';
@@ -167,21 +168,30 @@ function gatedControls(
   return { trusted, viewed };
 }
 
-function approving(
+async function approving(
   agent: Agent,
   policy: ApprovalPolicies,
-  judge: ApprovalJudge | undefined,
+  options: { judge?: ApprovalJudge; intent?: ScoopReviewHost['intent']; approvalMs?: number },
   context: Context
 ): Promise<Approvals> {
-  return attachApprovals(
+  const approvals = await attachApprovals(
     {
       harness: agent.harness,
       guestAlways: alwaysFor(policy),
       sudoApprover: () => policy.current().sudo.approver,
-      ...(judge ? { judge } : {}),
+      scoops: agent.scoopReviews,
+      ...(options.judge ? { judge: options.judge } : {}),
+      ...(options.approvalMs ? { ttlMs: options.approvalMs } : {}),
     },
     context
   );
+  agent.scoopReviews.bind({
+    approvals,
+    agents: agent.agents,
+    harness: agent.harness,
+    ...(options.intent ? { intent: options.intent } : {}),
+  });
+  return approvals;
 }
 
 async function guestsOf(
@@ -227,6 +237,8 @@ export async function hostAgent(
     labels?: LabelsRuntime;
     approvals?: Approvals;
     judge?: ApprovalJudge;
+    intent?: ScoopReviewHost['intent'];
+    approvalMs?: number;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -245,7 +257,7 @@ export async function hostAgent(
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
   const policy = await attachApprovalPolicy(agent.harness, context);
-  const approvals = options.approvals ?? (await approving(agent, policy, options.judge, context));
+  const approvals = options.approvals ?? (await approving(agent, policy, options, context));
   const monitor = createMonitor({
     ...options.monitor,
     harness: agent.harness,

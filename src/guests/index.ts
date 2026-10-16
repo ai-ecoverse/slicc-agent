@@ -14,7 +14,7 @@ import {
   guestContent,
 } from './attribution.ts';
 import { GUEST_REQUEST } from './guard.ts';
-import { DEFAULT_GUEST_POLICY, type GuestPolicy, gateKind } from './policy.ts';
+import { DEFAULT_GUEST_POLICY, type GuestPolicy } from './policy.ts';
 import {
   endReview,
   type GuestReviews,
@@ -171,7 +171,6 @@ async function place(
   at: number
 ): Promise<Proposed> {
   const gate = record.gates.messages;
-  if (gateKind(gate) === 'scoop') return unanswered('scoop');
   if (gate === 'off') return deliver(record, prepared.text, prepared.requestId, options, using);
   const { reviews } = options;
   if (!reviews || !options.approvals) return unanswered('unavailable');

@@ -436,64 +436,6 @@ test('a seat whose tools gate this agent does not know gets every tool call in i
   assert.equal(seen.items, 0);
 });
 
-test("a seat on a scoop tier, even once the policy no longer offers one, has its messages and its runs' tool calls denied at once: the review isn't available yet", async (t) => {
-  const page = await chrome.page(t);
-  await boot(page, {
-    steps: [
-      bash('touch /tmp/guest-scoop'),
-      answer('Scooped.'),
-      bash('test -e /tmp/guest-scoop && echo ran || echo never'),
-      answer('Checked.'),
-    ],
-  });
-  const seen = await page.evaluate(async () => {
-    const { until, open, mint, join, send, prompt, said, results } = globalThis.r;
-    const { local, model } = await open();
-    const out = { offered: model.guests.gates() };
-    const set = (guests) => local.control.approvalPolicySet({ guests }, BACKGROUND_CONTEXT);
-    await set({
-      allowedToolGates: ['user', 'agent', 'scoop'],
-      allowedMessageGates: ['user', 'agent', 'scoop', 'off'],
-    });
-    const tools = await mint('scoop:helper');
-    const messages = await mint('user', 'scoop:helper');
-    await set({
-      allowedToolGates: ['user', 'agent'],
-      allowedMessageGates: ['user', 'agent', 'off'],
-    });
-    const guest = await join(tools);
-    await send(guest, 'Make a file.');
-    await until(() => said().includes('Scooped.'), 'the guest run');
-    await prompt('Check the file.');
-    await until(() => said().includes('Checked.'), 'the owner check');
-    const asker = await join(messages);
-    const started = Date.now();
-    out.sent = await send(asker, 'Hello from a scoop seat.');
-    out.fast = Date.now() - started < 5000;
-    out.proposals = asker.proposals.value ?? [];
-    out.results = results();
-    out.approvals = (local.approvals.value ?? []).length;
-    out.delivered = JSON.stringify(globalThis.r.entries()).includes('Hello from a scoop seat.');
-    await asker.close();
-    await guest.close();
-    return out;
-  });
-  assert.deepEqual(seen.offered, {
-    messages: ['user', 'agent', 'cone', 'off'],
-    tools: ['user', 'agent'],
-  });
-  assert.deepEqual(seen.sent, {
-    accepted: false,
-    submissionId: null,
-    error: { code: 'EACCES', message: "This review isn't available yet." },
-  });
-  assert.equal(seen.fast, true);
-  assert.deepEqual(seen.proposals, []);
-  assert.deepEqual(seen.results, [refused("This review isn't available yet."), 'never']);
-  assert.equal(seen.approvals, 0);
-  assert.equal(seen.delivered, false);
-});
-
 test('a guest seat with tools off is refused until the owner allows it, then its runs use tools unasked, and taking off back denies them again', async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
@@ -509,11 +451,11 @@ test('a guest seat with tools off is refused until the owner allows it, then its
     );
     const set = (allowedToolGates) =>
       local.control.approvalPolicySet({ guests: { allowedToolGates } }, BACKGROUND_CONTEXT);
-    await set(['user', 'agent', 'off']);
+    await set(['user', 'agent', 'scoop', 'off']);
     const guest = await join(await mint('off'));
     await send(guest, 'Run freely.');
     await until(() => said().includes('Free.'), 'the free run');
-    await set(['user', 'agent']);
+    await set(['user', 'agent', 'scoop']);
     await send(guest, 'Run again.');
     await until(() => said().includes('Again.'), 'the second run');
     out.results = results();
@@ -521,10 +463,13 @@ test('a guest seat with tools off is refused until the owner allows it, then its
     await guest.close();
     return out;
   });
-  assert.equal(seen.refused, "A guest's tool calls need a review: by a person or the judge.");
+  assert.equal(
+    seen.refused,
+    "A guest's tool calls need a review: by a person, the judge or a scoop."
+  );
   assert.deepEqual(seen.results, [
     'guest-free',
-    refused("A guest's tool calls need a review: by a person or the judge."),
+    refused("A guest's tool calls need a review: by a person, the judge or a scoop."),
   ]);
   assert.equal(seen.items, 0);
 });

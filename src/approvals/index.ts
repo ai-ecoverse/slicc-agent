@@ -20,6 +20,7 @@ import {
   routable,
   ruled,
   type Settle,
+  scoopTier,
   sudoApprover,
   tierOf,
 } from './record.ts';
@@ -47,10 +48,15 @@ export interface Approvals {
     context: Context
   ): Promise<ApprovalDecided>;
   settled(id: string, context: Context): Promise<Approval>;
+  assign(id: string, reviewer: string, context: Context): Promise<Approval | undefined>;
   withdraw(id: string, reason: string | null, context: Context): Promise<Approval | undefined>;
   withdrawSeat(seat: string, context: Context): Promise<number>;
   expire(id: string, context: Context): Promise<Approval | undefined>;
   close(): void;
+}
+
+export interface ScoopRouter {
+  route(item: Approval): Promise<void>;
 }
 
 export interface ApprovalsAttach {
@@ -58,6 +64,7 @@ export interface ApprovalsAttach {
   now?: () => number;
   ttlMs?: number;
   judge?: ApprovalJudge;
+  scoops?: ScoopRouter;
   guestAlways?: (kind: ApprovalKind) => boolean;
   sudoApprover?: () => unknown;
 }
@@ -250,6 +257,11 @@ export async function attachApprovals(
       }
   }
   arm(startup.items);
+  const toScoop = (item: Approval) => {
+    if (options.scoops && item.state === 'pending' && scoopTier(item.tier))
+      void options.scoops.route(item).catch(() => undefined);
+  };
+  for (const item of startup.items) toScoop(item);
   const withdrawWhere = (match: (item: Approval) => boolean, reason: string | undefined) =>
     withdrawIn(match, reason, now);
   const judging = async (judge: ApprovalJudge, item: Approval, using: Context) => {
@@ -290,6 +302,7 @@ export async function attachApprovals(
       }, using);
       if (created && options.judge && made.state === 'pending' && made.tier === 'agent')
         void judging(options.judge, made, using);
+      if (created) toScoop(made);
       return made;
     },
     decide(id, answer, reason, decider, using) {
@@ -310,6 +323,13 @@ export async function attachApprovals(
       }, using);
     },
     settled: (id, using) => settledIn(state, id, using),
+    assign(id, reviewer, using) {
+      return serial((doc) => {
+        const item = doc.items.find((entry) => entry.id === id);
+        if (item?.state === 'pending' && scoopTier(item.tier)) item.reviewer ??= reviewer;
+        return item ? (copy([item])[0] as Approval) : undefined;
+      }, using);
+    },
     async withdraw(id, reason, using) {
       const [hit] = await serial(
         withdrawWhere((item) => item.id === id, cleanReason(reason)),

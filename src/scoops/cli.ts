@@ -2,6 +2,7 @@ import type { Context } from '@earendil-works/chord';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState } from '../agents.ts';
+import { reviewersOf } from '../guests/scoop.ts';
 import { CONE_PREFIX } from '../kernel/accounts.ts';
 import { resolve } from '../kernel/paths.ts';
 import { agentOfUser, type Layout, LEGACY, ROOT_USER } from '../layout.ts';
@@ -220,6 +221,20 @@ function handle(deps: Deps, who: Caller, name: string | undefined) {
   return name ? findScoop(deps.agents.state(), name, who.fromAgent ? who.cone : null) : undefined;
 }
 
+async function reviewing(
+  deps: Deps,
+  who: Caller,
+  [id, record]: [string, { name: string }],
+  context: Context
+) {
+  if (!who.fromAgent || who.scoop) return undefined;
+  const reviewers = await reviewersOf(deps.harness, deps.agents.state(), who.cone, context);
+  if (!reviewers.includes(id)) return undefined;
+  return fail(
+    `the scoop ${record.name} reviews this guest run's requests, so this run can't ask anything of it`
+  );
+}
+
 const ASYNC_VALUES = [
   '--name',
   '--agent',
@@ -360,6 +375,8 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   if (who.scoop) return fail('a scoop can only send to its parent');
   const found = handle(deps, who, request.argv[1]);
   if (!found) return fail(noScoop(deps.agents.state(), request.argv[1] ?? ''));
+  const refused = await reviewing(deps, who, found, context);
+  if (refused) return refused;
   const followUp = parsed.switches.has('--follow-up');
   return deps.scoops.feed(
     found[0],
@@ -476,6 +493,8 @@ async function stop(deps: Deps, request: Request, who: Caller, context: Context)
   if (who.scoop) return fail('a scoop cannot stop scoops');
   const found = handle(deps, who, request.argv[1]);
   if (!found) return fail(noScoop(deps.agents.state(), request.argv[1] ?? ''));
+  const refused = await reviewing(deps, who, found, context);
+  if (refused) return refused;
   return deps.scoops.stop(found[0], who.fromAgent, context);
 }
 
@@ -488,6 +507,8 @@ async function rename(
   if (who.scoop) return fail('a scoop cannot rename scoops');
   const found = handle(deps, who, request.argv[1]);
   if (!found) return fail(noScoop(deps.agents.state(), request.argv[1] ?? ''));
+  const refused = await reviewing(deps, who, found, context);
+  if (refused) return refused;
   return deps.scoops.rename(found[0], request.argv.slice(2).join(' '), context);
 }
 
