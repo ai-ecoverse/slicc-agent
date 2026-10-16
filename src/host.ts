@@ -18,6 +18,7 @@ import {
   attachApprovals,
   type DecidedBy,
 } from './approvals/index.ts';
+import { alwaysFor, attachApprovalPolicy } from './approvals/policy.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
@@ -47,6 +48,7 @@ import {
   CONTROL_READS,
   type Command,
   GUEST_METHODS,
+  OWNER_DEVICE_METHODS,
   PAGE_METHODS,
   type PrivateRevision,
   REMOTE_METHODS,
@@ -202,10 +204,15 @@ export async function hostAgent(
   const untouch = [state.subscribe(touch), mounted.views.subscribe(touch)];
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
+  const policy = await attachApprovalPolicy(agent.harness, context);
   const approvals =
     options.approvals ??
     (await attachApprovals(
-      { harness: agent.harness, ...(options.judge ? { judge: options.judge } : {}) },
+      {
+        harness: agent.harness,
+        guestAlways: alwaysFor(policy),
+        ...(options.judge ? { judge: options.judge } : {}),
+      },
       context
     ));
   const monitor = createMonitor({
@@ -219,25 +226,29 @@ export async function hostAgent(
     harness: agent.harness,
     agents: agent.agents,
     approvals,
+    policy,
     context,
   });
-  const control = createAgentControl(
-    agent.harness,
-    agent,
-    deliveries,
-    options.licks,
-    options.scoops,
-    options.skills,
-    options.sprinkles,
-    options.memory,
-    options.freezer,
-    options.changes,
-    monitor,
-    options.secrets?.list,
-    options.uploads,
-    options.labels,
-    guests
-  );
+  const control: AgentControl = {
+    ...createAgentControl(
+      agent.harness,
+      agent,
+      deliveries,
+      options.licks,
+      options.scoops,
+      options.skills,
+      options.sprinkles,
+      options.memory,
+      options.freezer,
+      options.changes,
+      monitor,
+      options.secrets?.list,
+      options.uploads,
+      options.labels,
+      guests
+    ),
+    approvalPolicySet: (change, using) => policy.set(change, using),
+  };
   const remote = createRemote({
     harness: agent.harness,
     send: (request, using) => control.send(request, using),
@@ -270,6 +281,7 @@ export async function hostAgent(
     labels: labels.state,
     guests: guests.seats,
     approvals: approvals.state,
+    approvalPolicy: policy.state,
   };
   const settings = options.settings ?? noSettings;
   const gates = gatedControls(control, slims.shown, shownViews, transcriptService.labels);
@@ -394,25 +406,20 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
   };
 }
 
-export const GUEST_MANAGERS: ReadonlySet<Seat> = new Set<Seat>(['owner']);
-
-export const OWNER_GUESTS = 'only the owner can invite or revoke guests';
-
-const notOwner = () => Promise.reject(forbidden(OWNER_GUESTS));
-
 const seated = (serving: Served, seat: Seat): AgentControl => ({
-  ...serving.trusted,
+  ...(seat === 'view' ? serving.viewed : serving.trusted),
   decide: serving.decide(seat === 'owner' ? 'owner' : 'follower'),
-  ...(GUEST_MANAGERS.has(seat) ? {} : { guestOpen: notOwner, guestRevoke: notOwner }),
 });
+
+const VIEW_METHODS = [...CONTROL_READS, ...OWNER_DEVICE_METHODS];
 
 export function serveAgent(serving: Served): Host {
   const host = closedToGuests(createHost({ name: AGENT_HOST, principalKey }));
   const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
   host.serve(AgentControl, ((_input: unknown, principal: unknown) => {
     const seat = seatOf(principal);
-    if (seat === 'view') return { kind: 'view', ...served(() => serving.viewed, CONTROL_READS) };
     const control = seated(serving, seat);
+    if (seat === 'view') return { kind: 'view', ...served(() => control, VIEW_METHODS) };
     return { kind: 'control', ...served(() => control, CONTROL_METHODS) };
   }) as never);
   host.serve(AgentTranscript, ((_input: unknown, principal: unknown) => ({

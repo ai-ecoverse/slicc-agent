@@ -52,6 +52,13 @@ export {
   verdictRecorder,
 } from './approvals/index.ts';
 export {
+  type ApprovalPolicy,
+  type ApprovalPolicyChange,
+  type ApprovalPolicySet,
+  DEFAULT_APPROVAL_POLICY,
+  type SudoPolicy,
+} from './approvals/policy.ts';
+export {
   FILE_LIMIT,
   IMAGE_LIMIT,
   type SendAttachment,
@@ -69,6 +76,7 @@ export {
   SEAT_REFUSED,
 } from './guests/client.ts';
 export type { GuestOpened, Proposed, ProposeRequest } from './guests/index.ts';
+export type { GateKind, GuestPolicy } from './guests/policy.ts';
 export type { GuestDraft, GuestGate, GuestGates, GuestSeat } from './guests/seats.ts';
 export { type AgentHost, type ConnectOptions, hostAgent } from './host.ts';
 export type {

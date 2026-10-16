@@ -322,30 +322,14 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
       listedAfterUnreviewed,
       hubRevoked: globalThis.seats.revoked,
     };
-    const follower = await join({ pages: false }, connectAgent);
-    out.followerInvite = createAgentModel(follower, { guests: hub }).guests.unavailable();
-    out.followerMint = await refused(() =>
-      follower.control.guestOpen(
-        {
-          id: 'f',
-          label: 'f',
-          agentId: 'cone',
-          expiresAt: null,
-          gates: { messages: 'off', tools: 'user' },
-        },
-        BACKGROUND_CONTEXT
-      )
-    );
-    await follower.close();
     await guest.close();
     return out;
   });
   assert.equal(result.asFollower, 'forbidden');
-  assert.equal(result.followerInvite, "Only the owner's tab can invite guests.");
-  assert.equal(result.followerMint, 'forbidden');
-  for (const key of ['abort', 'lick', 'configure', 'mint', 'settings'])
+  for (const key of ['abort', 'lick', 'configure', 'settings'])
     assert.equal(result[key], 'EACCES', key);
-  assert.equal(result.invite, 'Only a tab with Control can invite guests.');
+  assert.equal(result.mint, 'forbidden', 'the guest policy refuses a guest managing guests');
+  assert.equal(result.invite, "Only the owner's devices can invite guests.");
   assert.equal(result.gated, 'sent');
   assert.deepEqual(result.waiting, ['Mallory: Let me in']);
   assert.equal(result.pages, null);
@@ -363,6 +347,154 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
     ['seat-2', 'seat-3'],
     'the hub seats minted for a refused draft are revoked again'
   );
+});
+
+test('every owner device manages guests: a follower with Control and one without mint, list and revoke through the Guests port like the owner', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, 'answer=Hello.');
+  const result = await page.evaluate(async () => {
+    const { owner, join, hub, until, revoked } = globalThis.seats;
+    const local = await owner.connect();
+    const follower = await join({ pages: false }, connectAgent);
+    const viewer = await join({ pages: false, readOnly: true }, connectAgent);
+    const gates = { messages: 'user', tools: 'agent' };
+    const ports = [local, follower, viewer].map(
+      (connection) => createAgentModel(connection, { guests: hub }).guests
+    );
+    const unavailable = ports.map((port) => port.unavailable());
+    const fromFollower = await ports[1].mint('cone', { label: 'Ada', expiresAt: null, gates });
+    const fromViewer = await ports[2].mint('cone', { label: 'Bea', expiresAt: null, gates });
+    await until(
+      () => ports.every((port) => port.list().length === 2),
+      'every device to list both seats'
+    );
+    const listed = ports.map((port) => port.list().map((seat) => seat.label));
+    await ports[2].revoke(fromFollower.seat.id);
+    await ports[1].revoke(fromViewer.seat.id);
+    await until(() => ports.every((port) => port.list().length === 0), 'both seats to leave');
+    const viewDrives = await viewer.control.abort(BACKGROUND_CONTEXT).then(
+      () => 'ran',
+      (error) => error.code
+    );
+    for (const connection of [viewer, follower, local]) await connection.close();
+    return {
+      unavailable,
+      urls: [fromFollower.url, fromViewer.url],
+      listed,
+      revoked: [...revoked],
+      viewDrives,
+      viewOnly: viewer.viewOnly,
+    };
+  });
+  assert.deepEqual(result.unavailable, [null, null, null]);
+  assert.deepEqual(result.urls, [
+    'https://hub.test/join/seat-1-token',
+    'https://hub.test/join/seat-2-token',
+  ]);
+  assert.deepEqual(result.listed, [
+    ['Ada', 'Bea'],
+    ['Ada', 'Bea'],
+    ['Ada', 'Bea'],
+  ]);
+  assert.deepEqual(result.revoked, ['seat-1', 'seat-2']);
+  assert.equal(result.viewOnly, true);
+  assert.equal(result.viewDrives, 'EACCES', 'Control still gates driving');
+});
+
+test('the approval policy: by default a guest seat with tools off is refused, an owner device allows it, and a guest can never change the policy or manage seats', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, 'answer=Hello.');
+  const result = await page.evaluate(async () => {
+    const { owner, join, hub, until } = globalThis.seats;
+    const local = await owner.connect();
+    const viewer = await join({ pages: false, readOnly: true }, connectAgent);
+    const ownerPort = createAgentModel(local, { guests: hub }).guests;
+    const viewerPort = createAgentModel(viewer, { guests: hub }).guests;
+    const unreviewed = { messages: 'user', tools: 'off' };
+    const failed = (promise) =>
+      promise.then(
+        () => 'resolved',
+        (error) => `${error.code ?? ''}${error.code ? ' ' : ''}${error.message}`
+      );
+    const before = await failed(
+      ownerPort.mint('cone', { label: 'Eve', expiresAt: null, gates: unreviewed })
+    );
+    const offered = ownerPort.gates();
+    const set = await viewer.control.approvalPolicySet(
+      { guests: { allowedToolGates: ['user', 'agent', 'scoop', 'off'] } },
+      BACKGROUND_CONTEXT
+    );
+    const refusedChange = await viewer.control.approvalPolicySet(
+      { guests: { manageGuests: 'user' } },
+      BACKGROUND_CONTEXT
+    );
+    await until(
+      () => local.approvalPolicy.value.guests.allowedToolGates.includes('off'),
+      'the owner tab to see the policy'
+    );
+    const { seat } = await ownerPort.mint('cone', {
+      label: 'Eve',
+      expiresAt: null,
+      gates: unreviewed,
+    });
+    await local.control.approvalPolicySet(
+      { guests: { allowedToolGates: ['user', 'agent', 'scoop'] } },
+      BACKGROUND_CONTEXT
+    );
+    await until(
+      () => !viewer.approvalPolicy.value.guests.allowedToolGates.includes('off'),
+      'the follower to see it closed again'
+    );
+    const after = await failed(
+      viewerPort.mint('cone', { label: 'Mal', expiresAt: null, gates: unreviewed })
+    );
+    const guest = await join({ guest: { id: seat.id, label: 'Eve' } });
+    const draft = {
+      id: 'by-guest',
+      label: 'Friend',
+      agentId: 'cone',
+      expiresAt: null,
+      gates: { messages: 'off', tools: 'user' },
+    };
+    const asGuest = {
+      mint: await failed(guest.control.guestOpen(draft, BACKGROUND_CONTEXT)),
+      revoke: await failed(guest.control.guestRevoke(seat.id, BACKGROUND_CONTEXT)),
+      policy: await failed(
+        guest.control.approvalPolicySet(
+          { guests: { allowedToolGates: ['off'] }, sudo: { approver: 'agent' } },
+          BACKGROUND_CONTEXT
+        )
+      ),
+    };
+    const seats = ownerPort.list().map((listed) => [listed.label, listed.gates.tools]);
+    const policy = local.approvalPolicy.value;
+    await guest.close();
+    await viewer.close();
+    await local.close();
+    return { before, offered, set, refusedChange, after, asGuest, seats, policy };
+  });
+  const review = "A guest's tool calls need a review: by a person, the judge or a scoop.";
+  assert.equal(result.before, review);
+  assert.deepEqual(result.offered.tools, ['user', 'agent', 'scoop:*']);
+  assert.deepEqual(result.set.policy.guests.allowedToolGates, ['user', 'agent', 'scoop', 'off']);
+  assert.equal(
+    result.refusedChange.error,
+    "manageGuests can only be deny: guests can't manage guests yet."
+  );
+  assert.equal(result.after, review);
+  assert.deepEqual(result.seats, [['Eve', 'off']]);
+  assert.equal(
+    result.asGuest.mint,
+    "forbidden The owner's guest policy doesn't let guests manage guests."
+  );
+  assert.equal(
+    result.asGuest.revoke,
+    "forbidden The owner's guest policy doesn't let guests manage guests."
+  );
+  assert.match(result.asGuest.policy, /^EACCES /);
+  assert.equal(result.policy.guests.manageGuests, 'deny');
+  assert.deepEqual(result.policy.guests.allowedToolGates, ['user', 'agent', 'scoop']);
+  assert.deepEqual(result.policy.sudo, { approver: 'user' });
 });
 
 test('seats survive a worker restart: a revoked seat stays refused with its epoch bumped, a live one admits again, and an expiring one closes its guest and leaves the list', async (t) => {

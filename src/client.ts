@@ -6,6 +6,7 @@ import {
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { ApprovalPolicy } from './approvals/policy.ts';
 import type { Approval } from './approvals/record.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
@@ -63,6 +64,7 @@ export interface AgentConnection {
   readonly proposals?: ReplicatedState<GuestProposal[]>;
   readonly owner?: boolean;
   readonly approvals?: ReplicatedState<Approval[]>;
+  readonly approvalPolicy?: ReplicatedState<ApprovalPolicy>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
@@ -215,6 +217,7 @@ export async function connectAgent(
     viewOnly: controlHandle.kind === 'view',
     owner: pagesHandle.kind === 'pages',
     approvals: hold<Approval[]>(state('approvals')),
+    approvalPolicy: hold<ApprovalPolicy>(state('approvalPolicy')),
     settings: lastingSettings(settings, hold),
     remote,
     pages,

@@ -124,7 +124,7 @@ async function boot(page, directory) {
   }, directory ?? null);
 }
 
-test('a follower with Control answers over the link, the first decision wins, and one without Control only watches', async (t) => {
+test('every owner device answers over the link, with or without Control, and the first decision wins', async (t) => {
   const page = await chrome.page(t);
   await boot(page);
   const seen = await page.evaluate(async () => {
@@ -139,18 +139,25 @@ test('a follower with Control answers over the link, the first decision wins, an
     await until(() => models.every((model) => listed(model, item.id)), 'every tab to list it');
     const shown = mine.approvals.list()[0];
     const viewDecide = typeof watching.approvals.decide;
-    const viewRefused = await viewer.control.decide(item.id, 'once', null, BACKGROUND_CONTEXT).then(
+    await watching.approvals.decide(item.id, 'once');
+    const late = await failed(theirs.approvals.decide(item.id, 'deny'));
+    const later = await failed(mine.approvals.decide(item.id, 'deny'));
+    await until(() => !listed(mine, item.id) && !listed(theirs, item.id), 'the item to leave');
+    await until(() => endedHere.length, 'the owner to hear it ended');
+    const settled = record(follower, item.id);
+    const endedFirst = [...endedHere];
+    const second = await ask(message());
+    await until(() => listed(theirs, second.id), 'the second to be listed');
+    await theirs.approvals.decide(second.id, 'deny');
+    await until(() => record(viewer, second.id)?.state === 'rejected', 'the follower to answer');
+    const secondBy = record(viewer, second.id).decidedBy;
+    const viewOnly = await viewer.control.abort(BACKGROUND_CONTEXT).then(
       () => 'ran',
       (error) => error.code
     );
-    await theirs.approvals.decide(item.id, 'once');
-    const late = await failed(mine.approvals.decide(item.id, 'deny'));
-    await until(() => !listed(mine, item.id) && !listed(watching, item.id), 'the item to leave');
-    await until(() => endedHere.length, 'the owner to hear it ended');
-    const settled = record(viewer, item.id);
     for (const connection of [viewer, follower, local]) await connection.close();
     await owner.release();
-    return { shown, viewDecide, viewRefused, late, endedHere, settled };
+    return { shown, viewDecide, late, later, endedHere: endedFirst, settled, secondBy, viewOnly };
   });
   assert.deepEqual(seen.shown, {
     id: seen.settled.id,
@@ -163,13 +170,15 @@ test('a follower with Control answers over the link, the first decision wins, an
     kind: 'guest-message',
     text: 'Can I help?',
   });
-  assert.equal(seen.viewDecide, 'undefined');
-  assert.equal(seen.viewRefused, 'EACCES');
+  assert.equal(seen.viewDecide, 'function');
   assert.equal(seen.late, 'Someone else already answered this.');
+  assert.equal(seen.later, 'Someone else already answered this.');
   assert.deepEqual(seen.endedHere, [{ id: seen.settled.id, reason: 'answered' }]);
   assert.equal(seen.settled.state, 'approved');
   assert.equal(seen.settled.answer, 'once');
   assert.equal(seen.settled.decidedBy, 'follower');
+  assert.equal(seen.secondBy, 'follower');
+  assert.equal(seen.viewOnly, 'EACCES', 'Control still gates driving');
 });
 
 test('an unknown tier is a deny, and a person saying no stays apart from nobody answering', async (t) => {
@@ -463,24 +472,34 @@ test("the owner's page asks about a guest's message and tool call in a dialog wi
   assert.equal(denied, 'rejected');
 });
 
-test('a follower without Control shows a guest message as a notice to answer on the device in control', async (t) => {
+test('a follower without Control asks about a guest message in the same dialog as the owner, and its answer lands in the record', async (t) => {
   const page = await chrome.page(t);
   await viewport(page, 1280);
   await boot(page);
   await render(page, true);
   const shown = await page.evaluate(async () => {
-    const { ask, until, deep, message, owner } = globalThis.t;
-    await ask(message());
-    const notice = await until(() => deep('[data-approval-notice]'), 'the notice');
-    const text = notice.textContent.replace(/\s+/g, ' ').trim();
-    const dialog = Boolean(deep('dialog[data-approval]'));
-    globalThis.t.release = () => owner.release();
-    return { text, dialog };
+    const { ask, until, deep, record, local, message, owner } = globalThis.t;
+    const item = await ask(message());
+    const dialog = await until(
+      () => deep('dialog[data-approval][data-kind="guest-message"]'),
+      'the dialog'
+    );
+    const notice = Boolean(deep('[data-approval-notice]'));
+    const actions = [...dialog.querySelectorAll('[data-action]')].map(
+      (button) => button.dataset.action
+    );
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    deep('dialog[data-approval][data-kind="guest-message"] [data-action="once"]').click();
+    await until(() => record(local, item.id)?.state === 'approved', 'the approval');
+    const { decidedBy } = record(local, item.id);
+    await owner.release();
+    return { notice, actions, decidedBy, readOnly: local.readOnly };
   });
-  assert.match(shown.text, /waits for approval on the device in control/);
-  assert.equal(shown.dialog, false);
-  await shoot(page, 'guest-notice');
-  await page.evaluate(() => globalThis.t.release());
+  assert.equal(shown.readOnly, true);
+  assert.equal(shown.notice, false);
+  assert.ok(shown.actions.includes('once'));
+  assert.ok(shown.actions.includes('deny'));
+  assert.equal(shown.decidedBy, 'follower');
 });
 
 test('an approval due further off than a timer can wait stays pending and quiet', async (t) => {

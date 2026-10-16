@@ -24,9 +24,8 @@ export { ChangesAdapter, type ChangesEvents } from './changes-port.ts';
 export {
   GuestAdapter,
   type GuestHub,
-  NO_CONTROL,
   NO_HUB,
-  NO_OWNER,
+  NOT_OWNER_DEVICE,
 } from './guest-port.ts';
 export { MemoryAdapter } from './memory-port.ts';
 export {

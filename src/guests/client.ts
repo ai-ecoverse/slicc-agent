@@ -6,13 +6,14 @@ import {
   AgentGuestService,
   type AgentSettings,
   CONTROL_METHODS,
+  type GUEST_METHODS,
   type GuestProposal,
   type GuestShown,
   type SendResponse,
 } from '../services.ts';
 import { AGENT_HOST, kept, plain, type Remote, replicated } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
-import type { Proposed, ProposeRequest } from './index.ts';
+import type { GuestOpened, Proposed, ProposeRequest } from './index.ts';
 
 export const GUEST_ONLY = 'a guest can only watch and send messages';
 export const SEAT_REFUSED = "This guest link isn't valid any more.";
@@ -68,19 +69,24 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
   const proposalsMember = handle.proposals as Readable<GuestProposal[] | undefined>;
   const keeping = [transcriptMember, seatMember, proposalsMember].map(kept);
   await Promise.race([Promise.all(keeping.map((keep) => keep.ready)), link.ended]);
-  const call = handle.propose as (args: unknown[], ctx: unknown) => Promise<Proposed>;
-  const propose = async (request: ProposeRequest) => {
-    try {
-      return await host.root((ctx) => call([request], ctx), {});
-    } catch (error) {
-      throw plain(error);
-    }
-  };
+  const through =
+    <T>(name: (typeof GUEST_METHODS)[number]) =>
+    async (...args: unknown[]): Promise<T> => {
+      const call = handle[name] as (args: unknown[], ctx: unknown) => Promise<T>;
+      try {
+        return await host.root((ctx) => call(args, ctx), {});
+      } catch (error) {
+        throw plain(error);
+      }
+    };
+  const propose = (request: ProposeRequest) => through<Proposed>('propose')(request);
   const guest = seatMember.value as GuestShown;
   const refuse = () => Promise.reject(refusal(GUEST_ONLY));
   const control = Object.fromEntries(
     CONTROL_METHODS.map((name) => [name, refuse])
   ) as unknown as AgentControl;
+  control.guestOpen = (draft) => through<GuestOpened>('guestOpen')(draft);
+  control.guestRevoke = (id) => through<{ revoked: boolean }>('guestRevoke')(id);
   control.send = async (request): Promise<SendResponse> => {
     if (request.attachments?.length)
       return {

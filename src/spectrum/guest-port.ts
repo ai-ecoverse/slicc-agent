@@ -1,6 +1,13 @@
-import type { GuestDraft, GuestEvents, GuestPort, GuestSeat } from '@ai-ecoverse/slicc-spectrum/ui';
+import type {
+  GuestDraft,
+  GuestEvents,
+  GuestGate,
+  GuestPort,
+  GuestSeat,
+} from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
+import { DEFAULT_GUEST_POLICY, type GateKind } from '../guests/policy.ts';
 import { Emitter } from './emitter.ts';
 
 export interface GuestHub {
@@ -9,8 +16,10 @@ export interface GuestHub {
 }
 
 export const NO_HUB = 'Inviting guests needs the tray hub.';
-export const NO_CONTROL = 'Only a tab with Control can invite guests.';
-export const NO_OWNER = "Only the owner's tab can invite guests.";
+export const NOT_OWNER_DEVICE = "Only the owner's devices can invite guests.";
+
+const offered = (kinds: readonly GateKind[]): GuestGate[] =>
+  kinds.map((kind) => (kind === 'scoop' ? 'scoop:*' : kind));
 
 export class GuestAdapter extends Emitter<GuestEvents> implements GuestPort {
   readonly #connection: AgentConnection;
@@ -27,10 +36,17 @@ export class GuestAdapter extends Emitter<GuestEvents> implements GuestPort {
     return this.#connection.guests?.value ?? [];
   }
 
+  gates(): { messages: GuestGate[]; tools: GuestGate[] } {
+    const policy = this.#connection.approvalPolicy?.value?.guests ?? DEFAULT_GUEST_POLICY;
+    return {
+      messages: offered(policy.allowedMessageGates),
+      tools: offered(policy.allowedToolGates),
+    };
+  }
+
   unavailable(): string | null {
     const connection = this.#connection;
-    if (connection.viewOnly || connection.guest || !connection.guests) return NO_CONTROL;
-    if (connection.owner === false) return NO_OWNER;
+    if (connection.guest || !connection.guests) return NOT_OWNER_DEVICE;
     return this.#hub ? null : NO_HUB;
   }
 
