@@ -58,9 +58,9 @@ export function checkImports(file, source) {
   return problems;
 }
 
-export function nestedChords(lock, pinned) {
+export function nestedChords(lock) {
   return Object.entries(lock.packages ?? {})
-    .filter(([path, entry]) => path.endsWith(`node_modules/${CHORD}`) && entry.version !== pinned)
+    .filter(([path]) => path.endsWith(`/node_modules/${CHORD}`))
     .map(([path, entry]) => ({ path, version: entry.version }))
     .filter(({ path }) => !path.startsWith('node_modules/slicc-agent-4/'));
 }
@@ -78,9 +78,8 @@ function scripts(dir) {
 
 export function run(root) {
   const json = (path) => JSON.parse(readFileSync(join(root, path), 'utf8'));
-  const pinned = json('package.json').dependencies?.[CHORD];
   const problems = [];
-  for (const { path, version } of nestedChords(json('package-lock.json'), pinned)) {
+  for (const { path, version } of nestedChords(json('package-lock.json'))) {
     const parent = owner(path);
     if (!parent || !OWNERS.has(parent)) {
       problems.push(`${path} (${version}) is nested under ${parent ?? 'nothing'}, not pi-durable`);
