@@ -20,6 +20,8 @@ import {
   routable,
   ruled,
   type Settle,
+  sudoApprover,
+  tierOf,
 } from './record.ts';
 
 export * from './intent.ts';
@@ -30,6 +32,10 @@ export type ApprovalDecided =
   | { done: true; state: ApprovalState; error: null }
   | { done: false; state: null; error: string };
 
+export type Decider = DecidedBy | { by: DecidedBy; device?: string };
+
+const deciderOf = (decider: Decider) => (typeof decider === 'string' ? { by: decider } : decider);
+
 export interface Approvals {
   readonly state: ReplicatedState<Approval[]>;
   request(draft: ApprovalDraft, context: Context): Promise<Approval>;
@@ -37,7 +43,7 @@ export interface Approvals {
     id: string,
     answer: unknown,
     reason: string | null,
-    by: DecidedBy,
+    by: Decider,
     context: Context
   ): Promise<ApprovalDecided>;
   settled(id: string, context: Context): Promise<Approval>;
@@ -52,6 +58,7 @@ export interface ApprovalsAttach {
   ttlMs?: number;
   judge?: ApprovalJudge;
   guestAlways?: (kind: ApprovalKind) => boolean;
+  sudoApprover?: () => unknown;
 }
 
 const copy = (items: readonly Approval[]): Approval[] => JSON.parse(JSON.stringify(items));
@@ -61,6 +68,27 @@ function mark(item: Approval, how: Settle, at: number) {
   item.decidedBy = how.by;
   item.decidedAt = at;
   if (how.reason) item.reason = how.reason;
+}
+
+const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
+  guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : draft.always === true;
+
+function fresh(draft: ApprovalDraft, at: number, ttl: number, options: ApprovalsAttach): Approval {
+  const item = {
+    ...draft,
+    tier: tierOf(draft.kind, draft.tier, sudoApprover(options.sudoApprover?.())),
+    id: `apr-${crypto.randomUUID()}`,
+    state: 'pending',
+    decidedBy: null,
+    always: offered(options, draft),
+    createdAt: at,
+    expiresAt: draft.expiresAt ?? at + ttl,
+  } as Approval;
+  if (!knownTier(item.tier))
+    mark(item, { state: 'unanswered', by: 'host', reason: REASONS.unknownTier }, at);
+  else if (!routable(draft.kind, item.tier))
+    mark(item, { state: 'unanswered', by: 'host', reason: REASONS.unroutable }, at);
+  return item;
 }
 
 const withdrawIn =
@@ -94,9 +122,6 @@ const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: 
   }
   return copy([item])[0] as Approval;
 };
-
-const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
-  guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : draft.always === true;
 
 export async function attachApprovals(
   options: ApprovalsAttach,
@@ -196,20 +221,7 @@ export async function attachApprovals(
     state,
     async request(draft, using) {
       const made = await serial((doc) => {
-        const at = now();
-        const item = {
-          ...draft,
-          id: `apr-${crypto.randomUUID()}`,
-          state: 'pending',
-          decidedBy: null,
-          always: offered(options, draft),
-          createdAt: at,
-          expiresAt: draft.expiresAt ?? at + ttl,
-        } as Approval;
-        if (!knownTier(draft.tier))
-          settle(item, { state: 'unanswered', by: 'host', reason: REASONS.unknownTier });
-        else if (!routable(draft.kind, draft.tier))
-          settle(item, { state: 'unanswered', by: 'host', reason: REASONS.unroutable });
+        const item = fresh(draft, now(), ttl, options);
         doc.items.push(item);
         return copy([item])[0] as Approval;
       }, using);
@@ -217,7 +229,8 @@ export async function attachApprovals(
         void judging(options.judge, made, using);
       return made;
     },
-    decide(id, answer, reason, by, using) {
+    decide(id, answer, reason, decider, using) {
+      const { by, device } = deciderOf(decider);
       return serial((doc): ApprovalDecided => {
         const item = doc.items.find((entry) => entry.id === id);
         const ruling = item
@@ -225,6 +238,7 @@ export async function attachApprovals(
           : { error: `There is no approval ${id}.` };
         if (item && ruling.settle) {
           if (ruling.answer) item.answer = ruling.answer;
+          if (device && ruling.settle.by === by) item.device = device;
           settle(item, ruling.settle);
         }
         if ('error' in ruling && ruling.error)

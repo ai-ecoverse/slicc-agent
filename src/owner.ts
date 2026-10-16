@@ -1,3 +1,5 @@
+import type { SudoAnswer, SudoRequest } from './approvals/sudo.ts';
+import { type ApproveOptions, askSudo, unavailable } from './approvals/sudo-client.ts';
 import { type AgentConnection, connectAgent } from './client.ts';
 import { type KernelSource, serveAdmin } from './kernel/users.ts';
 import { holdLock } from './opfs-pool.ts';
@@ -14,11 +16,13 @@ export interface PortOptions {
   readOnly?: boolean;
   pages?: boolean;
   guest?: { id: string; label: string };
+  device?: string;
 }
 
 export interface AgentOwner {
   connect(options?: PortOptions): Promise<AgentConnection>;
   port(options?: PortOptions): Promise<PortEndpoint & Transferable>;
+  approve(request: SudoRequest, options?: ApproveOptions): Promise<SudoAnswer>;
   restart(): Promise<void>;
   release(): Promise<void>;
 }
@@ -68,6 +72,11 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     };
   };
   let worker: Promise<AgentWorker | undefined> = Promise.resolve().then(spawn);
+  const asking = new Set<AbortController>();
+  const stopAsking = () => {
+    for (const stop of asking) stop.abort();
+    asking.clear();
+  };
   try {
     await worker;
   } catch (error) {
@@ -83,7 +92,8 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     const guest = portOptions.guest
       ? { guest: { id: String(portOptions.guest.id), label: String(portOptions.guest.label) } }
       : {};
-    ready.postMessage({ connect: port2, ...readOnly, ...pages, ...guest }, [port2]);
+    const device = portOptions.device ? { device: portOptions.device } : {};
+    ready.postMessage({ connect: port2, ...readOnly, ...pages, ...guest, ...device }, [port2]);
     return port1;
   };
   return {
@@ -91,7 +101,20 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
       return connectAgent(await open(portOptions));
     },
     port: open,
+    async approve(request, approveOptions) {
+      const stop = new AbortController();
+      asking.add(stop);
+      try {
+        const port = await open().catch((error: unknown) => {
+          throw unavailable(error);
+        });
+        return await askSudo(port, request, approveOptions, stop.signal);
+      } finally {
+        asking.delete(stop);
+      }
+    },
     restart() {
+      stopAsking();
       worker = worker
         .catch(() => undefined)
         .then((old) => {
@@ -101,6 +124,7 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
       return worker.then(() => undefined);
     },
     async release() {
+      stopAsking();
       const previous = worker;
       worker = Promise.resolve(undefined);
       try {

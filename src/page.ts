@@ -1,3 +1,5 @@
+export type { SudoAnswer, SudoRequest } from './approvals/sudo.ts';
+export { type ApproveOptions, UNAVAILABLE } from './approvals/sudo-client.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
 export {
   connectGuest,

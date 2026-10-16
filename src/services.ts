@@ -6,6 +6,7 @@ import type {
   ApprovalPolicyChange,
   ApprovalPolicySet,
 } from './approvals/policy.ts';
+import type { AgentSudo } from './approvals/sudo.ts';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
@@ -426,6 +427,16 @@ export const PAGE_METHODS = keys<AgentPages>({
 
 export const AgentPagesService: RemoteContract = contract('slicc.agent.pages', {
   pages: { methods: PAGE_METHODS },
+  none: {},
+});
+
+export const SUDO_METHODS = keys<Omit<AgentSudo, 'approvals'>>({
+  request: true,
+  withdraw: true,
+});
+
+export const AgentSudoService: RemoteContract = contract('slicc.agent.sudo', {
+  sudo: { state: ['approvals'], methods: SUDO_METHODS },
   none: {},
 });
 
