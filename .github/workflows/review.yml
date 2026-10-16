@@ -13,10 +13,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: claude-review-${{ github.event.pull_request.number || inputs.pr_number }}
-  cancel-in-progress: true
-
 jobs:
   review:
     name: claude / review
@@ -27,6 +23,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number || inputs.pr_number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: write
@@ -73,7 +72,8 @@ jobs:
           show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
           claude_args: |
             --model ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
-            --allowedTools "Read,Grep,Glob,Write,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*)"
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr diff:*)"
+            --json-schema '{"type":"object","additionalProperties":false,"required":["body","comments"],"properties":{"body":{"type":"string","minLength":1},"comments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":1},"start_line":{"type":"integer","minimum":1},"body":{"type":"string","minLength":1}}}}}}'
             --max-turns 120
           prompt: |
             You are the code reviewer for ${{ github.repository }}, pull request ${{ env.PR_NUMBER }}, standing in for one Codex review round. Your findings carry the same weight as Codex's: be precise and high-signal.
@@ -98,14 +98,22 @@ jobs:
             - P2: should fix (real but contained defects, missing integration test for a behaviour change, forbidden comments).
             - P3: worth fixing (minor correctness or robustness issues).
 
-            HOW TO POST
-            Post exactly one review with `gh api` on `repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/reviews`, using `commit_id` ${{ env.HEAD_SHA }} and `event` `COMMENT`. Never use `APPROVE` or `REQUEST_CHANGES`. Write the JSON payload to `${{ runner.temp }}/review.json` and send it with `--input`. Put each P1, P2 or P3 finding in `comments` as an inline comment on the changed line it concerns (`path`, `line`, `side` `RIGHT`, plus `start_line` for a range), its body starting with the bold severity, for example `**P2** ...`, then the problem, why it matters, and the fix. The review `body` is the one summary: a few sentences on what the change does and the findings by severity, or that you found nothing at P3 or above. No praise, no "LGTM". Post nothing else: no other reviews or comments. Don't edit, commit or push anything.
+            YOUR ANSWER
+            Return it as the structured output; a later step posts it as one review that only comments, never approves or requests changes. You can't post, comment, edit, commit or push anything yourself. `comments` holds each P1, P2 or P3 finding as an inline comment on a line inside a hunk of `git diff ${{ env.BASE_SHA }}...${{ env.HEAD_SHA }}` (`path` relative to the repo root, `line`, plus `start_line` for a range), its body starting with the bold severity, for example `**P2** ...`, then the problem, why it matters, and the fix. `body` is the one summary: a few sentences on what the change does and the findings by severity, or that you found nothing at P3 or above. No praise, no "LGTM".
 
-      - name: No approvals from this workflow
-        if: always()
+      - name: Post the review
+        env:
+          REVIEW: ${{ steps.review.outputs.structured_output }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
         run: |
-          gh api "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" --paginate \
-            --jq '.[] | select(.state == "APPROVED" and .user.login == "github-actions[bot]") | .id' |
-            while read -r id; do
-              gh api -X PUT "repos/$GH_REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" -f message='This workflow never approves.' -f event=DISMISS
-            done
+          printf '%s' "$REVIEW" | jq -e --arg sha "$HEAD_SHA" '{
+            commit_id: $sha,
+            event: "COMMENT",
+            body: .body,
+            comments: [.comments[] | {path, line, side: "RIGHT", body} + (if .start_line and .start_line < .line then {start_line, start_side: "RIGHT"} else {} end)]
+          }' > "$RUNNER_TEMP/review.json"
+          if ! gh api -X POST "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" --input "$RUNNER_TEMP/review.json" --jq .html_url; then
+            echo "::warning::GitHub refused an inline comment, so the findings go into the summary"
+            jq '{commit_id, event, body: ([.body] + [.comments[] | "`\(.path):\(.line)` \(.body)"] | join("\n\n")), comments: []}' "$RUNNER_TEMP/review.json" > "$RUNNER_TEMP/flat.json"
+            gh api -X POST "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" --input "$RUNNER_TEMP/flat.json" --jq .html_url
+          fi
