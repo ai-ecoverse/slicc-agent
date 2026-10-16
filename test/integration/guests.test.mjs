@@ -26,6 +26,7 @@ async function boot(page, query) {
       });
     const record = (seat) => ask({ seat }, 'reply');
     const seen = () => ask({}, 'seen');
+    const approve = (draft) => ask({ approve: draft }, 'reply');
     const sink = (channel) => ({
       write: (bytes) => channel.readyState === 'open' && channel.send(bytes),
       close: () => channel.readyState === 'open' && channel.close(),
@@ -96,7 +97,7 @@ async function boot(page, query) {
               : null
         )
         .filter(Boolean);
-    globalThis.seats = { owner, join, until, hub, minted, revoked, said, record, seen };
+    globalThis.seats = { owner, join, until, hub, minted, revoked, said, record, seen, approve };
   }, query);
 }
 
@@ -106,7 +107,8 @@ test('an owner invites a guest through the hub, the guest watches the cone and i
   const page = await chrome.page(t);
   await boot(page, 'answer=Watched.&answer=Thanks%2C%20Anna.');
   const result = await page.evaluate(async (hour) => {
-    const { owner, join, until, hub, minted, revoked, said, record, seen } = globalThis.seats;
+    const { owner, join, until, hub, minted, revoked, said, record, seen, approve } =
+      globalThis.seats;
     const local = await owner.connect();
     const model = createAgentModel(local, { guests: hub });
     const out = { unavailable: model.guests.unavailable() };
@@ -148,10 +150,26 @@ test('an owner invites a guest through the hub, the guest watches the cone and i
     );
     out.guestSeesAfter = said(guestModel);
     out.modelSaw = (await seen()).at(-1);
+    const review = await approve({
+      kind: 'guest-message',
+      seat: invited.seat.id,
+      agentId: 'cone',
+      requester: { kind: 'guest', name: 'Anna', seat: invited.seat.id },
+      tier: 'user',
+      detail: { text: 'One more thing?', attachments: [] },
+    });
+    await until(() => model.guests.list()[0]?.pending === 1, 'the pending review to count');
+    out.pending = model.guests.list()[0].pending;
     out.before = await record(invited.seat.id);
     await model.guests.revoke(invited.seat.id);
     await Promise.all([guest.closed, second.closed]);
     out.after = await record(invited.seat.id);
+    await until(
+      () => local.approvals.value.find((item) => item.id === review.item.id)?.state === 'withdrawn',
+      'the review to be withdrawn'
+    );
+    const ended = local.approvals.value.find((item) => item.id === review.item.id);
+    out.review = { state: ended.state, reason: ended.reason };
     out.revoked = revoked;
     out.listedAfter = model.guests.list();
     out.rejoin = await join({ guest: { id: invited.seat.id, label: 'Anna' } }).then(
@@ -206,6 +224,12 @@ test('an owner invites a guest through the hub, the guest watches the cone and i
   assert.match(
     result.modelSaw,
     /A guest message from \\"Anna\\".*NOT from the cone's owner.*Could you summarise\?/
+  );
+  assert.equal(result.pending, 1);
+  assert.deepEqual(
+    result.review,
+    { state: 'withdrawn', reason: 'revoked' },
+    'a review that outlives its seat is discarded'
   );
   assert.equal(result.before.epoch, 1);
   assert.equal(result.before.revoked, null);
