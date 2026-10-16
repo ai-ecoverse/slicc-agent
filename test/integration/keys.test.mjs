@@ -66,7 +66,10 @@ const helpers = () => {
       kernel: { connect: () => kernel.connect() },
     });
     const connection = await owner.connect();
-    const model = createAgentModel(connection, { storage: localStorage });
+    const model = createAgentModel(connection, {
+      storage: localStorage,
+      ...(window.hostNotices ? { notices: window.hostNotices } : {}),
+    });
     const app = document.createElement('slicc-app');
     app.style.cssText = `display:block;width:${width}px;height:800px`;
     document.body.style.margin = '0';
@@ -306,5 +309,98 @@ test('while an open 3.x tab blocks the wipe there is no notice, and it shows onc
     LEGACY
   );
   assert.equal(gone, true);
+  await release(page);
+});
+
+test("bios's own notices and the agent's keys-moved notice show together, and each dismissal reaches its owner", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  await page.evaluate(
+    ({ name, sealed }) => {
+      const listeners = new Set();
+      const bios = {
+        dismissed: [],
+        shown: [
+          {
+            id: 'bios-update',
+            tone: 'info',
+            title: 'A new SLICC is ready.',
+            body: 'Reload to update.',
+            actions: [],
+          },
+          {
+            id: 'bios-offline',
+            tone: 'warning',
+            title: 'You are offline.',
+            body: 'Some tools are unavailable.',
+            actions: [],
+            dismissible: false,
+          },
+        ],
+        list: () => bios.shown,
+        act: async () => {},
+        dismiss(id) {
+          bios.dismissed.push(id);
+          bios.shown = bios.shown.filter((notice) => notice.id !== id);
+          for (const listener of listeners) listener(bios.shown);
+        },
+        on(type, listener) {
+          if (type !== 'notices') return () => {};
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+      window.hostNotices = bios;
+      return window.seedLegacy(name, ['adobe'], sealed);
+    },
+    { name: LEGACY, sealed: SEALED }
+  );
+  await start(page);
+  const ids = () =>
+    [...(window.deep('slicc-notices')?.shadowRoot?.querySelectorAll('[data-notice]') ?? [])].map(
+      (node) => ({
+        id: node.dataset.notice,
+        closable: Boolean(node.querySelector('[data-dismiss]')),
+      })
+    );
+  await page.until(
+    () => window.deep('slicc-notices')?.shadowRoot?.querySelectorAll('[data-notice]').length === 3
+  );
+  assert.deepEqual(await page.evaluate(ids), [
+    { id: 'bios-update', closable: true },
+    { id: 'bios-offline', closable: false },
+    { id: 'keys-moved', closable: true },
+  ]);
+  const dismiss = (id) =>
+    page.evaluate(
+      (id) =>
+        window
+          .deep('slicc-notices')
+          .shadowRoot.querySelector(`[data-notice="${id}"] [data-dismiss]`)
+          .click(),
+      id
+    );
+  await dismiss('bios-update');
+  await page.until(
+    () => window.deep('slicc-notices').shadowRoot.querySelectorAll('[data-notice]').length === 2
+  );
+  assert.deepEqual(await page.evaluate(() => window.hostNotices.dismissed), ['bios-update']);
+  await dismiss('keys-moved');
+  await page.until(() => {
+    const value = window.keysTest.connection.settings.state.value;
+    return value && !('moved' in value);
+  });
+  const left = await page.evaluate(() => {
+    window.keysTest.model.notices.dismiss('bios-offline');
+    return {
+      dismissed: window.hostNotices.dismissed,
+      listed: window.keysTest.model.notices.list().map((notice) => notice.id),
+    };
+  });
+  assert.deepEqual(left, { dismissed: ['bios-update'], listed: ['bios-offline'] });
+  await page.until(
+    () => window.deep('slicc-notices').shadowRoot.querySelectorAll('[data-notice]').length === 1
+  );
+  assert.deepEqual(await page.evaluate(ids), [{ id: 'bios-offline', closable: false }]);
   await release(page);
 });

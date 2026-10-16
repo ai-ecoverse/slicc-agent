@@ -5,7 +5,7 @@ import { ApprovalsAdapter, type HostApprovals } from './approvals-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { MonitorAdapter } from './monitor-port.ts';
-import { NoticesAdapter } from './notices-port.ts';
+import { type HostNotices, NoticesAdapter } from './notices-port.ts';
 import { PageAdapter, type PageOptions } from './page-port.ts';
 import { type Login, SettingsAdapter } from './settings-port.ts';
 import { SprinkleAdapter } from './sprinkle-port.ts';
@@ -36,6 +36,7 @@ export {
   monitorSnapshot,
 } from './monitor-port.ts';
 export {
+  type HostNotices,
   KEYS_MOVED,
   MISMATCH,
   mismatchBanner,
@@ -62,6 +63,7 @@ export function createAgentModel(
     monitor?: { extra?: () => readonly MonitorSection[] };
     page?: PageOptions;
     approvals?: HostApprovals;
+    notices?: HostNotices;
   } = {}
 ): {
   agent: AgentAdapter;
@@ -92,7 +94,7 @@ export function createAgentModel(
     sprinkles: new SprinkleAdapter(connection, report),
     memory: new MemoryAdapter(connection, report),
     changes: new ChangesAdapter(connection, report),
-    notices: new NoticesAdapter(connection.settings, report, connection.mismatch),
+    notices: new NoticesAdapter(connection.settings, report, connection.mismatch, options.notices),
     monitor: new MonitorAdapter(
       connection,
       options.monitor?.extra ? { extra: options.monitor.extra } : {}
