@@ -38,7 +38,7 @@ export class GuestAdapter extends Emitter<GuestEvents> implements GuestPort {
     return this.#connection.guests?.value ?? [];
   }
 
-  gates(): { messages: GuestGate[]; tools: GuestGate[] } {
+  gates(): ReturnType<NonNullable<GuestPort['gates']>> {
     const policy = this.#connection.approvalPolicy?.value?.guests ?? DEFAULT_GUEST_POLICY;
     return {
       messages: offered(policy.allowedMessageGates),

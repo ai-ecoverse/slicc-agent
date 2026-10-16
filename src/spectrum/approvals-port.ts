@@ -51,7 +51,7 @@ export function shown(item: Item, agentName: string | undefined): Approval {
     ...base,
     agentId: item.agentId,
     ...(agentName ? { agentName } : {}),
-    always: false as const,
+    always: item.always,
     ...(item.verdict
       ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } }
       : {}),
