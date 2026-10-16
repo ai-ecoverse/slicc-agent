@@ -27,7 +27,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           FORCED: ${{ vars.CI_RUNNER }}
-          POOL: ${{ vars.CERT_RUNNER || 'cloud-run-bench' }}
+          POOL: ${{ vars.CERT_RUNNER }}
         with:
           script: |
             const hosted = 'ubuntu-latest';
@@ -36,7 +36,7 @@ jobs:
               await core.summary.addRaw(`runner: ${runner} (${why})\n`).write();
             };
             if (process.env.FORCED) return await pick(process.env.FORCED, 'vars.CI_RUNNER');
-            const pool = process.env.POOL;
+            const pool = process.env.POOL || hosted;
             const { owner, repo } = context.repo;
             if (context.eventName === 'pull_request') {
               const head = context.payload.pull_request.head.repo;
