@@ -1,6 +1,11 @@
 import type { Context } from '@earendil-works/chord';
 import { Type } from '@earendil-works/pi-ai';
-import { defineTool, type Harness, section } from '@earendil-works/pi-durable';
+import {
+  defineTool,
+  type Harness,
+  section,
+  type ToolRegistration,
+} from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState, ScoopRecord } from '../agents.ts';
 import { scrubTexts } from '../secrets/scrub.ts';
@@ -171,7 +176,7 @@ export function writeAnswer(args: Args, place: Place, written: Written): string 
   return `Saved "${entry?.title ?? args.title}" in ${entry?.section ?? args.section} (${entry?.id ?? place.scope}). ${room}${redacted}`;
 }
 
-export function memoryWriteTool(ready: Promise<Host>) {
+export function memoryWriteTool(ready: Promise<Host>): ToolRegistration {
   return defineTool({
     name: MEMORY_WRITE,
     description: DESCRIPTION,

@@ -707,6 +707,8 @@ Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.js
 
 `npm run lint:patches` (part of `npm run lint`) fails when an installed version differs from `patchedVersion`, a marker is gone, a monkeypatch isn't named in `src/patches.ts`, a patch file and its entry don't match, or `renovate.json` doesn't route the package to the `patched dependencies` group with automerge off. That group covers every `@earendil-works/*` package, so a pi bump is always a reviewed PR: rerun each entry's `verify`, then move `patchedVersion` forward or drop the entry.
 
+**Two Chords.** pi-durable 1.3 pins `@earendil-works/chord` 1.3.0, while the link and serving code stays on 1.2.0, because Chord 1.3's link protocol refuses 1.2 peers (moving is the agent 6.0 port). npm and pnpm nest Chord 1.3 under pi-durable, which uses only its state, context, delta, JSON and output layer, whose interfaces match 1.2's, so the two copies interoperate. `npm run lint:chord` (part of `npm run lint`) fails if any package other than pi-durable gets its own Chord, or if pi-durable imports anything outside that layer, such as `createHost` or a link. Renovate holds `@earendil-works/chord` below 1.3. The second copy is 450 KB of unminified JavaScript in 23 modules, all of which the unbundled worker loads because pi-durable imports Chord's root index; bundled and minified, the agent worker grows by 22 KB.
+
 ## Develop
 
 ```sh

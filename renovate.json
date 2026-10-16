@@ -17,6 +17,11 @@
         "@ai-ecoverse/wasm-*"
       ],
       "automerge": false
+    },
+    {
+      "description": "Chord 1.3 changes the link protocol, so moving to it is the agent 6.0 port, done by hand; until then Renovate keeps @earendil-works/chord on 1.2.x. pi-durable 1.3 nests its own Chord 1.3, which only its state and context layer uses (npm run lint:chord).",
+      "matchPackageNames": ["@earendil-works/chord"],
+      "allowedVersions": "<1.3.0"
     }
   ]
 }
