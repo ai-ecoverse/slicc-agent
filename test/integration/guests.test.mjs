@@ -335,7 +335,7 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
   assert.equal(result.pages, null);
   assert.equal(result.remote, null);
   assert.equal(result.views, null);
-  const review = "A guest's tool calls need a review: by a person or the judge.";
+  const review = "A guest's tool calls need a review: by a person, the judge or a scoop.";
   assert.deepEqual(
     result.unreviewed,
     [review, review, review, review],
@@ -421,7 +421,7 @@ test('the approval policy: by default a guest seat with tools off is refused, an
     );
     const offered = ownerPort.gates();
     const set = await viewer.control.approvalPolicySet(
-      { guests: { allowedToolGates: ['user', 'agent', 'off'] } },
+      { guests: { allowedToolGates: ['user', 'agent', 'scoop', 'off'] } },
       BACKGROUND_CONTEXT
     );
     const refusedChange = await viewer.control.approvalPolicySet(
@@ -438,7 +438,7 @@ test('the approval policy: by default a guest seat with tools off is refused, an
       gates: unreviewed,
     });
     await local.control.approvalPolicySet(
-      { guests: { allowedToolGates: ['user', 'agent'] } },
+      { guests: { allowedToolGates: ['user', 'agent', 'scoop'] } },
       BACKGROUND_CONTEXT
     );
     await until(
@@ -473,10 +473,10 @@ test('the approval policy: by default a guest seat with tools off is refused, an
     await local.close();
     return { before, offered, set, refusedChange, after, asGuest, seats, policy };
   });
-  const review = "A guest's tool calls need a review: by a person or the judge.";
+  const review = "A guest's tool calls need a review: by a person, the judge or a scoop.";
   assert.equal(result.before, review);
-  assert.deepEqual(result.offered.tools, ['user', 'agent']);
-  assert.deepEqual(result.set.policy.guests.allowedToolGates, ['user', 'agent', 'off']);
+  assert.deepEqual(result.offered.tools, ['user', 'agent', 'scoop:*']);
+  assert.deepEqual(result.set.policy.guests.allowedToolGates, ['user', 'agent', 'scoop', 'off']);
   assert.equal(
     result.refusedChange.error,
     "manageGuests can only be deny: guests can't manage guests yet."
@@ -493,7 +493,7 @@ test('the approval policy: by default a guest seat with tools off is refused, an
   );
   assert.match(result.asGuest.policy, /^EACCES /);
   assert.equal(result.policy.guests.manageGuests, 'deny');
-  assert.deepEqual(result.policy.guests.allowedToolGates, ['user', 'agent']);
+  assert.deepEqual(result.policy.guests.allowedToolGates, ['user', 'agent', 'scoop']);
   assert.deepEqual(result.policy.sudo, { approver: 'user' });
 });
 

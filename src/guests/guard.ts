@@ -13,8 +13,8 @@ import {
   ToolTask,
 } from '@earendil-works/pi-durable';
 import type { Approval, Approvals } from '../approvals/index.ts';
-import { REASONS } from '../approvals/record.ts';
-import { type GuestPolicy, gateKind, gateRefusal, SCOOP_REVIEW_LATER } from './policy.ts';
+import { REASONS, scoopTier } from '../approvals/record.ts';
+import { type GuestPolicy, gateKind, gateRefusal } from './policy.ts';
 import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from './seats.ts';
 
 export const GUEST_GUARD = 'slicc-guest-guard';
@@ -30,7 +30,6 @@ export const GATE_REASONS = {
   judged: 'The automatic check declined this tool call in a run a guest started',
   unanswered: 'Nobody approved this tool call in a run a guest started in time.',
   unroutable: "The cone can't review a tool call it is itself waiting on.",
-  scoop: SCOOP_REVIEW_LATER,
   withdrawn: 'The review of this tool call was withdrawn.',
 } as const;
 
@@ -65,7 +64,25 @@ export function summaryOf(args: Record<string, unknown>): string {
   return text.length > SUMMARY_LENGTH ? `${text.slice(0, SUMMARY_LENGTH - 1)}…` : text;
 }
 
+const SCOOP_SAID: Record<string, (name: string) => string> = {
+  [REASONS.noScoop]: (name) => `there is no scoop ${name} in this cone to review it.`,
+  [REASONS.scoopStopped]: (name) => `the scoop ${name} is stopped, so it can't review it.`,
+  [REASONS.scoopAsked]: (name) =>
+    `the scoop ${name} can't review a call that asks something of it.`,
+  [REASONS.scoopUndecided]: (name) => `the scoop ${name} ended its review without deciding.`,
+};
+
+function scoopReason(item: Approval): string | null {
+  const name = item.tier.slice('scoop:'.length);
+  if (item.decidedBy?.startsWith('scoop:'))
+    return `The scoop ${name} declined this tool call in a run a guest started${item.reason ? `: ${item.reason}` : '.'}`;
+  const said = SCOOP_SAID[item.reason ?? ''];
+  return said ? `A guest started this run, and ${said(name)}` : null;
+}
+
 export function reasonOf(item: Approval): string {
+  const scooped = item.state === 'rejected' && scoopTier(item.tier) ? scoopReason(item) : null;
+  if (scooped) return scooped;
   if (item.state === 'rejected' && item.decidedBy === 'judge')
     return item.verdict
       ? `${GATE_REASONS.judged}: ${item.verdict.reason}`
@@ -111,7 +128,6 @@ function settledEarly(
   tool: string,
   args: string
 ): string | null {
-  if (gateKind(tier) === 'scoop') return GATE_REASONS.scoop;
   if (!policy.allowedToolGates.includes(gateKind(tier)))
     return gateRefusal("a guest's tool calls", policy.allowedToolGates);
   if (!liveSeat(seat, at)) return GATE_REASONS.ended;

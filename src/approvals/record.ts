@@ -8,7 +8,7 @@ export type ApprovalTier = 'user' | 'agent' | 'cone' | `scoop:${string}`;
 
 export type ApprovalAnswer = 'once' | 'always' | 'deny';
 
-export type DecidedBy = 'owner' | 'follower' | 'judge' | 'host';
+export type DecidedBy = 'owner' | 'follower' | 'judge' | 'host' | `scoop:${string}`;
 
 export type ApprovalRequester = {
   kind: 'guest' | 'agent' | 'user';
@@ -99,13 +99,27 @@ export const REASONS = {
   revoked: 'revoked',
   aborted: 'aborted',
   disconnected: 'disconnected',
+  noScoop: 'no-scoop',
+  scoopStopped: 'scoop-stopped',
+  scoopAsked: 'scoop-asked',
+  scoopUndecided: 'scoop-undecided',
 } as const;
+
+export const SCOOP_REASONS: readonly string[] = [
+  REASONS.noScoop,
+  REASONS.scoopStopped,
+  REASONS.scoopAsked,
+  REASONS.scoopUndecided,
+];
 
 export const guestKind = (kind: ApprovalKind): boolean => kind !== 'sudo';
 
+export const scoopTier = (tier: unknown): tier is `scoop:${string}` =>
+  typeof tier === 'string' && /^scoop:\S+$/.test(tier);
+
 export function knownTier(tier: unknown): tier is ApprovalTier {
   if (tier === 'user' || tier === 'agent' || tier === 'cone') return true;
-  return typeof tier === 'string' && /^scoop:\S+$/.test(tier);
+  return scoopTier(tier);
 }
 
 export function routable(kind: ApprovalKind, tier: ApprovalTier): boolean {
@@ -121,6 +135,7 @@ export const personal = (by: DecidedBy): boolean => by === 'owner' || by === 'fo
 export function answerer(by: DecidedBy, tier: string): boolean {
   if (personal(by)) return tier === 'user';
   if (by === 'judge') return tier === 'agent';
+  if (scoopTier(by)) return scoopTier(tier);
   return true;
 }
 
@@ -174,6 +189,7 @@ export function ruled(
     };
   if (!answerer(by, item.tier)) return { error: "This request isn't yours to answer." };
   const known = answerOf(answer);
+  if (known === 'always' && scoopTier(by)) return { error: 'A scoop answers once or deny.' };
   if (known === 'always' && !item.always)
     return { error: "Always isn't offered for this request." };
   if (!known) return { settle: { state: 'rejected', by, reason: REASONS.unknownAnswer } };

@@ -20,6 +20,7 @@ import {
   routable,
   ruled,
   type Settle,
+  scoopTier,
   sudoApprover,
   tierOf,
 } from './record.ts';
@@ -53,11 +54,16 @@ export interface Approvals {
   close(): void;
 }
 
+export interface ScoopRouter {
+  route(item: Approval): Promise<void>;
+}
+
 export interface ApprovalsAttach {
   harness: Pick<Harness, 'commit' | 'documentState'>;
   now?: () => number;
   ttlMs?: number;
   judge?: ApprovalJudge;
+  scoops?: ScoopRouter;
   guestAlways?: (kind: ApprovalKind) => boolean;
   sudoApprover?: () => unknown;
 }
@@ -250,6 +256,11 @@ export async function attachApprovals(
       }
   }
   arm(startup.items);
+  const toScoop = (item: Approval) => {
+    if (options.scoops && item.state === 'pending' && scoopTier(item.tier))
+      void options.scoops.route(item).catch(() => undefined);
+  };
+  for (const item of startup.items) toScoop(item);
   const withdrawWhere = (match: (item: Approval) => boolean, reason: string | undefined) =>
     withdrawIn(match, reason, now);
   const judging = async (judge: ApprovalJudge, item: Approval, using: Context) => {
@@ -290,6 +301,7 @@ export async function attachApprovals(
       }, using);
       if (created && options.judge && made.state === 'pending' && made.tier === 'agent')
         void judging(options.judge, made, using);
+      if (created) toScoop(made);
       return made;
     },
     decide(id, answer, reason, decider, using) {
