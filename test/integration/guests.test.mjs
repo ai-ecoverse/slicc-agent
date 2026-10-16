@@ -563,3 +563,105 @@ test('a gated guest message waits visibly: the guest sees it pending, an approva
   );
   assert.equal(result.pendingAfter, 0);
 });
+
+test('a guest-started run gets every tool call refused, top-level and in codemode, and none of them runs, while the owner’s own runs in the same cone still use tools', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const steps = [
+    { tool: { name: 'bash', args: { command: 'echo owner-ran' } } },
+    { answer: 'Owner done.' },
+    { tool: { name: 'bash', args: { command: 'touch /tmp/guest-bash' } } },
+    { answer: 'That was refused.' },
+    {
+      tool: {
+        name: 'codemode',
+        args: { code: "await tools.bash({ command: 'touch /tmp/guest-code' }); return 'done';" },
+      },
+    },
+    { answer: 'Refused again.' },
+    {
+      tool: {
+        name: 'bash',
+        args: {
+          command:
+            'for f in /tmp/guest-bash /tmp/guest-code; do test -e $f && echo "$f ran" || echo "$f never"; done',
+        },
+      },
+    },
+    { answer: 'Checked.' },
+  ];
+  const result = await page.evaluate(async (steps) => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
+    const owner = await startAgent({
+      worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const until = async (check, what) => {
+      for (let i = 0; i < 800; i++) {
+        const value = check();
+        if (value) return value;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`timed out waiting for ${what}`);
+    };
+    const local = await owner.connect();
+    const said = () =>
+      local.transcript.value.entries.flatMap((entry) =>
+        entry.kind === 'pi.assistant'
+          ? (entry.model?.[0]?.content ?? [])
+              .filter((block) => block.type === 'text')
+              .map((block) => block.text)
+          : []
+      );
+    const results = () =>
+      local.transcript.value.entries
+        .filter((entry) => entry.kind === 'pi.tool-result')
+        .map((entry) =>
+          (entry.model?.[0]?.content ?? [])
+            .map((block) => block.text ?? '')
+            .join('')
+            .trim()
+        );
+    const hub = {
+      mint: async () => ({ id: 'seat-1', url: 'https://hub.test/join/t' }),
+      revoke: async () => {},
+    };
+    const model = createAgentModel(local, { guests: hub });
+    await model.guests.mint('cone', {
+      label: 'Anna',
+      expiresAt: null,
+      gates: { messages: 'off', tools: 'user' },
+    });
+    await local.prompt('Run something.');
+    const guest = await connectGuest(await owner.port({ guest: { id: 'seat-1', label: 'Anna' } }));
+    await guest.control.send(
+      { text: 'Make a file.', whenBusy: 'steer', requestId: null },
+      BACKGROUND_CONTEXT
+    );
+    await until(() => said().includes('That was refused.'), 'the first guest run');
+    await guest.control.send(
+      { text: 'Try a script.', whenBusy: 'steer', requestId: null },
+      BACKGROUND_CONTEXT
+    );
+    await until(() => said().includes('Refused again.'), 'the second guest run');
+    await local.prompt('Check the files.');
+    await until(() => said().includes('Checked.'), 'the owner check');
+    const out = { said: said(), results: results() };
+    await guest.close();
+    await local.close();
+    await owner.release();
+    return out;
+  }, steps);
+  const blocked =
+    "Tool calls in a run a guest started need a review, which this agent can't do yet.";
+  assert.deepEqual(result.said, ['Owner done.', 'That was refused.', 'Refused again.', 'Checked.']);
+  assert.equal(result.results.length, 4);
+  assert.equal(result.results[0], 'owner-ran');
+  assert.ok(result.results[1].includes(blocked), result.results[1]);
+  assert.ok(result.results[2].includes(blocked), result.results[2]);
+  assert.match(result.results[3], /\/tmp\/guest-bash never/);
+  assert.match(result.results[3], /\/tmp\/guest-code never/);
+});

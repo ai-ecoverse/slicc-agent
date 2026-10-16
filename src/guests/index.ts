@@ -6,6 +6,7 @@ import type { Approval, Approvals } from '../approvals/index.ts';
 import { scrubText } from '../secrets/scrub.ts';
 import type { GuestPrincipal } from '../serving.ts';
 import { GUEST_INPUT_KIND, type GuestInput, guestContent } from './attribution.ts';
+import { GUEST_REQUEST } from './guard.ts';
 import {
   checkDraft,
   cleanLabel,
@@ -95,7 +96,7 @@ async function deliver(
   record: SeatRecord,
   text: string,
   approval: string | null,
-  requestId: string | undefined,
+  requestId: string,
   agents: GuestsOptions['agents'],
   using: Context
 ): Promise<Proposed> {
@@ -108,29 +109,37 @@ async function deliver(
       content: guestContent(record.label, text),
       whenBusy: 'followUp',
       entry: { kind: GUEST_INPUT_KIND, data: { ...data } },
-      ...(requestId ? { requestId } : {}),
+      requestId,
     },
     using
   );
   return { state: 'submitted', submissionId: String(submitted.id), reason: null };
 }
 
-async function proposeAs(
-  record: SeatRecord,
-  request: ProposeRequest,
-  options: GuestsOptions,
-  using: Context
-): Promise<Proposed> {
+type Prepared = { text: string; requestId: string };
+
+async function prepare(record: SeatRecord, request: ProposeRequest): Promise<Prepared | Proposed> {
   const text = typeof request?.text === 'string' ? request.text.trim() : '';
   if (!text) return unanswered('empty');
   if (text.length > MAX_PROPOSAL) return unanswered('too-long');
-  const scrubbed = await scrubText(text);
-  const requestId =
-    typeof request.requestId === 'string' && request.requestId.length <= MAX_REQUEST
-      ? `guest:${record.id}:${request.requestId}`
-      : undefined;
+  const asked =
+    typeof request.requestId === 'string' &&
+    request.requestId &&
+    request.requestId.length <= MAX_REQUEST
+      ? request.requestId
+      : crypto.randomUUID();
+  return { text: await scrubText(text), requestId: `${GUEST_REQUEST}${record.id}:${asked}` };
+}
+
+async function place(
+  record: SeatRecord,
+  prepared: Prepared,
+  options: GuestsOptions,
+  using: Context
+): Promise<Proposed> {
   const gate = record.gates.messages;
-  if (gate === 'off') return deliver(record, scrubbed, null, requestId, options.agents, using);
+  if (gate === 'off')
+    return deliver(record, prepared.text, null, prepared.requestId, options.agents, using);
   if (!options.approvals) return unanswered('unavailable');
   const item = await options.approvals.request(
     {
@@ -139,12 +148,52 @@ async function proposeAs(
       agentId: record.agentId,
       requester: { kind: 'guest', name: record.label, seat: record.id },
       tier: gate,
-      detail: { text: scrubbed, attachments: [] },
+      detail: { text: prepared.text, attachments: [] },
     },
     using
   );
   if (item.state !== 'pending') return unanswered(item.reason ?? item.state);
   return { state: 'pending', submissionId: null, approval: item.id, reason: null };
+}
+
+function keyedLine() {
+  const locks = new Map<string, Promise<unknown>>();
+  return <T>(id: string, run: () => Promise<T>): Promise<T> => {
+    const next = (locks.get(id) ?? Promise.resolve()).then(run, run);
+    const settled = next.catch(() => undefined);
+    locks.set(id, settled);
+    void settled.then(() => {
+      if (locks.get(id) === settled) locks.delete(id);
+    });
+    return next;
+  };
+}
+
+const pendingIn =
+  (approvals: GuestsOptions['approvals']) =>
+  (id: string): number =>
+    (approvals?.state.value ?? []).filter((item) => item.seat === id && item.state === 'pending')
+      .length;
+
+function shownSeats(
+  records: Record<string, SeatRecord>,
+  links: ReadonlyMap<string, number>,
+  at: number,
+  pendingOf: (id: string) => number
+): GuestSeat[] {
+  return Object.values(records)
+    .filter((record) => liveSeat(record, at))
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    .map((record) => ({
+      id: record.id,
+      label: record.label,
+      agentId: record.agentId,
+      createdAt: record.createdAt,
+      expiresAt: record.expiresAt,
+      gates: { ...record.gates },
+      connected: (links.get(record.id) ?? 0) > 0,
+      pending: pendingOf(record.id),
+    }));
 }
 
 export async function createGuests(options: GuestsOptions): Promise<Guests> {
@@ -158,34 +207,26 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
   const links = new Map<string, number>();
   const ended = new Set<(id: string) => void>();
   const gone = new Set<string>();
-  const pendingOf = (id: string) =>
-    (options.approvals?.state.value ?? []).filter(
-      (item) => item.seat === id && item.state === 'pending'
-    ).length;
-  const shown = (): GuestSeat[] =>
-    Object.values(records)
-      .filter((record) => liveSeat(record, now()))
-      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      .map((record) => ({
-        id: record.id,
-        label: record.label,
-        agentId: record.agentId,
-        createdAt: record.createdAt,
-        expiresAt: record.expiresAt,
-        gates: { ...record.gates },
-        connected: (links.get(record.id) ?? 0) > 0,
-        pending: pendingOf(record.id),
-      }));
+  const shown = () => shownSeats(records, links, now(), pendingIn(options.approvals));
   const seats = replicatedState<GuestSeat[]>(shown());
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const end = (id: string) => {
-    if (gone.has(id)) return;
+  const locked = keyedLine();
+  const cleanup = (record: SeatRecord, using: Context) =>
+    locked(record.id, async () => {
+      await withdrawQueued(harness, agents, record, using);
+      await options.approvals?.withdrawSeat(record.id, using);
+    });
+  const end = (id: string, using: Context = context): Promise<void> => {
+    const record = records[id];
+    if (gone.has(id) || !record) return Promise.resolve();
     gone.add(id);
     for (const listener of [...ended]) listener(id);
+    return cleanup(record, using);
   };
   const publish = () => {
     const at = now();
-    for (const record of Object.values(records)) if (!liveSeat(record, at)) end(record.id);
+    for (const record of Object.values(records))
+      if (!liveSeat(record, at)) void end(record.id).catch(() => undefined);
     seats.replace(context, shown());
     if (timer) clearTimeout(timer);
     timer = undefined;
@@ -205,9 +246,15 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       return changed ? copy(changed) : undefined;
     }, context);
   const delivering = new Set<string>();
-  const deliverOne = async (record: SeatRecord, item: Approval) => {
+  const deliverOne = (seat: string, item: Approval) =>
+    locked(seat, async () => {
+      const record = records[seat];
+      if (!record || !liveSeat(record, now())) return;
+      await deliverLocked(record, item);
+    });
+  const deliverLocked = async (record: SeatRecord, item: Approval) => {
     const text = (item.detail as { text?: string }).text ?? '';
-    const requestId = `guest:${record.id}:${item.id}`;
+    const requestId = `${GUEST_REQUEST}${record.id}:${item.id}`;
     const sent = await deliver(record, text, item.id, requestId, agents, context);
     if (sent.state !== 'submitted') return;
     const changed = await write((all) => {
@@ -225,7 +272,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       if (!record || !liveSeat(record, now()) || delivering.has(item.id)) continue;
       if (record.delivered?.includes(item.id)) continue;
       delivering.add(item.id);
-      void deliverOne(record, item).catch(() => undefined);
+      void deliverOne(record.id, item).catch(() => undefined);
     }
   };
   const offPending = options.approvals?.state.subscribe((items) => {
@@ -279,10 +326,9 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       });
       if (!changed) return { revoked: false };
       records[id] = changed;
-      end(id);
+      const ending = end(id, using);
       publish();
-      await withdrawQueued(harness, agents, changed, using);
-      await options.approvals?.withdrawSeat(id, using);
+      await ending;
       return { revoked: true };
     },
     admit(id, label) {
@@ -309,7 +355,13 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
     },
     async propose(guest, request, using) {
       const record = current(guest);
-      return record ? proposeAs(record, request, options, using) : unanswered('revoked');
+      if (!record) return unanswered('revoked');
+      const prepared = await prepare(record, request);
+      if ('state' in prepared) return prepared;
+      return locked(record.id, async () => {
+        const still = current(guest);
+        return still ? place(still, prepared, options, using) : unanswered('revoked');
+      });
     },
     dispose() {
       if (timer) clearTimeout(timer);
