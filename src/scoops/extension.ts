@@ -5,12 +5,12 @@ import {
   defineExtension,
   defineTask,
   type Extension,
+  hook,
   type PromptInput,
   type Submission,
   section,
-  type ToolRegistration,
+  ToolTask,
   type Tx,
-  wrapTool,
 } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
 import { AgentsDoc, live, type ScoopRecord } from '../agents.ts';
@@ -361,41 +361,38 @@ export function allowed(
   return roots.some((root) => path === root || path.startsWith(`${root === '/' ? '' : root}/`));
 }
 
-function refusal(value: string) {
-  return { output: [{ type: 'text' as const, text: value }], isError: true };
-}
-
-export function guardExtension(lookup: Lookup, tools: readonly ToolRegistration[]): Extension {
-  const wraps = tools
-    .filter((tool) => tool.name === 'read' || WRITES.has(tool.name))
-    .map((tool) =>
-      wrapTool(tool, (inner) => ({
-        ...inner,
-        async execute(args, api, context) {
-          const { agents, reads, layout = LEGACY, enforced } = await lookup();
+export function guardExtension(lookup: Lookup): Extension {
+  return defineExtension({
+    name: 'slicc-scoop-guard',
+    hooks: [
+      hook(ToolTask, {
+        async beforeTool(call, api, context) {
+          if (call.name !== 'read' && !WRITES.has(call.name)) return undefined;
+          const { agents, reads, layout = LEGACY, enforced, envOf } = await lookup();
           const record = Object.values(agents.state().scoops).find(
             (scoop) => scoop.conversation === api.conversationId
           );
-          if (!record || enforced) return inner.execute(args, api, context);
+          if (!record || enforced) return undefined;
           const own = layout.scoopRoot(record.folder);
           const cone = layout.users ? own : HOME;
-          const path = String((args as { path: unknown }).path);
+          const path = String(call.arguments.path);
           const asked = normalize(resolve(layout.workspace(record.folder), path));
-          const canonical = await api.env?.canonicalPath(asked, context);
+          const env = await envOf?.(api.conversationId, context);
+          const canonical = await env?.canonicalPath(asked, context);
           const target = canonical?.ok ? canonical.value : asked;
-          const writing = WRITES.has(inner.name);
+          const writing = WRITES.has(call.name);
           const skills = reads?.() ?? [];
           if (
             allowed(record, cone, target, writing, skills, own) ||
             allowed(record, cone, asked, writing, skills, own)
           )
-            return inner.execute(args, api, context);
-          const reach = layout.users || WRITES.has(inner.name) ? '' : `, and reads ${HOME}`;
-          return refusal(
-            `${target} is outside this scoop's folders. ${inner.name} reaches ${own} and /tmp${reach}.`
-          );
+            return undefined;
+          const reach = layout.users || writing ? '' : `, and reads ${HOME}`;
+          return {
+            block: `${target} is outside this scoop's folders. ${call.name} reaches ${own} and /tmp${reach}.`,
+          };
         },
-      }))
-    );
-  return defineExtension({ name: 'slicc-scoop-guard', wraps });
+      }),
+    ],
+  });
 }

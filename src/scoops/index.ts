@@ -21,7 +21,7 @@ import {
   type PlaneOptions,
   PROTOCOL,
 } from './requests.ts';
-import { createScoops, type Scoops, type ScoopsHost } from './service.ts';
+import { createScoops, type EnvOf, type Scoops, type ScoopsHost } from './service.ts';
 
 export const BUILTIN_ROLES = ['scout', 'worker', 'reviewer', 'oracle', 'delegate', 'gelatiere'];
 export const PNPM_HOME = '/home/.local/share/pnpm';
@@ -57,6 +57,7 @@ export interface AttachOptions {
   mcp?: (names: readonly string[]) => ToolRegistration[];
   layout?: Layout;
   enforced?: boolean;
+  envOf: EnvOf;
   spools?: Spools;
   agentDir?: string;
 }
@@ -276,7 +277,7 @@ export function setupScoops(
   let cached: Roles = { roles: [], warnings: [], limits: { ...DEFAULT_LIMITS } };
   let layout = LEGACY;
   registry.install(scoopsExtension(tasks, () => layout));
-  registry.install(guardExtension(lookup, fileTools));
+  registry.install(guardExtension(lookup));
   return {
     scoops,
     async attach(options, context) {
@@ -293,6 +294,7 @@ export function setupScoops(
         files: env,
         layout,
         ...(options.enforced ? { enforced: true } : {}),
+        envOf: options.envOf,
         ...(options.mcp ? { mcp: options.mcp } : {}),
       });
       const builtin = async () => {

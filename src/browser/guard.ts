@@ -1,11 +1,4 @@
-import {
-  defineExtension,
-  type Extension,
-  hook,
-  type ToolRegistration,
-  ToolTask,
-  wrapTool,
-} from '@earendil-works/pi-durable';
+import { defineExtension, type Extension, hook, ToolTask } from '@earendil-works/pi-durable';
 import { FACADE_PORT, kernelHost, ownKernelServer } from '../kernel/loopback.ts';
 import { PROTECTED_RULES, type ProtectedMatcher, protectedMatcher } from './origins.ts';
 import { words } from './shell.ts';
@@ -73,30 +66,17 @@ function commandOf(args: unknown): string {
   return typeof command === 'string' ? command : '';
 }
 
-export function browserGuard(
-  origins: readonly string[],
-  tools: readonly ToolRegistration[]
-): Extension {
-  const bash = tools.find((tool) => tool.name === 'bash') as ToolRegistration;
+export function browserGuard(origins: readonly string[]): Extension {
   const matcher = protectedMatcher(origins);
   return defineExtension({
     name: BROWSER_GUARD,
     hooks: [
       hook(ToolTask, {
         beforeTool: (call) =>
-          call.name === bash.name && refused(commandOf(call.arguments), matcher)
+          call.name === 'bash' && refused(commandOf(call.arguments), matcher)
             ? { block: REFUSAL }
             : undefined,
       }),
-    ],
-    wraps: [
-      wrapTool(bash, (inner) => ({
-        ...inner,
-        execute(args, api, context) {
-          if (!refused(commandOf(args), matcher)) return inner.execute(args, api, context);
-          return Promise.resolve({ output: [{ type: 'text', text: REFUSAL }], isError: true });
-        },
-      })),
     ],
   });
 }

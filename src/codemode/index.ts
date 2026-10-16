@@ -1,7 +1,6 @@
 import type { Context, JsonValue } from '@earendil-works/chord';
 import { withAbortSignal } from '@earendil-works/chord/context';
 import { Type } from '@earendil-works/pi-ai';
-import { validateToolArguments } from '@earendil-works/pi-ai/utils/validation';
 import {
   type CodemodeError,
   type CodemodeJsonSchema,
@@ -20,6 +19,8 @@ import {
   defineExtension,
   defineTool,
   type Extension,
+  type JsonObject,
+  type NestedToolExecutionResult,
   type ToolExecutionApi,
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
@@ -76,7 +77,12 @@ const DISCOVERY =
 
 const BASH_OUTPUT: CodemodeJsonSchema = {
   type: 'object',
-  properties: { output: { type: 'string' }, exit_code: { type: 'number' } },
+  properties: {
+    output: { type: 'string' },
+    exit_code: { type: 'number' },
+    truncated: { type: 'boolean' },
+    full_output_path: { type: 'string' },
+  },
   required: ['output', 'exit_code'],
 };
 
@@ -101,47 +107,53 @@ export function codemodeDescription(
   return sections.join('\n\n');
 }
 
-function textOf(content: readonly { type: string; text?: string }[] | undefined): string {
-  return (content ?? [])
-    .filter((part) => part.type === 'text')
+function textOf(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value
+    .filter((part) => part?.type === 'text')
     .map((part) => part.text)
     .join('\n');
 }
 
+function errorOf(result: NestedToolExecutionResult): string {
+  const errors = result.diagnostics
+    .filter((diagnostic) => diagnostic.severity === 'error')
+    .map((diagnostic) => diagnostic.message);
+  return [textOf(result.structuredOutput), ...errors].filter(Boolean).join('\n');
+}
+
+interface ShellOutput {
+  output: string;
+  exitCode: number;
+  truncated?: boolean;
+  fullOutputPath?: string;
+}
+
+function shellOutput(value: unknown): ShellOutput | undefined {
+  const shell = value as Partial<ShellOutput> | undefined;
+  return typeof shell?.output === 'string' && typeof shell.exitCode === 'number'
+    ? (shell as ShellOutput)
+    : undefined;
+}
+
 export async function callNested(
-  tool: ToolRegistration,
+  name: string,
   args: unknown,
   api: ToolExecutionApi,
-  context: Context,
-  id: string
+  context: Context
 ): Promise<unknown> {
-  const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
-  const valid = validateToolArguments(tool, {
-    type: 'toolCall',
-    id,
-    name: tool.name,
-    arguments: prepared as never,
-  });
-  const decoder = new TextDecoder();
-  let output = '';
-  const nested: ToolExecutionApi = {
-    ...api,
-    callId: id,
-    outputWindow: undefined,
-    output: (chunk) => {
-      output += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
-    },
-    retainedOutput: () => ({ text: output, truncated: false }),
-    diagnostic: () => undefined,
-    details: async () => undefined,
-  };
-  const bash = tool.name === 'bash';
-  const result = await tool.execute(valid, nested, context);
-  const text = result.output ? textOf(result.output) : output;
-  const exit = (result.structuredOutput as { exitCode?: unknown } | undefined)?.exitCode;
-  if (bash && typeof exit === 'number') return { output: text, exit_code: exit };
-  if (result.isError) throw new Error(text || `Tool "${tool.name}" failed`);
-  return bash ? { output: text, exit_code: 0 } : text;
+  const result = await api.executeTool(name, (args ?? {}) as JsonObject, context);
+  const shell = name === 'bash' ? shellOutput(result.structuredOutput) : undefined;
+  if (shell)
+    return {
+      output: shell.output,
+      exit_code: shell.exitCode,
+      ...(shell.truncated ? { truncated: true } : {}),
+      ...(shell.fullOutputPath ? { full_output_path: shell.fullOutputPath } : {}),
+    };
+  if (result.isError) throw new Error(errorOf(result) || `Tool "${name}" failed`);
+  return textOf(result.structuredOutput);
 }
 
 function valueText(value: unknown): string {
@@ -242,16 +254,16 @@ export function codemodeTool(options: CodemodeOptions): ToolRegistration {
     description: codemodeDescription(options.declared, options.extra !== undefined),
     parameters: Type.Object({ code: Type.String({ description: 'Raw JavaScript source.' }) }),
     replay: 'unsafe',
+    callers: ['model'],
     async execute({ code }, api, context) {
       const started = performance.now();
       const parsed = parseCodemodeSource(code);
       const agent = await api.agent(context);
       const callable = agent.tools.filter((tool) => tool.name !== CODEMODE);
-      let count = 0;
       const tools: CodemodeTool[] = callable.map((tool) => ({
         ...scriptTool(tool),
         execute: (args, { signal }) =>
-          callNested(tool, args, api, withAbortSignal(signal, context), `${api.callId}:${++count}`),
+          callNested(tool.name, args, api, withAbortSignal(signal, context)),
       }));
       const extra = options.extra
         ? await options.extra(api, agent, context)
