@@ -97,10 +97,10 @@ export function reasonOf(item: Approval): string {
   return GATE_REASONS.unanswered;
 }
 
-async function taintsOf(
+export async function taintsOf(
   inputs: readonly SubmissionId[],
   seats: Readonly<Record<string, SeatRecord>>,
-  harness: Held,
+  harness: Pick<Harness, 'submission'>,
   context: Context
 ): Promise<Taint[]> {
   const found = new Map<string, Taint>();

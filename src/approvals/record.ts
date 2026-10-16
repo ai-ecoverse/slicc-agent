@@ -50,6 +50,7 @@ type Base = {
   decidedBy: DecidedBy | null;
   device?: string;
   answer?: 'once' | 'always';
+  reviewer?: string;
   reason?: string;
   verdict?: ApprovalVerdict;
   always: boolean;
@@ -105,13 +106,6 @@ export const REASONS = {
   scoopUndecided: 'scoop-undecided',
 } as const;
 
-export const SCOOP_REASONS: readonly string[] = [
-  REASONS.noScoop,
-  REASONS.scoopStopped,
-  REASONS.scoopAsked,
-  REASONS.scoopUndecided,
-];
-
 export const guestKind = (kind: ApprovalKind): boolean => kind !== 'sudo';
 
 export const scoopTier = (tier: unknown): tier is `scoop:${string}` =>
@@ -132,10 +126,10 @@ export function answerOf(value: unknown): ApprovalAnswer | null {
 
 export const personal = (by: DecidedBy): boolean => by === 'owner' || by === 'follower';
 
-export function answerer(by: DecidedBy, tier: string): boolean {
-  if (personal(by)) return tier === 'user';
-  if (by === 'judge') return tier === 'agent';
-  if (scoopTier(by)) return scoopTier(tier);
+export function answerer(by: DecidedBy, item: Pick<Approval, 'tier' | 'reviewer'>): boolean {
+  if (personal(by)) return item.tier === 'user';
+  if (by === 'judge') return item.tier === 'agent';
+  if (scoopTier(by)) return scoopTier(item.tier) && item.reviewer === by;
   return true;
 }
 
@@ -187,7 +181,7 @@ export function ruled(
       error: gone('unanswered'),
       settle: { state: 'unanswered', by: 'host', reason: REASONS.timeout },
     };
-  if (!answerer(by, item.tier)) return { error: "This request isn't yours to answer." };
+  if (!answerer(by, item)) return { error: "This request isn't yours to answer." };
   const known = answerOf(answer);
   if (known === 'always' && scoopTier(by)) return { error: 'A scoop answers once or deny.' };
   if (known === 'always' && !item.always)

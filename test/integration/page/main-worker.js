@@ -23,13 +23,16 @@ const fauxModels = [
 ];
 const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
 const requests = [];
-const recorded = (message) => (context) => {
+const served = [];
+const recorded = (message) => (context, _options, _state, model) => {
   requests.push(JSON.stringify(context));
+  served.push(model?.id ?? null);
   return { ...message, timestamp: Date.now() };
 };
 const upstream = [];
 self.addEventListener('message', ({ data }) => {
   data?.requests?.postMessage(requests);
+  data?.served?.postMessage(served);
   data?.upstream?.postMessage({
     upstream,
     vault: self.fakeVault?.log.map(({ op, provider, server }) => ({ op, provider, server })) ?? [],

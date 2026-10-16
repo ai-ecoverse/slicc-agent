@@ -48,6 +48,7 @@ export interface Approvals {
     context: Context
   ): Promise<ApprovalDecided>;
   settled(id: string, context: Context): Promise<Approval>;
+  assign(id: string, reviewer: string, context: Context): Promise<Approval | undefined>;
   withdraw(id: string, reason: string | null, context: Context): Promise<Approval | undefined>;
   withdrawSeat(seat: string, context: Context): Promise<number>;
   expire(id: string, context: Context): Promise<Approval | undefined>;
@@ -322,6 +323,13 @@ export async function attachApprovals(
       }, using);
     },
     settled: (id, using) => settledIn(state, id, using),
+    assign(id, reviewer, using) {
+      return serial((doc) => {
+        const item = doc.items.find((entry) => entry.id === id);
+        if (item?.state === 'pending' && scoopTier(item.tier)) item.reviewer ??= reviewer;
+        return item ? (copy([item])[0] as Approval) : undefined;
+      }, using);
+    },
     async withdraw(id, reason, using) {
       const [hit] = await serial(
         withdrawWhere((item) => item.id === id, cleanReason(reason)),

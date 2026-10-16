@@ -10,13 +10,15 @@ import {
   defineTool,
   type Extension,
   type Harness,
+  LiveDoc,
   type NextTaskState,
   type TaskRuntime,
 } from '@earendil-works/pi-durable';
 import { type AgentsState, live, type ScoopRecord } from '../agents.ts';
 import type { Approval, Approvals, ApprovalsState } from '../approvals/index.ts';
 import { judgeState, type OwnerIntent } from '../approvals/judge.ts';
-import { ApprovalsDoc, REASONS } from '../approvals/record.ts';
+import { ApprovalsDoc, REASONS, scoopTier } from '../approvals/record.ts';
+import { taintsOf } from './guard.ts';
 import { GuestsDoc } from './seats.ts';
 
 export const SCOOP_DECIDE = 'approval_decide';
@@ -43,7 +45,7 @@ export const ScoopRoutesDoc = defineDoc<{ routes: Record<string, number> }>({
 });
 
 export interface ScoopReviewHost {
-  approvals: Pick<Approvals, 'decide'>;
+  approvals: Pick<Approvals, 'decide' | 'assign'>;
   agents: { state(): Readonly<AgentsState> };
   harness: Pick<Harness, 'commit'>;
   intent?: (item: Approval, context: Context) => Promise<OwnerIntent | null>;
@@ -83,6 +85,23 @@ export function askedOf(item: Approval, reviewer: Reviewer): boolean {
   return [reviewer.record.folder, reviewer.record.name]
     .map((name) => words(name).trim())
     .some((name) => name && asked.includes(` ${name} `));
+}
+
+export async function reviewersOf(
+  harness: Pick<Harness, 'snapshot' | 'submission'>,
+  state: Readonly<AgentsState>,
+  cone: string,
+  context: Context
+): Promise<string[]> {
+  const conversation = state.cones[cone]?.conversation as ConversationId | undefined;
+  const live = conversation && (await harness.snapshot(LiveDoc, conversation, context));
+  const inputs = live ? (live.run?.inputs ?? []) : [];
+  if (!inputs.length) return [];
+  const seats = (await harness.snapshot(GuestsDoc, context))?.seats ?? {};
+  return (await taintsOf(inputs, seats, harness, context)).flatMap((taint) => {
+    const id = scoopTier(taint.tier) ? reviewerOf(state, cone, taint.tier)?.id : undefined;
+    return id ? [id] : [];
+  });
 }
 
 const INSTRUCTIONS = (name: string) =>
@@ -311,6 +330,8 @@ export function scoopReviews(): ScoopReviews {
       if (!reviewer) return deny(host, item, REASONS.noScoop);
       if (!live(reviewer.record)) return deny(host, item, REASONS.scoopStopped);
       if (askedOf(item, reviewer)) return deny(host, item, REASONS.scoopAsked);
+      const assigned = await host.approvals.assign(item.id, reviewer.id, BACKGROUND_CONTEXT);
+      if (assigned?.reviewer !== reviewer.id) return;
       await host.harness.commit(async (tx) => {
         const routes = await tx.doc(ScoopRoutesDoc);
         if (routes.routes[item.id] !== undefined) return;
