@@ -16,11 +16,13 @@ export const GATE_KINDS: readonly GateKind[] = ['user', 'agent', 'cone', 'scoop'
 
 export const DEFAULT_GUEST_POLICY: GuestPolicy = {
   manageGuests: 'deny',
-  allowedToolGates: ['user', 'agent', 'scoop'],
-  allowedMessageGates: ['user', 'agent', 'cone', 'scoop', 'off'],
+  allowedToolGates: ['user', 'agent'],
+  allowedMessageGates: ['user', 'agent', 'cone', 'off'],
   maxSeatDays: 30,
   always: { messages: false, tools: false },
 };
+
+export const SCOOP_REVIEW_LATER = "This review isn't available yet.";
 
 export const MAX_SEAT_DAYS = 365;
 export const DAY_MS = 24 * 60 * 60 * 1000;
