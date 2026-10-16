@@ -52,7 +52,9 @@ export function shown(item: Item, agentName: string | undefined): Approval {
     agentId: item.agentId,
     ...(agentName ? { agentName } : {}),
     always: false as const,
-    ...(item.verdict ? { verdict: { ...item.verdict } } : {}),
+    ...(item.verdict && item.verdict.decision !== 'unsure'
+      ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } }
+      : {}),
   };
   if (item.kind === 'guest-tool')
     return { ...guest, kind: 'guest-tool', tool: item.detail.tool, summary: item.detail.summary };

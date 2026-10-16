@@ -1,6 +1,7 @@
 import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Harness } from '@earendil-works/pi-durable';
+import type { ApprovalJudge, Judgement } from './judge.ts';
 import {
   APPROVAL_MS,
   type Approval,
@@ -20,6 +21,8 @@ import {
   type Settle,
 } from './record.ts';
 
+export * from './intent.ts';
+export * from './judge.ts';
 export * from './record.ts';
 
 export type ApprovalDecided =
@@ -46,9 +49,49 @@ export interface ApprovalsAttach {
   harness: Pick<Harness, 'commit'>;
   now?: () => number;
   ttlMs?: number;
+  judge?: ApprovalJudge;
 }
 
 const copy = (items: readonly Approval[]): Approval[] => JSON.parse(JSON.stringify(items));
+
+function mark(item: Approval, how: Settle, at: number) {
+  item.state = how.state;
+  item.decidedBy = how.by;
+  item.decidedAt = at;
+  if (how.reason) item.reason = how.reason;
+}
+
+const withdrawIn =
+  (match: (item: Approval) => boolean, reason: string | undefined, now: () => number) =>
+  (doc: ApprovalsState) => {
+    const hit = doc.items.filter((item) => item.state === 'pending' && match(item));
+    for (const item of hit)
+      mark(item, { state: 'withdrawn', by: 'host', ...(reason ? { reason } : {}) }, now());
+    return hit.map((item) => copy([item])[0] as Approval);
+  };
+
+const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: ApprovalsState) => {
+  const item = doc.items.find((entry) => entry.id === id);
+  if (item?.tier !== 'agent') return undefined;
+  const late = item.state === 'unanswered' && item.reason === REASONS.timeout && !item.verdict;
+  if (item.state !== 'pending' && !(late && judgement.verdict)) return undefined;
+  if (judgement.verdict) item.verdict = judgement.verdict;
+  if (late) return copy([item])[0] as Approval;
+  if (judgement.outcome === 'ask') item.tier = 'user';
+  else {
+    const at = now();
+    const ruling = ruled(
+      item,
+      judgement.outcome === 'approve' ? 'once' : 'deny',
+      null,
+      'judge',
+      at
+    );
+    if (ruling.answer) item.answer = ruling.answer;
+    if (ruling.settle) mark(item, ruling.settle, at);
+  }
+  return copy([item])[0] as Approval;
+};
 
 export async function attachApprovals(
   options: ApprovalsAttach,
@@ -60,12 +103,7 @@ export async function attachApprovals(
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   let line: Promise<unknown> = Promise.resolve();
   let closed = false;
-  const settle = (item: Approval, how: Settle) => {
-    item.state = how.state;
-    item.decidedBy = how.by;
-    item.decidedAt = now();
-    if (how.reason) item.reason = how.reason;
-  };
+  const settle = (item: Approval, how: Settle) => mark(item, how, now());
   const write = <R>(
     change: (doc: ApprovalsState) => R,
     using: Context
@@ -83,6 +121,7 @@ export async function attachApprovals(
         settle(item, { state: 'withdrawn', by: 'host', reason: REASONS.restart });
       else if (item.expiresAt <= now())
         settle(item, { state: 'unanswered', by: 'host', reason: REASONS.timeout });
+      else if (options.judge && item.tier === 'agent') item.tier = 'user';
     }
   }, context);
   const state = replicatedState<Approval[]>(startup.items);
@@ -124,17 +163,34 @@ export async function attachApprovals(
       }
   }
   arm(startup.items);
-  const withdrawWhere =
-    (match: (item: Approval) => boolean, reason: string | undefined) => (doc: ApprovalsState) => {
-      const hit = doc.items.filter((item) => item.state === 'pending' && match(item));
-      for (const item of hit)
-        settle(item, { state: 'withdrawn', by: 'host', ...(reason ? { reason } : {}) });
-      return hit.map((item) => copy([item])[0] as Approval);
+  const withdrawWhere = (match: (item: Approval) => boolean, reason: string | undefined) =>
+    withdrawIn(match, reason, now);
+  const judging = async (judge: ApprovalJudge, item: Approval, using: Context) => {
+    const signal = using.abortSignal;
+    let gone = false;
+    const abort = () => {
+      gone = true;
+      void serial(
+        withdrawWhere((entry) => entry.id === item.id && entry.tier === 'agent', REASONS.aborted),
+        BACKGROUND_CONTEXT
+      ).catch(() => undefined);
     };
+    if (signal?.aborted) return abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    const judgement = await judge
+      .judge(item, using)
+      .catch((error: unknown): Judgement => ({ outcome: 'ask', error: String(error) }));
+    signal?.removeEventListener('abort', abort);
+    if (gone || closed) return;
+    const after = await serial(judgedIn(item.id, judgement, now), BACKGROUND_CONTEXT).catch(
+      () => undefined
+    );
+    if (after) await judge.record?.(after, judgement, BACKGROUND_CONTEXT).catch(() => undefined);
+  };
   return {
     state,
-    request(draft, using) {
-      return serial((doc) => {
+    async request(draft, using) {
+      const made = await serial((doc) => {
         const at = now();
         const item = {
           ...draft,
@@ -152,6 +208,9 @@ export async function attachApprovals(
         doc.items.push(item);
         return copy([item])[0] as Approval;
       }, using);
+      if (options.judge && made.state === 'pending' && made.tier === 'agent')
+        void judging(options.judge, made, using);
+      return made;
     },
     decide(id, answer, reason, by, using) {
       return serial((doc): ApprovalDecided => {

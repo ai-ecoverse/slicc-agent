@@ -10,7 +10,12 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agent } from './agent.ts';
-import { type Approvals, attachApprovals, type DecidedBy } from './approvals/index.ts';
+import {
+  type ApprovalJudge,
+  type Approvals,
+  attachApprovals,
+  type DecidedBy,
+} from './approvals/index.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
@@ -168,6 +173,7 @@ export async function hostAgent(
     thumbnail?: Thumbnail;
     labels?: LabelsRuntime;
     approvals?: Approvals;
+    judge?: ApprovalJudge;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -186,7 +192,11 @@ export async function hostAgent(
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
   const approvals =
-    options.approvals ?? (await attachApprovals({ harness: agent.harness }, context));
+    options.approvals ??
+    (await attachApprovals(
+      { harness: agent.harness, ...(options.judge ? { judge: options.judge } : {}) },
+      context
+    ));
   const monitor = createMonitor({
     ...options.monitor,
     harness: agent.harness,

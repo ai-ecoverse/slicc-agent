@@ -10,6 +10,15 @@ import {
 } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { type Agent, type AgentOptions, openAgent } from './agent.ts';
+import {
+  type ApprovalJudge,
+  approvalJudge,
+  judgeModelOf,
+  judgeSpender,
+  ownerIntent,
+  seedPolicy,
+  verdictRecorder,
+} from './approvals/index.ts';
 import { browserGuard } from './browser/guard.ts';
 import { attachChanges, CHANGES_MS } from './changes/index.ts';
 import {
@@ -33,6 +42,7 @@ import { AGENT_DIR, ROOT_HOME } from './layout.ts';
 import { setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
 import { type McpAccounts, setupMcp } from './mcp/index.ts';
+import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
 import { pageOnly, type Transport, transportFetch } from './net.ts';
@@ -329,6 +339,26 @@ async function settingsOf(
   return settings;
 }
 
+async function setupJudge(
+  models: Models,
+  home: SliccKernelEnv,
+  at: { home: string; agentDir?: string },
+  agent: Agent,
+  memories: () => readonly MemoryEntry[] | undefined
+): Promise<ApprovalJudge> {
+  await seedPolicy(home, BACKGROUND_CONTEXT).catch(() => false);
+  const settings = settingsText(home, HOME, at.agentDir);
+  return {
+    judge: approvalJudge({
+      models,
+      model: async (context) => judgeModelOf(await settings(context)),
+      intent: ownerIntent({ env: home, agents: agent.agents, memories }),
+      spend: judgeSpender((agentId, context) => agent.agents.conversation(agentId, context)),
+    }),
+    record: verdictRecorder((agentId, context) => agent.agents.conversation(agentId, context)),
+  };
+}
+
 function setupTitles(
   registry: ReturnType<typeof createRegistry>,
   models: Models,
@@ -496,8 +526,8 @@ async function start(
     ...(options.catalog ? { catalog: options.catalog } : {}),
   });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
-  const changes = attachChanges({ agents: agent.agents, env: home, reloadMs: CHANGES_MS });
   return hostAgent(agent, {
+    judge: await setupJudge(models, home, at, agent, () => memoryRuntime.memories.value),
     settings,
     licks: { licks: licks.licks, sources },
     scoops: { scoops: scoops.scoops, runtime },
@@ -505,7 +535,7 @@ async function start(
     sprinkles,
     memory: memoryRuntime,
     freezer,
-    changes,
+    changes: attachChanges({ agents: agent.agents, env: home, reloadMs: CHANGES_MS }),
     pages,
     labels: await attachLabels({ ...agent, label: titles.label, vault: vault.state }),
     mcp: mcpRuntime,

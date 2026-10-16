@@ -114,7 +114,11 @@ type Counted = Record<'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'totalTo
   cost: Record<'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'total', number>;
 };
 
-async function spend(tx: Tx, conversation: ConversationId, answer: AssistantMessage) {
+export async function spend(
+  tx: Tx,
+  conversation: ConversationId,
+  answer: Pick<AssistantMessage, 'provider' | 'model' | 'usage'>
+) {
   const models = (await tx.doc(UsageDoc, conversation)).models as unknown as Record<
     string,
     Counted
