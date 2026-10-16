@@ -1,5 +1,7 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
 import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' };
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
+import { createProvider } from '@earendil-works/pi-ai/models';
 import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
 import {
   fauxAssistantMessage,
@@ -146,13 +148,87 @@ const attach = relayed
 const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]
   : [];
-void runAgentWorker(self, {
+const judged = [];
+let judgeTable = {};
+const judgeSteps = params.getAll('judge-step').map((step) => JSON.parse(step));
+const inner = (fenced) => fenced.split('\n').slice(1, -1).join('\n');
+const answers = (low, aligned) => ({
+  risk: {
+    type: 'choice',
+    choice: low >= 0.5 ? 'low' : 'high',
+    probabilities: { low, high: 1 - low },
+    confidence: Math.max(low, 1 - low),
+  },
+  aligned: { type: 'bool', probability: aligned },
+});
+async function classify(model, context, options) {
+  const seen = { model: `${model.provider}/${model.id}`, state: context.state, aborted: false };
+  judged.push(seen);
+  const step = judgeTable[inner(context.state.request.untrusted)] ?? judgeSteps.shift() ?? {};
+  const base = { api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
+  if (step.hold) {
+    await new Promise((resolve) => {
+      if (options?.signal?.aborted) resolve();
+      options?.signal?.addEventListener('abort', resolve, { once: true });
+    });
+    seen.aborted = true;
+    return { ...base, answers: {}, stopReason: 'aborted', errorMessage: 'aborted' };
+  }
+  if (step.stop) return { ...base, answers: {}, stopReason: step.stop, errorMessage: step.error };
+  if (step.low === undefined) throw new Error('no judge answer queued');
+  return { ...base, answers: answers(step.low, step.aligned), stopReason: 'stop' };
+}
+const classifier = (id) => ({
+  type: 'classifier',
+  id,
+  name: id,
+  provider: 'judge',
+  api: 'judge-classify',
+  baseUrl: 'https://judge.test',
+  input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 65536,
+});
+const judges = params.has('judge')
+  ? [
+      createProvider({
+        id: 'judge',
+        name: 'Judge',
+        auth: { apiKey: { name: 'Judge', resolve: async () => ({ auth: {} }) } },
+        models: [classifier('j-1'), classifier('j-2')],
+        classifiers: { 'judge-classify': { classify } },
+      }),
+    ]
+  : [];
+const aborts = new Map();
+self.addEventListener('message', ({ data }) => {
+  data?.judged?.postMessage(judged);
+  if (data?.judgeTable) judgeTable = data.judgeTable;
+  if (data?.abort) aborts.get(data.abort)?.abort();
+  if (!data?.approve) return;
+  const controller = new AbortController();
+  if (data.key) aborts.set(data.key, controller);
+  running
+    .then((host) =>
+      host.approvals.request(data.approve, withAbortSignal(controller.signal, BACKGROUND_CONTEXT))
+    )
+    .then(
+      (item) => data.reply.postMessage({ item }),
+      (error) => data.reply.postMessage({ error: error.message })
+    );
+});
+const running = runAgentWorker(self, {
   ...(attach ? { attach } : {}),
   ...(params.has('redirect')
     ? { mcpRedirect: new URL(params.get('redirect'), self.location.origin).href }
     : {}),
   model: { provider: 'faux', modelId: 'faux-1' },
-  providers: [faux.provider, ...e2e, ...(params.has('bedrock') ? [amazonBedrockProvider()] : [])],
+  providers: [
+    faux.provider,
+    ...judges,
+    ...e2e,
+    ...(params.has('bedrock') ? [amazonBedrockProvider()] : []),
+  ],
   storage: params.has('persist')
     ? () => openOpfsSqliteStorage({ directory: params.get('persist') })
     : async () => new MemoryStorage(),

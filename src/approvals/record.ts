@@ -18,7 +18,13 @@ export type ApprovalRequester = {
   where?: string;
 };
 
-export type ApprovalVerdict = { decision: 'allow' | 'deny'; reason: string };
+export type ApprovalVerdict = {
+  decision: 'allow' | 'deny';
+  reason: string;
+  risk?: number;
+  aligned?: number;
+  model?: string;
+};
 
 export type ApprovalAttachment = { name: string; mimeType: string; size: number };
 
@@ -89,6 +95,7 @@ export const REASONS = {
   unknownAnswer: 'unknown-answer',
   restart: 'restart',
   revoked: 'revoked',
+  aborted: 'aborted',
 } as const;
 
 export const guestKind = (kind: ApprovalKind): boolean => kind !== 'sudo';
