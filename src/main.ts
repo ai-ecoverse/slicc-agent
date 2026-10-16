@@ -14,6 +14,7 @@ import {
   type ApprovalJudge,
   approvalJudge,
   judgeModelOf,
+  judgeSpender,
   ownerIntent,
   seedPolicy,
   verdictRecorder,
@@ -352,6 +353,7 @@ async function setupJudge(
       models,
       model: async (context) => judgeModelOf(await settings(context)),
       intent: ownerIntent({ env: home, agents: agent.agents, memories }),
+      spend: judgeSpender((agentId, context) => agent.agents.conversation(agentId, context)),
     }),
     record: verdictRecorder((agentId, context) => agent.agents.conversation(agentId, context)),
   };

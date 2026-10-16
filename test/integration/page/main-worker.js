@@ -177,7 +177,15 @@ async function classify(model, context, options) {
   if (step.delay) await new Promise((resolve) => setTimeout(resolve, step.delay));
   if (step.stop) return { ...base, answers: {}, stopReason: step.stop, errorMessage: step.error };
   if (step.low === undefined) throw new Error('no judge answer queued');
-  return { ...base, answers: answers(step.low, step.aligned), stopReason: 'stop' };
+  const usage = {
+    input: 100,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 102,
+    cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+  };
+  return { ...base, answers: answers(step.low, step.aligned), usage, stopReason: 'stop' };
 }
 const classifier = (id) => ({
   type: 'classifier',

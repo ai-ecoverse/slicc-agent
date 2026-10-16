@@ -40,6 +40,7 @@ export {
   JUDGE_QUESTIONS,
   type Judgement,
   judgeModelOf,
+  judgeSpender,
   judgeState,
   type OwnerIntent,
   ownerIntent,

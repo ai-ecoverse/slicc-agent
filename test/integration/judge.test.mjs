@@ -155,6 +155,12 @@ test("the judge approves a low-risk request that serves the owner's intent and d
       (await ask(tool('bash', 'git push --force origin main'))).id
     );
     const fenced = await settled(local, (await ask(message(push))).id);
+    const { lease } = await local.control.monitorOpen(null, true, BACKGROUND_CONTEXT);
+    const usage = await until(
+      () => (local.monitor.value.usage?.cost ?? 0) > 0.029 && local.monitor.value.usage,
+      'the judge spend in the monitor'
+    );
+    await local.control.monitorClose(lease, BACKGROUND_CONTEXT);
     const viewer = await owner.connect({ readOnly: true });
     await until(() => verdicts(viewer).length === 3, 'three verdict entries for a viewer');
     const states = await judged();
@@ -170,6 +176,7 @@ test("the judge approves a low-risk request that serves the owner's intent and d
       states,
       policy,
       listed,
+      usage,
     };
     await viewer.close();
     await local.close();
@@ -191,6 +198,8 @@ test("the judge approves a low-risk request that serves the owner's intent and d
   assert.equal(seen.denied.verdict.reason, 'it looks high-risk.');
   assert.equal(seen.fenced.state, 'rejected');
   assert.equal(seen.listed, 0);
+  assert.ok(Math.abs(seen.usage.cost - 0.03) < 1e-9);
+  assert.ok(seen.usage.tokens >= 3 * 102);
   assert.deepEqual(seen.viewerRecord.verdict, seen.approved.verdict);
   assert.deepEqual(
     seen.notes.map((note) => [note.approval, note.outcome, note.decision, note.model]),
@@ -244,7 +253,7 @@ async function shoot(page, name) {
   await viewport(page, 1280);
 }
 
-test('an unsure judge, a failed call or a judge model the settings do not have hands the request to a person, never to an approval, and the dialog says what the judge leaned to', async (t) => {
+test('an unsure judge, a failed call, an attachment the judge cannot read or a judge model the settings do not have hands the request to a person, never to an approval, and the owner answers it in the dialog', async (t) => {
   const page = await chrome.page(t);
   await viewport(page, 1280);
   const steps = [
@@ -285,6 +294,19 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
       () => record(local, slow.id)?.verdict && record(local, slow.id),
       'the late verdict'
     );
+    const filed = await settled(
+      local,
+      (
+        await ask(
+          message('Summarise the attached notes.', {
+            detail: {
+              text: 'Summarise the attached notes.',
+              attachments: [{ name: 'notes.txt', mimeType: 'text/plain', size: 120 }],
+            },
+          })
+        )
+      ).id
+    );
     await window.write(
       '/home/.pi/agent/settings.json',
       JSON.stringify({ approvals: { judgeModel: 'judge/missing' } })
@@ -314,6 +336,7 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
       unsure,
       failed,
       late,
+      filed,
       missing,
       listed,
       line: find(document, '.verdict')?.textContent.replace(/\s+/g, ' ').trim(),
@@ -322,7 +345,7 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
       calls: (await judged()).map((call) => call.model),
     };
   });
-  for (const item of [seen.unsure, seen.failed, seen.missing]) {
+  for (const item of [seen.unsure, seen.failed, seen.filed, seen.missing]) {
     assert.equal(item.state, 'pending');
     assert.equal(item.tier, 'user');
     assert.equal(item.decidedBy, null);
@@ -345,10 +368,12 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
   });
   assert.equal(seen.failed.verdict, undefined);
   assert.equal(seen.missing.verdict, undefined);
+  assert.equal(seen.filed.verdict, undefined);
   assert.deepEqual(seen.calls, ['judge/j-2', 'judge/j-2', 'judge/j-2']);
   assert.deepEqual(seen.listed, [
     [seen.unsure.id, null],
     [seen.failed.id, null],
+    [seen.filed.id, null],
     [seen.missing.id, null],
   ]);
   assert.equal(seen.line, undefined);
@@ -359,6 +384,7 @@ test('an unsure judge, a failed call or a judge model the settings do not have h
       ['escalated', null],
       ['escalated', 'Request timed out'],
       ['unanswered', null],
+      ['escalated', "the judge can't read attachments"],
       ['escalated', 'there is no judge model judge/missing'],
     ]
   );

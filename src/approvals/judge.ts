@@ -1,7 +1,9 @@
 import type { Context } from '@earendil-works/chord';
-import type { ClassifierQuestion, ClassifierResult } from '@earendil-works/pi-ai';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { ClassifierQuestion, ClassifierResult, Usage } from '@earendil-works/pi-ai';
 import type { Models } from '@earendil-works/pi-ai/models';
 import type { Conversation, ModelRef } from '@earendil-works/pi-durable';
+import { spend } from '../titles/labels.ts';
 import type { Approval, ApprovalVerdict } from './record.ts';
 
 export const JUDGE_KIND = 'slicc.approval-verdict';
@@ -33,6 +35,7 @@ export interface JudgeOptions {
   intent(item: Approval, context: Context): Promise<OwnerIntent | null>;
   nonce?: () => string;
   timeoutMs?: number;
+  spend?(item: Approval, result: ClassifierResult, context: Context): Promise<void>;
 }
 
 export const VERDICT_REASONS = {
@@ -73,10 +76,7 @@ export function fenced(text: string, nonce: string): string {
 }
 
 export function untrustedOf(item: Approval): string {
-  if (item.kind === 'guest-message') {
-    const files = item.detail.attachments.map((file) => `[attachment ${file.name}]`);
-    return [item.detail.text, ...files].join('\n');
-  }
+  if (item.kind === 'guest-message') return item.detail.text;
   if (item.kind === 'guest-tool') return `${item.detail.tool}: ${item.detail.summary}`;
   return item.detail.command;
 }
@@ -159,6 +159,8 @@ const failed = (error: unknown) => ({
 export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
   const nonce = options.nonce ?? (() => crypto.randomUUID().replaceAll('-', ''));
   return async (item, context) => {
+    if (item.kind === 'guest-message' && item.detail.attachments.length)
+      return { outcome: 'ask', error: "the judge can't read attachments" };
     const ref = await options.model(context).catch(() => null);
     const model = ref && options.models.getModelOfType('classifier', ref.provider, ref.modelId);
     if (!ref || !model)
@@ -180,6 +182,8 @@ export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
       )
       .catch(failed);
     if (!('stopReason' in result)) return result;
+    if (result.usage)
+      await options.spend?.(item, result, BACKGROUND_CONTEXT).catch(() => undefined);
     return {
       ...verdictOf(result, `${ref.provider}/${ref.modelId}`),
       cost: result.usage?.cost.total ?? null,
@@ -222,5 +226,25 @@ export function verdictRecorder(
   return async (item, judgement, context) => {
     const target = await conversation(item.agentId, context);
     await target?.submit(verdictEntry(item, judgement, now()), context);
+  };
+}
+
+export function judgeSpender(
+  conversation: (
+    agentId: string,
+    context: Context
+  ) => Promise<Pick<Conversation, 'id' | 'commit'> | undefined>
+): NonNullable<JudgeOptions['spend']> {
+  return async (item, result, context) => {
+    const target = await conversation(item.agentId, context);
+    await target?.commit(
+      (tx) =>
+        spend(tx, target.id, {
+          provider: result.provider,
+          model: result.model,
+          usage: result.usage as Usage,
+        }),
+      context
+    );
   };
 }
