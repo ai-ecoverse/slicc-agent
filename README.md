@@ -638,7 +638,7 @@ All the limits on approvals and guests live in one owner-changeable policy, the 
   - `guests.always: { messages: false, tools: false }`.
   - `sudo.approver: 'user'` (`'agent'` lets the judge decide sudo).
 - **Reading it:** `AgentTranscript.approvalPolicy` replicates it to every owner device.
-- **Changing it:** `AgentControl.approvalPolicySet({ guests?, sudo? })` changes the given entries. It's for owner devices only (the owner's pages, and followers with or without Control), never guests. It validates the change and answers `{ policy, error }`. A stored policy is read over the defaults, so a later default reaches entries nobody set.
+- **Changing it:** `AgentControl.approvalPolicySet({ guests?, sudo? })` changes the given entries. It's for owner devices only (the owner's pages, and followers with or without Control), never guests. It validates the change and answers `{ policy, error }`. Only the entries an owner device set are stored, as overrides read over the defaults, so a later default still reaches every entry nobody set.
 - **Where it applies:** gates and expiry are checked when a seat opens, so a seat keeps its gates when the policy changes later.
 - **What it doesn't open:** the guest contract stays closed to everything but its own seat (`closedToGuests`). That's the default-deny base a later policy entry may open.
 - **Not policy:** the guest guard (`slicc-guest-guard`, until #254) and the technical bounds (label 64, proposal 32,000 characters).

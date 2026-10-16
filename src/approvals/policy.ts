@@ -1,6 +1,11 @@
-import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import {
+  type Context,
+  type JsonValue,
+  type ReplicatedState,
+  replicatedState,
+} from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { defineDoc, type Harness } from '@earendil-works/pi-durable';
+import { defineDoc, type Harness, type JsonObject } from '@earendil-works/pi-durable';
 import {
   changedGuests,
   DEFAULT_GUEST_POLICY,
@@ -24,11 +29,13 @@ export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = {
   sudo: { approver: 'user' },
 };
 
-export const ApprovalPolicyDoc = defineDoc<{ policy: ApprovalPolicy | null }>({
+type Overrides = Partial<Record<keyof ApprovalPolicy, JsonObject>>;
+
+export const ApprovalPolicyDoc = defineDoc<{ overrides: Overrides }>({
   kind: 'slicc.approval-policy',
   version: 1,
   scope: 'session',
-  initial: () => ({ policy: null }),
+  initial: () => ({ overrides: {} }),
 });
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -61,11 +68,37 @@ export function changedPolicy(base: ApprovalPolicy, change: unknown): ApprovalPo
   return { policy: next, error: null };
 }
 
-function kept(stored: Partial<ApprovalPolicy> | null): ApprovalPolicy {
-  return {
-    guests: { ...DEFAULT_GUEST_POLICY, ...stored?.guests },
-    sudo: { ...DEFAULT_APPROVAL_POLICY.sudo, ...stored?.sudo },
-  };
+export function resolvedPolicy(overrides: Overrides): ApprovalPolicy {
+  const guests = (overrides.guests ?? {}) as Partial<GuestPolicy>;
+  return copy({
+    guests: {
+      ...DEFAULT_GUEST_POLICY,
+      ...guests,
+      always: { ...DEFAULT_GUEST_POLICY.always, ...guests.always },
+    },
+    sudo: { ...DEFAULT_APPROVAL_POLICY.sudo, ...overrides.sudo },
+  });
+}
+
+export function overridden(
+  overrides: Overrides,
+  change: Record<string, Record<string, unknown>>,
+  policy: ApprovalPolicy
+): Overrides {
+  const next = copy(overrides);
+  for (const [section, entries] of Object.entries(change)) {
+    const key = section as keyof ApprovalPolicy;
+    const into = next[key] ?? {};
+    const resolved = policy[key] as unknown as JsonObject;
+    for (const name of Object.keys(entries))
+      into[name] = (
+        name === 'always'
+          ? { ...(into.always as object), ...(entries.always as object) }
+          : resolved[name]
+      ) as JsonValue;
+    next[key] = into;
+  }
+  return next;
 }
 
 export interface ApprovalPolicies {
@@ -85,11 +118,11 @@ export async function attachApprovalPolicy(
   harness: Pick<Harness, 'commit'>,
   context: Context = BACKGROUND_CONTEXT
 ): Promise<ApprovalPolicies> {
-  const stored = await harness.commit(async (tx) => {
-    const found = (await tx.doc(ApprovalPolicyDoc)).policy;
-    return found ? copy(found) : null;
-  }, context);
-  const state = replicatedState<ApprovalPolicy>(kept(stored));
+  let overrides = await harness.commit(
+    async (tx) => copy((await tx.doc(ApprovalPolicyDoc)).overrides ?? {}),
+    context
+  );
+  const state = replicatedState<ApprovalPolicy>(resolvedPolicy(overrides));
   let line: Promise<unknown> = Promise.resolve();
   return {
     state,
@@ -98,10 +131,16 @@ export async function attachApprovalPolicy(
       const run = line.then(async () => {
         const made = changedPolicy(state.value as ApprovalPolicy, change);
         if (!made.policy) return made;
-        const policy = made.policy;
+        const next = overridden(
+          overrides,
+          change as Record<string, Record<string, unknown>>,
+          made.policy
+        );
         await harness.commit(async (tx) => {
-          (await tx.doc(ApprovalPolicyDoc)).policy = copy(policy);
+          (await tx.doc(ApprovalPolicyDoc)).overrides = copy(next);
         }, using);
+        overrides = next;
+        const policy = resolvedPolicy(next);
         state.replace(using, copy(policy));
         return { policy: copy(policy), error: null };
       });

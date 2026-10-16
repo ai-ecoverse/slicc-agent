@@ -17,6 +17,8 @@ export interface GuestHub {
 
 export const NO_HUB = 'Inviting guests needs the tray hub.';
 export const NOT_OWNER_DEVICE = "Only the owner's devices can invite guests.";
+export const NO_CONTROL = NOT_OWNER_DEVICE;
+export const NO_OWNER = NOT_OWNER_DEVICE;
 
 const offered = (kinds: readonly GateKind[]): GuestGate[] =>
   kinds.map((kind) => (kind === 'scoop' ? 'scoop:*' : kind));
