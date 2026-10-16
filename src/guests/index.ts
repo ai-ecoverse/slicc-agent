@@ -3,10 +3,12 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { type Harness, InboxDoc } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
 import type { Approval, Approvals } from '../approvals/index.ts';
+import type { ApprovalPolicies } from '../approvals/policy.ts';
 import { scrubText } from '../secrets/scrub.ts';
 import type { GuestPrincipal } from '../serving.ts';
 import { GUEST_INPUT_KIND, type GuestInput, guestContent } from './attribution.ts';
 import { GUEST_REQUEST } from './guard.ts';
+import { DEFAULT_GUEST_POLICY, type GuestPolicy } from './policy.ts';
 import {
   checkDraft,
   cleanLabel,
@@ -40,6 +42,7 @@ export interface Guests {
   joined(id: string): () => void;
   onEnd(listener: (id: string) => void): () => void;
   propose(guest: GuestPrincipal, request: ProposeRequest, context: Context): Promise<Proposed>;
+  policy(): GuestPolicy;
   dispose(): void;
 }
 
@@ -47,6 +50,7 @@ export interface GuestsOptions {
   harness: Pick<Harness, 'commit' | 'abortSubmission'>;
   agents: Pick<Agents, 'state' | 'conversation'>;
   approvals?: Pick<Approvals, 'state' | 'request' | 'withdrawSeat'>;
+  policy?: Pick<ApprovalPolicies, 'current'>;
   now?: () => number;
   context?: Context;
 }
@@ -200,6 +204,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
   const { harness, agents } = options;
   const now = options.now ?? Date.now;
   const context = options.context ?? BACKGROUND_CONTEXT;
+  const guestPolicy = () => options.policy?.current().guests ?? DEFAULT_GUEST_POLICY;
   const records: Record<string, SeatRecord> = await harness.commit(
     async (tx) => copy((await tx.doc(GuestsDoc)).seats),
     context
@@ -288,7 +293,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
     seats,
     async open(draft, using) {
       const at = now();
-      const problem = checkDraft(draft, at);
+      const problem = checkDraft(draft, at, guestPolicy());
       if (problem) return { seat: null, error: problem };
       if (!agents.state().cones[draft.agentId])
         return { seat: null, error: `There is no cone ${draft.agentId}.` };
@@ -363,6 +368,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
         return still ? place(still, prepared, options, using) : unanswered('revoked');
       });
     },
+    policy: guestPolicy,
     dispose() {
       if (timer) clearTimeout(timer);
       offPending?.();

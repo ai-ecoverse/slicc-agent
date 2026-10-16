@@ -1,18 +1,17 @@
 import {
   type Context,
   createHost,
-  isChordError,
   type Readable,
   type ReplicatedState,
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { ApprovalPolicy } from './approvals/policy.ts';
 import type { Approval } from './approvals/record.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { GuestSeat } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
-import { mismatched } from './mismatch.ts';
 import { controlAnswer, pageAnswer, remoteAnswer, settingsAnswer } from './readonly.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
@@ -40,7 +39,7 @@ import {
 } from './services.ts';
 import { AGENT_HOST, bound, kept, type Remote, type Root, replicated } from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import { greeted, LINK_PROTOCOL, type PortEndpoint, PortLink } from './wire.ts';
+import { type PortEndpoint, PortLink } from './wire.ts';
 
 export interface AgentConnection {
   readonly serverId: string;
@@ -65,11 +64,11 @@ export interface AgentConnection {
   readonly proposals?: ReplicatedState<GuestProposal[]>;
   readonly owner?: boolean;
   readonly approvals?: ReplicatedState<Approval[]>;
+  readonly approvalPolicy?: ReplicatedState<ApprovalPolicy>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
   readonly closed: Promise<Error | undefined>;
-  readonly mismatch?: string;
   readonly readOnly?: boolean;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   webhook(
@@ -122,8 +121,6 @@ function lastingSettings(
   };
 }
 
-const MISMATCHES = new Set(['contract_mismatch', 'upgrade_required']);
-
 const ended = (link: PortLink): Promise<never> =>
   link.ended.then((reason) => {
     throw reason ?? new Error('the agent closed the link');
@@ -135,11 +132,7 @@ export async function connectAgent(
 ): Promise<AgentConnection> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const link = new PortLink(endpoint);
-  const peer = greeted(await link.hello);
-  if (peer.protocol !== LINK_PROTOCOL) {
-    link.close('link protocol mismatch');
-    return mismatched(peer.serverId, peer.protocol);
-  }
+  const serverId = await link.hello;
   const host = createHost({ name: `follower:${crypto.randomUUID()}`, kind: 'client' });
   host.connect(link);
   const get = (contract: Parameters<typeof host.get>[0]) =>
@@ -166,8 +159,6 @@ export async function connectAgent(
   } catch (error) {
     release();
     link.close('handshake failed');
-    if (isChordError(error) && MISMATCHES.has(error.code))
-      return mismatched(peer.serverId, peer.protocol);
     throw error;
   }
   const root: Root = (run, rootOptions) => host.root(run, rootOptions);
@@ -205,7 +196,7 @@ export async function connectAgent(
     return reason;
   });
   return {
-    serverId: peer.serverId,
+    serverId,
     readOnly: controlHandle.kind === 'view',
     control,
     transcript: hold<ConversationView>(state('state')),
@@ -226,6 +217,7 @@ export async function connectAgent(
     viewOnly: controlHandle.kind === 'view',
     owner: pagesHandle.kind === 'pages',
     approvals: hold<Approval[]>(state('approvals')),
+    approvalPolicy: hold<ApprovalPolicy>(state('approvalPolicy')),
     settings: lastingSettings(settings, hold),
     remote,
     pages,

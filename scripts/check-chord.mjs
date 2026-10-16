@@ -61,8 +61,7 @@ export function checkImports(file, source) {
 export function nestedChords(lock) {
   return Object.entries(lock.packages ?? {})
     .filter(([path]) => path.endsWith(`/node_modules/${CHORD}`))
-    .map(([path, entry]) => ({ path, version: entry.version }))
-    .filter(({ path }) => !path.startsWith('node_modules/slicc-agent-4/'));
+    .map(([path, entry]) => ({ path, version: entry.version }));
 }
 
 function owner(path) {

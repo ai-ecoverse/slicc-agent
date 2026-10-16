@@ -1,21 +1,19 @@
 import { createHost, isChordError, type Readable, replicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import { type AgentConnection, lasting } from '../client.ts';
-import { mismatched } from '../mismatch.ts';
 import {
   type AgentControl,
   AgentGuestService,
   type AgentSettings,
   CONTROL_METHODS,
+  type GUEST_METHODS,
   type GuestProposal,
   type GuestShown,
   type SendResponse,
 } from '../services.ts';
 import { AGENT_HOST, kept, plain, type Remote, replicated } from '../serving.ts';
-import { greeted, LINK_PROTOCOL, type PortEndpoint, PortLink } from '../wire.ts';
-import type { Proposed, ProposeRequest } from './index.ts';
-
-const MISMATCHES = new Set(['contract_mismatch', 'upgrade_required']);
+import { type PortEndpoint, PortLink } from '../wire.ts';
+import type { GuestOpened, Proposed, ProposeRequest } from './index.ts';
 
 export const GUEST_ONLY = 'a guest can only watch and send messages';
 export const SEAT_REFUSED = "This guest link isn't valid any more.";
@@ -38,20 +36,13 @@ export interface GuestConnection extends AgentConnection {
   propose(request: ProposeRequest): Promise<Proposed>;
 }
 
-export async function connectGuest(
-  endpoint: PortEndpoint
-): Promise<GuestConnection | AgentConnection> {
+export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnection> {
   const link = new PortLink(endpoint);
-  let hello: string;
+  let serverId: string;
   try {
-    hello = await link.hello;
+    serverId = await link.hello;
   } catch {
     throw refusal(SEAT_REFUSED);
-  }
-  const peer = greeted(hello);
-  if (peer.protocol !== LINK_PROTOCOL) {
-    link.close('link protocol mismatch');
-    return mismatched(peer.serverId, peer.protocol);
   }
   const host = createHost({ name: `guest:${crypto.randomUUID()}`, kind: 'client' });
   host.connect(link);
@@ -70,11 +61,6 @@ export async function connectGuest(
       }),
     ]);
   } catch (error) {
-    if (isChordError(error) && MISMATCHES.has(error.code)) {
-      handle.release();
-      link.close('handshake failed');
-      return mismatched(peer.serverId, peer.protocol);
-    }
     return fail(isChordError(error) && error.code === 'forbidden' ? refusal(SEAT_REFUSED) : error);
   }
   if (handle.kind !== 'guest') return fail(refusal(SEAT_REFUSED));
@@ -83,19 +69,24 @@ export async function connectGuest(
   const proposalsMember = handle.proposals as Readable<GuestProposal[] | undefined>;
   const keeping = [transcriptMember, seatMember, proposalsMember].map(kept);
   await Promise.race([Promise.all(keeping.map((keep) => keep.ready)), link.ended]);
-  const call = handle.propose as (args: unknown[], ctx: unknown) => Promise<Proposed>;
-  const propose = async (request: ProposeRequest) => {
-    try {
-      return await host.root((ctx) => call([request], ctx), {});
-    } catch (error) {
-      throw plain(error);
-    }
-  };
+  const through =
+    <T>(name: (typeof GUEST_METHODS)[number]) =>
+    async (...args: unknown[]): Promise<T> => {
+      const call = handle[name] as (args: unknown[], ctx: unknown) => Promise<T>;
+      try {
+        return await host.root((ctx) => call(args, ctx), {});
+      } catch (error) {
+        throw plain(error);
+      }
+    };
+  const propose = (request: ProposeRequest) => through<Proposed>('propose')(request);
   const guest = seatMember.value as GuestShown;
   const refuse = () => Promise.reject(refusal(GUEST_ONLY));
   const control = Object.fromEntries(
     CONTROL_METHODS.map((name) => [name, refuse])
   ) as unknown as AgentControl;
+  control.guestOpen = (draft) => through<GuestOpened>('guestOpen')(draft);
+  control.guestRevoke = (id) => through<{ revoked: boolean }>('guestRevoke')(id);
   control.send = async (request): Promise<SendResponse> => {
     if (request.attachments?.length)
       return {
@@ -137,7 +128,7 @@ export async function connectGuest(
     dismissMoved: refuse,
   };
   return {
-    serverId: peer.serverId,
+    serverId,
     guest,
     control,
     transcript: transcript.state,

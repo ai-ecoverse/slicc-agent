@@ -1,6 +1,11 @@
 import type { Context, JsonValue, RemoteContract, ReplicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Approval, ApprovalAnswer, ApprovalDecided } from './approvals/index.ts';
+import type {
+  ApprovalPolicy,
+  ApprovalPolicyChange,
+  ApprovalPolicySet,
+} from './approvals/policy.ts';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
@@ -107,6 +112,7 @@ export interface AgentControl {
   toolLabel(agentId: string, callIds: string[], context: Context): Promise<string | null>;
   guestOpen(draft: GuestDraft, context: Context): Promise<GuestOpened>;
   guestRevoke(id: string, context: Context): Promise<{ revoked: boolean }>;
+  approvalPolicySet(change: ApprovalPolicyChange, context: Context): Promise<ApprovalPolicySet>;
   decide(
     id: string,
     decision: ApprovalAnswer,
@@ -278,8 +284,16 @@ export const CONTROL_METHODS = keys<AgentControl>({
   toolLabel: true,
   guestOpen: true,
   guestRevoke: true,
+  approvalPolicySet: true,
   decide: true,
 });
+
+export const OWNER_DEVICE_METHODS: readonly (keyof AgentControl & string)[] = [
+  'decide',
+  'guestOpen',
+  'guestRevoke',
+  'approvalPolicySet',
+];
 
 export const CONTROL_READS: readonly (keyof AgentControl & string)[] = [
   'wait',
@@ -292,7 +306,7 @@ export const CONTROL_READS: readonly (keyof AgentControl & string)[] = [
 
 export const AgentControl: RemoteContract = contract('slicc.agent.control', {
   control: { methods: CONTROL_METHODS },
-  view: { methods: CONTROL_READS },
+  view: { methods: [...CONTROL_READS, ...OWNER_DEVICE_METHODS] },
 });
 
 export type Delivered = 'run' | 'steer' | 'follow-up';
@@ -314,6 +328,7 @@ export interface AgentTranscript {
   readonly labels: ReplicatedState<Record<string, string>>;
   readonly guests: ReplicatedState<GuestSeat[]>;
   readonly approvals: ReplicatedState<Approval[]>;
+  readonly approvalPolicy: ReplicatedState<ApprovalPolicy>;
 }
 
 export interface PrivateRevision {
@@ -343,6 +358,7 @@ export const TRANSCRIPT_STATES = keys<AgentTranscript>({
   labels: true,
   guests: true,
   approvals: true,
+  approvalPolicy: true,
 });
 
 export const AgentTranscript: RemoteContract = contract('slicc.agent.transcript', {
@@ -382,11 +398,13 @@ export interface AgentGuest {
   readonly seat: ReplicatedState<GuestShown>;
   readonly proposals: ReplicatedState<GuestProposal[]>;
   propose(request: ProposeRequest, context: Context): Promise<Proposed>;
+  guestOpen(draft: GuestDraft, context: Context): Promise<GuestOpened>;
+  guestRevoke(id: string, context: Context): Promise<{ revoked: boolean }>;
 }
 
 export const GUEST_STATES = ['transcript', 'seat', 'proposals'] as const;
 
-export const GUEST_METHODS = ['propose'] as const;
+export const GUEST_METHODS = ['propose', 'guestOpen', 'guestRevoke'] as const;
 
 export const AgentGuestService: RemoteContract = contract('slicc.agent.guest', {
   guest: { state: GUEST_STATES, methods: GUEST_METHODS },

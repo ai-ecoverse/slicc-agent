@@ -7,19 +7,6 @@ import { Emitter } from './emitter.ts';
 
 export const KEYS_MOVED = 'keys-moved';
 
-export const MISMATCH = 'agent-mismatch';
-
-export function mismatchBanner(text: string): Notice {
-  return {
-    id: MISMATCH,
-    tone: 'warning',
-    title: "This tab can't follow that SLICC",
-    body: text,
-    actions: [],
-    dismissible: false,
-  };
-}
-
 function servers(names: readonly string[], lead: boolean): string {
   if (names.length > 1) return `MCP servers: ${names.join(', ')}`;
   return `${lead ? 'the' : 'and the'} MCP server ${names[0]}`;
@@ -48,15 +35,13 @@ export type HostNotices = Pick<NoticesPort, 'list' | 'act' | 'dismiss' | 'on'>;
 export class NoticesAdapter extends Emitter<{ notices: readonly Notice[] }> implements NoticesPort {
   readonly #settings: AgentSettings;
   readonly #report: Report;
-  readonly #mismatch: readonly Notice[];
   readonly #host: HostNotices | undefined;
   #hidden = false;
 
-  constructor(settings: AgentSettings, report: Report, mismatch?: string, host?: HostNotices) {
+  constructor(settings: AgentSettings, report: Report, host?: HostNotices) {
     super();
     this.#settings = settings;
     this.#report = report;
-    this.#mismatch = mismatch ? [mismatchBanner(mismatch)] : [];
     this.#host = host;
     settings.state.subscribe(() => this.emit('notices', this.list()));
     host?.on('notices', () => this.emit('notices', this.list()));
@@ -68,7 +53,7 @@ export class NoticesAdapter extends Emitter<{ notices: readonly Notice[] }> impl
 
   #agent(): readonly Notice[] {
     const moved = this.#settings.state.value?.moved;
-    return [...this.#mismatch, ...(moved?.length && !this.#hidden ? [movedNotice(moved)] : [])];
+    return moved?.length && !this.#hidden ? [movedNotice(moved)] : [];
   }
 
   #hosts(id: string): Notice | undefined {

@@ -1,5 +1,5 @@
 import type { Context, Host, ReplicatedState } from '@earendil-works/chord';
-import { replicatedState } from '@earendil-works/chord';
+import { forbidden, replicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
 import type { Approval } from '../approvals/index.ts';
@@ -7,6 +7,7 @@ import type { AgentGuest, GuestProposal, GuestShown } from '../services.ts';
 import type { AgentPrincipal, GuestPrincipal } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import type { Guests } from './index.ts';
+import { GUESTS_MANAGE_DENIED, GUESTS_MANAGE_LATER } from './policy.ts';
 import { guestView } from './view.ts';
 
 export function proposalsOf(items: readonly Approval[] | undefined, seat: string): GuestProposal[] {
@@ -21,6 +22,11 @@ export function proposalsOf(items: readonly Approval[] | undefined, seat: string
       decidedAt: item.decidedAt ?? null,
     }));
 }
+
+const managing = (guests: Pick<Guests, 'policy'>): Promise<never> =>
+  Promise.reject(
+    forbidden(guests.policy().manageGuests === 'deny' ? GUESTS_MANAGE_DENIED : GUESTS_MANAGE_LATER)
+  );
 
 export function guestOpener(
   guests: Guests,
@@ -62,6 +68,8 @@ export function guestOpener(
         seat,
         proposals,
         propose: (request, using) => guests.propose(principal, request, using),
+        guestOpen: () => managing(guests),
+        guestRevoke: () => managing(guests),
       },
       dispose() {
         off();

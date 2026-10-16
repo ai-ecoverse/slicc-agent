@@ -52,7 +52,7 @@ export function shown(item: Item, agentName: string | undefined): Approval {
     agentId: item.agentId,
     ...(agentName ? { agentName } : {}),
     always: false as const,
-    ...(item.verdict && item.verdict.decision !== 'unsure'
+    ...(item.verdict
       ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } }
       : {}),
   };
@@ -87,7 +87,7 @@ export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements Approv
     super();
     this.#connection = connection;
     this.#host = host;
-    this.#ours = !connection.readOnly && !connection.mismatch;
+    this.#ours = !connection.guest;
     if (this.#ours || host?.decide) this.decide = (...args) => this.#route(...args);
     this.#listed = new Set(this.#agent().map((approval) => approval.id));
     connection.approvals?.subscribe(() => this.#changed());

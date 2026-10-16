@@ -1,5 +1,13 @@
 import { defineDoc } from '@earendil-works/pi-durable';
 import type { ApprovalTier } from '../approvals/record.ts';
+import {
+  DAY_MS,
+  DEFAULT_GUEST_POLICY,
+  type GuestPolicy,
+  gateKind,
+  gateRefusal,
+  MAX_SEAT_DAYS,
+} from './policy.ts';
 
 export type GuestGate = ApprovalTier | 'off';
 
@@ -43,7 +51,7 @@ export const GuestsDoc = defineDoc<GuestsState>({
   initial: () => ({ seats: {} }),
 });
 
-export const MAX_SEAT_MS = 30 * 24 * 60 * 60 * 1000;
+export const MAX_SEAT_MS = MAX_SEAT_DAYS * DAY_MS;
 export const MAX_LABEL = 64;
 const MAX_ID = 256;
 
@@ -61,20 +69,27 @@ export function isGate(value: unknown): value is GuestGate {
   return /^scoop:\S+$/.test(value);
 }
 
-export function checkDraft(draft: GuestDraft, now: number): string | null {
+export function checkDraft(
+  draft: GuestDraft,
+  now: number,
+  policy: GuestPolicy = DEFAULT_GUEST_POLICY
+): string | null {
   if (typeof draft?.id !== 'string' || !draft.id || draft.id.length > MAX_ID)
     return 'A guest seat needs an id from the tray hub.';
   if (!cleanLabel(draft.label)) return 'A guest seat needs a label.';
   if (!isGate(draft.gates?.messages) || !isGate(draft.gates?.tools))
     return 'A guest seat needs a known gate for messages and for tools.';
-  if (draft.gates.tools === 'off' || draft.gates.tools === 'cone')
-    return "A guest's tool calls need a review: by a person, the judge or a scoop.";
+  if (!policy.allowedMessageGates.includes(gateKind(draft.gates.messages)))
+    return gateRefusal("a guest's messages", policy.allowedMessageGates);
+  if (!policy.allowedToolGates.includes(gateKind(draft.gates.tools)))
+    return gateRefusal("a guest's tool calls", policy.allowedToolGates);
   const { expiresAt } = draft;
   if (expiresAt !== null && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)))
     return 'A guest seat expires at a time, or never.';
   if (expiresAt !== null && expiresAt <= now) return 'That expiry has already passed.';
-  if (expiresAt !== null && expiresAt - now > MAX_SEAT_MS)
-    return 'A guest seat lasts at most 30 days.';
+  const days = policy.maxSeatDays;
+  if (expiresAt !== null && expiresAt - now > days * DAY_MS)
+    return `A guest seat lasts at most ${days} ${days === 1 ? 'day' : 'days'}.`;
   return null;
 }
 
