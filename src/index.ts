@@ -163,7 +163,7 @@ export {
 } from './sqlite.ts';
 export { type SystemFacts, systemSection } from './system.ts';
 export { UPLOADS, type Uploads, upload } from './uploads.ts';
-export { LINK_PROTOCOL, type PortEndpoint, PortLink } from './wire.ts';
+export { type PortEndpoint, PortLink } from './wire.ts';
 export {
   type KernelPorts,
   kernelPort,

@@ -29,8 +29,7 @@ export class GuestAdapter extends Emitter<GuestEvents> implements GuestPort {
 
   unavailable(): string | null {
     const connection = this.#connection;
-    if (connection.mismatch || connection.viewOnly || connection.guest || !connection.guests)
-      return NO_CONTROL;
+    if (connection.viewOnly || connection.guest || !connection.guests) return NO_CONTROL;
     if (connection.owner === false) return NO_OWNER;
     return this.#hub ? null : NO_HUB;
   }
