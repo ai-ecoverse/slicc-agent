@@ -131,6 +131,8 @@ test('an owner invites a guest through the hub, the guest watches the cone and i
     out.guest = guest.guest;
     const guestModel = createAgentModel(guest);
     await guestModel.agent.ready();
+    out.seat = guestModel.seat;
+    out.ownerSeat = 'seat' in model;
     await until(() => said(guestModel).includes('agent: Watched.'), 'the guest to watch');
     await until(() => model.guests.list()[0]?.connected, 'the seat to show connected');
     out.guestSees = said(guestModel);
@@ -179,6 +181,20 @@ test('an owner invites a guest through the hub, the guest watches the cone and i
     },
   ]);
   assert.equal(result.guest.name, 'sliccy');
+  assert.deepEqual(Object.keys(result.seat).sort(), [
+    'agentId',
+    'expiresAt',
+    'gates',
+    'id',
+    'label',
+  ]);
+  assert.deepEqual(
+    [result.seat.id, result.seat.label, result.seat.agentId],
+    ['seat-1', 'Anna', 'cone']
+  );
+  assert.deepEqual(result.seat.gates, { messages: 'off', tools: 'user' });
+  assert.equal(typeof result.seat.expiresAt, 'number');
+  assert.equal(result.ownerSeat, false);
   assert.deepEqual(result.guestSees, ['owner: Owner speaking.', 'agent: Watched.']);
   assert.deepEqual(result.ownerSees, [
     'owner: Owner speaking.',

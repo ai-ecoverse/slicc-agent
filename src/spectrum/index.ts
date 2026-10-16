@@ -1,5 +1,6 @@
 import type { MonitorSection } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { AgentConnection } from '../client.ts';
+import type { GuestGates } from '../guests/seats.ts';
 import { AgentAdapter } from './agent-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { GuestAdapter, type GuestHub } from './guest-port.ts';
@@ -54,6 +55,21 @@ export { type Login, SETTINGS_KEY, SettingsAdapter } from './settings-port.ts';
 export { SprinkleAdapter } from './sprinkle-port.ts';
 export { TrayAdapter } from './tray-port.ts';
 
+export interface GuestSeatShown {
+  id: string;
+  label: string;
+  agentId: string;
+  expiresAt: number | null;
+  gates: GuestGates;
+}
+
+function seatOf(connection: AgentConnection): { seat?: GuestSeatShown } {
+  const guest = connection.guest;
+  if (!guest) return {};
+  const { id, label, agentId, expiresAt, gates } = guest;
+  return { seat: { id, label, agentId, expiresAt, gates: { ...gates } } };
+}
+
 export function createAgentModel(
   connection: AgentConnection,
   options: {
@@ -74,6 +90,7 @@ export function createAgentModel(
   notices: NoticesAdapter;
   page: PageAdapter | null;
   guests: GuestAdapter;
+  seat?: GuestSeatShown;
 } {
   const agent = new AgentAdapter(connection);
   const report = (text: string) => agent.notify(text);
@@ -81,6 +98,7 @@ export function createAgentModel(
   return {
     agent,
     guests: new GuestAdapter(connection, options.guests ?? null),
+    ...seatOf(connection),
     page: options.page && run ? new PageAdapter(connection, agent, { ...options.page, run }) : null,
     settings: new SettingsAdapter(
       connection.settings,
