@@ -1,11 +1,13 @@
 import type { Message, SystemMessage, UserMessage } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { GuestProposal } from '../services.ts';
 
+export const APPROVED = 'It was approved.';
 export const UNANSWERED = 'Nobody approved this in time.';
 export const DECLINED = 'It was declined.';
 export const WITHDRAWN = 'It was withdrawn.';
 
 const ENDED: Record<string, string> = {
+  approved: APPROVED,
   unanswered: UNANSWERED,
   rejected: DECLINED,
   withdrawn: WITHDRAWN,
@@ -13,10 +15,11 @@ const ENDED: Record<string, string> = {
 
 export function proposalQueue(
   proposals: readonly GuestProposal[] | undefined,
-  label: string
+  label: string,
+  seat: string
 ): UserMessage[] {
   return (proposals ?? [])
-    .filter((proposal) => proposal.state === 'pending')
+    .filter((proposal) => proposal.state === 'pending' || proposal.state === 'queued')
     .map((proposal) => ({
       id: `g${proposal.id}`,
       role: 'user',
@@ -26,6 +29,7 @@ export function proposalQueue(
       mode: 'queue',
       from: label,
       origin: 'guest',
+      seat,
     }));
 }
 

@@ -1,5 +1,5 @@
 import { defineDoc } from '@earendil-works/pi-durable';
-import type { ApprovalTier } from '../approvals/record.ts';
+import type { ApprovalTier, DecidedBy } from '../approvals/record.ts';
 import {
   DAY_MS,
   DEFAULT_GUEST_POLICY,
@@ -24,11 +24,15 @@ export type GuestDraft = {
   gates: GuestGates;
 };
 
+export type SeatSubmission = { id: string; approval: string | null; tools: GuestGate };
+
 export type SeatRecord = GuestDraft & {
   createdAt: number;
   epoch: number;
   revoked: number | null;
   delivered?: string[];
+  submissions?: SeatSubmission[];
+  always?: { by: DecidedBy | null; approval: string; at: number };
 };
 
 export interface GuestSeat {

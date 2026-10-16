@@ -388,7 +388,7 @@ export interface GuestShown {
 export interface GuestProposal {
   id: string;
   text: string;
-  state: 'pending' | 'approved' | 'rejected' | 'unanswered' | 'withdrawn';
+  state: 'queued' | 'pending' | 'approved' | 'rejected' | 'unanswered' | 'withdrawn';
   reason: string | null;
   createdAt: number;
   decidedAt: number | null;

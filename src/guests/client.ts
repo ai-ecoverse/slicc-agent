@@ -24,6 +24,7 @@ const SAID: Record<string, string> = {
   'too-long': 'That message is too long for a guest seat.',
   gone: 'The cone this seat shares is gone.',
   unavailable: "Messages from guests need a review, and this agent can't review them yet.",
+  overflow: 'Too many of your messages are waiting for approval. Try again once one is answered.',
 };
 
 export const proposedSentence = (reason: string): string =>
@@ -99,8 +100,8 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     const proposed = await propose({ text: request.text, requestId: request.requestId });
     if (proposed.state === 'submitted')
       return { accepted: true, submissionId: proposed.submissionId, error: null };
-    if (proposed.state === 'pending')
-      return { accepted: true, submissionId: proposed.approval, error: null };
+    if (proposed.state === 'queued')
+      return { accepted: true, submissionId: proposed.review, error: null };
     return {
       accepted: false,
       submissionId: null,

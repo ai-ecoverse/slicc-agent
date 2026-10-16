@@ -43,9 +43,27 @@ const kernel = params.has('kernel');
 const port = kernelPort(self);
 let commits = 0;
 
+const crash = params.get('crash');
+const delivery = (writes) =>
+  writes.some(
+    (write) => write.type === 'submission' && write.value.requestId?.startsWith('guest:')
+  );
+
+function crashing(storage) {
+  if (!crash) return storage;
+  const commit = storage.commit.bind(storage);
+  storage.commit = async (writes, context) => {
+    if (!delivery(writes)) return commit(writes, context);
+    if (crash === 'after') await commit(writes, context);
+    self.postMessage({ crashed: crash });
+    return new Promise(() => {});
+  };
+  return storage;
+}
+
 async function start() {
   const directory = params.get('directory');
-  const storage = directory ? await openOpfsSqliteStorage({ directory }) : undefined;
+  const storage = directory ? crashing(await openOpfsSqliteStorage({ directory })) : undefined;
   const registry = createRegistry();
   let env;
   if (kernel) {
@@ -64,8 +82,10 @@ async function start() {
       commits += 1;
       return agent.harness.commit(...args);
     },
+    documentState: (...args) => agent.harness.documentState(...args),
   };
   const ttlMs = params.has('ttl') ? { ttlMs: Number(params.get('ttl')) } : {};
+  if (params.has('native')) return hostAgent(agent);
   return hostAgent(agent, { approvals: await attachApprovals({ harness, ...ttlMs }) });
 }
 
@@ -73,6 +93,8 @@ const host = start();
 self.addEventListener('message', ({ data }) => {
   if (data?.commits) data.commits.postMessage(commits);
   if (data?.seen) data.seen.postMessage(seen);
+  if (data?.reviews)
+    void host.then((ready) => data.reviews.postMessage(ready.guests.reviews.value ?? null));
   if (data?.seat)
     void host.then((ready) => data.reply.postMessage(ready.guests.record(data.seat) ?? null));
   if (!data?.approve) return;

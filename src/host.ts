@@ -240,6 +240,7 @@ export async function hostAgent(
     agents: agent.agents,
     approvals,
     policy,
+    reviews: agent.reviews,
     context,
   });
   const control: AgentControl = {
@@ -313,7 +314,7 @@ export async function hostAgent(
     settings,
     remote,
     pages,
-    guest: guestOpener(guests, agent.agents, mounted.views, context, approvals.state),
+    guest: guestOpener(guests, agent.agents, mounted.views, context),
     decide: (by) => (id, decision, reason, using) =>
       approvals.decide(id, decision, reason, by, using),
   });
