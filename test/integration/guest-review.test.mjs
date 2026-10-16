@@ -396,6 +396,7 @@ test('the guest is told each outcome: approved, declined, or that nobody approve
     'Anna asked “Delete the repo”: declined',
     'Anna asked “Anyone there?”: nobody approved it in time',
   ]);
+  for (const line of seen.asked) assert.match(line, /^Anna asked \u201c[^"\u201c\u201d]+\u201d: /);
   assert.deepEqual(seen.guestSees, ['guest(Anna): Please add a test', 'agent: Sure.']);
   assert.deepEqual(seen.ownerSees, seen.guestSees);
   if (env.REVIEW_GUEST_SHOT || env.REVIEW_OWNER_SHOT) {
