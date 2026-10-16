@@ -103,6 +103,6 @@ test('the model gets the text of MCP resource tools, lick decisions, refused sco
   assert.equal(seen.scoop[1].name, 'codemode');
   assert.match(
     seen.scoop[1].text,
-    /Output:\nrefused: Tool call blocked: \/etc\/hostname is outside this scoop's folders\./
+    /Output:\n+refused: Tool call blocked: \/etc\/hostname is outside this scoop's folders\./
   );
 });
