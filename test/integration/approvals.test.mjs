@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { env } from 'node:process';
 import { after, test } from 'node:test';
 import { launch } from './chrome.mjs';
 
@@ -311,4 +313,154 @@ test("bios's own sudo approvals and the agent's guest approvals show together, a
   assert.deepEqual(seen.decided, [['sudo-1', 'once']]);
   assert.deepEqual(seen.afterSudo, [seen.guest]);
   assert.equal(seen.left, 0);
+});
+
+async function viewport(page, width) {
+  await page.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await page.send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-color-scheme', value: 'light' }],
+  });
+}
+
+async function render(page, readOnly) {
+  await page.evaluate(async (readOnly) => {
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    const local = await globalThis.t.owner.connect(readOnly ? { readOnly: true } : {});
+    const model = createAgentModel(local, { storage: localStorage });
+    const app = document.createElement('slicc-app');
+    app.style.cssText = 'display:block;width:100vw;height:100vh';
+    document.body.style.margin = '0';
+    document.body.append(app);
+    const dummy = createDummyModel({ storage: localStorage });
+    delete dummy.notices;
+    delete dummy.tabs;
+    delete dummy.approvals;
+    app.model = { ...dummy, ...model };
+    await customElements.whenDefined('slicc-app');
+    await model.agent.ready();
+    const find = (root, selector) => {
+      const found = root.querySelector(selector);
+      if (found) return found;
+      for (const node of root.querySelectorAll('*'))
+        if (node.shadowRoot) {
+          const inner = find(node.shadowRoot, selector);
+          if (inner) return inner;
+        }
+      return null;
+    };
+    globalThis.t.local = local;
+    globalThis.t.model = model;
+    globalThis.t.deep = (selector) => find(document, selector);
+  }, readOnly);
+}
+
+async function shoot(page, name) {
+  if (!env.APPROVAL_SHOTS) return;
+  await mkdir(env.APPROVAL_SHOTS, { recursive: true });
+  for (const width of [1280, 420]) {
+    await viewport(page, width);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await page.screenshot(`${env.APPROVAL_SHOTS}/${name}-${width}.png`);
+  }
+  await viewport(page, 1280);
+}
+
+test("the owner's page asks about a guest's message and tool call in a dialog without Always, and the answer lands in the record", async (t) => {
+  const page = await chrome.page(t);
+  await viewport(page, 1280);
+  await boot(page);
+  await render(page, false);
+  const asked = await page.evaluate(async () => {
+    const { ask, until, deep, message, guest } = globalThis.t;
+    const item = await ask(
+      message({
+        detail: {
+          text: 'Could you add a dark mode toggle to the settings page?',
+          attachments: [{ name: 'mockup.png', mimeType: 'image/png', size: 48213 }],
+        },
+      })
+    );
+    const dialog = await until(
+      () => deep('dialog[data-approval][data-kind="guest-message"]'),
+      'the dialog'
+    );
+    globalThis.t.asked = { item, guest };
+    return {
+      text: deep('[data-guest-text]')?.textContent.trim(),
+      attachments: Boolean(deep('[data-attachments]')),
+      always: Boolean(dialog.querySelector('[data-action="always"]')),
+      actions: [...dialog.querySelectorAll('[data-action]')].map((button) => button.dataset.action),
+    };
+  });
+  assert.equal(asked.text, 'Could you add a dark mode toggle to the settings page?');
+  assert.equal(asked.attachments, true);
+  assert.equal(asked.always, false);
+  assert.ok(asked.actions.includes('once'));
+  assert.ok(asked.actions.includes('deny'));
+  await shoot(page, 'guest-message');
+  const tool = await page.evaluate(async () => {
+    const { ask, until, deep, record, local, asked } = globalThis.t;
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    deep('dialog[data-approval][data-kind="guest-message"] [data-action="once"]').click();
+    await until(() => record(local, asked.item.id)?.state === 'approved', 'the approval');
+    const item = await ask({
+      kind: 'guest-tool',
+      seat: 'seat-1',
+      agentId: 'cone',
+      requester: asked.guest,
+      tier: 'user',
+      detail: { tool: 'bash', summary: 'git push origin dark-mode' },
+    });
+    const dialog = await until(
+      () => deep('dialog[data-approval][data-kind="guest-tool"]'),
+      'the tool dialog'
+    );
+    globalThis.t.tool = item;
+    return {
+      text: dialog.textContent.replace(/\s+/g, ' '),
+      always: Boolean(dialog.querySelector('[data-action="always"]')),
+      decidedBy: record(local, asked.item.id).decidedBy,
+    };
+  });
+  assert.match(tool.text, /git push origin dark-mode/);
+  assert.equal(tool.always, false);
+  assert.equal(tool.decidedBy, 'owner');
+  await shoot(page, 'guest-tool');
+  const denied = await page.evaluate(async () => {
+    const { until, deep, record, local, tool, owner } = globalThis.t;
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    deep('dialog[data-approval][data-kind="guest-tool"] [data-action="deny"]').click();
+    await until(() => record(local, tool.id)?.state === 'rejected', 'the denial');
+    await until(() => !deep('dialog[data-approval]'), 'the dialog to close');
+    await owner.release();
+    return record(local, tool.id).state;
+  });
+  assert.equal(denied, 'rejected');
+});
+
+test('a follower without Control shows a guest message as a notice to answer on the device in control', async (t) => {
+  const page = await chrome.page(t);
+  await viewport(page, 1280);
+  await boot(page);
+  await render(page, true);
+  const shown = await page.evaluate(async () => {
+    const { ask, until, deep, message, owner } = globalThis.t;
+    await ask(message());
+    const notice = await until(() => deep('[data-approval-notice]'), 'the notice');
+    const text = notice.textContent.replace(/\s+/g, ' ').trim();
+    const dialog = Boolean(deep('dialog[data-approval]'));
+    globalThis.t.release = () => owner.release();
+    return { text, dialog };
+  });
+  assert.match(shown.text, /waits for approval on the device in control/);
+  assert.equal(shown.dialog, false);
+  await shoot(page, 'guest-notice');
+  await page.evaluate(() => globalThis.t.release());
 });

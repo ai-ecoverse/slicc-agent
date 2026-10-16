@@ -13,18 +13,9 @@ import { TrayAdapter } from './tray-port.ts';
 
 export { AgentAdapter, CONE } from './agent-port.ts';
 export {
-  type Approval,
-  type ApprovalDecision,
-  type ApprovalEnd,
-  type ApprovalRequester,
   ApprovalsAdapter,
-  type ApprovalsEvents,
-  type ApprovalVerdict,
-  type GuestMessageApproval,
-  type GuestToolApproval,
   type HostApprovals,
   NOT_HERE,
-  type SudoApproval,
   shown as shownApproval,
 } from './approvals-port.ts';
 export { ChangesAdapter, type ChangesEvents } from './changes-port.ts';

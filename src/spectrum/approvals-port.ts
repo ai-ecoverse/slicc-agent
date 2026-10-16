@@ -1,66 +1,15 @@
+import type {
+  Approval,
+  ApprovalDecision,
+  ApprovalEnd,
+  ApprovalRequester,
+  ApprovalsEvents,
+  ApprovalsPort,
+} from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Approval as Item } from '../approvals/record.ts';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
-
-export type ApprovalDecision = 'once' | 'always' | 'deny';
-
-export interface ApprovalRequester {
-  kind: 'agent' | 'user' | 'guest';
-  name: string;
-  agentId?: string;
-  where?: string;
-}
-
-export interface ApprovalVerdict {
-  decision: 'allow' | 'deny';
-  reason: string;
-}
-
-export interface SudoApproval {
-  id: string;
-  kind: 'sudo';
-  requester: ApprovalRequester;
-  command: string;
-  target?: string;
-  cwd?: string;
-  createdAt: number;
-  expiresAt: number;
-  always: boolean;
-  alwaysScope?: 'cwd';
-}
-
-interface GuestApproval {
-  id: string;
-  requester: ApprovalRequester;
-  agentId: string;
-  agentName?: string;
-  createdAt: number;
-  expiresAt: number;
-  always: false;
-  verdict?: ApprovalVerdict;
-}
-
-export interface GuestMessageApproval extends GuestApproval {
-  kind: 'guest-message';
-  text: string;
-  attachments?: readonly { name: string; mimeType: string; size: number }[];
-}
-
-export interface GuestToolApproval extends GuestApproval {
-  kind: 'guest-tool';
-  tool: string;
-  summary: string;
-}
-
-export type Approval = SudoApproval | GuestMessageApproval | GuestToolApproval;
-
-export type ApprovalEnd = 'answered' | 'withdrawn' | 'expired';
-
-export interface ApprovalsEvents {
-  approvals: readonly Approval[];
-  ended: { id: string; reason: ApprovalEnd };
-}
 
 const ENDS: Record<string, ApprovalEnd> = {
   approved: 'answered',
@@ -117,20 +66,13 @@ export function shown(item: Item, agentName: string | undefined): Approval {
   };
 }
 
-export interface HostApprovals {
-  list(): readonly Approval[];
-  on<K extends keyof ApprovalsEvents>(
-    type: K,
-    listener: (detail: ApprovalsEvents[K]) => void
-  ): () => void;
-  decide?(id: string, decision: ApprovalDecision, reason?: string): Promise<void>;
-}
+export type HostApprovals = ApprovalsPort;
 
 export const NOT_HERE = "This request can't be answered in this tab.";
 
 const asked = (item: Item) => item.state === 'pending' && item.tier === 'user';
 
-export class ApprovalsAdapter extends Emitter<ApprovalsEvents> {
+export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements ApprovalsPort {
   readonly #connection: AgentConnection;
   readonly #host: HostApprovals | undefined;
   readonly #ours: boolean;
