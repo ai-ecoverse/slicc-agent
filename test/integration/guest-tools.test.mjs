@@ -604,6 +604,92 @@ test('Always on a guest tool call, once the policy offers it, lets only that exa
   ]);
 });
 
+test('the guest tool call dialog offers Always allow only while the policy does, and Always there records that exact call on the seat', async (t) => {
+  const page = await chrome.page(t);
+  await page.send('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await boot(page, {
+    steps: [bash('echo always'), answer('One.'), bash('echo always'), answer('Two.')],
+  });
+  const seen = await page.evaluate(async () => {
+    const { until, pause, open, mint, join, send, said, results } = globalThis.r;
+    const { local, model } = await open();
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    const app = document.createElement('slicc-app');
+    app.style.cssText = 'display:block;width:100vw;height:100vh';
+    document.body.style.margin = '0';
+    document.body.append(app);
+    const dummy = createDummyModel({ storage: localStorage });
+    delete dummy.notices;
+    delete dummy.tabs;
+    delete dummy.approvals;
+    app.model = { ...dummy, ...model };
+    await customElements.whenDefined('slicc-app');
+    const find = (root, selector) => {
+      const found = root.querySelector(selector);
+      if (found) return found;
+      for (const node of root.querySelectorAll('*'))
+        if (node.shadowRoot) {
+          const inner = find(node.shadowRoot, selector);
+          if (inner) return inner;
+        }
+      return null;
+    };
+    const dialog = () => find(document, 'dialog[data-approval][data-kind="guest-tool"]');
+    const click = async (action) => {
+      await pause(600);
+      dialog().querySelector(`[data-action="${action}"]`).click();
+      await until(() => !dialog(), 'the dialog to close');
+    };
+    const shown = () => ({
+      always: Boolean(dialog().querySelector('[data-action="always"]')),
+      text: dialog().textContent.replace(/\s+/g, ' '),
+    });
+    const seat = await mint('user');
+    const guest = await join(seat);
+    await send(guest, 'First.');
+    await until(dialog, 'the first dialog');
+    const off = shown();
+    await click('deny');
+    await until(() => said().includes('One.'), 'the first run');
+    await local.control.approvalPolicySet(
+      { guests: { always: { tools: true } } },
+      BACKGROUND_CONTEXT
+    );
+    await send(guest, 'Second.');
+    await until(dialog, 'the second dialog');
+    const on = shown();
+    await click('always');
+    await until(() => said().includes('Two.'), 'the second run');
+    const record = local.guests.value.find((entry) => entry.id === seat);
+    const rules = record.alwaysTools.map(({ tool, arguments: args }) => `${tool} ${args}`);
+    const answers = local.approvals.value
+      .filter((item) => item.kind === 'guest-tool')
+      .map((item) => [item.always, item.state, item.answer ?? null]);
+    const out = { off, on, rules, answers, results: results() };
+    await guest.close();
+    return out;
+  });
+  assert.equal(seen.off.always, false, 'no Always while the policy is off');
+  assert.equal(seen.on.always, true, 'Always once the policy offers it');
+  assert.match(seen.on.text, /run exactly this bash call for Anna without asking again/);
+  assert.deepEqual(seen.rules, ['bash {"command":"echo always"}']);
+  assert.deepEqual(seen.answers, [
+    [false, 'rejected', null],
+    [true, 'approved', 'always'],
+  ]);
+  assert.deepEqual(seen.results, [
+    refused('The owner declined this tool call in a run a guest started.'),
+    'always',
+  ]);
+});
+
 test('the gate reaches a conversation stored before it existed, also forked and frozen then thawed', async (t) => {
   const page = await chrome.page(t);
   const directory = `/.slicc/guest-old-${Date.now()}`;
