@@ -1,6 +1,6 @@
 import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { Harness } from '@earendil-works/pi-durable';
+import type { DocumentState, Harness } from '@earendil-works/pi-durable';
 import type { ApprovalJudge, Judgement } from './judge.ts';
 import {
   APPROVAL_MS,
@@ -38,7 +38,7 @@ const deciderOf = (decider: Decider) => (typeof decider === 'string' ? { by: dec
 
 export interface Approvals {
   readonly state: ReplicatedState<Approval[]>;
-  request(draft: ApprovalDraft, context: Context): Promise<Approval>;
+  request(draft: ApprovalDraft & { id?: string }, context: Context): Promise<Approval>;
   decide(
     id: string,
     answer: unknown,
@@ -49,11 +49,12 @@ export interface Approvals {
   settled(id: string, context: Context): Promise<Approval>;
   withdraw(id: string, reason: string | null, context: Context): Promise<Approval | undefined>;
   withdrawSeat(seat: string, context: Context): Promise<number>;
+  expire(id: string, context: Context): Promise<Approval | undefined>;
   close(): void;
 }
 
 export interface ApprovalsAttach {
-  harness: Pick<Harness, 'commit'>;
+  harness: Pick<Harness, 'commit' | 'documentState'>;
   now?: () => number;
   ttlMs?: number;
   judge?: ApprovalJudge;
@@ -73,11 +74,16 @@ function mark(item: Approval, how: Settle, at: number) {
 const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
   guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : draft.always === true;
 
-function fresh(draft: ApprovalDraft, at: number, ttl: number, options: ApprovalsAttach): Approval {
+function fresh(
+  draft: ApprovalDraft & { id?: string },
+  at: number,
+  ttl: number,
+  options: ApprovalsAttach
+): Approval {
   const item = {
     ...draft,
     tier: tierOf(draft.kind, draft.tier, sudoApprover(options.sudoApprover?.())),
-    id: `apr-${crypto.randomUUID()}`,
+    id: draft.id ?? `apr-${crypto.randomUUID()}`,
     state: 'pending',
     decidedBy: null,
     always: offered(options, draft),
@@ -123,6 +129,49 @@ const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: 
   return copy([item])[0] as Approval;
 };
 
+function following(
+  committed: DocumentState<ApprovalsState>,
+  changed: (using: Context, items: Approval[]) => void
+) {
+  const items = () => (committed.value as ApprovalsState).items;
+  let shown = items();
+  return (using: Context) => {
+    const now = items();
+    if (now === shown) return;
+    shown = now;
+    changed(using, copy(now));
+  };
+}
+
+function settledIn(
+  state: ReplicatedState<Approval[]>,
+  id: string,
+  using: Context
+): Promise<Approval> {
+  return new Promise((resolve, reject) => {
+    const signal = using.abortSignal;
+    let done = false;
+    let off: (() => void) | undefined;
+    const finish = (end: () => void) => {
+      done = true;
+      off?.();
+      signal?.removeEventListener('abort', abort);
+      end();
+    };
+    const abort = () => finish(() => reject(signal?.reason));
+    const check = (items: readonly Approval[] | undefined) => {
+      const item = items?.find((entry) => entry.id === id);
+      if (!item) finish(() => reject(new Error(`There is no approval ${id}.`)));
+      else if (item.state !== 'pending') finish(() => resolve(item));
+    };
+    if (signal?.aborted) return abort();
+    check(state.value);
+    if (done) return;
+    signal?.addEventListener('abort', abort, { once: true });
+    off = state.subscribe((items) => check(items));
+  });
+}
+
 export async function attachApprovals(
   options: ApprovalsAttach,
   context: Context = BACKGROUND_CONTEXT
@@ -155,11 +204,19 @@ export async function attachApprovals(
     }
   }, context);
   const state = replicatedState<Approval[]>(startup.items);
+  const committed = (await harness.documentState(
+    ApprovalsDoc,
+    context
+  )) as DocumentState<ApprovalsState>;
+  const follow = following(committed, (using, items) => {
+    state.replace(using, items);
+    arm(items);
+  });
+  committed.subscribe((_value, using) => follow(using));
   const serial = <R>(change: (doc: ApprovalsState) => R, using: Context): Promise<R> => {
     const run = line.then(async () => {
-      const { result, items } = await write(change, using);
-      state.replace(using, items);
-      arm(items);
+      const { result } = await write(change, using);
+      follow(using);
       return result;
     });
     line = run.catch(() => undefined);
@@ -220,12 +277,18 @@ export async function attachApprovals(
   return {
     state,
     async request(draft, using) {
+      let created = true;
       const made = await serial((doc) => {
+        const kept = draft.id && doc.items.find((entry) => entry.id === draft.id);
+        if (kept) {
+          created = false;
+          return copy([kept])[0] as Approval;
+        }
         const item = fresh(draft, now(), ttl, options);
         doc.items.push(item);
         return copy([item])[0] as Approval;
       }, using);
-      if (options.judge && made.state === 'pending' && made.tier === 'agent')
+      if (created && options.judge && made.state === 'pending' && made.tier === 'agent')
         void judging(options.judge, made, using);
       return made;
     },
@@ -246,30 +309,7 @@ export async function attachApprovals(
         return { done: true, state: (item as Approval).state, error: null };
       }, using);
     },
-    settled(id, using) {
-      return new Promise((resolve, reject) => {
-        const signal = using.abortSignal;
-        let done = false;
-        let off: (() => void) | undefined;
-        const finish = (end: () => void) => {
-          done = true;
-          off?.();
-          signal?.removeEventListener('abort', abort);
-          end();
-        };
-        const abort = () => finish(() => reject(signal?.reason));
-        const check = (items: readonly Approval[] | undefined) => {
-          const item = items?.find((entry) => entry.id === id);
-          if (!item) finish(() => reject(new Error(`There is no approval ${id}.`)));
-          else if (item.state !== 'pending') finish(() => resolve(item));
-        };
-        if (signal?.aborted) return abort();
-        check(state.value);
-        if (done) return;
-        signal?.addEventListener('abort', abort, { once: true });
-        off = state.subscribe((items) => check(items));
-      });
-    },
+    settled: (id, using) => settledIn(state, id, using),
     async withdraw(id, reason, using) {
       const [hit] = await serial(
         withdrawWhere((item) => item.id === id, cleanReason(reason)),
@@ -284,6 +324,14 @@ export async function attachApprovals(
           using
         )
       ).length;
+    },
+    async expire(id, using) {
+      return serial((doc) => {
+        const item = doc.items.find((entry) => entry.id === id);
+        if (item?.state === 'pending' && item.expiresAt <= now())
+          settle(item, { state: 'unanswered', by: 'host', reason: REASONS.timeout });
+        return item ? (copy([item])[0] as Approval) : undefined;
+      }, using);
     },
     close() {
       closed = true;

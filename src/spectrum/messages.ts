@@ -13,7 +13,14 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
 import { splitUser } from '../attachments.ts';
-import { GUEST_INPUT_KIND, type GuestInput, guestText } from '../guests/attribution.ts';
+import {
+  ASKED_KIND,
+  askedLine,
+  GUEST_INPUT_KIND,
+  type GuestAsked,
+  type GuestInput,
+  guestText,
+} from '../guests/attribution.ts';
 import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import { mcpLabel } from '../mcp/label.ts';
@@ -321,7 +328,8 @@ function guestUser(
   delivered: Delivered | undefined,
   data: unknown
 ): UserMessage {
-  const name = String((data as Partial<GuestInput> | undefined)?.name ?? '');
+  const input = data as Partial<GuestInput> | undefined;
+  const name = String(input?.name ?? '');
   const shown = shownUser(message.content, `ref:${id.slice(1)}:0`);
   return {
     id,
@@ -332,6 +340,7 @@ function guestUser(
     ...(delivered ? { delivered } : {}),
     from: name,
     origin: 'guest',
+    ...(typeof input?.seat === 'string' ? { seat: input.seat } : {}),
   };
 }
 
@@ -523,6 +532,17 @@ function thawed(id: string, entry: EntryRecord): SystemMessage {
   };
 }
 
+function asked(id: string, entry: EntryRecord): SystemMessage {
+  const data = (entry.data ?? {}) as Partial<GuestAsked>;
+  return {
+    id,
+    role: 'system',
+    kind: 'notice',
+    text: askedLine(String(data.name ?? ''), String(data.text ?? '')),
+    createdAt: typeof data.at === 'number' ? data.at : 0,
+  };
+}
+
 function secrets(id: string, entry: EntryRecord): SystemMessage {
   const data = (entry.data ?? {}) as { names?: SecretName[] };
   return {
@@ -547,6 +567,7 @@ function entryMessage(
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   if (entry.kind === 'slicc.thawed') out.push(thawed(id, entry));
   else if (entry.kind === SECRETS_KIND) out.push(secrets(id, entry));
+  else if (entry.kind === ASKED_KIND) out.push(asked(id, entry));
   else if (entry.kind === SPRINKLE_KIND) out.push(sprinkleMessage(id, entry));
   else if (entry.kind === 'pi.user' && model)
     out.push(
@@ -646,15 +667,21 @@ export function queued(
     .filter((item) => item.mode !== 'write' && !parseLick(textOf(item.content)))
     .map((item) => {
       const shown = shownUser(item.content);
-      const guest =
-        item.entry?.kind === GUEST_INPUT_KIND ? String(item.entry.data?.name ?? '') : null;
+      const data = item.entry?.data;
+      const guest = item.entry?.kind === GUEST_INPUT_KIND ? String(data?.name ?? '') : null;
+      const seat = typeof data?.seat === 'string' ? { seat: data.seat } : {};
       return {
         id: `q${item.id}`,
         role: 'user' as const,
         ...shown,
         ...(guest === null
           ? {}
-          : { text: guestText(shown.text, guest), from: guest, origin: 'guest' as const }),
+          : {
+              text: guestText(shown.text, guest),
+              from: guest,
+              origin: 'guest' as const,
+              ...seat,
+            }),
         createdAt: at(`q${item.id}`),
         queued: true,
         mode: item.mode === 'steer' ? 'steer' : 'queue',

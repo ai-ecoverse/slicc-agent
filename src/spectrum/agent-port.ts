@@ -460,7 +460,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const guest = this.#connection.guest;
     const proposed =
       guest && guest.agentId === agentId
-        ? proposalQueue(this.#connection.proposals?.value, guest.label)
+        ? proposalQueue(this.#connection.proposals?.value, guest.label, guest.id)
         : [];
     return [...queued(this.#view(agentId), at), ...proposed, ...pending];
   }
