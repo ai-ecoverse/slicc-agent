@@ -54,7 +54,7 @@ test("with a kernel source that has users, the worker chats through the cone's o
       kernel: {
         connect: (options) => {
           connects.push(options ?? null);
-          return kernel.connect();
+          return kernel.connect(options?.user ? { user: options.user } : undefined);
         },
         users: kernel.users,
       },

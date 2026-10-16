@@ -42,7 +42,8 @@ const helpers = () => {
     const owner = await startAgent({
       worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
       kernel: {
-        connect: () => window.kernel.connect(),
+        connect: (options) =>
+          window.kernel.connect(options?.user ? { user: options.user } : undefined),
         ...(users ? { users: window.kernel.users } : {}),
       },
     });

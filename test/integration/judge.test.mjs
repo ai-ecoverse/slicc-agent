@@ -49,7 +49,11 @@ async function boot(page, { query = '', files = {}, users = false } = {}) {
           return worker;
         },
         kernel: users
-          ? { connect: () => kernel.connect(), users: kernel.users }
+          ? {
+              connect: (options) =>
+                kernel.connect(options?.user ? { user: options.user } : undefined),
+              users: kernel.users,
+            }
           : { connect: () => kernel.connect() },
       });
       const ask = (draft, key) =>
