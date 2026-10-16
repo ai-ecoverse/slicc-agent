@@ -16,6 +16,23 @@ export {
 } from './adobe.ts';
 export { type Agent, type AgentOptions, answerText, openAgent } from './agent.ts';
 export {
+  APPROVAL_MS,
+  type Approval,
+  type ApprovalAnswer,
+  type ApprovalDecided,
+  type ApprovalDraft,
+  type ApprovalKind,
+  type ApprovalRequester,
+  type ApprovalState,
+  type Approvals,
+  ApprovalsDoc,
+  type ApprovalTier,
+  type ApprovalVerdict,
+  attachApprovals,
+  type DecidedBy,
+  REASONS,
+} from './approvals/index.ts';
+export {
   FILE_LIMIT,
   IMAGE_LIMIT,
   type SendAttachment,

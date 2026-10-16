@@ -1,6 +1,7 @@
 import { defineDoc } from '@earendil-works/pi-durable';
+import type { ApprovalTier } from '../approvals/record.ts';
 
-export type GuestGate = 'user' | 'agent' | 'cone' | `scoop:${string}` | 'off';
+export type GuestGate = ApprovalTier | 'off';
 
 export type GuestGates = {
   messages: GuestGate;

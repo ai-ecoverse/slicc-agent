@@ -68,6 +68,22 @@ function created(run: () => Promise<string>): Promise<Created> {
   );
 }
 
+function monitorControl(
+  monitor: Pick<Monitor, 'open' | 'close'> | undefined
+): Pick<AgentControl, 'monitorOpen' | 'monitorClose'> {
+  return {
+    monitorOpen: async (lease, resync, context) =>
+      monitor ? monitor.open(lease, resync, context) : { lease: '', ttlMs: 0 },
+    monitorClose: async (lease, context) => monitor?.close(lease, context),
+  };
+}
+
+const noApprovals: AgentControl['decide'] = async () => ({
+  done: false,
+  state: null,
+  error: 'This agent has no approvals.',
+});
+
 function freezerControl(
   freezer: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'> | undefined
 ): Pick<AgentControl, 'freeze' | 'newChat' | 'thaw' | 'discard'> {
@@ -461,9 +477,7 @@ export function createAgentControl(
     ...freezerControl(freezer),
     ...changesControl(changes),
     ...guestControl(guests),
-    monitorOpen: async (lease, resync, context) =>
-      monitor ? monitor.open(lease, resync, context) : { lease: '', ttlMs: 0 },
-    monitorClose: async (lease, context) => monitor?.close(lease, context),
+    ...monitorControl(monitor),
     image: (ref, context) => storedImage(harness, ref, context),
     async unqueue(agentId, id, context) {
       return withdraw(await conversationFor(agentId, context), id, context);
@@ -535,5 +549,6 @@ export function createAgentControl(
     agentCommands: async (agentId) => skills?.commandsFor(agentId) ?? [],
     toolLabel: async (agentId, callIds, context) =>
       labels ? labels.label(agentId, callIds, context) : null,
+    decide: noApprovals,
   };
 }

@@ -2,17 +2,24 @@ import type { MonitorSection } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { AgentConnection } from '../client.ts';
 import type { GuestGates } from '../guests/seats.ts';
 import { AgentAdapter } from './agent-port.ts';
+import { ApprovalsAdapter, type HostApprovals } from './approvals-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { GuestAdapter, type GuestHub } from './guest-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { MonitorAdapter } from './monitor-port.ts';
-import { NoticesAdapter } from './notices-port.ts';
+import { type HostNotices, NoticesAdapter } from './notices-port.ts';
 import { PageAdapter, type PageOptions } from './page-port.ts';
 import { type Login, SettingsAdapter } from './settings-port.ts';
 import { SprinkleAdapter } from './sprinkle-port.ts';
 import { TrayAdapter } from './tray-port.ts';
 
 export { AgentAdapter, CONE } from './agent-port.ts';
+export {
+  ApprovalsAdapter,
+  type HostApprovals,
+  NOT_HERE,
+  shown as shownApproval,
+} from './approvals-port.ts';
 export { ChangesAdapter, type ChangesEvents } from './changes-port.ts';
 export {
   GuestAdapter,
@@ -37,6 +44,7 @@ export {
   monitorSnapshot,
 } from './monitor-port.ts';
 export {
+  type HostNotices,
   KEYS_MOVED,
   MISMATCH,
   mismatchBanner,
@@ -78,9 +86,12 @@ export function createAgentModel(
     monitor?: { extra?: () => readonly MonitorSection[] };
     page?: PageOptions;
     guests?: GuestHub;
+    approvals?: HostApprovals;
+    notices?: HostNotices;
   } = {}
 ): {
   agent: AgentAdapter;
+  approvals: ApprovalsAdapter;
   settings: SettingsAdapter;
   tray: TrayAdapter;
   sprinkles: SprinkleAdapter;
@@ -99,6 +110,7 @@ export function createAgentModel(
     agent,
     guests: new GuestAdapter(connection, options.guests ?? null),
     ...seatOf(connection),
+    approvals: new ApprovalsAdapter(connection, options.approvals),
     page: options.page && run ? new PageAdapter(connection, agent, { ...options.page, run }) : null,
     settings: new SettingsAdapter(
       connection.settings,
@@ -110,7 +122,7 @@ export function createAgentModel(
     sprinkles: new SprinkleAdapter(connection, report),
     memory: new MemoryAdapter(connection, report),
     changes: new ChangesAdapter(connection, report),
-    notices: new NoticesAdapter(connection.settings, report, connection.mismatch),
+    notices: new NoticesAdapter(connection.settings, report, connection.mismatch, options.notices),
     monitor: new MonitorAdapter(
       connection,
       options.monitor?.extra ? { extra: options.monitor.extra } : {}

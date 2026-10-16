@@ -7,6 +7,7 @@ import {
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { Approval } from './approvals/record.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { GuestSeat } from './guests/seats.ts';
@@ -60,11 +61,13 @@ export interface AgentConnection {
   readonly guests?: ReplicatedState<GuestSeat[]>;
   readonly viewOnly?: boolean;
   readonly guest?: GuestShown;
+  readonly approvals?: ReplicatedState<Approval[]>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
   readonly closed: Promise<Error | undefined>;
   readonly mismatch?: string;
+  readonly readOnly?: boolean;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   webhook(
     name: string,
@@ -200,6 +203,7 @@ export async function connectAgent(
   });
   return {
     serverId: peer.serverId,
+    readOnly: controlHandle.kind === 'view',
     control,
     transcript: hold<ConversationView>(state('state')),
     deliveries: hold<Record<string, Delivered>>(state('deliveries')),
@@ -217,6 +221,7 @@ export async function connectAgent(
     labels: hold<Record<string, string>>(state('labels')),
     guests: hold<GuestSeat[]>(state('guests')),
     viewOnly: controlHandle.kind === 'view',
+    approvals: hold<Approval[]>(state('approvals')),
     settings: lastingSettings(settings, hold),
     remote,
     pages,

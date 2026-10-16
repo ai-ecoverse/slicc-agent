@@ -12,6 +12,7 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agent } from './agent.ts';
+import { type Approvals, attachApprovals, type DecidedBy } from './approvals/index.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
@@ -80,6 +81,7 @@ export interface AgentHost {
   readonly users?: UserClients;
   readonly pages: Pages;
   readonly guests: Guests;
+  readonly approvals: Approvals;
   connect(endpoint: PortEndpoint, options?: ConnectOptions): void;
   close(): Promise<void>;
 }
@@ -176,6 +178,7 @@ export async function hostAgent(
     uploads?: Uploads;
     thumbnail?: Thumbnail;
     labels?: LabelsRuntime;
+    approvals?: Approvals;
   } = {}
 ): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -193,6 +196,8 @@ export async function hostAgent(
   const untouch = [state.subscribe(touch), mounted.views.subscribe(touch)];
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
+  const approvals =
+    options.approvals ?? (await attachApprovals({ harness: agent.harness }, context));
   const monitor = createMonitor({
     ...options.monitor,
     harness: agent.harness,
@@ -200,7 +205,13 @@ export async function hostAgent(
     views: mounted.views,
     context,
   });
-  const guests = await createGuests({ harness: agent.harness, agents: agent.agents, context });
+  const guests = await createGuests({
+    harness: agent.harness,
+    agents: agent.agents,
+    pending: approvals.state,
+    withdrawSeat: (seat, using) => approvals.withdrawSeat(seat, using),
+    context,
+  });
   const control = createAgentControl(
     agent.harness,
     agent,
@@ -249,6 +260,7 @@ export async function hostAgent(
     vault: options.secrets?.vault ?? idleVault,
     labels: labels.state,
     guests: guests.seats,
+    approvals: approvals.state,
   };
   const settings = options.settings ?? noSettings;
   const gates = gatedControls(control, slims.shown, shownViews, transcriptService.labels);
@@ -262,6 +274,8 @@ export async function hostAgent(
     remote,
     pages,
     guest: guestOpener(guests, agent.agents, mounted.views, context),
+    decide: (by) => (id, decision, reason, using) =>
+      approvals.decide(id, decision, reason, by, using),
   });
   const offGuests = guests.onEnd((id) => {
     void host.invalidatePrincipal((principal) => guestOf(principal)?.id === id);
@@ -272,6 +286,7 @@ export async function hostAgent(
     agent,
     pages,
     guests,
+    approvals,
     ...(options.users ? { users: options.users } : {}),
     connect(endpoint, connectOptions) {
       if (connectOptions?.guest) {
@@ -297,6 +312,7 @@ export async function hostAgent(
       await monitor.dispose();
       await remote.dispose();
       deliveries.dispose();
+      approvals.close();
       transcript.dispose();
       mounted.dispose();
       labels.dispose();
@@ -326,6 +342,7 @@ interface Served {
   remote: AgentRemote;
   pages: Pages;
   guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
+  decide: (by: DecidedBy) => AgentControl['decide'];
 }
 
 export const CLOSED_TO_GUESTS = 'a guest seat has only its transcript and propose';
@@ -368,13 +385,20 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
   };
 }
 
+const seated = (serving: Served, seat: Seat): AgentControl => ({
+  ...serving.trusted,
+  decide: serving.decide(seat === 'owner' ? 'owner' : 'follower'),
+});
+
 export function serveAgent(serving: Served): Host {
   const host = closedToGuests(createHost({ name: AGENT_HOST, principalKey }));
   const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
-  host.serve(AgentControl, ((_input: unknown, principal: unknown) =>
-    seatOf(principal) === 'view'
-      ? { kind: 'view', ...served(() => serving.viewed, CONTROL_READS) }
-      : { kind: 'control', ...served(() => serving.trusted, CONTROL_METHODS) }) as never);
+  host.serve(AgentControl, ((_input: unknown, principal: unknown) => {
+    const seat = seatOf(principal);
+    if (seat === 'view') return { kind: 'view', ...served(() => serving.viewed, CONTROL_READS) };
+    const control = seated(serving, seat);
+    return { kind: 'control', ...served(() => control, CONTROL_METHODS) };
+  }) as never);
   host.serve(AgentTranscript, ((_input: unknown, principal: unknown) => ({
     kind: 'transcript',
     ...readablesOf(seatOf(principal) === 'view' ? viewing : serving.transcript),
