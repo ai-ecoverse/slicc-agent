@@ -436,6 +436,35 @@ test('a seat whose tools gate this agent does not know gets every tool call in i
   assert.equal(seen.items, 0);
 });
 
+test('a seat whose tools gate is a scoop gets its calls denied at once, since no scoop can answer one yet', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    steps: [
+      bash('touch /tmp/guest-scoop'),
+      answer('Scooped.'),
+      bash('test -e /tmp/guest-scoop && echo ran || echo never'),
+      answer('Checked.'),
+    ],
+  });
+  const seen = await page.evaluate(async () => {
+    const { until, open, mint, join, send, prompt, said, results, items } = globalThis.r;
+    await open();
+    const guest = await join(await mint('scoop:helper'));
+    await send(guest, 'Make a file.');
+    await until(() => said().includes('Scooped.'), 'the guest run');
+    await prompt('Check the file.');
+    await until(() => said().includes('Checked.'), 'the owner check');
+    const out = { results: results(), items: items().length };
+    await guest.close();
+    return out;
+  });
+  assert.deepEqual(seen.results, [
+    refused("No scoop can review a guest's tool call yet, so this one is denied."),
+    'never',
+  ]);
+  assert.equal(seen.items, 0);
+});
+
 test('a guest seat with tools off is refused until the owner allows it, then its runs use tools unasked, and taking off back denies them again', async (t) => {
   const page = await chrome.page(t);
   await boot(page, {

@@ -30,6 +30,7 @@ export const GATE_REASONS = {
   judged: 'The automatic check declined this tool call in a run a guest started',
   unanswered: 'Nobody approved this tool call in a run a guest started in time.',
   unroutable: "The cone can't review a tool call it is itself waiting on.",
+  scoop: "No scoop can review a guest's tool call yet, so this one is denied.",
   withdrawn: 'The review of this tool call was withdrawn.',
 } as const;
 
@@ -102,6 +103,23 @@ async function taintsOf(
   return [...found.values()];
 }
 
+function settledEarly(
+  seat: SeatRecord,
+  tier: string,
+  policy: GuestPolicy,
+  at: number,
+  tool: string,
+  args: string
+): string | null {
+  if (!policy.allowedToolGates.includes(gateKind(tier)))
+    return gateRefusal("a guest's tool calls", policy.allowedToolGates);
+  if (!liveSeat(seat, at)) return GATE_REASONS.ended;
+  if (tier === 'off') return '';
+  if (gateKind(tier) === 'scoop') return GATE_REASONS.scoop;
+  const kept = seat.alwaysTools?.some((rule) => rule.tool === tool && rule.arguments === args);
+  return policy.always.tools && kept ? '' : null;
+}
+
 const ended = (status: string) => status === 'terminal' || status === 'completing';
 
 export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
@@ -144,17 +162,10 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
     const host = await awaitWithContext(bound, context);
     const policy = host.policy();
     const now = host.now ?? Date.now;
-    if (!policy.allowedToolGates.includes(gateKind(taint.tier)))
-      return gateRefusal("a guest's tool calls", policy.allowedToolGates);
-    if (!liveSeat(seat, now())) return GATE_REASONS.ended;
-    if (taint.tier === 'off') return undefined;
     const args = canonical(call.arguments);
     const always = policy.always.tools;
-    if (
-      always &&
-      seat.alwaysTools?.some((rule) => rule.tool === call.name && rule.arguments === args)
-    )
-      return undefined;
+    const early = settledEarly(seat, taint.tier, policy, now(), call.name, args);
+    if (early !== null) return early || undefined;
     const id = await api.memo<string>(
       `${GUEST_TOOL_MEMO}:${seat.id}:${taint.tier}`,
       `apr-${crypto.randomUUID()}`,
@@ -174,8 +185,15 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
       BACKGROUND_CONTEXT
     );
     watch(host, id, task);
+    const live = async () =>
+      liveSeat((await api.snapshot(GuestsDoc, context))?.seats[seat.id], now());
+    if (!(await live())) {
+      await host.approvals.withdraw(id, REASONS.revoked, BACKGROUND_CONTEXT);
+      return GATE_REASONS.ended;
+    }
     const item = asked.state === 'pending' ? await host.approvals.settled(id, context) : asked;
     if (item.state !== 'approved') return reasonOf(item);
+    if (!(await live())) return GATE_REASONS.ended;
     if (item.answer === 'always' && always)
       await remember(seat.id, {
         approval: item.id,
