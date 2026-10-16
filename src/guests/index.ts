@@ -24,6 +24,7 @@ import {
   MAX_QUEUED,
   pruneReviews,
   type ReviewsState,
+  told,
 } from './review.ts';
 import {
   checkDraft,
@@ -204,6 +205,7 @@ async function place(
       decidedAt: null,
       submissionId: null,
       ended: false,
+      conversation: Number(conversation.id),
     };
     doc.next += 1;
     pruneReviews(doc);
@@ -286,7 +288,10 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       await harness.commit(async (tx) => {
         const doc = await tx.doc(GuestReviewsDoc);
         for (const review of liveReviews(doc, record.id))
-          if (review.state === 'queued') endReview(review, 'withdrawn', 'revoked', now());
+          if (review.state === 'queued') {
+            endReview(review, 'withdrawn', 'revoked', now());
+            await told(tx, review);
+          }
       }, using);
       await options.approvals?.withdrawSeat(record.id, using);
     });

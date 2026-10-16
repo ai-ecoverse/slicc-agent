@@ -19,7 +19,10 @@ import {
   GUEST_INPUT_KIND,
   type GuestAsked,
   type GuestInput,
+  type GuestOutcome,
+  type GuestReviewed,
   guestText,
+  REVIEWED_KIND,
 } from '../guests/attribution.ts';
 import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
@@ -532,13 +535,31 @@ function thawed(id: string, entry: EntryRecord): SystemMessage {
   };
 }
 
-function asked(id: string, entry: EntryRecord): SystemMessage {
+export function reviewed(entries: readonly EntryRecord[]): Map<string, GuestOutcome> {
+  const out = new Map<string, GuestOutcome>();
+  for (const entry of entries) {
+    if (entry.kind !== REVIEWED_KIND) continue;
+    const data = (entry.data ?? {}) as Partial<GuestReviewed>;
+    if (typeof data.review === 'string' && data.outcome) out.set(data.review, data.outcome);
+  }
+  return out;
+}
+
+function asked(
+  id: string,
+  entry: EntryRecord,
+  outcomes: ReadonlyMap<string, GuestOutcome>
+): SystemMessage {
   const data = (entry.data ?? {}) as Partial<GuestAsked>;
   return {
     id,
     role: 'system',
     kind: 'notice',
-    text: askedLine(String(data.name ?? ''), String(data.text ?? '')),
+    text: askedLine(
+      String(data.name ?? ''),
+      String(data.text ?? ''),
+      outcomes.get(String(data.review))
+    ),
     createdAt: typeof data.at === 'number' ? data.at : 0,
   };
 }
@@ -560,14 +581,18 @@ function entryMessage(
   out: Message[],
   calls: Map<string, ToolCall>,
   delivered: Delivered | undefined,
-  notes: { decisions: ReadonlyMap<string, LickDecision>; origins: ReadonlyMap<number, From> }
+  notes: {
+    decisions: ReadonlyMap<string, LickDecision>;
+    origins: ReadonlyMap<number, From>;
+    outcomes: ReadonlyMap<string, GuestOutcome>;
+  }
 ): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   if (entry.kind === 'slicc.thawed') out.push(thawed(id, entry));
   else if (entry.kind === SECRETS_KIND) out.push(secrets(id, entry));
-  else if (entry.kind === ASKED_KIND) out.push(asked(id, entry));
+  else if (entry.kind === ASKED_KIND) out.push(asked(id, entry, notes.outcomes));
   else if (entry.kind === SPRINKLE_KIND) out.push(sprinkleMessage(id, entry));
   else if (entry.kind === 'pi.user' && model)
     out.push(
@@ -630,7 +655,11 @@ export function toMessages(
   const out: Message[] = [];
   if (!view) return out;
   const calls = new Map<string, ToolCall>();
-  const notes = { decisions: lickDecisions(view.entries), origins: origins(view.entries) };
+  const notes = {
+    decisions: lickDecisions(view.entries),
+    origins: origins(view.entries),
+    outcomes: reviewed(view.entries),
+  };
   let previous: EntryRecord | undefined;
   for (const entry of view.entries) {
     const steered = previous?.kind === 'pi.tool-result' ? 'steer' : undefined;

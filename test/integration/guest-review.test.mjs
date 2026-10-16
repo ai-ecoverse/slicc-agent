@@ -133,9 +133,7 @@ async function boot(page, { query = '', crash = null, judge = false, files = {} 
       const asked = (model) =>
         model.agent
           .messages('cone')
-          .filter(
-            (message) => message.role === 'system' && message.text.endsWith('awaiting approval')
-          )
+          .filter((message) => message.role === 'system' && / asked “/.test(message.text))
           .map((message) => message.text);
       const queue = (guest) => guest.model.agent.queue('cone').map((message) => message.text);
       const notices = (guest) =>
@@ -364,7 +362,7 @@ test('the guest is told each outcome: approved, declined, or that nobody approve
   });
   await boot(page, { query: 'ttl=2500&answer=Sure.' });
   const seen = await page.evaluate(async () => {
-    const { join, until, said, notices, listed, open } = globalThis.r;
+    const { join, until, said, asked, notices, listed, open } = globalThis.r;
     const { model, seat } = await open();
     const guest = await join(seat);
     await guest.model.agent.send('cone', 'Please add a test');
@@ -376,13 +374,27 @@ test('the guest is told each outcome: approved, declined, or that nobody approve
     await until(() => listed(model)[0] === 'Delete the repo', 'the second');
     await model.approvals.decide(model.approvals.list()[0].id, 'deny');
     await until(() => notices(guest).length === 3, 'three notices');
+    await until(
+      () => asked(model).every((line) => !line.endsWith('awaiting approval')),
+      'the owner lines to end'
+    );
     globalThis.shown = { model, guest };
-    return { notices: notices(guest), guestSees: said(guest.model), ownerSees: said(model) };
+    return {
+      notices: notices(guest),
+      asked: asked(model),
+      guestSees: said(guest.model),
+      ownerSees: said(model),
+    };
   });
   assert.deepEqual(seen.notices, [
     'It was approved. Please add a test',
     'It was declined. Delete the repo',
     'Nobody approved this in time. Anyone there?',
+  ]);
+  assert.deepEqual(seen.asked, [
+    'Anna asked “Please add a test”: approved',
+    'Anna asked “Delete the repo”: declined',
+    'Anna asked “Anyone there?”: nobody approved it in time',
   ]);
   assert.deepEqual(seen.guestSees, ['guest(Anna): Please add a test', 'agent: Sure.']);
   assert.deepEqual(seen.ownerSees, seen.guestSees);
@@ -518,7 +530,7 @@ test('an Always answer on a guest message lets that seat send without asking aga
   ]);
   assert.deepEqual(seen.listed, ['Me too?']);
   assert.deepEqual(seen.asked, [
-    'Anna asked “May I always?”, awaiting approval',
+    'Anna asked “May I always?”: approved',
     'Ben asked “Me too?”, awaiting approval',
   ]);
   assert.deepEqual(seen.ownerSees, [

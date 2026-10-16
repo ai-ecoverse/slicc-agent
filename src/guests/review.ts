@@ -1,6 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context';
 import {
+  type ConversationId,
   defineDoc,
   defineExtension,
   defineTask,
@@ -13,7 +14,14 @@ import {
 import type { Agents } from '../agents.ts';
 import type { Approval, Approvals, ApprovalsState } from '../approvals/index.ts';
 import { ApprovalsDoc } from '../approvals/record.ts';
-import { GUEST_INPUT_KIND, type GuestInput, guestContent } from './attribution.ts';
+import {
+  GUEST_INPUT_KIND,
+  type GuestInput,
+  type GuestOutcome,
+  type GuestReviewed,
+  guestContent,
+  REVIEWED_KIND,
+} from './attribution.ts';
 import { GUEST_REQUEST } from './guard.ts';
 import { type GuestGate, GuestsDoc, liveSeat } from './seats.ts';
 
@@ -42,7 +50,9 @@ export type Review = {
   decidedAt: number | null;
   submissionId: string | null;
   ended: boolean;
+  conversation: number;
   auto?: boolean;
+  told?: boolean;
 };
 
 export type ReviewsState = { next: number; reviews: Record<string, Review> };
@@ -90,6 +100,16 @@ export function endReview(review: Review, state: ReviewState, reason: string | n
   review.ended = true;
 }
 
+export async function told(tx: Pick<Tx, 'appendEntry'>, review: Review): Promise<void> {
+  if (review.told) return;
+  review.told = true;
+  const data: GuestReviewed = { review: review.id, outcome: review.state as GuestOutcome };
+  await tx.appendEntry(review.conversation as unknown as ConversationId, {
+    kind: REVIEWED_KIND,
+    data: { ...data },
+  });
+}
+
 export function pruneReviews(state: ReviewsState, kept = KEPT_REVIEWS) {
   const ended = Object.values(state.reviews)
     .filter((review) => review.ended)
@@ -114,6 +134,7 @@ async function turn(id: string, runtime: Runtime, context: Context) {
     const seat = (await tx.doc(GuestsDoc)).seats[review.seat];
     if (!liveSeat(seat, runtime.now())) {
       endReview(review, 'withdrawn', 'revoked', runtime.now());
+      await told(tx, review);
       return DONE;
     }
     const before = liveReviews(doc, review.seat)
@@ -129,6 +150,7 @@ async function turn(id: string, runtime: Runtime, context: Context) {
           policy: 'allSettled',
         };
       endReview(prior, 'unanswered', 'failed', runtime.now());
+      await told(tx, prior);
     }
     return { status: 'running', checkpoint: { phase: 'ask' } };
   }, context);
@@ -145,6 +167,7 @@ async function ask(id: string, runtime: Runtime, host: ReviewHost, context: Cont
       kept.reason = 'always';
       kept.auto = true;
       kept.decidedAt = runtime.now();
+      await told(tx, kept);
       return { status: 'running', checkpoint: { phase: 'deliver' } };
     }, context);
   if (review && !review.ended)
@@ -214,6 +237,7 @@ async function decide(id: string, runtime: Runtime, host: ReviewHost, context: C
     if (settled?.state === 'approved') {
       review.state = 'approved';
       review.decidedAt = at;
+      await told(tx, review);
       if (settled.answer === 'always' && host.alwaysAllowed()) {
         const record = (await tx.doc(GuestsDoc)).seats[review.seat];
         if (record && liveSeat(record, runtime.now())) {
@@ -224,6 +248,7 @@ async function decide(id: string, runtime: Runtime, host: ReviewHost, context: C
       return { status: 'running', checkpoint: { phase: 'deliver' } };
     }
     endReview(review, settled?.state ?? 'unanswered', settled?.reason ?? null, at);
+    await told(tx, review);
     return DONE;
   }, context);
 }
@@ -298,7 +323,10 @@ function reviewTask(lookup: () => Promise<ReviewHost>) {
       await host.approvals.withdraw(task.input.review, 'aborted', BACKGROUND_CONTEXT);
       await runtime.commit(async (tx) => {
         const review = await reviewOf(tx, task.input.review);
-        if (review && !review.ended) endReview(review, 'withdrawn', 'aborted', runtime.now());
+        if (review && !review.ended) {
+          endReview(review, 'withdrawn', 'aborted', runtime.now());
+          await told(tx, review);
+        }
         return { status: 'terminal', outcome: { status: 'aborted' } };
       }, context);
     },
