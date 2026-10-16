@@ -13,25 +13,6 @@ export interface PortEndpoint {
 
 export type Frame = { hello: string } | { close: true } | Uint8Array;
 
-export const LINK_PROTOCOL = 2;
-
-const GREETING = /^slicc-agent-link\/(\d+) (.+)$/;
-
-export interface Greeting {
-  protocol: number;
-  serverId: string;
-}
-
-export const greeting = (serverId: string): string =>
-  `slicc-agent-link/${LINK_PROTOCOL} ${serverId}`;
-
-export function greeted(hello: string): Greeting {
-  const found = GREETING.exec(hello);
-  return found
-    ? { protocol: Number(found[1]), serverId: found[2] as string }
-    : { protocol: 1, serverId: hello };
-}
-
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -77,7 +58,7 @@ export class PortLink implements Link {
   }
 
   greet(serverId: string): void {
-    this.#endpoint.postMessage({ hello: greeting(serverId) } satisfies Frame);
+    this.#endpoint.postMessage({ hello: serverId } satisfies Frame);
   }
 
   send(frame: ChordFrame): void {
