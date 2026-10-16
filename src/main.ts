@@ -269,9 +269,10 @@ async function modelsOf(
   return { store, records, providers, fields, models, bases, endpoints, defaultModel };
 }
 
-function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>) {
+function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>, origin: string) {
   const registry = createRegistry();
   registry.install(CodingTools);
+  registry.install(browserGuard([origin]));
   registry.install(sliccPrompt(facts));
   const read = (CodingTools.tools as readonly ToolRegistration[]).find(
     (tool) => tool.name === 'read'
@@ -311,7 +312,14 @@ async function prepare(
     transport,
     version: facts.version,
   });
-  return { names, native, transport, facts, ...made, registry: baseRegistry(facts) };
+  return {
+    names,
+    native,
+    transport,
+    facts,
+    ...made,
+    registry: baseRegistry(facts, scope.location.origin),
+  };
 }
 
 function modelsOfAgent(
@@ -388,7 +396,6 @@ async function start(
   const { names, native, transport, facts, models, registry, records, endpoints } = ready;
   const memory = setupMemory(registry);
   const coding = CodingTools.tools as readonly ToolRegistration[];
-  registry.install(browserGuard([scope.location.origin], coding));
   const mcp = setupMcp(registry);
   const codemode = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   registry.install(codemodeExtension(codemode));
@@ -495,6 +502,7 @@ async function start(
       agents: agent.agents,
       groups,
       env: home,
+      envOf: async (conversationId, context) => environment({ conversationId }, context),
       ...at,
       ...(people
         ? { layout: people.layout, spools: people.spools, enforced: people.enforced }

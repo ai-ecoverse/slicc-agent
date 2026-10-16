@@ -5,7 +5,7 @@ import { launch } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-test('the model gets the text of MCP resource tools, lick decisions, refused scoop reads and fitted wide images', async (t) => {
+test('the model gets the text of MCP resource tools, lick decisions, refused scoop reads, also from codemode, and fitted wide images', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const steps = [
@@ -15,6 +15,14 @@ test('the model gets the text of MCP resource tools, lick decisions, refused sco
     { tool: { name: 'read', args: { path: '/tmp/wide.png' } } },
     { answer: 'Cone done.' },
     { tool: { name: 'read', args: { path: '/etc/hostname' } } },
+    {
+      tool: {
+        name: 'codemode',
+        args: {
+          code: 'try { text(await tools.read({ path: "/etc/hostname" })); } catch (error) { text(`refused: ${error.message}`); }',
+        },
+      },
+    },
     { answer: 'Scoop done.' },
   ];
   const seen = await page.evaluate(async (steps) => {
@@ -74,7 +82,7 @@ test('the model gets the text of MCP resource tools, lick decisions, refused sco
           images: (entry.model[0].content ?? []).filter((block) => block.type === 'image').length,
         }));
     const scoopView = () => connection.views.value?.[scoop.id];
-    for (let i = 0; i < 200 && results(scoopView()).length < 1; i++)
+    for (let i = 0; i < 400 && results(scoopView()).length < 2; i++)
       await new Promise((resolve) => setTimeout(resolve, 25));
     const result = { cone: results(connection.transcript.value), scoop: results(scoopView()) };
     await owner.release();
@@ -92,4 +100,9 @@ test('the model gets the text of MCP resource tools, lick decisions, refused sco
   assert.equal(image.images, 1);
   assert.equal(seen.scoop[0].name, 'read');
   assert.match(seen.scoop[0].text, /\/etc\/hostname is outside this scoop's folders\./);
+  assert.equal(seen.scoop[1].name, 'codemode');
+  assert.match(
+    seen.scoop[1].text,
+    /Output:\nrefused: Tool call blocked: \/etc\/hostname is outside this scoop's folders\./
+  );
 });
