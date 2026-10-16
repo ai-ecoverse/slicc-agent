@@ -1,6 +1,6 @@
 import { createHost, isChordError, type Readable, replicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
-import { type AgentConnection, lasting } from '../client.ts';
+import { type AgentConnection, final, lasting } from '../client.ts';
 import {
   type AgentControl,
   AgentGuestService,
@@ -61,7 +61,9 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
       }),
     ]);
   } catch (error) {
-    return fail(isChordError(error) && error.code === 'forbidden' ? refusal(SEAT_REFUSED) : error);
+    return fail(
+      isChordError(error) && error.code === 'forbidden' ? refusal(SEAT_REFUSED) : final(error)
+    );
   }
   if (handle.kind !== 'guest') return fail(refusal(SEAT_REFUSED));
   const transcriptMember = handle.transcript as Readable<ConversationView | undefined>;
