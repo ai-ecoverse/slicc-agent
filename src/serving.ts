@@ -27,6 +27,7 @@ export interface AgentPrincipal {
   seat: Seat;
   link: number;
   guest?: GuestPrincipal;
+  device?: string;
 }
 
 export const seatOf = (principal: Principal): Seat => (principal as AgentPrincipal).seat;
@@ -35,6 +36,9 @@ export const guestOf = (principal: Principal): GuestPrincipal | undefined => {
   const found = principal as Partial<AgentPrincipal> | undefined;
   return found?.seat === 'guest' ? found.guest : undefined;
 };
+
+export const deviceOf = (principal: Principal): string | undefined =>
+  (principal as AgentPrincipal).device;
 
 export const principalKey = (principal: Principal): string => {
   const { seat, link } = (principal ?? {}) as Partial<AgentPrincipal>;

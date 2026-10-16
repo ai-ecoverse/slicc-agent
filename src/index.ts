@@ -33,6 +33,7 @@ export {
   attachApprovals,
   DEFAULT_POLICY,
   type DecidedBy,
+  type Decider,
   JUDGE_ALLOW,
   JUDGE_DENY,
   JUDGE_KIND,
@@ -58,6 +59,7 @@ export {
   DEFAULT_APPROVAL_POLICY,
   type SudoPolicy,
 } from './approvals/policy.ts';
+export type { AgentSudo, SudoAnswer, SudoRequest } from './approvals/sudo.ts';
 export {
   FILE_LIMIT,
   IMAGE_LIMIT,

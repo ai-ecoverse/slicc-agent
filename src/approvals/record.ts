@@ -16,6 +16,7 @@ export type ApprovalRequester = {
   seat?: string;
   agentId?: string;
   where?: string;
+  device?: string;
 };
 
 export type ApprovalVerdict = {
@@ -47,6 +48,7 @@ type Base = {
   tier: string;
   state: ApprovalState;
   decidedBy: DecidedBy | null;
+  device?: string;
   answer?: 'once' | 'always';
   reason?: string;
   verdict?: ApprovalVerdict;
@@ -96,6 +98,7 @@ export const REASONS = {
   restart: 'restart',
   revoked: 'revoked',
   aborted: 'aborted',
+  disconnected: 'disconnected',
 } as const;
 
 export const guestKind = (kind: ApprovalKind): boolean => kind !== 'sudo';
@@ -120,6 +123,14 @@ export function answerer(by: DecidedBy, tier: string): boolean {
   if (by === 'judge') return tier === 'agent';
   return true;
 }
+
+export type SudoApprover = 'user' | 'agent';
+
+export const sudoApprover = (value: unknown): SudoApprover =>
+  value === 'agent' ? 'agent' : 'user';
+
+export const tierOf = (kind: ApprovalKind, tier: string, sudo: SudoApprover): string =>
+  kind === 'sudo' ? sudo : tier;
 
 export function gone(state: ApprovalState): string {
   if (state === 'unanswered') return 'This request timed out.';

@@ -12,13 +12,22 @@ export function serveConnections(scope: WorkerScope, host: Promise<AgentHost>): 
       readOnly?: boolean;
       pages?: boolean;
       guest?: { id: string; label: string };
+      device?: unknown;
     } | null;
     const port = message?.connect;
     if (!port) return;
     const pages = message?.pages === false ? { pages: false } : {};
     const guest = message?.guest ? { guest: message.guest } : {};
+    const device =
+      typeof message?.device === 'string' && message.device ? { device: message.device } : {};
     host.then(
-      (ready) => ready.connect(port, { readOnly: message?.readOnly === true, ...pages, ...guest }),
+      (ready) =>
+        ready.connect(port, {
+          readOnly: message?.readOnly === true,
+          ...pages,
+          ...guest,
+          ...device,
+        }),
       () => port.close?.()
     );
   });

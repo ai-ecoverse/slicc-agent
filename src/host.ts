@@ -16,9 +16,10 @@ import {
   type ApprovalJudge,
   type Approvals,
   attachApprovals,
-  type DecidedBy,
+  type Decider,
 } from './approvals/index.ts';
-import { alwaysFor, attachApprovalPolicy } from './approvals/policy.ts';
+import { type ApprovalPolicies, alwaysFor, attachApprovalPolicy } from './approvals/policy.ts';
+import { type AgentSudo, createSudo, ownedSudo } from './approvals/sudo.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
@@ -43,6 +44,7 @@ import {
   AgentPagesService,
   AgentRemoteService,
   AgentSettings,
+  AgentSudoService,
   AgentTranscript,
   CONTROL_METHODS,
   CONTROL_READS,
@@ -54,10 +56,12 @@ import {
   REMOTE_METHODS,
   REMOTE_READS,
   SETTINGS_METHODS,
+  SUDO_METHODS,
 } from './services.ts';
 import {
   AGENT_HOST,
   type AgentPrincipal,
+  deviceOf,
   type GuestPrincipal,
   guestOf,
   principalKey,
@@ -80,6 +84,7 @@ export interface ConnectOptions {
   readOnly?: boolean;
   pages?: boolean;
   guest?: { id: string; label: string };
+  device?: string;
 }
 
 export interface AgentHost {
@@ -162,6 +167,23 @@ function gatedControls(
   return { trusted, viewed };
 }
 
+function approving(
+  agent: Agent,
+  policy: ApprovalPolicies,
+  judge: ApprovalJudge | undefined,
+  context: Context
+): Promise<Approvals> {
+  return attachApprovals(
+    {
+      harness: agent.harness,
+      guestAlways: alwaysFor(policy),
+      sudoApprover: () => policy.current().sudo.approver,
+      ...(judge ? { judge } : {}),
+    },
+    context
+  );
+}
+
 const noRevision = () => replicatedState<PrivateRevision>({ revision: 0 });
 
 export async function hostAgent(
@@ -205,16 +227,7 @@ export async function hostAgent(
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
   const policy = await attachApprovalPolicy(agent.harness, context);
-  const approvals =
-    options.approvals ??
-    (await attachApprovals(
-      {
-        harness: agent.harness,
-        guestAlways: alwaysFor(policy),
-        ...(options.judge ? { judge: options.judge } : {}),
-      },
-      context
-    ));
+  const approvals = options.approvals ?? (await approving(agent, policy, options.judge, context));
   const monitor = createMonitor({
     ...options.monitor,
     harness: agent.harness,
@@ -283,6 +296,11 @@ export async function hostAgent(
     approvals: approvals.state,
     approvalPolicy: policy.state,
   };
+  const sudo = createSudo({
+    approvals,
+    agents: () => agent.agents.state(),
+    ...(options.licks ? { licks: options.licks.licks } : {}),
+  });
   const settings = options.settings ?? noSettings;
   const gates = gatedControls(control, slims.shown, shownViews, transcriptService.labels);
   const { trusted, viewed } = gates;
@@ -291,6 +309,7 @@ export async function hostAgent(
     viewed,
     transcript: transcriptService,
     viewMonitor: monitor.viewState,
+    sudo,
     settings,
     remote,
     pages,
@@ -323,7 +342,10 @@ export async function hostAgent(
       links += 1;
       const link = new PortLink(endpoint);
       link.greet(serverId);
-      host.accept(link, { principal: { seat, link: links } satisfies AgentPrincipal });
+      const device = connectOptions?.device ? { device: connectOptions.device } : {};
+      host.accept(link, {
+        principal: { seat, link: links, ...device } satisfies AgentPrincipal,
+      });
     },
     async close() {
       offGuests();
@@ -359,11 +381,12 @@ interface Served {
   viewed: AgentControl;
   transcript: Record<keyof AgentTranscript, ReplicatedState<unknown>>;
   viewMonitor: ReplicatedState<unknown>;
+  sudo?: AgentSudo;
   settings: AgentSettings;
   remote: AgentRemote;
   pages: Pages;
   guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
-  decide: (by: DecidedBy) => AgentControl['decide'];
+  decide: (by: Decider) => AgentControl['decide'];
 }
 
 export const CLOSED_TO_GUESTS = 'a guest seat has only its transcript and propose';
@@ -406,9 +429,12 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
   };
 }
 
-const seated = (serving: Served, seat: Seat): AgentControl => ({
+const seated = (serving: Served, seat: Seat, device: string | undefined): AgentControl => ({
   ...(seat === 'view' ? serving.viewed : serving.trusted),
-  decide: serving.decide(seat === 'owner' ? 'owner' : 'follower'),
+  decide: serving.decide({
+    by: seat === 'owner' ? 'owner' : 'follower',
+    ...(device ? { device } : {}),
+  }),
 });
 
 const VIEW_METHODS = [...CONTROL_READS, ...OWNER_DEVICE_METHODS];
@@ -418,7 +444,7 @@ export function serveAgent(serving: Served): Host {
   const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
   host.serve(AgentControl, ((_input: unknown, principal: unknown) => {
     const seat = seatOf(principal);
-    const control = seated(serving, seat);
+    const control = seated(serving, seat, deviceOf(principal));
     if (seat === 'view') return { kind: 'view', ...served(() => control, VIEW_METHODS) };
     return { kind: 'control', ...served(() => control, CONTROL_METHODS) };
   }) as never);
@@ -469,5 +495,17 @@ export function serveAgent(serving: Served): Host {
       };
     }) as never
   );
+  host.serve(AgentSudoService, ((_input: unknown, principal: unknown, self: Self) => {
+    const sudo = serving.sudo;
+    if (seatOf(principal) !== 'owner' || !sudo) return { kind: 'none' };
+    const held = self.resources({
+      mine: resource({ rev: 1, open: () => ownedSudo(sudo), close: (mine) => mine.release() }),
+    });
+    return {
+      kind: 'sudo',
+      approvals: readable(sudo.approvals),
+      ...served(() => held.mine.value, SUDO_METHODS),
+    };
+  }) as never);
   return host;
 }
