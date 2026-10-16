@@ -1,28 +1,17 @@
+import type { GuestDraft, GuestEvents, GuestPort, GuestSeat } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
-import type { GuestGates, GuestSeat } from '../guests/seats.ts';
 import { Emitter } from './emitter.ts';
 
-export interface GuestDraftShown {
-  label: string;
-  expiresAt: number | null;
-  gates: GuestGates;
-}
-
-export interface GuestEvents {
-  seats: readonly GuestSeat[];
-  unavailable: string | null;
-}
-
 export interface GuestHub {
-  mint(request: GuestDraftShown & { agentId: string }): Promise<{ id: string; url: string }>;
+  mint(request: GuestDraft & { agentId: string }): Promise<{ id: string; url: string }>;
   revoke(id: string): Promise<void>;
 }
 
 export const NO_HUB = 'Inviting guests needs the tray hub.';
 export const NO_CONTROL = 'Only a tab with Control can invite guests.';
 
-export class GuestAdapter extends Emitter<GuestEvents> {
+export class GuestAdapter extends Emitter<GuestEvents> implements GuestPort {
   readonly #connection: AgentConnection;
   readonly #hub: GuestHub | null;
 
@@ -44,7 +33,7 @@ export class GuestAdapter extends Emitter<GuestEvents> {
     return this.#hub ? null : NO_HUB;
   }
 
-  async mint(agentId: string, draft: GuestDraftShown): Promise<{ seat: GuestSeat; url: string }> {
+  async mint(agentId: string, draft: GuestDraft): Promise<{ seat: GuestSeat; url: string }> {
     const problem = this.unavailable();
     if (problem) throw new Error(problem);
     const hub = this.#hub as GuestHub;

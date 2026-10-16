@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { env } from 'node:process';
 import { after, test } from 'node:test';
 import { launch } from './chrome.mjs';
 
@@ -359,4 +360,82 @@ test('seats survive a worker restart: a revoked seat stays refused with its epoc
   assert.deepEqual(result.briefListed, ['Kept', 'Brief']);
   assert.deepEqual(result.afterExpiry, ['Kept']);
   assert.equal(result.expiredJoin, 'EACCES');
+});
+
+test('the Network panel invites a guest through the agent adapter, shows the link once, lists the seat as connected once the guest joins, and revokes it', async (t) => {
+  const page = await chrome.page(t);
+  await page.send('Emulation.setDeviceMetricsOverride', {
+    width: Number(env.GUESTS_WIDTH ?? 1280),
+    height: 860,
+    deviceScaleFactor: 1,
+    mobile: Number(env.GUESTS_WIDTH ?? 1280) < 600,
+  });
+  await page.send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-color-scheme', value: 'light' }],
+  });
+  await boot(page, 'answer=Hi.');
+  await page.evaluate(async () => {
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    const { owner, hub } = globalThis.seats;
+    const local = await owner.connect();
+    const model = createAgentModel(local, { storage: localStorage, guests: hub });
+    const app = document.createElement('slicc-app');
+    app.style.cssText = 'display:block;width:100vw;height:100vh';
+    document.body.style.margin = '0';
+    document.body.append(app);
+    app.model = { ...createDummyModel({ storage: localStorage }), ...model };
+    await customElements.whenDefined('slicc-app');
+    await model.agent.ready();
+    const all = (root, selector, found = []) => {
+      found.push(...root.querySelectorAll(selector));
+      for (const node of root.querySelectorAll('*'))
+        if (node.shadowRoot) all(node.shadowRoot, selector, found);
+      return found;
+    };
+    globalThis.ui = { model, local, find: (selector) => all(document, selector)[0] ?? null, all };
+  });
+  await page.until(() => globalThis.ui.find('[data-network]'));
+  await page.evaluate(() => globalThis.ui.find('[data-network]').click());
+  await page.until(() => globalThis.ui.find('section[data-guests] [data-guests-empty]'));
+  await page.evaluate(() => globalThis.ui.find('[data-action="invite-guest"]').click());
+  await page.until(() => globalThis.ui.find('slicc-guest-invite #guest-name'));
+  await page.evaluate(() => globalThis.ui.find('slicc-guest-invite #guest-name').focus());
+  await page.insert('Anna');
+  await page.evaluate(() => globalThis.ui.find('[data-action="create-guest-link"]').click());
+  await page.until(() => globalThis.ui.find('[data-guest-invite="link"]'));
+  const link = await page.evaluate(() => {
+    const field = globalThis.ui.find('[data-copy="guest-url"]');
+    return { url: field?.value ?? '', minted: globalThis.seats.minted };
+  });
+  assert.equal(link.url, 'https://hub.test/join/seat-1-token');
+  assert.equal(link.minted.length, 1);
+  assert.equal(link.minted[0].label, 'Anna');
+  assert.equal(link.minted[0].agentId, 'cone');
+  assert.deepEqual(link.minted[0].gates, { messages: 'user', tools: 'user' });
+  if (env.GUESTS_LINK_SHOT) await page.screenshot(env.GUESTS_LINK_SHOT);
+  await page.evaluate(() => globalThis.ui.find('[data-action="done-guest"]').click());
+  await page.until(() => globalThis.ui.find('li[data-seat="seat-1"][data-connected="false"]'));
+  await page.evaluate(async () => {
+    globalThis.guest = await globalThis.seats.join({ guest: { id: 'seat-1', label: 'Anna' } });
+  });
+  await page.until(() => globalThis.ui.find('li[data-seat="seat-1"][data-connected="true"]'));
+  const row = await page.evaluate(() => globalThis.ui.find('li[data-seat="seat-1"]').innerText);
+  assert.match(row, /Anna/);
+  assert.match(row, /sliccy/);
+  assert.match(row, /Expires in 7 days/);
+  if (env.GUESTS_SHOT) await page.screenshot(env.GUESTS_SHOT);
+  await page.evaluate(() => globalThis.ui.find('[data-action="revoke-guest"]').click());
+  await page.until(() => globalThis.ui.find('slicc-confirm'));
+  await page.evaluate(() =>
+    globalThis.ui.all(globalThis.ui.find('slicc-confirm').shadowRoot, '[data-action]')[0].click()
+  );
+  await page.until(() => globalThis.ui.find('section[data-guests] [data-guests-empty]'));
+  const after = await page.evaluate(async () => {
+    await globalThis.guest.closed;
+    return { revoked: globalThis.seats.revoked, seats: globalThis.ui.model.guests.list() };
+  });
+  assert.deepEqual(after.revoked, ['seat-1']);
+  assert.deepEqual(after.seats, []);
 });

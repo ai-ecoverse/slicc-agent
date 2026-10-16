@@ -15,8 +15,6 @@ export { AgentAdapter, CONE } from './agent-port.ts';
 export { ChangesAdapter, type ChangesEvents } from './changes-port.ts';
 export {
   GuestAdapter,
-  type GuestDraftShown,
-  type GuestEvents,
   type GuestHub,
   NO_CONTROL,
   NO_HUB,
