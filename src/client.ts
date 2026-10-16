@@ -1,6 +1,7 @@
 import {
   type Context,
   createHost,
+  isChordError,
   type Readable,
   type ReplicatedState,
 } from '@earendil-works/chord';
@@ -119,6 +120,16 @@ function lastingSettings(
   };
 }
 
+const VERSIONS = new Set(['upgrade_required', 'contract_mismatch']);
+
+export const OTHER_VERSION =
+  "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
+
+export const final = (error: unknown): unknown =>
+  isChordError(error) && VERSIONS.has(error.code)
+    ? Object.assign(new Error(OTHER_VERSION, { cause: error }), { code: 'EVERSION' })
+    : error;
+
 const ended = (link: PortLink): Promise<never> =>
   link.ended.then((reason) => {
     throw reason ?? new Error('the agent closed the link');
@@ -157,7 +168,7 @@ export async function connectAgent(
   } catch (error) {
     release();
     link.close('handshake failed');
-    throw error;
+    throw final(error);
   }
   const root: Root = (run, rootOptions) => host.root(run, rootOptions);
   const control = bound<AgentControl>(controlHandle, root, CONTROL_METHODS, controlAnswer);

@@ -212,3 +212,52 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
   assert.equal(seen.refusals.abort[0], 'EACCES');
   assert.equal(seen.stillBusy, true);
 });
+
+test('a follower or guest of an owner on another agent version is refused once with EVERSION, and the link ends', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    await import('/dist-test/page.js');
+    await import('/dist-test/other-owner.js');
+    const owner = otherOwner([
+      'slicc.agent.control',
+      'slicc.agent.transcript',
+      'slicc.agent.settings',
+      'slicc.agent.remote',
+      'slicc.agent.pages',
+      'slicc.agent.guest',
+    ]);
+    const refused = async (connect, seat) => {
+      const started = performance.now();
+      const outcome = await connect(owner.port(seat)).then(
+        () => ({ connected: true }),
+        (error) => ({ code: error.code, message: error.message })
+      );
+      return { ...outcome, ms: performance.now() - started };
+    };
+    const follower = await refused(connectAgent, { seat: 'control', link: 1 });
+    const guest = await refused(connectGuest, {
+      seat: 'guest',
+      link: 2,
+      guest: { id: 'seat-1', name: 'Anna', epoch: 1 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const result = {
+      follower,
+      guest,
+      links: owner.links.length,
+      closed: owner.links.map((link) => link.closed),
+    };
+    await owner.close();
+    return result;
+  });
+  const sentence =
+    "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
+  for (const outcome of [seen.follower, seen.guest]) {
+    assert.equal(outcome.code, 'EVERSION', JSON.stringify(outcome));
+    assert.equal(outcome.message, sentence);
+    assert.ok(outcome.ms < 2000, `${outcome.ms}`);
+  }
+  assert.equal(seen.links, 2);
+  assert.deepEqual(seen.closed, [true, true]);
+});
