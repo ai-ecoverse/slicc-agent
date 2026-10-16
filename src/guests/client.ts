@@ -14,6 +14,7 @@ import {
 import { AGENT_HOST, kept, plain, type Remote, replicated } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import type { GuestOpened, Proposed, ProposeRequest } from './index.ts';
+import { SCOOP_REVIEW_LATER } from './policy.ts';
 
 export const GUEST_ONLY = 'a guest can only watch and send messages';
 export const SEAT_REFUSED = "This guest link isn't valid any more.";
@@ -24,6 +25,7 @@ const SAID: Record<string, string> = {
   'too-long': 'That message is too long for a guest seat.',
   gone: 'The cone this seat shares is gone.',
   unavailable: "Messages from guests need a review, and this agent can't review them yet.",
+  scoop: SCOOP_REVIEW_LATER,
   overflow: 'Too many of your messages are waiting for approval. Try again once one is answered.',
 };
 

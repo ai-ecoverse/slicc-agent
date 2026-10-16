@@ -14,7 +14,7 @@ import {
 } from '@earendil-works/pi-durable';
 import type { Approval, Approvals } from '../approvals/index.ts';
 import { REASONS } from '../approvals/record.ts';
-import { type GuestPolicy, gateKind, gateRefusal } from './policy.ts';
+import { type GuestPolicy, gateKind, gateRefusal, SCOOP_REVIEW_LATER } from './policy.ts';
 import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from './seats.ts';
 
 export const GUEST_GUARD = 'slicc-guest-guard';
@@ -30,7 +30,7 @@ export const GATE_REASONS = {
   judged: 'The automatic check declined this tool call in a run a guest started',
   unanswered: 'Nobody approved this tool call in a run a guest started in time.',
   unroutable: "The cone can't review a tool call it is itself waiting on.",
-  scoop: "No scoop can review a guest's tool call yet, so this one is denied.",
+  scoop: SCOOP_REVIEW_LATER,
   withdrawn: 'The review of this tool call was withdrawn.',
 } as const;
 
@@ -111,11 +111,11 @@ function settledEarly(
   tool: string,
   args: string
 ): string | null {
+  if (gateKind(tier) === 'scoop') return GATE_REASONS.scoop;
   if (!policy.allowedToolGates.includes(gateKind(tier)))
     return gateRefusal("a guest's tool calls", policy.allowedToolGates);
   if (!liveSeat(seat, at)) return GATE_REASONS.ended;
   if (tier === 'off') return '';
-  if (gateKind(tier) === 'scoop') return GATE_REASONS.scoop;
   const kept = seat.alwaysTools?.some((rule) => rule.tool === tool && rule.arguments === args);
   return policy.always.tools && kept ? '' : null;
 }
