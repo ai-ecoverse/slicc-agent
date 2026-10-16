@@ -355,6 +355,7 @@ export async function hostAgent(
       await monitor.dispose();
       await remote.dispose();
       deliveries.dispose();
+      sudo.close();
       approvals.close();
       transcript.dispose();
       mounted.dispose();

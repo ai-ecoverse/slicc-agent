@@ -93,6 +93,23 @@ function settled(
 
 export const WITHDRAW_MS = 5000;
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function timedOut(
+  link: { approvals: Readable<Approval[] | undefined>; ended: Promise<never> },
+  id: string,
+  expiresAt: number
+): Promise<unknown> {
+  let off: () => void = () => undefined;
+  const left = new Promise<void>((resolve) => {
+    off = link.approvals.subscribe((items) => {
+      if (answerOf(items?.find((item) => item.id === id))) resolve();
+    });
+  });
+  const wait = Math.max(0, expiresAt - Date.now()) + WITHDRAW_MS;
+  return Promise.race([left, link.ended.catch(() => undefined), delay(wait)]).finally(() => off());
+}
+
 export async function askSudo(
   endpoint: PortEndpoint,
   request: SudoRequest,
@@ -107,10 +124,11 @@ export async function askSudo(
     if (asked.id === null) throw new Error(asked.error);
     const signals = { signal, stop };
     const { answer, aborted } = await settled(link.approvals, asked.id, signals, link.ended);
-    if (aborted && aborted !== 'expired')
+    if (aborted === 'expired') await timedOut(link, asked.id, request.expiresAt);
+    else if (aborted)
       await Promise.race([
         link.sudo.withdraw(asked.id, String(aborted), BACKGROUND_CONTEXT),
-        new Promise((resolve) => setTimeout(resolve, WITHDRAW_MS)),
+        delay(WITHDRAW_MS),
       ]);
     return answer;
   } finally {

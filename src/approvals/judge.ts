@@ -81,12 +81,18 @@ export function untrustedOf(item: Approval): string {
   return item.detail.command;
 }
 
+export function sudoContext(item: Approval): { sudo?: { target: string; cwd: string | null } } {
+  if (item.kind !== 'sudo') return {};
+  return { sudo: { target: item.detail.target ?? 'root', cwd: item.detail.cwd ?? null } };
+}
+
 export function judgeState(item: Approval, intent: OwnerIntent, nonce: string) {
   return {
     request: {
       kind: item.kind,
       requester: { kind: item.requester.kind, name: item.requester.name },
       untrusted: fenced(untrustedOf(item), nonce),
+      ...sudoContext(item),
     },
     owner: { policy: intent.policy, messages: intent.messages, memory: intent.memory },
   };

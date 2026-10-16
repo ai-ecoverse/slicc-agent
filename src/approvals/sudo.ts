@@ -141,9 +141,23 @@ export interface SudoAttach {
   licks?: Pick<Licks, 'deliver'>;
 }
 
-export function createSudo(options: SudoAttach): AgentSudo {
+type SudoLick = NonNullable<ReturnType<typeof scoopLick>>;
+
+export function createSudo(options: SudoAttach): AgentSudo & { close(): void } {
   const { approvals } = options;
   const agents = () => options.agents?.();
+  const waiting = new Map<string, SudoLick>();
+  const send = (lick: SudoLick) =>
+    void options.licks?.deliver(lick, BACKGROUND_CONTEXT).catch(() => undefined);
+  const watch = (items: readonly Approval[]) => {
+    for (const [id, lick] of waiting) {
+      const item = items.find((entry) => entry.id === id);
+      if (item?.state === 'pending' && item.tier !== 'user') continue;
+      waiting.delete(id);
+      if (item?.state === 'pending') send(lick);
+    }
+  };
+  const off = approvals.state.subscribe((items) => watch(items));
   return {
     approvals: approvals.state,
     async request(value, where, context) {
@@ -164,11 +178,18 @@ export function createSudo(options: SudoAttach): AgentSudo {
         context
       );
       const lick = scoopLick(item.id, agentId, detail, agents());
-      if (lick) void options.licks?.deliver(lick, BACKGROUND_CONTEXT).catch(() => undefined);
+      if (lick) {
+        waiting.set(item.id, lick);
+        watch(approvals.state.value as Approval[]);
+      }
       return { id: item.id, error: null };
     },
     async withdraw(id, reason, context) {
       await approvals.withdraw(id, reason, context);
+    },
+    close() {
+      off();
+      waiting.clear();
     },
   };
 }

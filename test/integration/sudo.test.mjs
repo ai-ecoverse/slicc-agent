@@ -126,10 +126,12 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         });
       const ask = async (draft) => (await call((reply) => ({ approve: draft, reply }))).item;
       const judged = () => call((port) => ({ judged: port }));
+      const setTable = (judgeTable) => running.postMessage({ judgeTable });
       globalThis.t = {
         kernel,
         ask,
         judged,
+        setTable,
         owner,
         asked,
         follow,
@@ -366,13 +368,13 @@ test("with the judge on, sudo waits for a person by default, even when asked for
   const allow = encodeURIComponent(JSON.stringify({ low: 0.99, aligned: 0.99 }));
   await boot(page, {
     worker: 'main-worker.js',
-    query: `?judge&judge-step=${allow}&judge-step=${allow}&judge-step=${allow}`,
+    query: `?judge&judge-step=${allow}&judge-step=${allow}&judge-step=${allow}&answer=Noted.&answer=Noted.`,
     files: {
       '/home/.pi/agent/settings.json': JSON.stringify({ approvals: { judgeModel: 'judge/j-1' } }),
     },
   });
   const seen = await page.evaluate(async () => {
-    const { owner, ask, judged, until, newest, pending, sudo, tags } = globalThis.t;
+    const { owner, ask, judged, setTable, until, newest, pending, sudo, tags } = globalThis.t;
     const local = await owner.connect();
     const model = createAgentModel(local);
     await model.agent.ready();
@@ -418,7 +420,31 @@ test("with the judge on, sudo waits for a person by default, even when asked for
     await until(() => local.approvalPolicy?.value?.sudo?.approver === 'agent', 'the policy');
     const judgedRun = await sudo(['ls', '/root'], tags.cone);
     const byJudge = newest(local);
-    const after = (await judged()).length;
+    const seenByJudge = await judged();
+    const after = seenByJudge.length;
+    const context = seenByJudge.at(-1).state.request.sudo;
+    const scoop = await local.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
+    const scoopTag = JSON.stringify({ kind: 'agent', agentId: scoop.id });
+    setTable({
+      '/usr/bin/ls /tmp': { low: 0.5, aligned: 0.5 },
+      '/usr/bin/ls /etc': { low: 0.99, aligned: 0.99 },
+    });
+    const licks = () =>
+      local.transcript.value.entries
+        .map((entry) => JSON.stringify(entry))
+        .filter((text) => text.includes('channel=\\"sudo-request\\"'));
+    const allowed = await sudo(['ls', '/etc'], scoopTag);
+    const unsure = sudo(['ls', '/tmp'], scoopTag);
+    await until(
+      () => newest(local).detail.command === '/usr/bin/ls /tmp' && newest(local).tier === 'user',
+      'the unsure one to reach a person'
+    );
+    const escalated = newest(local);
+    const lick = await until(() => licks().find((text) => text.includes('ls /tmp')), 'the lick');
+    await model.approvals.decide(escalated.id, 'deny');
+    await unsure;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const quiet = licks().some((text) => text.includes('/usr/bin/ls /etc'));
     await local.close();
     await owner.release();
     return {
@@ -430,6 +456,11 @@ test("with the judge on, sudo waits for a person by default, even when asked for
       judgedRun: judgedRun.status,
       byJudge: { tier: byJudge.tier, decidedBy: byJudge.decidedBy, answer: byJudge.answer },
       after,
+      context,
+      allowed: allowed.status,
+      escalated: escalated.verdict?.decision ?? null,
+      lick,
+      quiet,
     };
   });
   assert.equal(seen.calls, 1);
@@ -442,5 +473,45 @@ test("with the judge on, sudo waits for a person by default, even when asked for
   assert.deepEqual(seen.decided, ['owner', 'owner']);
   assert.equal(seen.judgedRun, 0);
   assert.deepEqual(seen.byJudge, { tier: 'agent', decidedBy: 'judge', answer: 'once' });
+  assert.deepEqual(seen.context, { target: 'root', cwd: '/' });
+  assert.equal(seen.allowed, 0);
+  assert.equal(seen.escalated, 'unsure');
+  assert.match(seen.lick, /helper asked to run \/usr\/bin\/ls \/tmp/);
+  assert.equal(seen.quiet, false);
   assert.equal(seen.after, 2);
+});
+
+test('a sudo the kernel lets expire is recorded as timed out, not withdrawn', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  const seen = await page.evaluate(async () => {
+    const { owner, until, newest } = globalThis.t;
+    const local = await owner.connect();
+    const expiresAt = Date.now() + 1500;
+    const kernel = new AbortController();
+    const asked = owner.approve(
+      {
+        id: 'sudo-9',
+        kind: 'sudo',
+        user: 'cone',
+        target: 'root',
+        argv: ['ls', '/root'],
+        path: '/usr/bin/ls',
+        cwd: '/',
+        expiresAt,
+        always: true,
+      },
+      { signal: kernel.signal }
+    );
+    await until(() => newest(local)?.state === 'pending', 'the request');
+    await new Promise((resolve) => setTimeout(resolve, expiresAt - Date.now() - 300));
+    kernel.abort('expired');
+    const answer = await asked;
+    await until(() => newest(local).state !== 'pending', 'the record to settle');
+    const { state, reason } = newest(local);
+    await local.close();
+    await owner.release();
+    return { answer, state, reason };
+  });
+  assert.deepEqual(seen, { answer: 'deny', state: 'unanswered', reason: 'timeout' });
 });
