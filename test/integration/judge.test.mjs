@@ -253,7 +253,7 @@ async function shoot(page, name) {
   await viewport(page, 1280);
 }
 
-test('an unsure judge, a failed call, an attachment the judge cannot read or a judge model the settings do not have hands the request to a person, never to an approval, and the owner answers it in the dialog', async (t) => {
+test("an unsure judge, a failed call, an attachment the judge cannot read or a judge model the settings do not have hands the request to a person, never to an approval, and the dialog says the judge wasn't sure", async (t) => {
   const page = await chrome.page(t);
   await viewport(page, 1280);
   const steps = [
@@ -371,12 +371,21 @@ test('an unsure judge, a failed call, an attachment the judge cannot read or a j
   assert.equal(seen.filed.verdict, undefined);
   assert.deepEqual(seen.calls, ['judge/j-2', 'judge/j-2', 'judge/j-2']);
   assert.deepEqual(seen.listed, [
-    [seen.unsure.id, null],
+    [
+      seen.unsure.id,
+      {
+        decision: 'unsure',
+        reason: "it looks low-risk, but it isn't clear it serves what the owner asked for.",
+      },
+    ],
     [seen.failed.id, null],
     [seen.filed.id, null],
     [seen.missing.id, null],
   ]);
-  assert.equal(seen.line, undefined);
+  assert.equal(
+    seen.line,
+    "The automatic check wasn\u2019t sure: it looks low-risk, but it isn't clear it serves what the owner asked for."
+  );
   assert.match(seen.dialogText, /dark mode toggle/);
   assert.deepEqual(
     seen.notes.map((note) => [note.outcome, note.error ?? null]),
