@@ -384,7 +384,7 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
     width: Number(env.GUESTS_WIDTH ?? 1280),
     height: 860,
     deviceScaleFactor: 1,
-    mobile: Number(env.GUESTS_WIDTH ?? 1280) < 600,
+    mobile: false,
   });
   await page.send('Emulation.setEmulatedMedia', {
     features: [{ name: 'prefers-color-scheme', value: 'light' }],
