@@ -10,6 +10,7 @@ export interface GuestHub {
 
 export const NO_HUB = 'Inviting guests needs the tray hub.';
 export const NO_CONTROL = 'Only a tab with Control can invite guests.';
+export const NO_OWNER = "Only the owner's tab can invite guests.";
 
 export class GuestAdapter extends Emitter<GuestEvents> implements GuestPort {
   readonly #connection: AgentConnection;
@@ -30,6 +31,7 @@ export class GuestAdapter extends Emitter<GuestEvents> implements GuestPort {
     const connection = this.#connection;
     if (connection.mismatch || connection.viewOnly || connection.guest || !connection.guests)
       return NO_CONTROL;
+    if (connection.owner === false) return NO_OWNER;
     return this.#hub ? null : NO_HUB;
   }
 

@@ -65,7 +65,8 @@ async function start() {
       return agent.harness.commit(...args);
     },
   };
-  return hostAgent(agent, { approvals: await attachApprovals({ harness }) });
+  const ttlMs = params.has('ttl') ? { ttlMs: Number(params.get('ttl')) } : {};
+  return hostAgent(agent, { approvals: await attachApprovals({ harness, ...ttlMs }) });
 }
 
 const host = start();

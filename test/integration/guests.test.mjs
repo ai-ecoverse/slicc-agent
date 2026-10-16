@@ -314,6 +314,7 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
         () => 'sent',
         (error) => error.message
       ),
+      waiting: guestModel.agent.queue('cone').map((message) => `${message.from}: ${message.text}`),
       pages: guest.pages ?? null,
       remote: guest.remote ?? null,
       views: guest.views ?? null,
@@ -321,17 +322,32 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
       listedAfterUnreviewed,
       hubRevoked: globalThis.seats.revoked,
     };
+    const follower = await join({ pages: false }, connectAgent);
+    out.followerInvite = createAgentModel(follower, { guests: hub }).guests.unavailable();
+    out.followerMint = await refused(() =>
+      follower.control.guestOpen(
+        {
+          id: 'f',
+          label: 'f',
+          agentId: 'cone',
+          expiresAt: null,
+          gates: { messages: 'off', tools: 'user' },
+        },
+        BACKGROUND_CONTEXT
+      )
+    );
+    await follower.close();
     await guest.close();
     return out;
   });
   assert.equal(result.asFollower, 'forbidden');
+  assert.equal(result.followerInvite, "Only the owner's tab can invite guests.");
+  assert.equal(result.followerMint, 'forbidden');
   for (const key of ['abort', 'lick', 'configure', 'mint', 'settings'])
     assert.equal(result[key], 'EACCES', key);
   assert.equal(result.invite, 'Only a tab with Control can invite guests.');
-  assert.equal(
-    result.gated,
-    "Messages from guests need a review, and this agent can't review them yet."
-  );
+  assert.equal(result.gated, 'sent');
+  assert.deepEqual(result.waiting, ['Mallory: Let me in']);
   assert.equal(result.pages, null);
   assert.equal(result.remote, null);
   assert.equal(result.views, null);
@@ -482,4 +498,68 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
   });
   assert.deepEqual(after.revoked, ['seat-1']);
   assert.deepEqual(after.seats, []);
+});
+
+test('a gated guest message waits visibly: the guest sees it pending, an approval delivers it once, and one nobody answers ends as not approved in time', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, 'ttl=2500&answer=Welcome%2C%20Anna.');
+  const result = await page.evaluate(async () => {
+    const { owner, join, until, hub, said } = globalThis.seats;
+    const local = await owner.connect();
+    const model = createAgentModel(local, { guests: hub });
+    const { seat } = await model.guests.mint('cone', {
+      label: 'Anna',
+      expiresAt: null,
+      gates: { messages: 'user', tools: 'user' },
+    });
+    const guest = await join({ guest: { id: seat.id, label: 'Anna' } });
+    const guestModel = createAgentModel(guest);
+    await guestModel.agent.ready();
+    const queue = () =>
+      guestModel.agent
+        .queue('cone')
+        .map((message) => `${message.origin}(${message.from}): ${message.text}`);
+    await guestModel.agent.send('cone', 'Can I join in?');
+    await until(() => queue().length === 1, 'the guest to see its message waiting');
+    const out = { waiting: queue() };
+    await until(() => model.approvals.list().length === 1, 'the owner to be asked');
+    const asked = model.approvals.list()[0];
+    out.asked = { kind: asked.kind, text: asked.text, always: asked.always };
+    await until(() => model.guests.list()[0]?.pending === 1, 'the seat to count it');
+    await model.approvals.decide(asked.id, 'once');
+    await until(
+      () => said(model).includes('agent: Welcome, Anna.'),
+      'the approved message to be answered'
+    );
+    out.ownerSees = said(model);
+    await until(() => queue().length === 0, 'the guest queue to empty');
+    await until(
+      () => said(guestModel).includes('agent: Welcome, Anna.'),
+      'the guest to see the answer'
+    );
+    await guestModel.agent.send('cone', 'Anyone there?');
+    await until(() => queue().length === 1, 'the second message to wait');
+    const notice = () =>
+      guestModel.agent
+        .messages('cone')
+        .find((message) => message.role === 'system' && message.text === 'Anyone there?');
+    await until(notice, 'the unanswered notice');
+    out.notice = { title: notice().title, kind: notice().kind };
+    out.queueAfter = queue();
+    out.ownerAfter = said(model);
+    out.pendingAfter = model.guests.list()[0].pending;
+    await guest.close();
+    return out;
+  });
+  assert.deepEqual(result.waiting, ['guest(Anna): Can I join in?']);
+  assert.deepEqual(result.asked, { kind: 'guest-message', text: 'Can I join in?', always: false });
+  assert.deepEqual(result.ownerSees, ['guest(Anna): Can I join in?', 'agent: Welcome, Anna.']);
+  assert.deepEqual(result.notice, { title: 'Nobody approved this in time.', kind: 'notice' });
+  assert.deepEqual(result.queueAfter, []);
+  assert.deepEqual(
+    result.ownerAfter,
+    result.ownerSees,
+    'an unanswered message never reaches the agent'
+  );
+  assert.equal(result.pendingAfter, 0);
 });

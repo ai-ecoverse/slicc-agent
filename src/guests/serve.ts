@@ -2,17 +2,32 @@ import type { Context, Host, ReplicatedState } from '@earendil-works/chord';
 import { replicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
-import type { AgentGuest, GuestShown } from '../services.ts';
+import type { Approval } from '../approvals/index.ts';
+import type { AgentGuest, GuestProposal, GuestShown } from '../services.ts';
 import type { AgentPrincipal, GuestPrincipal } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import type { Guests } from './index.ts';
 import { guestView } from './view.ts';
 
+export function proposalsOf(items: readonly Approval[] | undefined, seat: string): GuestProposal[] {
+  return (items ?? [])
+    .filter((item) => item.kind === 'guest-message' && item.seat === seat)
+    .map((item) => ({
+      id: item.id,
+      text: (item.detail as { text?: string }).text ?? '',
+      state: item.state,
+      reason: item.reason ?? null,
+      createdAt: item.createdAt,
+      decidedAt: item.decidedAt ?? null,
+    }));
+}
+
 export function guestOpener(
   guests: Guests,
   agents: Pick<Agents, 'state'>,
   views: ReplicatedState<Record<string, ConversationView>>,
-  context: Context
+  context: Context,
+  approvals?: ReplicatedState<Approval[]>
 ) {
   return (principal: GuestPrincipal): { value: AgentGuest; dispose(): void } | undefined => {
     const record = guests.current(principal);
@@ -33,13 +48,25 @@ export function guestOpener(
       expiresAt: record.expiresAt,
       gates: { ...record.gates },
     });
+    let listed = JSON.stringify(proposalsOf(approvals?.value, record.id));
+    const proposals = replicatedState<GuestProposal[]>(JSON.parse(listed) as GuestProposal[]);
+    const offProposals = approvals?.subscribe((items) => {
+      const next = JSON.stringify(proposalsOf(items, record.id));
+      if (next === listed) return;
+      listed = next;
+      proposals.replace(context, JSON.parse(next) as GuestProposal[]);
+    });
     return {
       value: {
         transcript,
         seat,
+        proposals,
         propose: (request, using) => guests.propose(principal, request, using),
       },
-      dispose: off,
+      dispose() {
+        off();
+        offProposals?.();
+      },
     };
   };
 }

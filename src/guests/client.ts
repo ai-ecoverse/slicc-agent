@@ -7,6 +7,7 @@ import {
   AgentGuestService,
   type AgentSettings,
   CONTROL_METHODS,
+  type GuestProposal,
   type GuestShown,
   type SendResponse,
 } from '../services.ts';
@@ -79,7 +80,8 @@ export async function connectGuest(
   if (handle.kind !== 'guest') return fail(refusal(SEAT_REFUSED));
   const transcriptMember = handle.transcript as Readable<ConversationView | undefined>;
   const seatMember = handle.seat as Readable<GuestShown | undefined>;
-  const keeping = [transcriptMember, seatMember].map(kept);
+  const proposalsMember = handle.proposals as Readable<GuestProposal[] | undefined>;
+  const keeping = [transcriptMember, seatMember, proposalsMember].map(kept);
   await Promise.race([Promise.all(keeping.map((keep) => keep.ready)), link.ended]);
   const call = handle.propose as (args: unknown[], ctx: unknown) => Promise<Proposed>;
   const propose = async (request: ProposeRequest) => {
@@ -102,20 +104,24 @@ export async function connectGuest(
         error: { code: 'EACCES', message: "A guest can't attach files." },
       };
     const proposed = await propose({ text: request.text, requestId: request.requestId });
-    return proposed.state === 'submitted'
-      ? { accepted: true, submissionId: proposed.submissionId, error: null }
-      : {
-          accepted: false,
-          submissionId: null,
-          error: { code: 'EACCES', message: proposedSentence(proposed.reason) },
-        };
+    if (proposed.state === 'submitted')
+      return { accepted: true, submissionId: proposed.submissionId, error: null };
+    if (proposed.state === 'pending')
+      return { accepted: true, submissionId: proposed.approval, error: null };
+    return {
+      accepted: false,
+      submissionId: null,
+      error: { code: 'EACCES', message: proposedSentence(proposed.reason) },
+    };
   };
   const transcript = lasting(replicated(transcriptMember));
+  const proposals = lasting(replicated(proposalsMember));
   let open = true;
   const finish = () => {
     if (!open) return;
     open = false;
     transcript.freeze();
+    proposals.freeze();
     for (const keep of keeping) keep.stop();
     handle.release();
   };
@@ -135,6 +141,7 @@ export async function connectGuest(
     guest,
     control,
     transcript: transcript.state,
+    proposals: proposals.state,
     deliveries: replicatedState({}),
     agents: replicatedState({
       active: guest.agentId,

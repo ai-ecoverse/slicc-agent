@@ -26,6 +26,7 @@ export {
   type GuestHub,
   NO_CONTROL,
   NO_HUB,
+  NO_OWNER,
 } from './guest-port.ts';
 export { MemoryAdapter } from './memory-port.ts';
 export {

@@ -208,8 +208,7 @@ export async function hostAgent(
   const guests = await createGuests({
     harness: agent.harness,
     agents: agent.agents,
-    pending: approvals.state,
-    withdrawSeat: (seat, using) => approvals.withdrawSeat(seat, using),
+    approvals,
     context,
   });
   const control = createAgentControl(
@@ -273,7 +272,7 @@ export async function hostAgent(
     settings,
     remote,
     pages,
-    guest: guestOpener(guests, agent.agents, mounted.views, context),
+    guest: guestOpener(guests, agent.agents, mounted.views, context, approvals.state),
     decide: (by) => (id, decision, reason, using) =>
       approvals.decide(id, decision, reason, by, using),
   });
@@ -385,9 +384,16 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
   };
 }
 
+export const GUEST_MANAGERS: ReadonlySet<Seat> = new Set<Seat>(['owner']);
+
+export const OWNER_GUESTS = 'only the owner can invite or revoke guests';
+
+const notOwner = () => Promise.reject(forbidden(OWNER_GUESTS));
+
 const seated = (serving: Served, seat: Seat): AgentControl => ({
   ...serving.trusted,
   decide: serving.decide(seat === 'owner' ? 'owner' : 'follower'),
+  ...(GUEST_MANAGERS.has(seat) ? {} : { guestOpen: notOwner, guestRevoke: notOwner }),
 });
 
 export function serveAgent(serving: Served): Host {
@@ -435,12 +441,13 @@ export function serveAgent(serving: Served): Host {
       const held = self.resources({
         seat: resource({ rev: 1, open: () => opening, close: (made) => made.dispose() }),
       });
-      const later = (name: 'transcript' | 'seat') =>
+      const later = (name: 'transcript' | 'seat' | 'proposals') =>
         lazily(() => held.seat.value.value[name] as ReplicatedState<unknown>);
       return {
         kind: 'guest',
         transcript: later('transcript'),
         seat: later('seat'),
+        proposals: later('proposals'),
         ...served(() => held.seat.value.value, GUEST_METHODS),
       };
     }) as never

@@ -24,6 +24,7 @@ import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { CONNECT_IT, isBusy, providerName, queued, toMessages } from './messages.ts';
 import { readUrl, sendAttachments } from './outgoing.ts';
+import { merged, proposalNotices, proposalQueue } from './proposals.ts';
 
 export const CONE = 'cone';
 
@@ -107,6 +108,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       if (!next) for (const pending of this.#outbox.values()) pending.release();
       this.emit('hold', next);
       this.emit('agents', this.list());
+    });
+    connection.proposals?.subscribe(() => {
+      const agentId = connection.guest?.agentId;
+      if (agentId) this.emit('messages', agentId);
     });
     connection.frozen?.subscribe(() => {
       this.emit('frozen', this.frozen());
@@ -321,6 +326,13 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   }
 
   messages(agentId: string = this.active()): readonly Message[] {
+    const listed = this.#listed(agentId);
+    const guest = this.#connection.guest;
+    if (!guest || guest.agentId !== agentId) return listed;
+    return merged(listed, proposalNotices(this.#connection.proposals?.value));
+  }
+
+  #listed(agentId: string): readonly Message[] {
     const shown = this.#messages.get(agentId) ?? [];
     const notes = this.#notices.get(agentId);
     if (!notes) return shown;
@@ -451,7 +463,12 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       .map((item) => item.message);
     const stamps = this.#queuedAt.get(agentId);
     const at = (id: string) => stamps?.get(id)?.at ?? 0;
-    return [...queued(this.#view(agentId), at), ...pending];
+    const guest = this.#connection.guest;
+    const proposed =
+      guest && guest.agentId === agentId
+        ? proposalQueue(this.#connection.proposals?.value, guest.label)
+        : [];
+    return [...queued(this.#view(agentId), at), ...proposed, ...pending];
   }
 
   unqueue(agentId: string, messageId: string): void {

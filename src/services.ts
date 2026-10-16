@@ -368,13 +368,23 @@ export interface GuestShown {
   gates: GuestGates;
 }
 
+export interface GuestProposal {
+  id: string;
+  text: string;
+  state: 'pending' | 'approved' | 'rejected' | 'unanswered' | 'withdrawn';
+  reason: string | null;
+  createdAt: number;
+  decidedAt: number | null;
+}
+
 export interface AgentGuest {
   readonly transcript: ReplicatedState<ConversationView>;
   readonly seat: ReplicatedState<GuestShown>;
+  readonly proposals: ReplicatedState<GuestProposal[]>;
   propose(request: ProposeRequest, context: Context): Promise<Proposed>;
 }
 
-export const GUEST_STATES = ['transcript', 'seat'] as const;
+export const GUEST_STATES = ['transcript', 'seat', 'proposals'] as const;
 
 export const GUEST_METHODS = ['propose'] as const;
 

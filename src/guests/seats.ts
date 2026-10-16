@@ -20,6 +20,7 @@ export type SeatRecord = GuestDraft & {
   createdAt: number;
   epoch: number;
   revoked: number | null;
+  delivered?: string[];
 };
 
 export interface GuestSeat {

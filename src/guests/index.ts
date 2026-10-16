@@ -2,6 +2,7 @@ import { type Context, type ReplicatedState, replicatedState } from '@earendil-w
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { type Harness, InboxDoc } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
+import type { Approval, Approvals } from '../approvals/index.ts';
 import { scrubText } from '../secrets/scrub.ts';
 import type { GuestPrincipal } from '../serving.ts';
 import { GUEST_INPUT_KIND, type GuestInput, guestContent } from './attribution.ts';
@@ -20,16 +21,12 @@ export type GuestOpened = { seat: GuestSeat; error: null } | { seat: null; error
 
 export type Proposed =
   | { state: 'submitted'; submissionId: string; reason: null }
+  | { state: 'pending'; submissionId: null; approval: string; reason: null }
   | { state: 'unanswered'; submissionId: null; reason: string };
 
 export interface ProposeRequest {
   text: string;
   requestId: string | null;
-}
-
-export interface Pending {
-  seat?: string;
-  state: string;
 }
 
 export interface Guests {
@@ -48,14 +45,14 @@ export interface Guests {
 export interface GuestsOptions {
   harness: Pick<Harness, 'commit' | 'abortSubmission'>;
   agents: Pick<Agents, 'state' | 'conversation'>;
-  pending?: ReplicatedState<readonly Pending[]>;
-  withdrawSeat?: (seat: string, context: Context) => Promise<unknown>;
+  approvals?: Pick<Approvals, 'state' | 'request' | 'withdrawSeat'>;
   now?: () => number;
   context?: Context;
 }
 
 export const MAX_PROPOSAL = 32_000;
 const MAX_REQUEST = 128;
+const KEPT_DELIVERED = 100;
 const LONGEST_TIMER = 2 ** 31 - 1;
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -94,27 +91,21 @@ async function withdrawQueued(
   for (const id of queued) await harness.abortSubmission(id, using, conversation.id);
 }
 
-async function submitGuest(
+async function deliver(
   record: SeatRecord,
-  request: ProposeRequest,
+  text: string,
+  approval: string | null,
+  requestId: string | undefined,
   agents: GuestsOptions['agents'],
   using: Context
 ): Promise<Proposed> {
-  const text = typeof request?.text === 'string' ? request.text.trim() : '';
-  if (!text) return unanswered('empty');
-  if (text.length > MAX_PROPOSAL) return unanswered('too-long');
-  if (record.gates.messages !== 'off') return unanswered('unavailable');
   const conversation = await agents.conversation(record.agentId, using);
   if (!conversation) return unanswered('gone');
-  const requestId =
-    typeof request.requestId === 'string' && request.requestId.length <= MAX_REQUEST
-      ? `guest:${record.id}:${request.requestId}`
-      : undefined;
-  const data: GuestInput = { seat: record.id, name: record.label, approval: null };
+  const data: GuestInput = { seat: record.id, name: record.label, approval };
   const submitted = await conversation.submit(
     {
       type: 'input',
-      content: guestContent(record.label, await scrubText(text)),
+      content: guestContent(record.label, text),
       whenBusy: 'followUp',
       entry: { kind: GUEST_INPUT_KIND, data: { ...data } },
       ...(requestId ? { requestId } : {}),
@@ -122,6 +113,38 @@ async function submitGuest(
     using
   );
   return { state: 'submitted', submissionId: String(submitted.id), reason: null };
+}
+
+async function proposeAs(
+  record: SeatRecord,
+  request: ProposeRequest,
+  options: GuestsOptions,
+  using: Context
+): Promise<Proposed> {
+  const text = typeof request?.text === 'string' ? request.text.trim() : '';
+  if (!text) return unanswered('empty');
+  if (text.length > MAX_PROPOSAL) return unanswered('too-long');
+  const scrubbed = await scrubText(text);
+  const requestId =
+    typeof request.requestId === 'string' && request.requestId.length <= MAX_REQUEST
+      ? `guest:${record.id}:${request.requestId}`
+      : undefined;
+  const gate = record.gates.messages;
+  if (gate === 'off') return deliver(record, scrubbed, null, requestId, options.agents, using);
+  if (!options.approvals) return unanswered('unavailable');
+  const item = await options.approvals.request(
+    {
+      kind: 'guest-message',
+      seat: record.id,
+      agentId: record.agentId,
+      requester: { kind: 'guest', name: record.label, seat: record.id },
+      tier: gate,
+      detail: { text: scrubbed, attachments: [] },
+    },
+    using
+  );
+  if (item.state !== 'pending') return unanswered(item.reason ?? item.state);
+  return { state: 'pending', submissionId: null, approval: item.id, reason: null };
 }
 
 export async function createGuests(options: GuestsOptions): Promise<Guests> {
@@ -136,8 +159,9 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
   const ended = new Set<(id: string) => void>();
   const gone = new Set<string>();
   const pendingOf = (id: string) =>
-    (options.pending?.value ?? []).filter((item) => item.seat === id && item.state === 'pending')
-      .length;
+    (options.approvals?.state.value ?? []).filter(
+      (item) => item.seat === id && item.state === 'pending'
+    ).length;
   const shown = (): GuestSeat[] =>
     Object.values(records)
       .filter((record) => liveSeat(record, now()))
@@ -174,13 +198,41 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       timer = setTimeout(publish, Math.min(Math.max(0, next - at), LONGEST_TIMER));
   };
   publish();
-  const offPending = options.pending?.subscribe(() => seats.replace(context, shown()));
   const write = (change: (seats: Record<string, SeatRecord>) => SeatRecord | undefined) =>
     harness.commit(async (tx) => {
       const doc = await tx.doc(GuestsDoc);
       const changed = change(doc.seats);
       return changed ? copy(changed) : undefined;
     }, context);
+  const delivering = new Set<string>();
+  const deliverOne = async (record: SeatRecord, item: Approval) => {
+    const text = (item.detail as { text?: string }).text ?? '';
+    const requestId = `guest:${record.id}:${item.id}`;
+    const sent = await deliver(record, text, item.id, requestId, agents, context);
+    if (sent.state !== 'submitted') return;
+    const changed = await write((all) => {
+      const kept = all[record.id];
+      if (!kept) return undefined;
+      kept.delivered = [...(kept.delivered ?? []), item.id].slice(-KEPT_DELIVERED);
+      return kept;
+    });
+    if (changed) records[record.id] = changed;
+  };
+  const approved = (items: readonly Approval[]) => {
+    for (const item of items) {
+      if (item.kind !== 'guest-message' || item.state !== 'approved' || !item.seat) continue;
+      const record = records[item.seat];
+      if (!record || !liveSeat(record, now()) || delivering.has(item.id)) continue;
+      if (record.delivered?.includes(item.id)) continue;
+      delivering.add(item.id);
+      void deliverOne(record, item).catch(() => undefined);
+    }
+  };
+  const offPending = options.approvals?.state.subscribe((items) => {
+    seats.replace(context, shown());
+    approved(items);
+  });
+  approved(options.approvals?.state.value ?? []);
   const current = (guest: GuestPrincipal) => {
     const record = records[guest.id];
     return record && liveSeat(record, now()) && record.epoch === guest.epoch ? record : undefined;
@@ -230,7 +282,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       end(id);
       publish();
       await withdrawQueued(harness, agents, changed, using);
-      await options.withdrawSeat?.(id, using);
+      await options.approvals?.withdrawSeat(id, using);
       return { revoked: true };
     },
     admit(id, label) {
@@ -257,7 +309,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
     },
     async propose(guest, request, using) {
       const record = current(guest);
-      return record ? submitGuest(record, request, agents, using) : unanswered('revoked');
+      return record ? proposeAs(record, request, options, using) : unanswered('revoked');
     },
     dispose() {
       if (timer) clearTimeout(timer);
