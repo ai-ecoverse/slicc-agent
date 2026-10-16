@@ -427,7 +427,7 @@ async function start(
     env: home,
     home: HOME,
     activity,
-    ...(people ? { dirs: () => people.lickDirs() } : {}),
+    ...(people ? { dirs: () => people.lickDirs(), cronUser: people.cronUser.bind(people) } : {}),
   });
   await sources.start(BACKGROUND_CONTEXT);
   await sources.boot(

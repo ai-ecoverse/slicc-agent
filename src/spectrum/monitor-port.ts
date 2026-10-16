@@ -83,7 +83,6 @@ function trend(series: readonly number[] | undefined): { series?: number[] } {
 const KINDS: Record<string, string> = {
   'pi.generation': 'generating',
   'pi.compaction': 'compacting',
-  'slicc.cron': 'cron',
   'slicc.scoop-wait': 'agent wait',
   'slicc.scoop-reporter': 'report',
   'slicc.memory-extract': 'memory extraction',

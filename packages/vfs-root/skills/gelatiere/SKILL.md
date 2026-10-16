@@ -5,7 +5,7 @@ description: Use this when you receive a <lick channel="sprinkle" source="sprink
 
 # Gelatiere
 
-The gelatiere is a scoop with the `gelatiere` role. Each night, and whenever someone runs `gelatiere run`, it reviews memory, skills and setup, and folds a few suggestions into `/home/.gelatiere/suggestions.json`. The suggestions sprinkle shows the open ones as cards. `gelatiere init` starts it and adds its crontab line; the user can change its pass in `~/.pi/agent/GELATIERE.md`.
+The gelatiere is a scoop with the `gelatiere` role. Each night, and whenever someone runs `gelatiere run`, it reviews memory, skills and setup, and folds a few suggestions into `/home/.gelatiere/suggestions.json`. The suggestions sprinkle shows the open ones as cards. `gelatiere init` starts it and puts its nightly line in the scoop's own crontab; the user can change its pass in `~/.pi/agent/GELATIERE.md`.
 
 ## A `gelatiere-suggestions` lick arrived
 
@@ -21,7 +21,7 @@ Its body lists the new suggestions for your cone. Reply with one short sentence:
 
 ## The `gelatiere` command
 
-- `gelatiere init` starts the gelatiere scoop and its nightly crontab line.
+- `gelatiere init` starts the gelatiere scoop and puts its nightly line in the scoop's crontab.
 - `gelatiere run` asks it for a pass now.
 - `gelatiere list [--all] [--json]` lists the open suggestions, or all of them.
 - `gelatiere install <id>` installs a suggested skill.

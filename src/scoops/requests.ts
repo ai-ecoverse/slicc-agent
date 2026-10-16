@@ -1,9 +1,11 @@
 import type { Context } from '@earendil-works/chord';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
+import type { CronRun } from '../licks/crontab.ts';
 import type { Answer } from './service.ts';
 
 export const CONTROL_DIR = '/var/lib/slicc/agent/requests';
-export const PROTOCOL = 'slicc-agent/1';
+export const PROTOCOL = 'slicc-agent/2';
+export const PROTOCOL_MARK = 'slicc-agent/';
 export const STALE_MS = 10 * 60_000;
 const COMMAND_NAMES = new Set(['subagent', 'memory', 'gelatiere', 'freezer', 'models', 'panel']);
 
@@ -17,23 +19,36 @@ export interface Request {
   argv: string[];
   stdin: string;
   user?: string;
+  cron?: CronRun;
 }
 
-const HEADER = 6;
+const HEADERS: Record<string, number> = { 'slicc-agent/1': 6, [PROTOCOL]: 7 };
+
+export function cronOf(field: string): CronRun | undefined {
+  const [job, due, missed, extra] = field.split(' ');
+  const count = Number(missed);
+  if (!job || !due || extra !== undefined || !Number.isInteger(count) || count < 0)
+    return undefined;
+  return { job, due, missed: count };
+}
 
 export function parseRequest(id: string, bytes: Uint8Array): Request | undefined {
   const decoder = new TextDecoder();
   const fields: string[] = [];
   let at = 0;
-  while (fields.length < HEADER) {
+  let header = 1;
+  while (fields.length < header) {
     const end = bytes.indexOf(0, at);
     if (end < 0) return undefined;
     fields.push(decoder.decode(bytes.subarray(at, end)));
     at = end + 1;
+    header = HEADERS[fields[0] as string] ?? 0;
   }
-  const [version, as, caller, cwd, pid, count] = fields;
-  const argc = Number(count);
-  if (version !== PROTOCOL || !Number.isInteger(argc) || argc < 0) return undefined;
+  if (!header) return undefined;
+  const [, as, caller, cwd, pid] = fields;
+  const cron = header === 7 ? cronOf(fields[5] as string) : undefined;
+  const argc = Number(fields.at(-1));
+  if (!Number.isInteger(argc) || argc < 0) return undefined;
   const argv: string[] = [];
   while (argv.length < argc) {
     const end = bytes.indexOf(0, at);
@@ -52,6 +67,7 @@ export function parseRequest(id: string, bytes: Uint8Array): Request | undefined
     pid: Number.isInteger(process) && process > 0 ? process : null,
     argv,
     stdin: decoder.decode(bytes.subarray(at)),
+    ...(cron ? { cron } : {}),
   };
 }
 

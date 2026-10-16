@@ -2,8 +2,12 @@ import type { Context } from '@earendil-works/chord';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState } from '../agents.ts';
+import { CONE_PREFIX } from '../kernel/accounts.ts';
 import { resolve } from '../kernel/paths.ts';
 import { agentOfUser, type Layout, LEGACY, ROOT_USER } from '../layout.ts';
+import { type CronRun, cronLick } from '../licks/crontab.ts';
+import type { LickTarget } from '../licks/lick.ts';
+import type { Licks } from '../licks/licks.ts';
 import { findRole, type Roles } from '../roles/roles.ts';
 import type { Request, Runner } from './requests.ts';
 import { type Answer, findScoop, modelOf, type Scoops } from './service.ts';
@@ -50,6 +54,7 @@ export interface CliOptions {
   models?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   layout?: Layout;
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
+  licks?: Pick<Licks, 'deliver'>;
 }
 
 export interface PanelCaller {
@@ -364,6 +369,43 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   );
 }
 
+function cronTarget(deps: Deps, request: Request): LickTarget | Answer {
+  const state = deps.agents.state();
+  const name = request.argv[1] ?? '';
+  if (!name) return fail('send needs cone or a scoop handle', 2);
+  const user = request.user && request.user !== ROOT_USER ? request.user : undefined;
+  const own = user ? agentOfUser(state, user) : undefined;
+  if (user && !own) return fail(`${user} is no cone or scoop`);
+  if (own?.startsWith('scoop:')) {
+    const record = state.scoops[own] as { name: string };
+    const mine = [own, own.slice('scoop:'.length), record.name].includes(name);
+    return mine
+      ? (own as LickTarget)
+      : fail("a scoop's cron job can only send to the scoop itself");
+  }
+  const cone = own ? own.slice(CONE_PREFIX.length) : null;
+  const home: LickTarget = cone ? `cone:${cone}` : 'cone';
+  if (name === 'cone') return home;
+  return (findScoop(state, name, cone)?.[0] as LickTarget | undefined) ?? home;
+}
+
+async function cronSend(
+  deps: Deps,
+  request: Request,
+  run: CronRun,
+  context: Context
+): Promise<Answer> {
+  if (!deps.licks) return fail('licks are not available in this agent');
+  const parsed = flags(request.argv.slice(2), ['--file']);
+  const unknown = [...parsed.switches].find((flag) => flag !== '--follow-up');
+  if (unknown) return fail(`unknown option ${unknown}`, 2);
+  const target = cronTarget(deps, request);
+  if (isAnswer(target)) return target;
+  const text = (await message(deps, parsed, request, context)).trim();
+  await deps.licks.deliver(cronLick(run, target, text), context);
+  return ok('');
+}
+
 async function latest(
   deps: Deps,
   record: { folder: string; cone: string },
@@ -551,6 +593,8 @@ export function createCli(options: CliOptions): Runner {
     },
     async run(request, context) {
       try {
+        if (request.cron && request.as === 'agent' && request.argv[0] === 'send')
+          return await cronSend(deps, request, request.cron, context);
         return await dispatch(deps, request, callerOf(options.agents, request), context);
       } catch (error) {
         return fail((error as Error).message);
