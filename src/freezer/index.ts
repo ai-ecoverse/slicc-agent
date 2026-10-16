@@ -19,7 +19,7 @@ import {
 import { HOME } from '../kernel/env.ts';
 import { type Layout, LEGACY } from '../layout.ts';
 import type { LickTarget } from '../licks/lick.ts';
-import { pinned } from '../secrets/extension.ts';
+import { copyAgent, SELECTION, storedAgent } from '../selection.ts';
 import { cleanTitle, TITLE_TURNS, titleDue } from '../titles/extension.ts';
 import { scrubTranscript } from '../titles/generate.ts';
 
@@ -329,21 +329,8 @@ async function freshLike(
   conversation: Conversation,
   context: Context
 ): Promise<Conversation> {
-  const agent = await conversation.agent(context);
-  return harness.createConversation(
-    {
-      ownership: { kind: 'ownerless' },
-      agent: pinned({
-        model: agent.model,
-        thinkingLevel: agent.thinkingLevel,
-        extensions: agent.extensions,
-        tools: agent.tools,
-        instructions: agent.instructions ?? null,
-        cwd: agent.cwd ?? null,
-      }),
-    },
-    context
-  );
+  const init = copyAgent(await storedAgent(harness, conversation.id, context));
+  return harness.createConversation({ ownership: { kind: 'ownerless' }, init }, context);
 }
 
 async function activeCone(agents: Agents, context: Context): Promise<Conversation> {
@@ -366,17 +353,15 @@ async function thawScoop(
   if (!conversation) throw new Error(`There is no conversation ${id}.`);
   const last = (await conversation.context(context)).entries.at(-1);
   const agent = await conversation.agent(context);
-  const cone = await (await activeCone(agents, context)).agent(context);
+  const cone = await storedAgent(harness, (await activeCone(agents, context)).id, context);
   const created = {
     ownership: { kind: 'ownerless' as const },
-    agent: pinned({
+    agent: {
       model: agent.model as NonNullable<typeof agent.model>,
       thinkingLevel: agent.thinkingLevel,
-      extensions: cone.extensions,
-      tools: cone.tools,
-      instructions: cone.instructions ?? null,
       ...(layout.users ? {} : { cwd: HOME }),
-    }),
+    },
+    init: copyAgent(cone, SELECTION),
   };
   const fork = last
     ? await conversation.fork(last.id, created, context)

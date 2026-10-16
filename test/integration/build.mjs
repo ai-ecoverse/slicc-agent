@@ -6,6 +6,7 @@ await build({
   entryPoints: [
     'test/integration/page/agent-worker.js',
     'test/integration/page/storage-worker.js',
+    'test/integration/page/legacy-worker.js',
     'test/integration/page/page.js',
     'test/integration/page/main-worker.js',
     'test/integration/page/codemode-worker.js',

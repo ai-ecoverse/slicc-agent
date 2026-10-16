@@ -12,6 +12,7 @@ import {
   packageDirs,
   type Roles,
 } from '../roles/roles.ts';
+import type { Choosable } from '../selection.ts';
 import { type CliOptions, createCli, RUN_DIR } from './cli.ts';
 import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
 import {
@@ -21,7 +22,7 @@ import {
   type PlaneOptions,
   PROTOCOL,
 } from './requests.ts';
-import { createScoops, type EnvOf, type Scoops, type ScoopsHost } from './service.ts';
+import { choosable, createScoops, type EnvOf, type Scoops, type ScoopsHost } from './service.ts';
 
 export const BUILTIN_ROLES = ['scout', 'worker', 'reviewer', 'oracle', 'delegate', 'gelatiere'];
 export const PNPM_HOME = '/home/.local/share/pnpm';
@@ -75,6 +76,7 @@ export interface ScoopsRuntime {
 
 export interface ScoopsSetup {
   scoops: Scoops;
+  choosable: Choosable;
   attach(options: AttachOptions, context: Context): Promise<ScoopsRuntime>;
 }
 
@@ -280,6 +282,7 @@ export function setupScoops(
   registry.install(guardExtension(lookup));
   return {
     scoops,
+    choosable: choosable(fileTools),
     async attach(options, context) {
       const { harness, agents, groups, env, home } = options;
       const assets = options.assets ?? packageAssets();
