@@ -1,5 +1,6 @@
 import type { Context, JsonValue, RemoteContract, ReplicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { Approval, ApprovalAnswer, ApprovalDecided } from './approvals/index.ts';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
@@ -102,6 +103,12 @@ export interface AgentControl {
   image(ref: ImageRef, context: Context): Promise<StoredImage>;
   agentCommands(agentId: string, context: Context): Promise<Command[]>;
   toolLabel(agentId: string, callIds: string[], context: Context): Promise<string | null>;
+  decide(
+    id: string,
+    decision: ApprovalAnswer,
+    reason: string | null,
+    context: Context
+  ): Promise<ApprovalDecided>;
 }
 
 export interface ImageRef {
@@ -265,6 +272,7 @@ export const CONTROL_METHODS = keys<AgentControl>({
   image: true,
   agentCommands: true,
   toolLabel: true,
+  decide: true,
 });
 
 export const CONTROL_READS: readonly (keyof AgentControl & string)[] = [
@@ -298,6 +306,7 @@ export interface AgentTranscript {
   readonly monitor: ReplicatedState<MonitorFeed>;
   readonly vault: ReplicatedState<VaultState>;
   readonly labels: ReplicatedState<Record<string, string>>;
+  readonly approvals: ReplicatedState<Approval[]>;
 }
 
 export interface PrivateRevision {
@@ -325,6 +334,7 @@ export const TRANSCRIPT_STATES = keys<AgentTranscript>({
   monitor: true,
   vault: true,
   labels: true,
+  approvals: true,
 });
 
 export const AgentTranscript: RemoteContract = contract('slicc.agent.transcript', {

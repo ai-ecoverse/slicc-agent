@@ -7,6 +7,7 @@ import {
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
+import type { Approval } from './approvals/record.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
@@ -55,11 +56,13 @@ export interface AgentConnection {
   readonly monitor?: ReplicatedState<MonitorFeed>;
   readonly vault?: ReplicatedState<VaultState>;
   readonly labels?: ReplicatedState<Record<string, string>>;
+  readonly approvals?: ReplicatedState<Approval[]>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
   readonly closed: Promise<Error | undefined>;
   readonly mismatch?: string;
+  readonly readOnly?: boolean;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
   webhook(
     name: string,
@@ -195,6 +198,7 @@ export async function connectAgent(
   });
   return {
     serverId: peer.serverId,
+    readOnly: controlHandle.kind === 'view',
     control,
     transcript: hold<ConversationView>(state('state')),
     deliveries: hold<Record<string, Delivered>>(state('deliveries')),
@@ -210,6 +214,7 @@ export async function connectAgent(
     monitor: hold<MonitorFeed>(state('monitor')),
     vault: hold<VaultState>(state('vault')),
     labels: hold<Record<string, string>>(state('labels')),
+    approvals: hold<Approval[]>(state('approvals')),
     settings: lastingSettings(settings, hold),
     remote,
     pages,

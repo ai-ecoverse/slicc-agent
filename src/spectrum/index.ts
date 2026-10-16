@@ -1,6 +1,7 @@
 import type { MonitorSection } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { AgentConnection } from '../client.ts';
 import { AgentAdapter } from './agent-port.ts';
+import { ApprovalsAdapter, type HostApprovals } from './approvals-port.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
 import { MonitorAdapter } from './monitor-port.ts';
@@ -11,6 +12,12 @@ import { SprinkleAdapter } from './sprinkle-port.ts';
 import { TrayAdapter } from './tray-port.ts';
 
 export { AgentAdapter, CONE } from './agent-port.ts';
+export {
+  ApprovalsAdapter,
+  type HostApprovals,
+  NOT_HERE,
+  shown as shownApproval,
+} from './approvals-port.ts';
 export { ChangesAdapter, type ChangesEvents } from './changes-port.ts';
 export { MemoryAdapter } from './memory-port.ts';
 export {
@@ -55,10 +62,12 @@ export function createAgentModel(
     login?: Login;
     monitor?: { extra?: () => readonly MonitorSection[] };
     page?: PageOptions;
+    approvals?: HostApprovals;
     notices?: HostNotices;
   } = {}
 ): {
   agent: AgentAdapter;
+  approvals: ApprovalsAdapter;
   settings: SettingsAdapter;
   tray: TrayAdapter;
   sprinkles: SprinkleAdapter;
@@ -73,6 +82,7 @@ export function createAgentModel(
   const run = options.page?.run;
   return {
     agent,
+    approvals: new ApprovalsAdapter(connection, options.approvals),
     page: options.page && run ? new PageAdapter(connection, agent, { ...options.page, run }) : null,
     settings: new SettingsAdapter(
       connection.settings,
