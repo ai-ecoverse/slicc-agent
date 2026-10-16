@@ -18,18 +18,25 @@ export interface LoadedTemplates {
 export function parseCommandArgs(text: string): string[] {
   const args: string[] = [];
   let current = '';
+  let started = false;
   let quote: string | null = null;
   for (const char of text) {
     if (quote) {
       if (char === quote) quote = null;
       else current += char;
-    } else if (char === '"' || char === "'") quote = char;
-    else if (/\s/.test(char)) {
-      if (current) args.push(current);
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started) args.push(current);
       current = '';
-    } else current += char;
+      started = false;
+    } else {
+      current += char;
+      started = true;
+    }
   }
-  if (current) args.push(current);
+  if (started) args.push(current);
   return args;
 }
 

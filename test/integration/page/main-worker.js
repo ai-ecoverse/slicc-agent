@@ -6,6 +6,8 @@ import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-be
 import {
   fauxAssistantMessage,
   fauxProvider,
+  fauxText,
+  fauxThinking,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
 import { MemoryStorage } from '@earendil-works/pi-durable';
@@ -35,7 +37,9 @@ self.addEventListener('message', ({ data }) => {
 });
 const steps = [
   ...params.getAll('step').map((spec) => {
-    const { tool, answer } = JSON.parse(spec);
+    const { tool, answer, think, error } = JSON.parse(spec);
+    if (error) return fauxAssistantMessage([], { stopReason: 'error', errorMessage: error });
+    if (think) return fauxAssistantMessage([fauxThinking(think), fauxText(answer)]);
     return tool
       ? fauxAssistantMessage([fauxToolCall(tool.name, tool.args)], { stopReason: 'toolUse' })
       : fauxAssistantMessage(answer);
@@ -93,6 +97,7 @@ async function* chunks(body) {
   }
 }
 const MODEL_HOST = 'model.test';
+const scripted = params.getAll('e2e-call').map((spec) => JSON.parse(spec));
 const json = (body) => ({
   status: 200,
   headers: [['content-type', 'application/json']],
@@ -120,7 +125,12 @@ function model(request) {
   });
   const chunk = (delta, finish) =>
     `data: ${JSON.stringify({ id: 'e2e', object: 'chat.completion.chunk', created: 1, model: 'e2e-1', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
-  const text = `${chunk({ role: 'assistant', content: 'From the model.' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+  const body = upstream.at(-1).body;
+  const side = body.includes('Give this chat a title') || body.includes('Label this group');
+  const call = !side && scripted.length ? scripted.shift() : undefined;
+  const text = call
+    ? `${chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_e2e', type: 'function', function: { name: call.name, arguments: call.arguments } }] }, null)}${chunk({}, 'tool_calls')}data: [DONE]\n\n`
+    : `${chunk({ role: 'assistant', content: 'From the model.' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
   return {
     status: 200,
     headers: [['content-type', 'text/event-stream']],
