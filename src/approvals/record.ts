@@ -31,7 +31,7 @@ export type ApprovalAttachment = { name: string; mimeType: string; size: number 
 
 export type GuestMessageDetail = { text: string; attachments: ApprovalAttachment[] };
 
-export type GuestToolDetail = { tool: string; summary: string };
+export type GuestToolDetail = { tool: string; summary: string; arguments?: string; task?: number };
 
 export type SudoDetail = {
   command: string;

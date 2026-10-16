@@ -113,6 +113,11 @@ export interface AgentControl {
   toolLabel(agentId: string, callIds: string[], context: Context): Promise<string | null>;
   guestOpen(draft: GuestDraft, context: Context): Promise<GuestOpened>;
   guestRevoke(id: string, context: Context): Promise<{ revoked: boolean }>;
+  guestAlwaysForget(
+    seat: string,
+    approval: string,
+    context: Context
+  ): Promise<{ removed: boolean }>;
   approvalPolicySet(change: ApprovalPolicyChange, context: Context): Promise<ApprovalPolicySet>;
   decide(
     id: string,
@@ -285,6 +290,7 @@ export const CONTROL_METHODS = keys<AgentControl>({
   toolLabel: true,
   guestOpen: true,
   guestRevoke: true,
+  guestAlwaysForget: true,
   approvalPolicySet: true,
   decide: true,
 });
@@ -293,6 +299,7 @@ export const OWNER_DEVICE_METHODS: readonly (keyof AgentControl & string)[] = [
   'decide',
   'guestOpen',
   'guestRevoke',
+  'guestAlwaysForget',
   'approvalPolicySet',
 ];
 

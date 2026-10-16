@@ -26,6 +26,14 @@ export type GuestDraft = {
 
 export type SeatSubmission = { id: string; approval: string | null; tools: GuestGate };
 
+export type AlwaysTool = {
+  approval: string;
+  tool: string;
+  arguments: string;
+  by: DecidedBy | null;
+  at: number;
+};
+
 export type SeatRecord = GuestDraft & {
   createdAt: number;
   epoch: number;
@@ -33,6 +41,7 @@ export type SeatRecord = GuestDraft & {
   delivered?: string[];
   submissions?: SeatSubmission[];
   always?: { by: DecidedBy | null; approval: string; at: number };
+  alwaysTools?: AlwaysTool[];
 };
 
 export interface GuestSeat {
@@ -44,6 +53,7 @@ export interface GuestSeat {
   gates: GuestGates;
   connected: boolean;
   pending: number;
+  alwaysTools: AlwaysTool[];
 }
 
 export type GuestsState = { seats: Record<string, SeatRecord> };

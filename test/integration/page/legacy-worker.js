@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT as ctx } from '@earendil-works/chord/context';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux';
+import { GuestsDoc } from '../../../src/guests/seats.ts';
 import { openAgent, openOpfsSqliteStorage } from '../../../src/index.ts';
 
 const params = new URL(self.location.href).searchParams;
@@ -10,7 +11,7 @@ models.setProvider(faux.provider);
 faux.setResponses(Array.from({ length: 4 }, (_, n) => fauxAssistantMessage(`Seeded ${n + 1}.`)));
 const model = { provider: 'faux', modelId: 'faux-1' };
 const named = (names) => names.map((name) => ({ name }));
-const COPIED = named([
+const ALL = named([
   'coding-tools',
   'slicc-images',
   'slicc-codemode',
@@ -23,6 +24,7 @@ const COPIED = named([
   'slicc-titles',
   'slicc-guest-guard',
 ]);
+const COPIED = ALL.filter(({ name }) => params.get('without') !== name);
 const TOOLS = named(['bash', 'read', 'write', 'edit', 'codemode', 'lick_confirm', 'lick_dismiss']);
 
 async function seed() {
@@ -37,6 +39,10 @@ async function seed() {
     { extensions: { remove: named(['slicc-browser-guard']) }, tools: named(['bash']) },
     ctx
   );
+  for (const seat of params.getAll('seat').map((spec) => JSON.parse(spec)))
+    await agent.harness.commit(async (tx) => {
+      (await tx.doc(GuestsDoc)).seats[seat.id] = seat;
+    }, ctx);
   await agent.close();
   return { kept };
 }

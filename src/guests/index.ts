@@ -55,6 +55,7 @@ export interface Guests {
   readonly reviews: ReplicatedState<ReviewsState | null>;
   open(draft: GuestDraft, context: Context): Promise<GuestOpened>;
   revoke(id: string, context: Context): Promise<{ revoked: boolean }>;
+  forgetAlways(id: string, approval: string, context: Context): Promise<{ removed: boolean }>;
   admit(id: string, label: string): GuestPrincipal | null;
   record(id: string): SeatRecord | undefined;
   current(guest: GuestPrincipal): SeatRecord | undefined;
@@ -221,6 +222,21 @@ async function place(
   }, using);
 }
 
+function forgotten(
+  harness: GuestsOptions['harness'],
+  id: string,
+  approval: string,
+  using: Context
+): Promise<{ removed: boolean }> {
+  return harness.commit(async (tx) => {
+    const record = (await tx.doc(GuestsDoc)).seats[id];
+    const kept = record?.alwaysTools?.filter((rule) => rule.approval !== approval);
+    if (!record || !kept || kept.length === record.alwaysTools?.length) return { removed: false };
+    record.alwaysTools = kept;
+    return { removed: true };
+  }, using);
+}
+
 function keyedLine() {
   const locks = new Map<string, Promise<unknown>>();
   return <T>(id: string, run: () => Promise<T>): Promise<T> => {
@@ -258,6 +274,7 @@ function shownSeats(
       gates: { ...record.gates },
       connected: (links.get(record.id) ?? 0) > 0,
       pending: pendingOf(record.id),
+      alwaysTools: copy(record.alwaysTools ?? []),
     }));
 }
 
@@ -380,9 +397,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       const changed = await write((all) => {
         const record = all[id];
         if (!record || record.revoked !== null) return undefined;
-        record.revoked = at;
-        record.epoch += 1;
-        return record;
+        return Object.assign(record, { revoked: at, epoch: record.epoch + 1, alwaysTools: [] });
       });
       if (!changed) return { revoked: false };
       records[id] = changed;
@@ -391,6 +406,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       await ending;
       return { revoked: true };
     },
+    forgetAlways: (id, approval, using) => forgotten(harness, id, approval, using),
     admit(id, label) {
       const record = records[id];
       if (!record || !liveSeat(record, now()) || record.label !== cleanLabel(label)) return null;
