@@ -1,7 +1,9 @@
 import {
   type Context,
   createHost,
+  forbidden,
   type Host,
+  type Readable,
   type ReplicatedState,
   replicatedState,
   resource,
@@ -21,6 +23,8 @@ import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
+import { createGuests, type Guests } from './guests/index.ts';
+import { admitGuest, guestOpener } from './guests/serve.ts';
 import type { UserClients } from './kernel/users.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
@@ -33,6 +37,8 @@ import type { SecretName } from './secrets/names.ts';
 import type { VaultState } from './secrets/vault.ts';
 import {
   AgentControl,
+  type AgentGuest,
+  AgentGuestService,
   AgentPagesService,
   AgentRemoteService,
   AgentSettings,
@@ -40,6 +46,7 @@ import {
   CONTROL_METHODS,
   CONTROL_READS,
   type Command,
+  GUEST_METHODS,
   PAGE_METHODS,
   type PrivateRevision,
   REMOTE_METHODS,
@@ -49,6 +56,8 @@ import {
 import {
   AGENT_HOST,
   type AgentPrincipal,
+  type GuestPrincipal,
+  guestOf,
   principalKey,
   readable,
   readablesOf,
@@ -68,6 +77,7 @@ import { type PortEndpoint, PortLink } from './wire.ts';
 export interface ConnectOptions {
   readOnly?: boolean;
   pages?: boolean;
+  guest?: { id: string; label: string };
 }
 
 export interface AgentHost {
@@ -75,6 +85,7 @@ export interface AgentHost {
   readonly agent: Agent;
   readonly users?: UserClients;
   readonly pages: Pages;
+  readonly guests: Guests;
   readonly approvals: Approvals;
   connect(endpoint: PortEndpoint, options?: ConnectOptions): void;
   close(): Promise<void>;
@@ -204,6 +215,12 @@ export async function hostAgent(
     views: mounted.views,
     context,
   });
+  const guests = await createGuests({
+    harness: agent.harness,
+    agents: agent.agents,
+    approvals,
+    context,
+  });
   const control = createAgentControl(
     agent.harness,
     agent,
@@ -218,7 +235,8 @@ export async function hostAgent(
     monitor,
     options.secrets?.list,
     options.uploads,
-    options.labels
+    options.labels,
+    guests
   );
   const remote = createRemote({
     harness: agent.harness,
@@ -250,6 +268,7 @@ export async function hostAgent(
     monitor: monitor.state,
     vault: options.secrets?.vault ?? idleVault,
     labels: labels.state,
+    guests: guests.seats,
     approvals: approvals.state,
   };
   const settings = options.settings ?? noSettings;
@@ -263,17 +282,27 @@ export async function hostAgent(
     settings,
     remote,
     pages,
+    guest: guestOpener(guests, agent.agents, mounted.views, context, approvals.state),
     decide: (by) => (id, decision, reason, using) =>
       approvals.decide(id, decision, reason, by, using),
+  });
+  const offGuests = guests.onEnd((id) => {
+    void host.invalidatePrincipal((principal) => guestOf(principal)?.id === id);
   });
   let links = 0;
   return {
     serverId,
     agent,
     pages,
+    guests,
     approvals,
     ...(options.users ? { users: options.users } : {}),
     connect(endpoint, connectOptions) {
+      if (connectOptions?.guest) {
+        links += 1;
+        admitGuest(guests, endpoint, connectOptions.guest, serverId, links, host);
+        return;
+      }
       const seat: Seat = connectOptions?.readOnly
         ? 'view'
         : connectOptions?.pages === false
@@ -285,7 +314,9 @@ export async function hostAgent(
       host.accept(link, { principal: { seat, link: links } satisfies AgentPrincipal });
     },
     async close() {
+      offGuests();
       await host.close();
+      guests.dispose();
       await pages.dispose();
       await monitor.dispose();
       await remote.dispose();
@@ -319,16 +350,64 @@ interface Served {
   settings: AgentSettings;
   remote: AgentRemote;
   pages: Pages;
+  guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
   decide: (by: DecidedBy) => AgentControl['decide'];
 }
+
+export const CLOSED_TO_GUESTS = 'a guest seat has only its transcript and propose';
+
+const opened = new WeakSet<object>();
+
+export const openToGuests = <F extends object>(factory: F): F => {
+  opened.add(factory);
+  return factory;
+};
+
+export function closedToGuests(host: Host): Host {
+  const serve = ((type: never, factory: (...args: unknown[]) => unknown, options?: never) =>
+    host.serve(
+      type,
+      (opened.has(factory)
+        ? factory
+        : (input: unknown, principal: unknown, self: unknown) => {
+            if (seatOf(principal as never) === 'guest') throw forbidden(CLOSED_TO_GUESTS);
+            return factory(input, principal, self);
+          }) as never,
+      options
+    )) as Host['serve'];
+  return new Proxy(host, {
+    get(target, key) {
+      if (key === 'serve') return serve;
+      const value = Reflect.get(target, key, target) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
+  return {
+    get value() {
+      return readable(state()).value;
+    },
+    subscribe: (listener) => readable(state()).subscribe(listener),
+    events: (listener) => readable(state()).events(listener),
+  };
+}
+
+export const GUEST_MANAGERS: ReadonlySet<Seat> = new Set<Seat>(['owner']);
+
+export const OWNER_GUESTS = 'only the owner can invite or revoke guests';
+
+const notOwner = () => Promise.reject(forbidden(OWNER_GUESTS));
 
 const seated = (serving: Served, seat: Seat): AgentControl => ({
   ...serving.trusted,
   decide: serving.decide(seat === 'owner' ? 'owner' : 'follower'),
+  ...(GUEST_MANAGERS.has(seat) ? {} : { guestOpen: notOwner, guestRevoke: notOwner }),
 });
 
 export function serveAgent(serving: Served): Host {
-  const host = createHost({ name: AGENT_HOST, principalKey });
+  const host = closedToGuests(createHost({ name: AGENT_HOST, principalKey }));
   const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
   host.serve(AgentControl, ((_input: unknown, principal: unknown) => {
     const seat = seatOf(principal);
@@ -362,5 +441,26 @@ export function serveAgent(serving: Served): Host {
     });
     return { kind: 'pages', ...served(() => held.mine.value, PAGE_METHODS) };
   }) as never);
+  host.serve(
+    AgentGuestService,
+    openToGuests((_input: unknown, principal: unknown, self: Self) => {
+      const guest = guestOf(principal as never);
+      if (!guest) return { kind: 'none' };
+      const opening = serving.guest?.(guest);
+      if (!opening) throw forbidden(CLOSED_TO_GUESTS);
+      const held = self.resources({
+        seat: resource({ rev: 1, open: () => opening, close: (made) => made.dispose() }),
+      });
+      const later = (name: 'transcript' | 'seat' | 'proposals') =>
+        lazily(() => held.seat.value.value[name] as ReplicatedState<unknown>);
+      return {
+        kind: 'guest',
+        transcript: later('transcript'),
+        seat: later('seat'),
+        proposals: later('proposals'),
+        ...served(() => held.seat.value.value, GUEST_METHODS),
+      };
+    }) as never
+  );
   return host;
 }

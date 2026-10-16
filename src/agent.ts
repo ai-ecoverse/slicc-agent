@@ -15,6 +15,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { type Agents, openAgents } from './agents.ts';
 import type { Cones } from './cone.ts';
+import { guestGuard } from './guests/guard.ts';
 
 export interface AgentOptions {
   models: Models;
@@ -61,16 +62,20 @@ async function prompt(root: Conversation, text: string, context: Context): Promi
 
 export async function openAgent(options: AgentOptions): Promise<Agent> {
   const context = options.context ?? BACKGROUND_CONTEXT;
+  const registry = options.registry ?? createRegistry();
+  let opened: Harness | undefined;
+  registry.install(guestGuard(() => opened));
   const harness = await Harness.open(
     options.storage ?? new MemoryStorage(),
     {
       models: options.models,
-      registry: options.registry ?? createRegistry(),
+      registry,
       ...(options.settings ? { settings: options.settings } : {}),
       ...(options.env ? { env: options.env } : {}),
     },
     context
   );
+  opened = harness;
   const root = await harness.root(context, { agent: { model: options.model } });
   const agents = await openAgents(harness, root, context);
   await options.beforeResume?.(harness, context);

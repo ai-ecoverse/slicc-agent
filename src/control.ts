@@ -18,6 +18,7 @@ import type { ChangesRuntime } from './changes/index.ts';
 import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
 import type { FreezerRuntime } from './freezer/index.ts';
+import type { Guests } from './guests/index.ts';
 import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
@@ -102,6 +103,18 @@ function freezerControl(
       }),
   };
 }
+
+function guestControl(
+  guests: Pick<Guests, 'open' | 'revoke'> | undefined
+): Pick<AgentControl, 'guestOpen' | 'guestRevoke'> {
+  return {
+    guestOpen: async (draft, context) =>
+      guests ? guests.open(draft, context) : { seat: null, error: NO_GUESTS },
+    guestRevoke: async (id, context) => (guests ? guests.revoke(id, context) : { revoked: false }),
+  };
+}
+
+const NO_GUESTS = 'This agent has no guest seats.';
 
 function changesControl(
   changes: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'> | undefined
@@ -351,7 +364,8 @@ export function createAgentControl(
   monitor?: Pick<Monitor, 'open' | 'close'>,
   secrets?: () => readonly SecretName[],
   uploads?: Uploads,
-  labels?: Pick<LabelsRuntime, 'label'>
+  labels?: Pick<LabelsRuntime, 'label'>,
+  guests?: Pick<Guests, 'open' | 'revoke'>
 ): AgentControl {
   const cone = cones(target);
   const current = () => cone.cone();
@@ -462,6 +476,7 @@ export function createAgentControl(
     ...memoryControl(memory),
     ...freezerControl(freezer),
     ...changesControl(changes),
+    ...guestControl(guests),
     ...monitorControl(monitor),
     image: (ref, context) => storedImage(harness, ref, context),
     async unqueue(agentId, id, context) {
@@ -531,9 +546,7 @@ export function createAgentControl(
         },
         context
       ),
-    async agentCommands(agentId, _context) {
-      return skills?.commandsFor(agentId) ?? [];
-    },
+    agentCommands: async (agentId) => skills?.commandsFor(agentId) ?? [],
     toolLabel: async (agentId, callIds, context) =>
       labels ? labels.label(agentId, callIds, context) : null,
     decide: noApprovals,
