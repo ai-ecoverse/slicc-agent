@@ -105,12 +105,14 @@ function freezerControl(
 }
 
 function guestControl(
-  guests: Pick<Guests, 'open' | 'revoke'> | undefined
-): Pick<AgentControl, 'guestOpen' | 'guestRevoke'> {
+  guests: Pick<Guests, 'open' | 'revoke' | 'forgetAlways'> | undefined
+): Pick<AgentControl, 'guestOpen' | 'guestRevoke' | 'guestAlwaysForget'> {
   return {
     guestOpen: async (draft, context) =>
       guests ? guests.open(draft, context) : { seat: null, error: NO_GUESTS },
     guestRevoke: async (id, context) => (guests ? guests.revoke(id, context) : { revoked: false }),
+    guestAlwaysForget: async (seat, approval, context) =>
+      guests ? guests.forgetAlways(seat, approval, context) : { removed: false },
   };
 }
 
@@ -357,7 +359,7 @@ export function createAgentControl(
   secrets?: () => readonly SecretName[],
   uploads?: Uploads,
   labels?: Pick<LabelsRuntime, 'label'>,
-  guests?: Pick<Guests, 'open' | 'revoke'>
+  guests?: Pick<Guests, 'open' | 'revoke' | 'forgetAlways'>
 ): Omit<AgentControl, 'approvalPolicySet'> {
   const cone = cones(target);
   const current = () => cone.cone();

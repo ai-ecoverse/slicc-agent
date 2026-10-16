@@ -184,6 +184,24 @@ function approving(
   );
 }
 
+async function guestsOf(
+  agent: Agent,
+  approvals: Approvals,
+  policy: ApprovalPolicies,
+  context: Context
+): Promise<Guests> {
+  const guests = await createGuests({
+    harness: agent.harness,
+    agents: agent.agents,
+    approvals,
+    policy,
+    reviews: agent.reviews,
+    context,
+  });
+  agent.gate.bind({ approvals, policy: () => guests.policy() });
+  return guests;
+}
+
 const noRevision = () => replicatedState<PrivateRevision>({ revision: 0 });
 
 export async function hostAgent(
@@ -235,14 +253,7 @@ export async function hostAgent(
     views: mounted.views,
     context,
   });
-  const guests = await createGuests({
-    harness: agent.harness,
-    agents: agent.agents,
-    approvals,
-    policy,
-    reviews: agent.reviews,
-    context,
-  });
+  const guests = await guestsOf(agent, approvals, policy, context);
   const control: AgentControl = {
     ...createAgentControl(
       agent.harness,

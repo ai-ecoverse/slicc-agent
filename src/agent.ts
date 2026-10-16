@@ -15,7 +15,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { type Agents, openAgents } from './agents.ts';
 import type { Cones } from './cone.ts';
-import { guestGuard } from './guests/guard.ts';
+import { type GuestToolGate, guestToolGate } from './guests/guard.ts';
 import { type GuestReviews, guestReviews } from './guests/review.ts';
 
 export interface AgentOptions {
@@ -35,6 +35,7 @@ export interface Agent extends Cones {
   readonly root: Conversation;
   readonly agents: Agents;
   readonly reviews: GuestReviews;
+  readonly gate: GuestToolGate;
   onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
   prompt(text: string): Promise<string>;
   close(): Promise<void>;
@@ -67,7 +68,8 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const registry = options.registry ?? createRegistry();
   let opened: Harness | undefined;
-  registry.install(guestGuard(() => opened));
+  const gate = guestToolGate(() => opened);
+  registry.install(gate.extension);
   const reviews = guestReviews();
   registry.install(reviews.extension);
   const harness = await Harness.open(
@@ -91,6 +93,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     root,
     agents,
     reviews,
+    gate,
     cone: () => agents.cone(),
     switchCone: (conversation, switching) => agents.switchCone(conversation, switching),
     onCone: (listener) => agents.onCone(listener),
