@@ -13,6 +13,7 @@ export interface AgentWorker {
 export interface PortOptions {
   readOnly?: boolean;
   pages?: boolean;
+  guest?: { id: string; label: string };
 }
 
 export interface AgentOwner {
@@ -79,7 +80,10 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     const { port1, port2 } = channel();
     const readOnly = portOptions.readOnly === true ? { readOnly: true } : {};
     const pages = portOptions.pages === false ? { pages: false } : {};
-    ready.postMessage({ connect: port2, ...readOnly, ...pages }, [port2]);
+    const guest = portOptions.guest
+      ? { guest: { id: String(portOptions.guest.id), label: String(portOptions.guest.label) } }
+      : {};
+    ready.postMessage({ connect: port2, ...readOnly, ...pages, ...guest }, [port2]);
     return port1;
   };
   return {

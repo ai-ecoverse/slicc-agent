@@ -9,6 +9,7 @@ import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Approval } from './approvals/record.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
+import type { GuestSeat } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import { controlAnswer, pageAnswer, remoteAnswer, settingsAnswer } from './readonly.ts';
 import type { AgentRemote } from './remote/host.ts';
@@ -24,6 +25,8 @@ import {
   CONTROL_METHODS,
   type Command,
   type Delivered,
+  type GuestProposal,
+  type GuestShown,
   type MonitorFeed,
   PAGE_METHODS,
   type PrivateRevision,
@@ -54,6 +57,11 @@ export interface AgentConnection {
   readonly monitor?: ReplicatedState<MonitorFeed>;
   readonly vault?: ReplicatedState<VaultState>;
   readonly labels?: ReplicatedState<Record<string, string>>;
+  readonly guests?: ReplicatedState<GuestSeat[]>;
+  readonly viewOnly?: boolean;
+  readonly guest?: GuestShown;
+  readonly proposals?: ReplicatedState<GuestProposal[]>;
+  readonly owner?: boolean;
   readonly approvals?: ReplicatedState<Approval[]>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
@@ -203,6 +211,9 @@ export async function connectAgent(
     monitor: hold<MonitorFeed>(state('monitor')),
     vault: hold<VaultState>(state('vault')),
     labels: hold<Record<string, string>>(state('labels')),
+    guests: hold<GuestSeat[]>(state('guests')),
+    viewOnly: controlHandle.kind === 'view',
+    owner: pagesHandle.kind === 'pages',
     approvals: hold<Approval[]>(state('approvals')),
     settings: lastingSettings(settings, hold),
     remote,

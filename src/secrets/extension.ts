@@ -12,6 +12,7 @@ import {
   type ToolExecutionResult,
   ToolTask,
 } from '@earendil-works/pi-durable';
+import { GUEST_GUARD } from '../guests/guard.ts';
 import { TITLES } from '../titles/extension.ts';
 import type { Names, SecretName } from './names.ts';
 import type { Scrub } from './scrub.ts';
@@ -133,7 +134,9 @@ export function shellGrants(names: Pick<Names, 'state'>) {
 }
 
 const missing = (list: readonly { name: string }[]) =>
-  [SECRETS, TITLES].filter((name) => !list.some((extension) => extension.name === name));
+  [SECRETS, TITLES, GUEST_GUARD].filter(
+    (name) => !list.some((extension) => extension.name === name)
+  );
 
 export function pinned<T extends AgentChange>(change: T): T {
   const list = change.extensions;

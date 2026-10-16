@@ -1,5 +1,11 @@
 export { type AgentConnection, connectAgent } from './client.ts';
 export {
+  connectGuest,
+  GUEST_ONLY,
+  type GuestConnection,
+  SEAT_REFUSED,
+} from './guests/client.ts';
+export {
   type ByteSink,
   bridgePort,
   encodeFrame,

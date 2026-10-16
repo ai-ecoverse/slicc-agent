@@ -62,6 +62,14 @@ export {
 } from './attachments.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
 export { createAgentControl } from './control.ts';
+export {
+  connectGuest,
+  GUEST_ONLY,
+  type GuestConnection,
+  SEAT_REFUSED,
+} from './guests/client.ts';
+export type { GuestOpened, Proposed, ProposeRequest } from './guests/index.ts';
+export type { GuestDraft, GuestGate, GuestGates, GuestSeat } from './guests/seats.ts';
 export { type AgentHost, type ConnectOptions, hostAgent } from './host.ts';
 export type {
   KernelClient,

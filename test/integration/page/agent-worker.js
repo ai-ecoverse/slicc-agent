@@ -28,10 +28,17 @@ const script = params
   .map((command) =>
     fauxAssistantMessage([fauxToolCall('bash', { command })], { stopReason: 'toolUse' })
   );
-faux.setResponses([
-  ...script,
-  ...params.getAll('answer').map((answer) => fauxAssistantMessage([fauxText(answer)])),
-]);
+const seen = [];
+const recorded = (message) => (context) => {
+  seen.push(JSON.stringify(context.messages.at(-1)?.content ?? ''));
+  return message;
+};
+faux.setResponses(
+  [
+    ...script,
+    ...params.getAll('answer').map((answer) => fauxAssistantMessage([fauxText(answer)])),
+  ].map(recorded)
+);
 const kernel = params.has('kernel');
 const port = kernelPort(self);
 let commits = 0;
@@ -58,12 +65,16 @@ async function start() {
       return agent.harness.commit(...args);
     },
   };
-  return hostAgent(agent, { approvals: await attachApprovals({ harness }) });
+  const ttlMs = params.has('ttl') ? { ttlMs: Number(params.get('ttl')) } : {};
+  return hostAgent(agent, { approvals: await attachApprovals({ harness, ...ttlMs }) });
 }
 
 const host = start();
 self.addEventListener('message', ({ data }) => {
   if (data?.commits) data.commits.postMessage(commits);
+  if (data?.seen) data.seen.postMessage(seen);
+  if (data?.seat)
+    void host.then((ready) => data.reply.postMessage(ready.guests.record(data.seat) ?? null));
   if (!data?.approve) return;
   host
     .then((ready) => ready.approvals.request(data.approve, BACKGROUND_CONTEXT))

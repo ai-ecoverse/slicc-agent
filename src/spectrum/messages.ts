@@ -13,6 +13,7 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
 import { splitUser } from '../attachments.ts';
+import { GUEST_INPUT_KIND, type GuestInput, guestText } from '../guests/attribution.ts';
 import { parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import { mcpLabel } from '../mcp/label.ts';
@@ -314,6 +315,26 @@ function user(
   };
 }
 
+function guestUser(
+  id: string,
+  message: ModelMessage,
+  delivered: Delivered | undefined,
+  data: unknown
+): UserMessage {
+  const name = String((data as Partial<GuestInput> | undefined)?.name ?? '');
+  const shown = shownUser(message.content, `ref:${id.slice(1)}:0`);
+  return {
+    id,
+    role: 'user',
+    ...shown,
+    text: guestText(shown.text, name),
+    createdAt: message.timestamp ?? 0,
+    ...(delivered ? { delivered } : {}),
+    from: name,
+    origin: 'guest',
+  };
+}
+
 export function origins(entries: readonly EntryRecord[]): Map<number, From> {
   const out = new Map<number, From>();
   for (const entry of entries)
@@ -532,6 +553,8 @@ function entryMessage(
       lickMessage(id, entry, notes.decisions) ??
         user(id, model, delivered, notes.origins.get(entry.id))
     );
+  else if (entry.kind === GUEST_INPUT_KIND && model)
+    out.push(guestUser(id, model, delivered, entry.data));
   else if (entry.kind === 'pi.assistant' && model) {
     const message = assistant(id, model);
     out.push(withoutLickTools(message));
@@ -617,15 +640,24 @@ export function queued(
     id: number;
     mode: string;
     content?: ModelMessage['content'];
+    entry?: { kind?: string; data?: Partial<GuestInput> };
   }[];
   return items
     .filter((item) => item.mode !== 'write' && !parseLick(textOf(item.content)))
-    .map((item) => ({
-      id: `q${item.id}`,
-      role: 'user' as const,
-      ...shownUser(item.content),
-      createdAt: at(`q${item.id}`),
-      queued: true,
-      mode: item.mode === 'steer' ? 'steer' : 'queue',
-    }));
+    .map((item) => {
+      const shown = shownUser(item.content);
+      const guest =
+        item.entry?.kind === GUEST_INPUT_KIND ? String(item.entry.data?.name ?? '') : null;
+      return {
+        id: `q${item.id}`,
+        role: 'user' as const,
+        ...shown,
+        ...(guest === null
+          ? {}
+          : { text: guestText(shown.text, guest), from: guest, origin: 'guest' as const }),
+        createdAt: at(`q${item.id}`),
+        queued: true,
+        mode: item.mode === 'steer' ? 'steer' : 'queue',
+      };
+    });
 }
