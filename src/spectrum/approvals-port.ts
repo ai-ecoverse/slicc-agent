@@ -87,7 +87,7 @@ export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements Approv
     super();
     this.#connection = connection;
     this.#host = host;
-    this.#ours = !connection.readOnly;
+    this.#ours = !connection.guest;
     if (this.#ours || host?.decide) this.decide = (...args) => this.#route(...args);
     this.#listed = new Set(this.#agent().map((approval) => approval.id));
     connection.approvals?.subscribe(() => this.#changed());

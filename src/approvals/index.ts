@@ -6,6 +6,7 @@ import {
   APPROVAL_MS,
   type Approval,
   type ApprovalDraft,
+  type ApprovalKind,
   type ApprovalState,
   ApprovalsDoc,
   type ApprovalsState,
@@ -50,6 +51,7 @@ export interface ApprovalsAttach {
   now?: () => number;
   ttlMs?: number;
   judge?: ApprovalJudge;
+  guestAlways?: (kind: ApprovalKind) => boolean;
 }
 
 const copy = (items: readonly Approval[]): Approval[] => JSON.parse(JSON.stringify(items));
@@ -92,6 +94,9 @@ const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: 
   }
   return copy([item])[0] as Approval;
 };
+
+const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
+  guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : draft.always === true;
 
 export async function attachApprovals(
   options: ApprovalsAttach,
@@ -197,7 +202,7 @@ export async function attachApprovals(
           id: `apr-${crypto.randomUUID()}`,
           state: 'pending',
           decidedBy: null,
-          always: guestKind(draft.kind) ? false : draft.always === true,
+          always: offered(options, draft),
           createdAt: at,
           expiresAt: draft.expiresAt ?? at + ttl,
         } as Approval;
