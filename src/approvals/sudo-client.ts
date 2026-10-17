@@ -1,7 +1,8 @@
-import { createHost, type Readable } from '@earendil-works/chord';
+import type { Readable } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { clientHost, holding } from '../client.ts';
 import { AgentSudoService, SUDO_METHODS } from '../services.ts';
-import { AGENT_HOST, bound, type Remote, type Root } from '../serving.ts';
+import { bound, type Remote, type Root } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import type { Approval } from './record.ts';
 import type { AgentSudo, SudoAnswer, SudoRequest } from './sudo.ts';
@@ -32,10 +33,10 @@ function halted(stop: AbortSignal | undefined): Promise<never> {
 
 async function open(endpoint: PortEndpoint, stop: AbortSignal | undefined) {
   const link = new PortLink(endpoint);
-  const host = createHost({ name: `sudo:${crypto.randomUUID()}`, kind: 'client' });
+  let host: ReturnType<typeof clientHost> | undefined;
   const close = async () => {
     link.close('closed');
-    await host.close().catch(() => undefined);
+    await host?.close().catch(() => undefined);
   };
   const ended = link.ended.then((reason) => {
     throw reason ?? new Error('the agent closed the link');
@@ -45,13 +46,15 @@ async function open(endpoint: PortEndpoint, stop: AbortSignal | undefined) {
   stopped.catch(() => undefined);
   try {
     await Promise.race([link.hello, ended, stopped]);
-    host.connect(link);
-    const handle = host.get(AgentSudoService, {}, { at: AGENT_HOST }) as unknown as Remote;
-    await Promise.race([handle.ready, ended, stopped]);
-    if (handle.kind !== 'sudo') throw unavailable();
-    const root: Root = (run, options) => host.root(run, options);
+    const client = clientHost(link, 'sudo');
+    host = client;
+    const [handle] = (await Promise.race([holding(client, link, [AgentSudoService]), stopped])) as [
+      Remote,
+    ];
+    if (handle.variant !== 'sudo') throw unavailable();
+    const root: Root = (run, options) => client.root(run, options);
     const sudo = bound<Omit<AgentSudo, 'approvals'>>(handle, root, SUDO_METHODS, missing);
-    return { sudo, approvals: handle.approvals as Readable<Approval[] | undefined>, ended, close };
+    return { sudo, approvals: handle.approvals as Readable<Approval[]>, ended, close };
   } catch (error) {
     await close();
     throw (error as { code?: unknown })?.code === 'EAGAIN' ? error : unavailable(error);
@@ -59,7 +62,7 @@ async function open(endpoint: PortEndpoint, stop: AbortSignal | undefined) {
 }
 
 function settled(
-  approvals: Readable<Approval[] | undefined>,
+  approvals: Readable<Approval[]>,
   id: string,
   signals: { signal: AbortSignal | undefined; stop: AbortSignal | undefined },
   ended: Promise<never>
@@ -96,7 +99,7 @@ export const WITHDRAW_MS = 5000;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function timedOut(
-  link: { approvals: Readable<Approval[] | undefined>; ended: Promise<never> },
+  link: { approvals: Readable<Approval[]>; ended: Promise<never> },
   id: string,
   expiresAt: number
 ): Promise<unknown> {

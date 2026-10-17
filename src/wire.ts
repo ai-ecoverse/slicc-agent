@@ -1,4 +1,4 @@
-import type { Frame as ChordFrame, Link } from '@earendil-works/chord';
+import { type Frame as ChordFrame, type Link, PROTOCOL_VERSION } from '@earendil-works/chord';
 
 export interface PortEndpoint {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -12,6 +12,14 @@ export interface PortEndpoint {
 }
 
 export type Frame = { hello: string } | { close: true } | Uint8Array;
+
+export const OTHER_VERSION =
+  "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
+
+export const otherVersion = (cause?: unknown): Error =>
+  Object.assign(new Error(OTHER_VERSION, cause === undefined ? undefined : { cause }), {
+    code: 'EVERSION',
+  });
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -31,15 +39,19 @@ export class PortLink implements Link {
   readonly #closers = new Set<(reason: string) => void>();
   #handler: ((frame: ChordFrame) => void) | undefined;
   #closed = false;
+  #held: Uint8Array[] | undefined;
+  #heard = false;
+  #legacy = false;
+  #mismatch = false;
   #greet!: (hello: string) => void;
-  #refuse!: (error: Error) => void;
+  #unwelcome!: (error: Error) => void;
   #finish!: (reason: Error | undefined) => void;
 
   constructor(endpoint: PortEndpoint) {
     this.#endpoint = endpoint;
-    this.hello = new Promise((greet, refuse) => {
+    this.hello = new Promise((greet, unwelcome) => {
       this.#greet = greet;
-      this.#refuse = refuse;
+      this.#unwelcome = unwelcome;
     });
     this.hello.catch(() => undefined);
     this.ended = new Promise((finish) => {
@@ -58,12 +70,24 @@ export class PortLink implements Link {
   }
 
   greet(serverId: string): void {
+    this.#held ??= [];
     this.#endpoint.postMessage({ hello: serverId } satisfies Frame);
   }
 
-  send(frame: ChordFrame): void {
-    if (this.#closed) return;
+  mismatched(): void {
+    this.#mismatch = true;
+  }
+
+  send(frame: ChordFrame): number {
+    if (this.#closed) return 0;
     const bytes = encoder.encode(JSON.stringify(frame));
+    const size = bytes.byteLength;
+    if (this.#held) this.#held.push(bytes);
+    else this.#post(bytes);
+    return size;
+  }
+
+  #post(bytes: Uint8Array): void {
     this.#endpoint.postMessage(bytes, [bytes.buffer]);
   }
 
@@ -79,6 +103,7 @@ export class PortLink implements Link {
 
   close(reason = 'closed'): void {
     if (this.#closed) return;
+    this.#held = undefined;
     this.send({ t: 'bye', reason });
     this.#endpoint.postMessage({ close: true } satisfies Frame);
     this.#end(reason, false);
@@ -102,18 +127,40 @@ export class PortLink implements Link {
       return;
     }
     if (frame.t === 'bye') this.#end(frame.reason ?? 'peer closed', false);
+    else if (!this.#heard) this.#hello(frame);
+    else if (this.#legacy) this.#refuse(frame);
     else this.#handler?.(frame);
+  }
+
+  #hello(frame: ChordFrame): void {
+    this.#heard = true;
+    const held = this.#held;
+    this.#held = undefined;
+    if (frame.t !== 'hello' || frame.protocol !== undefined) {
+      for (const bytes of held ?? []) this.#post(bytes);
+      this.#handler?.(frame);
+      return;
+    }
+    this.#legacy = true;
+    this.#mismatch = true;
+    if (!held) this.close(`protocol-version ${PROTOCOL_VERSION}`);
+  }
+
+  #refuse(frame: ChordFrame): void {
+    if (frame.t !== 'hold') return;
+    const error = { code: 'upgrade_required', message: `upgrade_required: ${OTHER_VERSION}` };
+    this.#post(encoder.encode(JSON.stringify({ t: 'gone', id: frame.id, error })));
   }
 
   #end(reason: string, failed: boolean): void {
     if (this.#closed) return;
     this.#closed = true;
     this.#queue.length = 0;
+    this.#held = undefined;
     this.#endpoint.close?.();
-    const error = new Error(reason);
-    this.#refuse(new Error(`agent port closed before hello: ${reason}`));
-    this.#finish(failed ? error : undefined);
+    this.#unwelcome(new Error(`agent port closed before hello: ${reason}`));
     for (const handler of [...this.#closers]) handler(reason);
     this.#closers.clear();
+    this.#finish(this.#mismatch ? otherVersion() : failed ? new Error(reason) : undefined);
   }
 }

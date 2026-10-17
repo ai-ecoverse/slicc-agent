@@ -89,8 +89,26 @@ async function start() {
   return hostAgent(agent, { approvals: await attachApprovals({ harness, ...ttlMs }) });
 }
 
+let guestLinks = 0;
+const collected = new FinalizationRegistry(() => {
+  guestLinks -= 1;
+});
+
+async function collect() {
+  for (let i = 0; i < 6; i++) {
+    globalThis.gc?.();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return { gc: typeof globalThis.gc === 'function', alive: guestLinks };
+}
+
 const host = start();
 self.addEventListener('message', ({ data }) => {
+  if (data?.connect && data?.guest) {
+    guestLinks += 1;
+    collected.register(data.connect, null);
+  }
+  if (data?.guestLinks) void collect().then((seen) => data.guestLinks.postMessage(seen));
   if (data?.commits) data.commits.postMessage(commits);
   if (data?.seen) data.seen.postMessage(seen);
   if (data?.reviews)

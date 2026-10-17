@@ -261,3 +261,93 @@ test('a follower or guest of an owner on another agent version is refused once w
   assert.equal(seen.links, 2);
   assert.deepEqual(seen.closed, [true, true]);
 });
+
+test('a 5.x follower or guest from the npm tarball meeting a 6.x owner is refused once with EVERSION, and the owner keeps serving its own', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    await import('/dist-test/page.js');
+    await import('/dist-test/agent-5.js');
+    const owner = await startAgent({
+      worker: () =>
+        new Worker('/dist-test/agent-worker.js?answer=Still%20here.', { type: 'module' }),
+    });
+    const local = await owner.connect();
+    const opened = await local.control.guestOpen(
+      {
+        id: 'seat-5',
+        label: 'Anna',
+        agentId: 'cone',
+        expiresAt: null,
+        gates: { messages: 'user', tools: 'user' },
+      },
+      BACKGROUND_CONTEXT
+    );
+    const refused = async (connect, options) => {
+      const port = await owner.port(options);
+      const started = performance.now();
+      const outcome = await Promise.race([
+        connect(port).then(
+          () => ({ connected: true }),
+          (error) => ({ code: error.code, message: error.message })
+        ),
+        new Promise((resolve) => setTimeout(() => resolve({ pending: true }), 5000)),
+      ]);
+      return { ...outcome, ms: performance.now() - started };
+    };
+    const follower = await refused(oldConnectAgent, { pages: false });
+    const guest = await refused(oldConnectGuest, { guest: { id: 'seat-5', label: 'Anna' } });
+    const still = await local.prompt('Are you there?');
+    await local.close();
+    await owner.release();
+    return { opened: opened.error, follower, guest, still };
+  });
+  assert.equal(seen.opened, null);
+  const sentence =
+    "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
+  for (const outcome of [seen.follower, seen.guest]) {
+    assert.equal(outcome.code, 'EVERSION', JSON.stringify(outcome));
+    assert.equal(outcome.message, sentence);
+    assert.ok(outcome.ms < 2000, `${outcome.ms}`);
+  }
+  assert.equal(seen.still, 'Still here.');
+});
+
+test('a follower or guest meeting a 5.x owner is refused once with EVERSION, and the link ends', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    await import('/dist-test/page.js');
+    await import('/dist-test/agent-5.js');
+    const owner = oldOwner();
+    const refused = async (connect, seat) => {
+      const started = performance.now();
+      const outcome = await Promise.race([
+        connect(owner.port(seat)).then(
+          () => ({ connected: true }),
+          (error) => ({ code: error.code, message: error.message })
+        ),
+        new Promise((resolve) => setTimeout(() => resolve({ pending: true }), 5000)),
+      ]);
+      return { ...outcome, ms: performance.now() - started };
+    };
+    const follower = await refused(connectAgent, { seat: 'control', link: 1 });
+    const guest = await refused(connectGuest, {
+      seat: 'guest',
+      link: 2,
+      guest: { id: 'seat-1', name: 'Anna', epoch: 1 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const closed = owner.links.map((link) => link.closed);
+    await owner.close();
+    return { follower, guest, closed };
+  });
+  const sentence =
+    "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
+  for (const outcome of [seen.follower, seen.guest]) {
+    assert.equal(outcome.code, 'EVERSION', JSON.stringify(outcome));
+    assert.equal(outcome.message, sentence);
+    assert.ok(outcome.ms < 2000, `${outcome.ms}`);
+  }
+  assert.deepEqual(seen.closed, [true, true]);
+});
