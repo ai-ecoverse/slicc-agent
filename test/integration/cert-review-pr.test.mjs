@@ -341,6 +341,43 @@ test('the plan reviews only a behaviour change with merge-ok, records a skip as 
   );
 });
 
+test('a same-repo Renovate pull request is reviewed without merge-ok, so a devDependency bump settles by itself; anyone else still waits for merge-ok', async (t) => {
+  const api = await fakeApi(t, (method, url) => {
+    if (url.startsWith('/repos/o/r/pulls/9/files')) return [{ filename: 'package-lock.json' }];
+    if (method === 'POST' && url.startsWith('/repos/o/r/statuses/')) return {};
+    return undefined;
+  });
+  const statuses = () => api.seen.filter((x) => x.method === 'POST').map((x) => x.body);
+  const plan = (author) =>
+    pr(api.url, [
+      'plan',
+      '--repo',
+      'o/r',
+      '--pr',
+      '9',
+      '--head',
+      'h'.repeat(40),
+      '--run',
+      '1',
+      '--guard',
+      'PASS',
+      '--action',
+      'opened',
+      '--labels',
+      '',
+      '--author',
+      author,
+    ]);
+  const renovate = await plan('renovate[bot]');
+  assert.match(renovate.out, /go=true/);
+  assert.equal(statuses().at(-1).state, 'pending');
+  for (const author of ['trieloff', 'renovate', 'dependabot[bot]', '']) {
+    const other = await plan(author);
+    assert.match(other.out, /go=false/, author);
+    assert.match(statuses().at(-1).description, /^waits for merge-ok/, author);
+  }
+});
+
 test("the merge group's cert-review is a lookup: each PR's status on the head being merged, paginated, red naming the one that isn't certified", async (t) => {
   const heads = { 11: 'a'.repeat(40), 12: 'b'.repeat(40), 13: 'c'.repeat(40) };
   let state12 = 'success';
@@ -451,6 +488,8 @@ test("the workflow: same-repo PRs with merge-ok review the merge ref with main's
   for (const name of ['plan', 'pack', 'suite'])
     assert.match(jobs[name], /git fetch -q --no-tags --depth=2 origin "\$GITHUB_SHA"/);
   assert.match(jobs.plan, /echo "commit=\$GITHUB_SHA"/);
+  assert.match(jobs.plan, /AUTHOR: \$\{\{ github\.event\.pull_request\.user\.login \}\}/);
+  assert.match(jobs.plan, /--author "\$AUTHOR"/);
   assert.match(jobs.plan, /echo "parent=\$\(git rev-parse "\$GITHUB_SHA\^1"\)"/);
   assert.match(jobs.pack, /^ {4}runs-on: ubuntu-latest$/m);
   const secretSteps = workflow.match(/secrets\.[A-Z_]+/g) ?? [];
