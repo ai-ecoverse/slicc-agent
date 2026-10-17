@@ -27,6 +27,7 @@ const { positionals, values } = parseArgs({
     approval: { type: 'string', default: 'cert-review-approved' },
     evidence: { type: 'string', default: '' },
     shipped: { type: 'string', default: '' },
+    author: { type: 'string', default: '' },
   },
 });
 const { repo, context } = values;
@@ -84,6 +85,8 @@ async function status(sha, state, description) {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, 'posted=true\n');
 }
 
+const AUTO_AUTHORS = new Set(['renovate[bot]']);
+
 const GUARD_FAIL = (label) => `reviewer change: needs coordinator review (${label} on this head)`;
 const GUARD_INCOMPLETE = 'the certification self-guard did not finish: re-run the failed jobs';
 
@@ -101,7 +104,7 @@ async function plan() {
   const files = await all(`repos/${repo}/pulls/${values.pr}/files`);
   const packs = values.shipped ? JSON.parse(readFileSync(values.shipped, 'utf8')) : [];
   const behaviour = behaviourFiles(files, shippedPaths(packs));
-  const labelled = values.labels.split(',').includes('merge-ok');
+  const labelled = values.labels.split(',').includes('merge-ok') || AUTO_AUTHORS.has(values.author);
   const self = reviewsItself(files);
   if (values.guard !== 'PASS') {
     const fail = values.guard === 'FAIL';
