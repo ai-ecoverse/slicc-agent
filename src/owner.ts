@@ -74,8 +74,11 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
   let worker: Promise<AgentWorker | undefined> = Promise.resolve().then(spawn);
   const asking = new Set<AbortController>();
   const stopAsking = () => {
-    for (const stop of asking) stop.abort();
+    const waiting = [...asking];
     asking.clear();
+    return () => {
+      for (const stop of waiting) stop.abort();
+    };
   };
   try {
     await worker;
@@ -114,22 +117,24 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
       }
     },
     restart() {
+      const deny = stopAsking();
       worker = worker
         .catch(() => undefined)
         .then((old) => {
           old?.terminate();
-          stopAsking();
+          deny();
           return spawn();
         });
       return worker.then(() => undefined);
     },
     async release() {
+      const deny = stopAsking();
       const previous = worker;
       worker = Promise.resolve(undefined);
       try {
         (await previous.catch(() => undefined))?.terminate();
       } finally {
-        stopAsking();
+        deny();
         release();
       }
     },

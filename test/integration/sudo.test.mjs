@@ -515,3 +515,47 @@ test('a sudo the kernel lets expire is recorded as timed out, not withdrawn', as
   });
   assert.deepEqual(seen, { answer: 'deny', state: 'unanswered', reason: 'timeout' });
 });
+
+test('a sudo asked right after a restart reaches the new worker, while the one waiting on the old worker is denied', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { query: `?directory=/sudo-restart-${Date.now()}` });
+  const seen = await page.evaluate(async () => {
+    const { owner, until, newest } = globalThis.t;
+    const request = (id) => ({
+      id,
+      kind: 'sudo',
+      user: 'cone',
+      target: 'root',
+      argv: ['ls', '/root'],
+      path: '/usr/bin/ls',
+      cwd: '/',
+      expiresAt: Date.now() + 60_000,
+      always: true,
+    });
+    let local = await owner.connect();
+    const before = owner.approve(request('sudo-old'));
+    await until(() => newest(local)?.state === 'pending', 'the first request');
+    const first = newest(local).id;
+    await local.close();
+    const restarted = owner.restart();
+    const after = owner.approve(request('sudo-new'));
+    const old = await before;
+    await restarted;
+    local = await owner.connect();
+    const model = createAgentModel(local);
+    const item = await until(
+      () =>
+        local.approvals.value.find(
+          (entry) => entry.kind === 'sudo' && entry.state === 'pending' && entry.id !== first
+        ),
+      'the request after the restart'
+    );
+    const reloaded = local.approvals.value.find((entry) => entry.id === first);
+    await model.approvals.decide(item.id, 'once');
+    const answer = await after;
+    await local.close();
+    await owner.release();
+    return { old, answer, first: [reloaded.state, reloaded.reason] };
+  });
+  assert.deepEqual(seen, { old: 'deny', answer: 'once', first: ['withdrawn', 'restart'] });
+});
