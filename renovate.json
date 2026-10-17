@@ -4,7 +4,7 @@
   "packageRules": [
     {
       "groupName": "patched dependencies",
-      "matchPackageNames": ["@earendil-works/**"],
+      "matchPackageNames": ["@earendil-works/**", "@aws-sdk/middleware-websocket"],
       "automerge": false,
       "labels": ["patched-dependency"]
     },

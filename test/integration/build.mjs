@@ -42,7 +42,10 @@ await build({
   logLevel: 'warning',
 });
 await build({
-  entryPoints: ['test/integration/page/bedrock-worker.js'],
+  entryPoints: [
+    'test/integration/page/bedrock-worker.js',
+    'test/integration/page/bedrock-agent-worker.js',
+  ],
   outdir: 'dist-test',
   bundle: true,
   format: 'esm',
