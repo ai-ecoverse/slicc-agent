@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMain } from './main.mjs';
 
 const CHORD = '@earendil-works/chord';
 const ROOT = `node_modules/${CHORD}`;
@@ -23,9 +23,12 @@ export function check(lock) {
 export const run = (root) =>
   check(JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')));
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const problems = run(process.cwd());
   for (const problem of problems) console.error(`check-chord: ${problem}`);
-  if (problems.length) process.exit(1);
-  console.log('check-chord: one Chord');
+  if (problems.length) {
+    console.log(`check-chord: FAIL ${problems.length} problem${problems.length === 1 ? '' : 's'}`);
+    process.exit(1);
+  }
+  console.log('check-chord: PASS 1 chord');
 }
