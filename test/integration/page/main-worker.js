@@ -119,6 +119,17 @@ const json = (body) => ({
     yield new TextEncoder().encode(JSON.stringify(body));
   })(),
 });
+const holdModel = (request) =>
+  new Promise((_resolve, reject) => {
+    const seen = { url: request.url, held: 'holding' };
+    upstream.push(seen);
+    const done = () => {
+      seen.held = 'aborted';
+      reject(new DOMException('The request was aborted', 'AbortError'));
+    };
+    if (request.signal?.aborted) done();
+    request.signal?.addEventListener('abort', done, { once: true });
+  });
 function model(request) {
   const path = new URL(request.url).pathname;
   if (path === '/v1/config')
@@ -157,6 +168,9 @@ const relay = {
   traits: { crossOrigin: 'any' },
   async fetch(request) {
     if (new URL(request.url).host === MODEL_HOST && params.has('e2e')) return model(request);
+    if (new URL(request.url).host.startsWith('bedrock-runtime.') && params.has('hold-model')) {
+      return holdModel(request);
+    }
     if (new URL(request.url).host !== relayed) throw new TypeError('relay: unknown host');
     const response = await fake.fetch(request.url, {
       method: request.method,
@@ -273,7 +287,13 @@ const running = runAgentWorker(self, {
 });
 if (params.has('vault')) {
   const records = params.getAll('record').map((record) => JSON.parse(record));
-  const fake = fakeVault(params.has('scrub') ? seeded(vectors).values : [], 1, { records });
+  const models = params.has('bedrock')
+    ? [{ provider: 'amazon-bedrock', url: 'https://bedrock-runtime.us-west-2.amazonaws.com' }]
+    : [];
+  const fake = fakeVault(params.has('scrub') ? seeded(vectors).values : [], 1, {
+    records,
+    models,
+  });
   self.fakeVault = fake;
   self.dispatchEvent(new MessageEvent('message', { data: { vault: fake.port, scrub: fake.pair } }));
 }

@@ -12,6 +12,7 @@ import {
   adobeUsage,
   type Budget,
 } from './adobe.ts';
+import { abortableBedrock } from './bedrock.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import { BEDROCK, preferredModel } from './preferred.ts';
@@ -84,7 +85,7 @@ export function createSliccModels(
   providers = sliccProviders()
 ): MutableModels {
   const models = createModels({ credentials: withDefaultRegions(credentials) });
-  for (const provider of providers) models.setProvider(provider);
+  for (const provider of providers) models.setProvider(abortableBedrock(provider));
   return models;
 }
 

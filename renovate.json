@@ -4,9 +4,14 @@
   "packageRules": [
     {
       "groupName": "patched dependencies",
-      "matchPackageNames": ["@earendil-works/**"],
+      "matchPackageNames": ["@earendil-works/**", "@aws-sdk/middleware-websocket"],
       "automerge": false,
       "labels": ["patched-dependency"]
+    },
+    {
+      "description": "@aws-sdk/middleware-websocket keeps a caret range, the same kind pi-ai's @aws-sdk/client-bedrock-runtime asks for, so npm and pnpm resolve one copy for both and the aws-websocket-abort-signal patch reaches the class the Bedrock client uses.",
+      "matchPackageNames": ["@aws-sdk/middleware-websocket"],
+      "rangeStrategy": "replace"
     },
     {
       "description": "The kernel, pnpm, slicc-cdp and the wasm command packages move only after the homescoop coordinator certifies them, as in slicc-bios, so Renovate opens their PRs but never merges them; a PR merges once the cert lane has certified that version. The kernel and wasm-* devDependencies are the versions CI tests.",
