@@ -1,6 +1,7 @@
 import {
   type Context,
   createHost,
+  type Host,
   isChordError,
   type Readable,
   type ReplicatedState,
@@ -38,9 +39,9 @@ import {
   type SettingsState,
   TRANSCRIPT_STATES,
 } from './services.ts';
-import { AGENT_HOST, bound, kept, type Remote, type Root, replicated } from './serving.ts';
+import { type AgentPrincipal, bound, type Remote, type Root, replicated, SELF } from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import { type PortEndpoint, PortLink } from './wire.ts';
+import { otherVersion, type PortEndpoint, PortLink } from './wire.ts';
 
 export interface AgentConnection {
   readonly serverId: string;
@@ -124,18 +125,50 @@ function lastingSettings(
 
 const VERSIONS = new Set(['upgrade_required', 'contract_mismatch']);
 
-export const OTHER_VERSION =
-  "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
-
 export const final = (error: unknown): unknown =>
-  isChordError(error) && VERSIONS.has(error.code)
-    ? Object.assign(new Error(OTHER_VERSION, { cause: error }), { code: 'EVERSION' })
-    : error;
+  isChordError(error) && VERSIONS.has(error.code) ? otherVersion(error) : error;
 
-const ended = (link: PortLink): Promise<never> =>
+export const ended = (link: PortLink): Promise<never> =>
   link.ended.then((reason) => {
     throw reason ?? new Error('the agent closed the link');
   });
+
+type Contract = Parameters<Host<AgentPrincipal>['get']>[0];
+
+export function clientHost(link: PortLink, name: string): Host<AgentPrincipal> {
+  const host = createHost<AgentPrincipal>({
+    name: `${name}:${crypto.randomUUID()}`,
+    kind: 'client',
+    self: SELF,
+  });
+  host.connect(link, { principal: SELF, onProtocolMismatch: () => link.mismatched() });
+  return host;
+}
+
+export async function holding(
+  host: Host<AgentPrincipal>,
+  link: PortLink,
+  contracts: readonly Contract[]
+): Promise<Remote[]> {
+  const stop = new AbortController();
+  const getting = contracts.map(
+    (contract) =>
+      host.get(contract, {}, { signal: stop.signal }) as Promise<unknown> as Promise<Remote>
+  );
+  try {
+    return await Promise.race([Promise.all(getting), ended(link)]);
+  } catch (error) {
+    stop.abort();
+    for (const got of getting)
+      void got.then(
+        (ref) => ref.release(),
+        () => undefined
+      );
+    link.close('handshake failed');
+    void host.close().catch(() => undefined);
+    throw error;
+  }
+}
 
 export async function connectAgent(
   endpoint: PortEndpoint,
@@ -144,17 +177,16 @@ export async function connectAgent(
   const context = options.context ?? BACKGROUND_CONTEXT;
   const link = new PortLink(endpoint);
   const serverId = await link.hello;
-  const host = createHost({ name: `follower:${crypto.randomUUID()}`, kind: 'client' });
-  host.connect(link);
-  const get = (contract: Parameters<typeof host.get>[0]) =>
-    host.get(contract, {}, { at: AGENT_HOST }) as unknown as Remote;
-  const handles = [
+  const host = clientHost(link, 'follower');
+  const handles = await holding(host, link, [
     AgentControl,
     AgentTranscript,
     AgentSettings,
     AgentRemoteService,
     AgentPagesService,
-  ].map(get);
+  ]).catch((error: unknown) => {
+    throw final(error);
+  });
   const [controlHandle, transcriptHandle, settingsHandle, remoteHandle, pagesHandle] = handles as [
     Remote,
     Remote,
@@ -165,24 +197,15 @@ export async function connectAgent(
   const release = () => {
     for (const handle of handles) handle.release();
   };
-  try {
-    await Promise.race([Promise.all(handles.map((handle) => handle.ready)), ended(link)]);
-  } catch (error) {
-    release();
-    link.close('handshake failed');
-    throw final(error);
-  }
   const root: Root = (run, rootOptions) => host.root(run, rootOptions);
   const control = bound<AgentControl>(controlHandle, root, CONTROL_METHODS, controlAnswer);
   const members = Object.fromEntries(
     TRANSCRIPT_STATES.map((name) => [name, transcriptHandle[name] as Readable<unknown>])
   ) as Record<(typeof TRANSCRIPT_STATES)[number], Readable<unknown>>;
-  const settingsState = settingsHandle.state as Readable<unknown>;
-  const keeping = [...Object.values(members), settingsState].map(kept);
-  await Promise.race([Promise.all(keeping.map((keep) => keep.ready)), ended(link)]);
+  const settingsState = settingsHandle.state as Readable<SettingsState>;
   const settings: AgentSettings = {
     ...bound<Omit<AgentSettings, 'state'>>(settingsHandle, root, SETTINGS_METHODS, settingsAnswer),
-    state: replicated(settingsState as Readable<SettingsState | undefined>),
+    state: replicated(settingsState),
   };
   const remote = bound<AgentRemote>(remoteHandle, root, REMOTE_METHODS, remoteAnswer);
   const pages = bound<AgentPages>(pagesHandle, root, PAGE_METHODS, pageAnswer);
@@ -199,7 +222,6 @@ export async function connectAgent(
     if (!open) return;
     open = false;
     for (const kept of held) kept.freeze();
-    for (const keep of keeping) keep.stop();
     release();
   };
   const closed = link.ended.then((reason) => {
@@ -208,7 +230,7 @@ export async function connectAgent(
   });
   return {
     serverId,
-    readOnly: controlHandle.kind === 'view',
+    readOnly: controlHandle.variant === 'view',
     control,
     transcript: hold<ConversationView>(state('state')),
     deliveries: hold<Record<string, Delivered>>(state('deliveries')),
@@ -225,8 +247,8 @@ export async function connectAgent(
     vault: hold<VaultState>(state('vault')),
     labels: hold<Record<string, string>>(state('labels')),
     guests: hold<GuestSeat[]>(state('guests')),
-    viewOnly: controlHandle.kind === 'view',
-    owner: pagesHandle.kind === 'pages',
+    viewOnly: controlHandle.variant === 'view',
+    owner: pagesHandle.variant === 'pages',
     approvals: hold<Approval[]>(state('approvals')),
     approvalPolicy: hold<ApprovalPolicy>(state('approvalPolicy')),
     settings: lastingSettings(settings, hold),

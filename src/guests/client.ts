@@ -1,6 +1,6 @@
-import { createHost, isChordError, type Readable, replicatedState } from '@earendil-works/chord';
+import { isChordError, type Readable, replicatedState } from '@earendil-works/chord';
 import type { ConversationView } from '@earendil-works/pi-durable';
-import { type AgentConnection, final, lasting } from '../client.ts';
+import { type AgentConnection, clientHost, final, holding, lasting } from '../client.ts';
 import {
   type AgentControl,
   AgentGuestService,
@@ -11,7 +11,7 @@ import {
   type GuestShown,
   type SendResponse,
 } from '../services.ts';
-import { AGENT_HOST, kept, plain, type Remote, replicated } from '../serving.ts';
+import { plain, type Remote, replicated } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import type { GuestOpened, Proposed, ProposeRequest } from './index.ts';
 
@@ -45,33 +45,21 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
   } catch {
     throw refusal(SEAT_REFUSED);
   }
-  const host = createHost({ name: `guest:${crypto.randomUUID()}`, kind: 'client' });
-  host.connect(link);
-  const handle = host.get(AgentGuestService, {}, { at: AGENT_HOST }) as unknown as Remote;
-  const fail = async (error: unknown): Promise<never> => {
+  const host = clientHost(link, 'guest');
+  const [handle] = (await holding(host, link, [AgentGuestService]).catch((error: unknown) => {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === 'EVERSION') throw error;
+    throw isChordError(error) && error.code !== 'forbidden' ? final(error) : refusal(SEAT_REFUSED);
+  })) as [Remote];
+  if (handle.variant !== 'guest') {
     handle.release();
     link.close('handshake failed');
     await host.close();
-    throw error;
-  };
-  try {
-    await Promise.race([
-      handle.ready,
-      link.ended.then(() => {
-        throw refusal(SEAT_REFUSED);
-      }),
-    ]);
-  } catch (error) {
-    return fail(
-      isChordError(error) && error.code === 'forbidden' ? refusal(SEAT_REFUSED) : final(error)
-    );
+    throw refusal(SEAT_REFUSED);
   }
-  if (handle.kind !== 'guest') return fail(refusal(SEAT_REFUSED));
-  const transcriptMember = handle.transcript as Readable<ConversationView | undefined>;
-  const seatMember = handle.seat as Readable<GuestShown | undefined>;
-  const proposalsMember = handle.proposals as Readable<GuestProposal[] | undefined>;
-  const keeping = [transcriptMember, seatMember, proposalsMember].map(kept);
-  await Promise.race([Promise.all(keeping.map((keep) => keep.ready)), link.ended]);
+  const transcriptMember = handle.transcript as Readable<ConversationView>;
+  const seatMember = handle.seat as Readable<GuestShown>;
+  const proposalsMember = handle.proposals as Readable<GuestProposal[]>;
   const through =
     <T>(name: (typeof GUEST_METHODS)[number]) =>
     async (...args: unknown[]): Promise<T> => {
@@ -116,7 +104,6 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     open = false;
     transcript.freeze();
     proposals.freeze();
-    for (const keep of keeping) keep.stop();
     handle.release();
   };
   const closed = link.ended.then((reason) => {

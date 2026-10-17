@@ -3,7 +3,7 @@ import { env } from 'node:process';
 import { after, test } from 'node:test';
 import { launch } from './chrome.mjs';
 
-const chrome = await launch();
+const chrome = await launch({ args: ['--js-flags=--expose-gc'] });
 after(() => chrome.close());
 
 async function boot(page, query) {
@@ -27,6 +27,7 @@ async function boot(page, query) {
     const record = (seat) => ask({ seat }, 'reply');
     const seen = () => ask({}, 'seen');
     const approve = (draft) => ask({ approve: draft }, 'reply');
+    const guestLinks = () => ask({}, 'guestLinks');
     const sink = (channel) => ({
       write: (bytes) => channel.readyState === 'open' && channel.send(bytes),
       close: () => channel.readyState === 'open' && channel.close(),
@@ -97,7 +98,19 @@ async function boot(page, query) {
               : null
         )
         .filter(Boolean);
-    globalThis.seats = { owner, join, until, hub, minted, revoked, said, record, seen, approve };
+    globalThis.seats = {
+      owner,
+      join,
+      until,
+      hub,
+      minted,
+      revoked,
+      said,
+      record,
+      seen,
+      approve,
+      guestLinks,
+    };
   }, query);
 }
 
@@ -694,4 +707,100 @@ test('a gated guest message waits visibly: the guest sees it pending, an approva
     'an unanswered message never reaches the agent'
   );
   assert.equal(result.pendingAfter, 0);
+});
+
+test('minting and revoking guests leaves nothing of theirs on the agent: each revoked guest link is collected', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, 'answer=Hello.');
+  const seen = await page.evaluate(async () => {
+    const { owner, guestLinks } = globalThis.seats;
+    const local = await owner.connect();
+    let minted = 0;
+    const round = async (count) => {
+      for (let i = 0; i < count; i++) {
+        minted += 1;
+        const id = `leak-${minted}`;
+        const opened = await local.control.guestOpen(
+          {
+            id,
+            label: `Guest ${minted}`,
+            agentId: 'cone',
+            expiresAt: null,
+            gates: { messages: 'user', tools: 'user' },
+          },
+          BACKGROUND_CONTEXT
+        );
+        if (opened.error) throw new Error(opened.error);
+        const guest = await connectGuest(
+          await owner.port({ guest: { id, label: `Guest ${minted}` } })
+        );
+        await local.control.guestRevoke(id, BACKGROUND_CONTEXT);
+        await guest.closed;
+        await guest.close();
+      }
+      return guestLinks();
+    };
+    const first = await round(10);
+    const second = await round(10);
+    await local.close();
+    return { first, second, minted };
+  });
+  assert.equal(seen.minted, 20);
+  assert.equal(seen.first.gc, true, 'the worker can collect garbage on demand');
+  assert.ok(
+    seen.second.alive <= seen.first.alive,
+    `revoked guest links still held: ${seen.first.alive} after 10 guests, ${seen.second.alive} after 20`
+  );
+  assert.ok(seen.second.alive <= 2, `${seen.second.alive} of 20 revoked guest links still held`);
+});
+
+test('a guest link has at most four calls in flight: further calls are answered at once as unavailable, and the link stays open', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, `answer=Hello.&directory=/calls-${Date.now()}&crash=before`);
+  const seen = await page.evaluate(async () => {
+    const { owner } = globalThis.seats;
+    const local = await owner.connect();
+    const opened = await local.control.guestOpen(
+      {
+        id: 'busy',
+        label: 'Busy',
+        agentId: 'cone',
+        expiresAt: null,
+        gates: { messages: 'off', tools: 'user' },
+      },
+      BACKGROUND_CONTEXT
+    );
+    const guest = await connectGuest(await owner.port({ guest: { id: 'busy', label: 'Busy' } }));
+    const propose = (n) => guest.propose({ text: `Message ${n}`, requestId: `call-${n}` });
+    const waiting = [1, 2, 3, 4].map(propose);
+    const extra = await Promise.allSettled([5, 6, 7].map(propose));
+    const settled = await Promise.race([
+      Promise.any(waiting).then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 300)),
+    ]);
+    const closed = await Promise.race([
+      guest.closed.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 300)),
+    ]);
+    await guest.close();
+    await local.close();
+    await owner.release();
+    return {
+      opened: opened.error,
+      extra: extra.map((one) =>
+        one.status === 'rejected' ? [one.reason.code, one.reason.message] : one.value
+      ),
+      settled,
+      closed,
+    };
+  });
+  assert.equal(seen.opened, null);
+  assert.equal(seen.settled, false, 'the first four are still in flight');
+  assert.equal(seen.extra.length, 3);
+  for (const refused of seen.extra) {
+    assert.ok(Array.isArray(refused), JSON.stringify(refused));
+    assert.equal(refused[0], 'unavailable');
+    assert.match(refused[1], /Too many calls in progress on this connection \(4\)/);
+  }
+  assert.equal(seen.closed, false);
 });

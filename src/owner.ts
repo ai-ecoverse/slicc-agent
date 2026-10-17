@@ -114,22 +114,22 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
       }
     },
     restart() {
-      stopAsking();
       worker = worker
         .catch(() => undefined)
         .then((old) => {
           old?.terminate();
+          stopAsking();
           return spawn();
         });
       return worker.then(() => undefined);
     },
     async release() {
-      stopAsking();
       const previous = worker;
       worker = Promise.resolve(undefined);
       try {
         (await previous.catch(() => undefined))?.terminate();
       } finally {
+        stopAsking();
         release();
       }
     },

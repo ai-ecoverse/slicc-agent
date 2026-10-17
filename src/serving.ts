@@ -1,8 +1,8 @@
 import {
   type Ctx,
+  hostNamed,
   isChordError,
   method,
-  type Principal,
   type Readable,
   type RemoteContract,
   type ReplicatedState,
@@ -23,28 +23,20 @@ export interface GuestPrincipal {
   epoch: number;
 }
 
-export interface AgentPrincipal {
-  seat: Seat;
-  link: number;
-  guest?: GuestPrincipal;
-  device?: string;
-}
+export type AgentPrincipal =
+  | { seat: 'owner' | 'control' | 'view'; link: number; device?: string }
+  | { seat: 'guest'; link: number; guest: GuestPrincipal }
+  | { seat: 'host' };
 
-export const seatOf = (principal: Principal): Seat => (principal as AgentPrincipal).seat;
+export const SELF: AgentPrincipal = { seat: 'host' };
 
-export const guestOf = (principal: Principal): GuestPrincipal | undefined => {
-  const found = principal as Partial<AgentPrincipal> | undefined;
-  return found?.seat === 'guest' ? found.guest : undefined;
-};
-
-export const deviceOf = (principal: Principal): string | undefined =>
-  (principal as AgentPrincipal).device;
-
-export const principalKey = (principal: Principal): string => {
-  const { seat, link } = (principal ?? {}) as Partial<AgentPrincipal>;
-  const guest = guestOf(principal);
-  if (guest) return `guest:${guest.id}:e${guest.epoch}:${link}`;
-  return seat ? `${seat}:${link}` : 'host';
+export const principalKey = (principal: AgentPrincipal): string => {
+  if (principal.seat === 'host') return 'host';
+  if (principal.seat === 'guest') {
+    const { guest, link } = principal;
+    return `guest:${guest.id}:e${guest.epoch}:${link}`;
+  }
+  return `${principal.seat}:${principal.link}`;
 };
 
 export interface Members {
@@ -59,6 +51,7 @@ export function contract(name: string, variants: Record<string, Members>): Remot
   const def: Parameters<typeof remote>[1] = {
     version: 1,
     input: Type.Object({}),
+    host: hostNamed(AGENT_HOST),
     variants: Object.fromEntries(
       Object.entries(variants).map(([kind, members]) => [
         kind,
@@ -154,13 +147,13 @@ export function readablesOf(
 }
 
 export interface Remote {
-  readonly kind: string | undefined;
+  readonly variant: string | undefined;
   readonly ready: Promise<void>;
   release(): void;
   [member: string]: unknown;
 }
 
-export function replicated<T>(member: Readable<T | undefined>): ReplicatedState<T> {
+export function replicated<T>(member: Readable<T>): ReplicatedState<T> {
   return {
     get value() {
       return member.value;
@@ -168,7 +161,6 @@ export function replicated<T>(member: Readable<T | undefined>): ReplicatedState<
     subscribe(listener: (value: T, context: Context, delivery: never) => unknown) {
       let sequence = 0;
       return member.subscribe((value) => {
-        if (value === undefined) return;
         sequence += 1;
         void listener(value, BACKGROUND_CONTEXT, {
           kind: sequence === 1 ? 'hydrate' : 'update',
@@ -177,17 +169,6 @@ export function replicated<T>(member: Readable<T | undefined>): ReplicatedState<
       });
     },
   } as ReplicatedState<T>;
-}
-
-export function kept(member: Readable<unknown>): { ready: Promise<void>; stop(): void } {
-  let resolve!: () => void;
-  const ready = new Promise<void>((done) => {
-    resolve = done;
-  });
-  const stop = member.subscribe((value) => {
-    if (value !== undefined) resolve();
-  });
-  return { ready, stop };
 }
 
 export const CLOSED = 'the connection to the agent is closed';
