@@ -256,7 +256,7 @@ test('the workflow compares the packed sides for every reviewed change that is n
     new RegExp(`\\n {2}${name}:\\n([\\s\\S]*?)(?=\\n {2}[a-z-]+:\\n|$)`).exec(workflow)?.[1] ?? '';
   assert.match(
     body('same'),
-    /needs: \[plan, pack\]\n {4}if: \$\{\{ !cancelled\(\) && needs\.plan\.outputs\.go == 'true' && needs\.plan\.outputs\.forced != 'true' && needs\.pack\.result == 'success' \}\}/
+    /needs: \[plan, pack, pack-base, delta\]\n {4}if: \$\{\{ !cancelled\(\) && needs\.plan\.outputs\.go == 'true' && needs\.plan\.outputs\.forced != 'true' && needs\.pack\.result == 'success' && needs\.pack-base\.result == 'success' \}\}/
   );
   assert.match(body('same'), /node tools\/cert-review\/same\.mjs --candidate /);
   assert.match(body('same'), /node tools\/cert-review\/pr\.mjs same /);

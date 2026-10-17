@@ -198,6 +198,16 @@ else process.exit(1);
   };
   const good = await record(['--tarball', ok.file, '--sha256', ok.sha256]);
   assert.equal(good.status, 0, JSON.stringify(good.json.problems));
+  const planted = await record([
+    '--tarball',
+    ok.file,
+    '--sha256',
+    ok.sha256,
+    '--jobs',
+    'pack=success,suite=success,artifacts=failure',
+  ]);
+  assert.equal(planted.status, 1);
+  assert.match(planted.json.line, /INCOMPLETE .*the artifacts job ended failure/);
   await writeFile(
     join(review, 'verdict.json'),
     JSON.stringify({
@@ -506,7 +516,7 @@ test("the workflow: same-repo PRs with merge-ok review the merge ref with main's
   assert.equal(jobs.compat, undefined);
   assert.match(
     jobs.record,
-    /JOBS: pack=\$\{\{ needs\.pack\.result \}\},suite=\$\{\{ needs\.suite\.result \}\}\n/
+    /JOBS: pack=\$\{\{ needs\.pack\.result \}\},pack-base=\$\{\{ needs\.pack-base\.result \}\},delta=\$\{\{ needs\.delta\.result \}\},suite=\$\{\{ needs\.suite\.result \}\}\n/
   );
   assert.match(jobs.suite, /node test\/integration\/build\.mjs/);
   assert.doesNotMatch(jobs.suite, /secrets\./);
