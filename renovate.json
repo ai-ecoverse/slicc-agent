@@ -24,9 +24,9 @@
       "automerge": false
     },
     {
-      "description": "Chord 1.3 changes the link protocol, so moving to it is the agent 6.0 port, done by hand; until then Renovate keeps @earendil-works/chord on 1.2.x. pi-durable 1.3 nests its own Chord 1.3, which only its state and context layer uses (npm run lint:chord).",
-      "matchPackageNames": ["@earendil-works/chord"],
-      "allowedVersions": "<1.3.0"
+      "description": "slicc-agent-5 is the newest 5.x agent: the integration tests run it as a follower and guest of another version against this 6.x owner, so it stays on 5.x.",
+      "matchDepNames": ["slicc-agent-5"],
+      "allowedVersions": "<6.0.0"
     }
   ]
 }

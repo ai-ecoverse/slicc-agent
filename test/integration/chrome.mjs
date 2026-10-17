@@ -16,7 +16,7 @@ const options = {
   coverage: ['/dist-test/'],
 };
 
-export const launch = () => start(options);
+export const launch = (more = {}) => start({ ...options, ...more });
 
 if (argv[1] === fileURLToPath(import.meta.url)) {
   const { url } = await serve({ ...options, port: Number(env.PORT ?? 8080) });

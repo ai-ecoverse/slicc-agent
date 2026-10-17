@@ -12,6 +12,7 @@ await build({
     'test/integration/page/codemode-worker.js',
     'test/integration/page/adobe-worker.js',
     'test/integration/page/other-owner.js',
+    'test/integration/page/agent-5.js',
   ],
   outdir: 'dist-test',
   bundle: true,

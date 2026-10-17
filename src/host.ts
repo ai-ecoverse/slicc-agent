@@ -6,7 +6,6 @@ import {
   type Readable,
   type ReplicatedState,
   replicatedState,
-  resource,
   type Self,
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
@@ -62,14 +61,12 @@ import {
 import {
   AGENT_HOST,
   type AgentPrincipal,
-  deviceOf,
   type GuestPrincipal,
-  guestOf,
   principalKey,
   readable,
   readablesOf,
+  SELF,
   type Seat,
-  seatOf,
   served,
 } from './serving.ts';
 import type { SkillsRuntime } from './skills/index.ts';
@@ -342,7 +339,9 @@ export async function hostAgent(
       approvals.decide(id, decision, reason, by, using),
   });
   const offGuests = guests.onEnd((id) => {
-    void host.invalidatePrincipal((principal) => guestOf(principal)?.id === id);
+    void host.invalidatePrincipal(
+      (principal) => principal.seat === 'guest' && principal.guest.id === id
+    );
   });
   let links = 0;
   return {
@@ -358,7 +357,7 @@ export async function hostAgent(
         admitGuest(guests, endpoint, connectOptions.guest, serverId, links, host);
         return;
       }
-      const seat: Seat = connectOptions?.readOnly
+      const seat: Exclude<Seat, 'guest'> = connectOptions?.readOnly
         ? 'view'
         : connectOptions?.pages === false
           ? 'control'
@@ -423,18 +422,18 @@ export const openToGuests = <F extends object>(factory: F): F => {
   return factory;
 };
 
-export function closedToGuests(host: Host): Host {
+export function closedToGuests(host: Host<AgentPrincipal>): Host<AgentPrincipal> {
   const serve = ((type: never, factory: (...args: unknown[]) => unknown, options?: never) =>
     host.serve(
       type,
       (opened.has(factory)
         ? factory
-        : (input: unknown, principal: unknown, self: unknown) => {
-            if (seatOf(principal as never) === 'guest') throw forbidden(CLOSED_TO_GUESTS);
+        : (input: unknown, principal: AgentPrincipal, self: unknown) => {
+            if (principal.seat === 'guest') throw forbidden(CLOSED_TO_GUESTS);
             return factory(input, principal, self);
           }) as never,
       options
-    )) as Host['serve'];
+    )) as Host<AgentPrincipal>['serve'];
   return new Proxy(host, {
     get(target, key) {
       if (key === 'serve') return serve;
@@ -454,83 +453,90 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
   };
 }
 
-const seated = (serving: Served, seat: Seat, device: string | undefined): AgentControl => ({
-  ...(seat === 'view' ? serving.viewed : serving.trusted),
+const seated = (serving: Served, principal: AgentPrincipal): AgentControl => ({
+  ...(principal.seat === 'view' ? serving.viewed : serving.trusted),
   decide: serving.decide({
-    by: seat === 'owner' ? 'owner' : 'follower',
-    ...(device ? { device } : {}),
+    by: principal.seat === 'owner' ? 'owner' : 'follower',
+    ...('device' in principal && principal.device ? { device: principal.device } : {}),
   }),
 });
 
 const VIEW_METHODS = [...CONTROL_READS, ...OWNER_DEVICE_METHODS];
 
-export function serveAgent(serving: Served): Host {
-  const host = closedToGuests(createHost({ name: AGENT_HOST, principalKey }));
+export function serveAgent(serving: Served): Host<AgentPrincipal> {
+  const host = closedToGuests(
+    createHost<AgentPrincipal>({ name: AGENT_HOST, self: SELF, principalKey })
+  );
   const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
-  host.serve(AgentControl, ((_input: unknown, principal: unknown) => {
-    const seat = seatOf(principal);
-    const control = seated(serving, seat, deviceOf(principal));
-    if (seat === 'view') return { kind: 'view', ...served(() => control, VIEW_METHODS) };
-    return { kind: 'control', ...served(() => control, CONTROL_METHODS) };
-  }) as never);
-  host.serve(AgentTranscript, ((_input: unknown, principal: unknown) => ({
-    kind: 'transcript',
-    ...readablesOf(seatOf(principal) === 'view' ? viewing : serving.transcript),
-  })) as never);
-  host.serve(AgentSettings, ((_input: unknown, principal: unknown) => ({
-    kind: seatOf(principal) === 'view' ? 'view' : 'settings',
-    state: readable(serving.settings.state),
-    ...(seatOf(principal) === 'view' ? {} : served(() => serving.settings, SETTINGS_METHODS)),
-  })) as never);
-  host.serve(AgentRemoteService, ((_input: unknown, principal: unknown) => {
-    if (seatOf(principal) !== 'view')
-      return { kind: 'remote', ...served(() => serving.remote, REMOTE_METHODS) };
+  host.serve(AgentControl, (_input, principal) => {
+    const control = seated(serving, principal);
+    return principal.seat === 'view'
+      ? { variant: 'view', ...served(() => control, VIEW_METHODS) }
+      : { variant: 'control', ...served(() => control, CONTROL_METHODS) };
+  });
+  host.serve(AgentTranscript, (_input, principal) => ({
+    variant: 'transcript',
+    ...readablesOf(principal.seat === 'view' ? viewing : serving.transcript),
+  }));
+  host.serve(AgentSettings, (_input, principal) =>
+    principal.seat === 'view'
+      ? { variant: 'view', state: readable(serving.settings.state) }
+      : {
+          variant: 'settings',
+          state: readable(serving.settings.state),
+          ...served(() => serving.settings, SETTINGS_METHODS),
+        }
+  );
+  host.serve(AgentRemoteService, (_input, principal) => {
+    if (principal.seat !== 'view')
+      return { variant: 'remote', ...served(() => serving.remote, REMOTE_METHODS) };
     const scoped = viewRemote(serving.remote);
-    return { kind: 'watch', ...served(() => scoped, REMOTE_READS) };
-  }) as never);
-  host.serve(AgentPagesService, ((_input: unknown, principal: unknown, self: Self) => {
-    if (seatOf(principal) !== 'owner') return { kind: 'none' };
-    const held = self.resources({
-      mine: resource({
-        rev: 1,
-        open: () => ownedPages(serving.pages),
-        close: (mine) => mine.release(),
-      }),
+    return { variant: 'watch', ...served(() => scoped, REMOTE_READS) };
+  });
+  host.serve(AgentPagesService, (_input, principal, self) => {
+    if (principal.seat !== 'owner') return { variant: 'none' };
+    const mine = self.resource('mine', {
+      version: 1,
+      open: () => ownedPages(serving.pages),
+      close: (owned) => owned.release(),
     });
-    return { kind: 'pages', ...served(() => held.mine.value, PAGE_METHODS) };
-  }) as never);
+    return { variant: 'pages', ...served(() => mine.value, PAGE_METHODS) };
+  });
   host.serve(
     AgentGuestService,
-    openToGuests((_input: unknown, principal: unknown, self: Self) => {
-      const guest = guestOf(principal as never);
-      if (!guest) return { kind: 'none' };
-      const opening = serving.guest?.(guest);
+    openToGuests((_input: unknown, principal: AgentPrincipal, self: Self<AgentPrincipal>) => {
+      if (principal.seat !== 'guest') return { variant: 'none' };
+      const opening = serving.guest?.(principal.guest);
       if (!opening) throw forbidden(CLOSED_TO_GUESTS);
-      const held = self.resources({
-        seat: resource({ rev: 1, open: () => opening, close: (made) => made.dispose() }),
+      const seat = self.resource('seat', {
+        version: 1,
+        open: () => opening,
+        close: (made) => made.dispose(),
       });
       const later = (name: 'transcript' | 'seat' | 'proposals') =>
-        lazily(() => held.seat.value.value[name] as ReplicatedState<unknown>);
+        lazily(() => seat.value.value[name] as ReplicatedState<unknown>);
       return {
-        kind: 'guest',
+        variant: 'guest',
         transcript: later('transcript'),
         seat: later('seat'),
         proposals: later('proposals'),
-        ...served(() => held.seat.value.value, GUEST_METHODS),
+        ...served(() => seat.value.value, GUEST_METHODS),
       };
-    }) as never
+    })
   );
-  host.serve(AgentSudoService, ((_input: unknown, principal: unknown, self: Self) => {
+  host.serve(AgentSudoService, (_input, principal, self) => {
     const sudo = serving.sudo;
-    if (seatOf(principal) !== 'owner' || !sudo) return { kind: 'none' };
-    const held = self.resources({
-      mine: resource({ rev: 1, open: () => ownedSudo(sudo), close: (mine) => mine.release() }),
+    if (principal.seat !== 'owner' || !sudo) return { variant: 'none' };
+    const mine = self.resource('mine', {
+      version: 1,
+      open: () => ownedSudo(sudo),
+      close: (owned) => owned.release(),
     });
     return {
-      kind: 'sudo',
+      variant: 'sudo',
       approvals: readable(sudo.approvals),
-      ...served(() => held.mine.value, SUDO_METHODS),
+      ...served(() => mine.value, SUDO_METHODS),
     };
-  }) as never);
+  });
   return host;
 }

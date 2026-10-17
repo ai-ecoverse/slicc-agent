@@ -10,6 +10,8 @@ import { GUESTS_MANAGE_DENIED, GUESTS_MANAGE_LATER } from './policy.ts';
 import type { ReviewsState } from './review.ts';
 import { guestView } from './view.ts';
 
+export const GUEST_CALLS = 4;
+
 export function proposalsOf(state: ReviewsState | null | undefined, seat: string): GuestProposal[] {
   return Object.values(state?.reviews ?? {})
     .filter((review) => review.seat === seat)
@@ -85,7 +87,7 @@ export function admitGuest(
   asked: { id: string; label: string },
   serverId: string,
   link: number,
-  host: Pick<Host, 'accept'>
+  host: Pick<Host<AgentPrincipal>, 'accept'>
 ): void {
   const port = new PortLink(endpoint);
   const guest = guests.admit(String(asked.id), String(asked.label));
@@ -95,5 +97,5 @@ export function admitGuest(
   }
   void port.ended.then(guests.joined(guest.id));
   port.greet(serverId);
-  host.accept(port, { principal: { seat: 'guest', link, guest } satisfies AgentPrincipal });
+  host.accept(port, { principal: { seat: 'guest', link, guest }, maxCalls: GUEST_CALLS });
 }
