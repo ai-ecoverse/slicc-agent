@@ -269,13 +269,13 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           artifact-ids: ${{ needs.pack.outputs.id }}
-          path: ${{ runner.temp }}/packs
+          path: ${{ runner.temp }}/packs/agent-tgz-${{ needs.plan.outputs.version }}
           digest-mismatch: error
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           artifact-ids: ${{ needs.pack-base.outputs.id }}
-          path: ${{ runner.temp }}/packs
+          path: ${{ runner.temp }}/packs/agent-tgz-${{ needs.plan.outputs.prev }}
           digest-mismatch: error
 
       - id: same
@@ -383,19 +383,18 @@ jobs:
         with:
           artifact-ids: ${{ needs.delta.outputs.id }}
           path: ${{ runner.temp }}/evidence
-          merge-multiple: true
           digest-mismatch: error
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           artifact-ids: ${{ needs.pack.outputs.id }}
-          path: ${{ runner.temp }}/packs
+          path: ${{ runner.temp }}/packs/agent-tgz-${{ needs.plan.outputs.version }}
           digest-mismatch: error
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           artifact-ids: ${{ needs.pack-base.outputs.id }}
-          path: ${{ runner.temp }}/packs
+          path: ${{ runner.temp }}/packs/agent-tgz-${{ needs.plan.outputs.prev }}
           digest-mismatch: error
 
       - name: The tree (the pull request on main, or main), its dependencies and Chromium, and both packed builds
@@ -497,7 +496,6 @@ jobs:
         with:
           artifact-ids: ${{ needs.delta.outputs.id }}
           path: ${{ runner.temp }}/evidence
-          merge-multiple: true
           digest-mismatch: error
 
       - name: Findings, in code
@@ -626,7 +624,6 @@ jobs:
         with:
           artifact-ids: ${{ needs.review.outputs.verdict }}
           path: ${{ runner.temp }}/cert-review
-          merge-multiple: true
           digest-mismatch: error
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -635,7 +632,6 @@ jobs:
         with:
           artifact-ids: ${{ needs.pack.outputs.id }}
           path: ${{ runner.temp }}/pack
-          merge-multiple: true
           digest-mismatch: error
 
       - name: The line, from the build, the findings and the verdict
@@ -695,7 +691,6 @@ jobs:
         with:
           artifact-ids: ${{ needs.record.outputs.artifact }}
           path: ${{ runner.temp }}/record
-          merge-multiple: true
           digest-mismatch: error
 
       - name: The verdict as the cert-review status on the pull request's head, and in a comment
