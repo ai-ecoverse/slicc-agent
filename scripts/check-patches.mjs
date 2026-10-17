@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMain } from './main.mjs';
 
 const KINDS = new Set(['monkeypatch', 'patch-package', 'environment']);
 const FIELDS = ['kind', 'package', 'patchedVersion', 'reason', 'removeWhen', 'verify'];
@@ -97,13 +97,15 @@ export function run(root) {
   return problems;
 }
 
-if (
-  process.argv[1] &&
-  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
-) {
+if (isMain(import.meta.url)) {
   const problems = run(process.cwd());
   for (const problem of problems) console.error(`check-patches: ${problem}`);
-  if (problems.length) process.exit(1);
+  if (problems.length) {
+    console.log(
+      `check-patches: FAIL ${problems.length} problem${problems.length === 1 ? '' : 's'}`
+    );
+    process.exit(1);
+  }
   const count = Object.keys(
     JSON.parse(readFileSync(join(process.cwd(), 'patches/patches.json'), 'utf8'))
   ).length;

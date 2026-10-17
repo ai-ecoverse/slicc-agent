@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { isMain } from './main.mjs';
 
 const TAG = /^v?(\d+)\.(\d+)\.(\d+)$/;
 export const BACKFILL = 'backfill';
@@ -43,15 +43,18 @@ function exec(cmd, args) {
   return result.status === 0 ? result.stdout : '';
 }
 
-if (
-  process.argv[1] &&
-  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
-) {
-  const { name } = JSON.parse(readFileSync('package.json', 'utf8'));
-  const tag = process.env.TAG ?? '';
-  const chosen = publish({ run: exec, log: console.log, name, tag });
-  const version = `${name}@${tag.replace(/^v/, '')}`;
-  console.log(
-    chosen ? `publish: PASS ${version} as ${chosen}` : `publish: PASS ${version} already on npm`
-  );
+if (isMain(import.meta.url)) {
+  try {
+    const { name } = JSON.parse(readFileSync('package.json', 'utf8'));
+    const tag = process.env.TAG ?? '';
+    const chosen = publish({ run: exec, log: console.log, name, tag });
+    const version = `${name}@${tag.replace(/^v/, '')}`;
+    console.log(
+      chosen ? `publish: PASS ${version} as ${chosen}` : `publish: PASS ${version} already on npm`
+    );
+  } catch (err) {
+    console.error(err.message);
+    console.log(`publish: FAIL ${String(err.message ?? err).split('\n')[0]}`);
+    process.exitCode = 1;
+  }
 }

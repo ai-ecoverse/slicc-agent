@@ -82,7 +82,11 @@ jobs:
           node-version: 24
           cache: npm
 
-      - run: node scripts/verdict.mjs publish scripts/publish.mjs
+      - name: Publish the tag to npm, and fail unless publish.mjs printed its verdict
+        run: |
+          set -o pipefail
+          node scripts/publish.mjs | tee "$RUNNER_TEMP/publish.log"
+          grep -q '^publish: PASS' "$RUNNER_TEMP/publish.log" || { echo "::error title=publish::no PASS verdict from publish.mjs; its silence is not a pass"; exit 1; }
 
   verify:
     name: release / verify on npm
