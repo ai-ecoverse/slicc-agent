@@ -14,16 +14,6 @@
       "rangeStrategy": "replace"
     },
     {
-      "description": "The kernel, pnpm, slicc-cdp and the wasm command packages move only after the homescoop coordinator certifies them, as in slicc-bios, so Renovate opens their PRs but never merges them; a PR merges once the cert lane has certified that version. The kernel and wasm-* devDependencies are the versions CI tests.",
-      "matchPackageNames": [
-        "@ai-ecoverse/slicc-cdp",
-        "@ai-ecoverse/slicc-kernel",
-        "@ai-ecoverse/wasi-pnpm",
-        "@ai-ecoverse/wasm-*"
-      ],
-      "automerge": false
-    },
-    {
       "description": "slicc-agent-5 is the newest 5.x agent: the integration tests run it as a follower and guest of another version against this 6.x owner, so it stays on 5.x.",
       "matchDepNames": ["slicc-agent-5"],
       "allowedVersions": "<6.0.0"
