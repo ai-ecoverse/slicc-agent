@@ -65,7 +65,7 @@
   "devDependencies": {
     "@ai-ecoverse/slicc-kernel": "1.122.0",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
-    "@ai-ecoverse/slicc-shared-web": "1.23.1",
+    "@ai-ecoverse/slicc-shared-web": "1.23.2",
     "@ai-ecoverse/slicc-spectrum": "1.85.0",
     "@ai-ecoverse/wasm-bash": "5.3.0-19",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-9",
