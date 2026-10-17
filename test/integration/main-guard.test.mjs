@@ -47,6 +47,7 @@ test('lint:chord run through a symlinked checkout still checks the lockfile and 
   const result = viaLink('check-chord.mjs', cwd);
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stderr, /second Chord/);
+  assert.doesNotMatch(result.stdout, /PASS/);
 });
 
 test('lint:patches run through a symlinked checkout still checks patches.json and fails on a broken entry', () => {
@@ -59,6 +60,7 @@ test('lint:patches run through a symlinked checkout still checks patches.json an
   const result = viaLink('check-patches.mjs', cwd);
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stderr, /broken: missing kind/);
+  assert.doesNotMatch(result.stdout, /PASS/);
 });
 
 test('publish run through a symlinked checkout reaches its npm lookup, and publishes nothing when the version is already out', () => {
@@ -76,6 +78,7 @@ test('publish run through a symlinked checkout reaches its npm lookup, and publi
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /@ai-ecoverse\/guard-probe@9\.9\.9 is already on npm/);
+  assert.match(result.stdout, /^publish: PASS @ai-ecoverse\/guard-probe@9\.9\.9 already on npm$/m);
   const log = readFileSync(calls, 'utf8');
   assert.match(log, /^npm view @ai-ecoverse\/guard-probe@9\.9\.9 version/);
   assert.doesNotMatch(log, /publish/);

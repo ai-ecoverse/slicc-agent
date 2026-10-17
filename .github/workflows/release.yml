@@ -82,7 +82,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - run: node scripts/publish.mjs
+      - run: node scripts/verdict.mjs publish scripts/publish.mjs
 
   verify:
     name: release / verify on npm

@@ -30,5 +30,5 @@ if (
   const problems = run(process.cwd());
   for (const problem of problems) console.error(`check-chord: ${problem}`);
   if (problems.length) process.exit(1);
-  console.log('check-chord: one Chord');
+  console.log('check-chord: PASS 1 chord');
 }

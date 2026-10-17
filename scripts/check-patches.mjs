@@ -104,5 +104,8 @@ if (
   const problems = run(process.cwd());
   for (const problem of problems) console.error(`check-patches: ${problem}`);
   if (problems.length) process.exit(1);
-  console.log('check-patches: ok');
+  const count = Object.keys(
+    JSON.parse(readFileSync(join(process.cwd(), 'patches/patches.json'), 'utf8'))
+  ).length;
+  console.log(`check-patches: PASS ${count} patches`);
 }
