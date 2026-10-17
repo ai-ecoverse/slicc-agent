@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const TAG = /^v?(\d+)\.(\d+)\.(\d+)$/;
@@ -43,7 +43,10 @@ function exec(cmd, args) {
   return result.status === 0 ? result.stdout : '';
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   const { name } = JSON.parse(readFileSync('package.json', 'utf8'));
   publish({ run: exec, log: console.log, name, tag: process.env.TAG ?? '' });
 }
