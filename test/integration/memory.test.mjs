@@ -194,14 +194,17 @@ const held = () => {
         look();
       });
     await scoped('sliccy');
-    const armed = heard((data) => data === 'armed');
-    hold.postMessage('arm');
-    await armed;
     return {
       owner,
       connection,
       scoped,
-      holding: heard((data) => data === 'held'),
+      heard,
+      arm: async () => {
+        const armed = heard((data) => data === 'armed');
+        hold.postMessage('arm');
+        await armed;
+        return heard((data) => data === 'held');
+      },
       release: () => hold.postMessage('release'),
       reads: async () => {
         const counted = heard((data) => typeof data?.reads === 'number');
@@ -220,7 +223,8 @@ const held = () => {
 
 const files = {
   '/home/.pi/agent/memory/MEMORY.md': '## Notes\n\n### One\n\nShared note.\n',
-  '/home/.pi/agent/memory/cone/MEMORY.md': '## Notes\n\n### Two\n\nCone note.\n',
+  '/home/.pi/agent/memory/held/MEMORY.md': '## Notes\n\n### Two\n\nHeld note.\n',
+  '/home/.pi/agent/agent-memory/reviewer/MEMORY.md': '## Notes\n\n### Three\n\nRole note.\n',
 };
 
 test('memory: a memory read that never settles does not keep a newer cone from its scope', async (t) => {
@@ -231,8 +235,9 @@ test('memory: a memory read that never settles does not keep a newer cone from i
   const seen = await page.evaluate(async (files) => {
     const agent = await window.heldMemory(files);
     const { connection } = agent;
+    const holding = await agent.arm();
     await connection.control.createCone('first', BACKGROUND_CONTEXT);
-    await agent.holding;
+    await holding;
     const created = await connection.control.createCone('second', BACKGROUND_CONTEXT);
     const scope = await agent.scoped('second');
     const first = await agent.scoped('first');
@@ -251,8 +256,9 @@ test('memory: after the agent host closes, no memory reload runs', async (t) => 
   await page.goto('/');
   const seen = await page.evaluate(async (files) => {
     const agent = await window.heldMemory(files);
+    const holding = await agent.arm();
     await agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
-    await agent.holding;
+    await holding;
     const closed = await agent.close();
     const before = await agent.reads();
     agent.release();
