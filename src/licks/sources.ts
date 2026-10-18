@@ -3,6 +3,7 @@ import type { Conversation, Harness, TaskId } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Activity } from '../kernel/activity.ts';
 import { ROOT_USER } from '../layout.ts';
+import { type Attachment, attachmentPart } from './attachment.ts';
 import { type BootFacts, bootLicks, LicksHostDoc } from './boot.ts';
 import { type ConfigError, parseWebhook, type WebhookEntry } from './config.ts';
 import {
@@ -30,6 +31,7 @@ export interface LickSourcesOptions {
   activity?: Activity;
   dirs?: () => readonly LickDir[] | Promise<readonly LickDir[]>;
   cronUser?: (target: LickTarget, place: LickDir) => string | undefined;
+  fetch?: typeof fetch;
 }
 
 export interface LickDir {
@@ -56,6 +58,17 @@ export interface WebhookDelivery {
   headers?: Record<string, string>;
   body: unknown;
   verified?: boolean;
+  attachment?: Attachment;
+}
+
+export async function withAttachment(
+  delivery: WebhookDelivery,
+  fetcher: typeof fetch | undefined
+): Promise<WebhookDelivery> {
+  const { attachment, ...rest } = delivery;
+  if (!attachment) return delivery;
+  const part = await attachmentPart(attachment, fetcher);
+  return { ...rest, body: [rest.body, part].filter(Boolean).join('\n\n') };
 }
 
 export interface LickSources {
@@ -309,7 +322,10 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     async webhook(name, delivery, context) {
       const entry = webhooks.get(name);
       if (!entry) return false;
-      await deliver(webhookLick(name, entry, delivery), context);
+      await deliver(
+        webhookLick(name, entry, await withAttachment(delivery, options.fetch)),
+        context
+      );
       return true;
     },
     async close(context) {

@@ -164,9 +164,51 @@ function model(request) {
     })(),
   };
 }
+const GATEWAY_HOST = 'ntfy.sliccy.ai';
+const gatewayFiles = {
+  '/file/release.json': {
+    type: 'application/json; charset=utf-8',
+    chunks: ['{"action":"released",', '"tag":"v1.2.0"}'],
+  },
+  '/file/flood.txt': {
+    type: 'text/plain; charset=utf-8',
+    chunks: Array.from({ length: 300 }, () => 'x'.repeat(1024)),
+  },
+  '/file/logo.png': {
+    type: 'image/png',
+    chunks: [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+  },
+};
+function gateway(request) {
+  const path = new URL(request.url).pathname;
+  upstream.push({ url: request.url, body: '' });
+  const file = gatewayFiles[path];
+  if (!file)
+    return {
+      status: 404,
+      headers: [['content-type', 'application/json']],
+      body: (async function* () {
+        yield new TextEncoder().encode('{"code":40401,"error":"not found"}');
+      })(),
+    };
+  return {
+    status: 200,
+    headers: [
+      ['content-type', file.type],
+      ['content-disposition', 'attachment'],
+      ['x-content-type-options', 'nosniff'],
+    ],
+    body: (async function* () {
+      for (const chunk of file.chunks)
+        yield typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk;
+    })(),
+  };
+}
 const relay = {
   traits: { crossOrigin: 'any' },
   async fetch(request) {
+    if (new URL(request.url).host === GATEWAY_HOST && params.has('gateway'))
+      return gateway(request);
     if (new URL(request.url).host === MODEL_HOST && params.has('e2e')) return model(request);
     if (new URL(request.url).host.startsWith('bedrock-runtime.') && params.has('hold-model')) {
       return holdModel(request);
@@ -180,9 +222,10 @@ const relay = {
     return { status: response.status, headers: [...response.headers], body: chunks(response.body) };
   },
 };
-const attach = relayed
-  ? async (port) => Object.assign(await attachKernel(port), { transport: relay })
-  : undefined;
+const attach =
+  relayed || params.has('gateway')
+    ? async (port) => Object.assign(await attachKernel(port), { transport: relay })
+    : undefined;
 const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]
   : [];

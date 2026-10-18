@@ -408,7 +408,7 @@ async function start(
   const mcp = setupMcp(registry);
   const codemode = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   registry.install(codemodeExtension(codemode));
-  const licks = setupLicks(registry);
+  const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
   const skills = setupSkills(registry, licks.licks);
