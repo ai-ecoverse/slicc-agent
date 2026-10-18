@@ -232,19 +232,23 @@ test('memory: a memory read that never settles does not keep a newer cone from i
   await page.init(helpers);
   await page.init(held);
   await page.goto('/');
-  const seen = await page.evaluate(async (files) => {
-    const agent = await window.heldMemory(files);
-    const { connection } = agent;
-    const holding = await agent.arm();
-    await connection.control.createCone('first', BACKGROUND_CONTEXT);
-    await holding;
-    const created = await connection.control.createCone('second', BACKGROUND_CONTEXT);
+  await page.evaluate(async (files) => {
+    window.agent = await window.heldMemory(files);
+  }, files);
+  await page.evaluate(async () => {
+    window.holding = await window.agent.arm();
+    await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
+  });
+  await page.evaluate(() => window.holding);
+  const seen = await page.evaluate(async () => {
+    const { agent } = window;
+    const created = await agent.connection.control.createCone('second', BACKGROUND_CONTEXT);
     const scope = await agent.scoped('second');
     const first = await agent.scoped('first');
     agent.release();
     await agent.owner.release();
     return { created: created.id, scope, first: first.label };
-  }, files);
+  });
   assert.deepEqual(seen.scope, { id: seen.created, label: 'second', group: 'cones' });
   assert.equal(seen.first, 'first');
 });
@@ -254,19 +258,23 @@ test('memory: after the agent host closes, no memory reload runs', async (t) => 
   await page.init(helpers);
   await page.init(held);
   await page.goto('/');
-  const seen = await page.evaluate(async (files) => {
-    const agent = await window.heldMemory(files);
-    const holding = await agent.arm();
-    await agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
-    await holding;
-    const closed = await agent.close();
+  await page.evaluate(async (files) => {
+    window.agent = await window.heldMemory(files);
+  }, files);
+  await page.evaluate(async () => {
+    window.holding = await window.agent.arm();
+    await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
+  });
+  await page.evaluate(() => window.holding);
+  assert.equal(await page.evaluate(() => window.agent.close()), 'closed');
+  const later = await page.evaluate(async () => {
+    const { agent } = window;
     const before = await agent.reads();
     agent.release();
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const after = await agent.reads();
     await agent.owner.release();
-    return { closed, later: after - before };
-  }, files);
-  assert.equal(seen.closed, 'closed');
-  assert.equal(seen.later, 0);
+    return after - before;
+  });
+  assert.equal(later, 0);
 });
