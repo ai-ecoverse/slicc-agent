@@ -726,3 +726,64 @@ export function artifactProblems(artifacts, expect, prefixes) {
   }
   return problems;
 }
+
+async function quietly(fn, fallback) {
+  try {
+    return await fn();
+  } catch {
+    return fallback;
+  }
+}
+
+async function attestationsAt(get, at) {
+  let res;
+  try {
+    res = await get(at);
+  } catch (error) {
+    return { missing: `attestations unreachable (${error?.message ?? 'network error'})` };
+  }
+  if (res.ok) return { res };
+  if (res.status !== 404) return { problem: `attestations answered ${res.status}` };
+  return { missing: 'attestations answered 404' };
+}
+
+export async function awaitAttestations({
+  url,
+  fetch: get,
+  modified,
+  servedAt,
+  now = Date.now,
+  sleep,
+  deadline = Number.POSITIVE_INFINITY,
+  graceMs = 30 * 60_000,
+  quietMs = 10 * 60_000,
+  everyMs = 15_000,
+}) {
+  let last;
+  let quietSince = now();
+  let missing = 'no attestations on npm';
+  for (;;) {
+    const at = await quietly(() => (typeof url === 'function' ? url() : url), undefined);
+    if (at) {
+      const found = await attestationsAt(get, at);
+      if (!found.missing) return found;
+      missing = found.missing;
+    }
+    const changed = await quietly(modified, last);
+    if (changed !== last) {
+      last = changed;
+      quietSince = now();
+    }
+    const served = now() - servedAt;
+    const minutes = (ms) => Math.round(ms / 60_000);
+    if (now() >= deadline)
+      return {
+        problem: `${missing} for ${minutes(served)} min after npm started serving it, through the whole wait`,
+      };
+    if (served >= graceMs && now() - quietSince >= quietMs)
+      return {
+        problem: `${missing} for ${minutes(served)} min after npm started serving it, and its packument stopped changing ${minutes(now() - quietSince)} min ago`,
+      };
+    await sleep(everyMs);
+  }
+}
