@@ -26,6 +26,7 @@ export interface LegacyJob {
 }
 
 const NAMED = /^#\s*name:\s*(\S+)\s*$/;
+const SCHEDULED = /^(@\S+|(?:\S+\s+){4}\S+)\s+(.*)$/;
 const REFUSED = /^"[^"]*":(\d+): (.*)$/;
 
 function legacyLine(text: string, line: number): LegacyJob {
@@ -73,10 +74,9 @@ export function relicked(table: string, jobs: readonly LegacyJob[]): string | un
   let changed = false;
   for (let at = 0; at + 1 < lines.length; at++) {
     const job = named.get(NAMED.exec((lines[at] as string).trim())?.[1] ?? '');
-    const plain = job ? ` ${sendCommand(job.target, job.message, false)}` : '';
-    const line = (lines[at + 1] as string).trimEnd();
-    if (!job || !line.endsWith(plain) || !line.slice(0, -plain.length).trim()) continue;
-    lines[at + 1] = `${line.slice(0, -plain.length)} ${sendCommand(job.target, job.message)}`;
+    const parts = SCHEDULED.exec((lines[at + 1] as string).trim());
+    if (!job || !parts || parts[2] !== sendCommand(job.target, job.message, false)) continue;
+    lines[at + 1] = `${parts[1]} ${sendCommand(job.target, job.message)}`;
     changed = true;
   }
   return changed ? lines.join('\n') : undefined;

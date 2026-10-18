@@ -53,7 +53,7 @@ done
 
 count=0
 seen=0
-while [ ! -f "$dir/out/$id.code" ]; do
+while [ ! -s "$dir/out/$id.code" ]; do
   sleep 0.1
   count=$((count + 1))
   if [ $seen = 0 ] && [ -f "$dir/out/$id.ack" ]; then seen=1; fi
