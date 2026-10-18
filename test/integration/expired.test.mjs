@@ -118,7 +118,7 @@ test('an Adobe record that expires while the page is open turns the account expi
   assert.deepEqual(seen, { connected: true, early: false, after: 'expired' });
 });
 
-test('a 401 on an Adobe turn shows Log in, the account offers Sign in, and the next turn after it goes through', async (t) => {
+test('a 401 on an Adobe turn shows Log in, the account offers Sign in even after another account changes, and the next turn after it goes through', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
@@ -127,7 +127,7 @@ test('a 401 on an Adobe turn shows Log in, the account offers Sign in, and the n
   const fresh = adobeRecord({ value: 'e2e-ims-token-0002', expiresAt });
   const seen = await page.evaluate(
     async ({ query, fresh }) => {
-      const { owner, agent, settings, adobe } = await window.openAdobe(query);
+      const { owner, agent, settings, adobe, seal } = await window.openAdobe(query);
       await window.until(() => settings.models().some((model) => model.id === 'adobe/e2e-1'));
       const before = adobe()?.status;
       agent.setModel(agent.active(), 'adobe/e2e-1');
@@ -142,7 +142,17 @@ test('a 401 on an Adobe turn shows Log in, the account offers Sign in, and the n
           .find((part) => part.type === 'error');
       await window.until(() => card());
       await window.until(() => adobe()?.status === 'expired');
-      const refused = { card: card(), status: adobe()?.status };
+      await seal({
+        kind: 'model',
+        name: 'AWS_BEARER_TOKEN_BEDROCK',
+        provider: 'amazon-bedrock',
+        placeholder: 'fnox_proxy_bedrock',
+        value: 'e2e-bedrock-key-0001',
+      });
+      const bedrock = () =>
+        settings.accounts().find((account) => account.id === 'amazon-bedrock')?.status;
+      await window.until(() => bedrock() === 'connected');
+      const refused = { card: card(), status: adobe()?.status, bedrock: bedrock() };
       window.nextSeal = fresh;
       await settings.connect('adobe');
       await window.until(() => adobe()?.status === 'connected');
@@ -160,11 +170,12 @@ test('a 401 on an Adobe turn shows Log in, the account offers Sign in, and the n
       await owner.release();
       return result;
     },
-    { query: queryOf(revoked, ['e2e-revoked=e2e-ims-token-0001']), fresh }
+    { query: queryOf(revoked, ['bedrock', 'e2e-revoked=e2e-ims-token-0001']), fresh }
   );
   assert.equal(seen.before, 'connected');
   assert.equal(seen.refused.card.action, 'login');
   assert.equal(seen.refused.card.message, 'Your Adobe session has expired.');
+  assert.equal(seen.refused.bedrock, 'connected');
   assert.equal(seen.refused.status, 'expired');
   assert.equal(seen.signedIn, 'connected');
   assert.equal(seen.answered, true);

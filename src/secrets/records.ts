@@ -11,6 +11,7 @@ export interface VaultRecords {
   model(provider: string): AgentRecord | undefined;
   mcp(server: string, name?: string): AgentRecord | undefined;
   rejecting(provider: string): () => void;
+  reconnected(provider: string): void;
   close(): void;
 }
 
@@ -32,7 +33,7 @@ export function vaultRecords(vault: Source, now: () => number = Date.now): Vault
   let port = vault.state.value.port;
   let lock: Promise<unknown> = Promise.resolve();
   let raw: AgentRecord[] = [];
-  let refused = new Map<string, number>();
+  let refused = new Map<string, string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const derive = (records: AgentRecord[]) => {
     const at = now();
@@ -69,7 +70,7 @@ export function vaultRecords(vault: Source, now: () => number = Date.now): Vault
     const run = lock.then(async () => {
       raw = await read();
       const held = new Set(raw.map(keyOf));
-      refused = new Map([...refused].filter(([key, seen]) => held.has(key) && seen === version));
+      refused = new Map([...refused].filter(([key]) => held.has(key)));
       apply(context);
     });
     lock = run.catch(() => undefined);
@@ -102,9 +103,12 @@ export function vaultRecords(vault: Source, now: () => number = Date.now): Vault
       return () => {
         if (!key || version !== seen || refused.has(key)) return;
         if (!raw.some((item) => keyOf(item) === key)) return;
-        refused.set(key, seen);
+        refused.set(key, provider);
         apply(BACKGROUND_CONTEXT);
       };
+    },
+    reconnected(provider) {
+      refused = new Map([...refused].filter(([, owner]) => owner !== provider));
     },
     close() {
       off();
