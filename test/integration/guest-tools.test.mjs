@@ -134,6 +134,23 @@ async function boot(page, options = {}) {
         await until(() => !r.asked().some((item) => item.id === first.id), 'the answer');
         return first;
       };
+      r.when = (check, what) =>
+        new Promise((resolve) => {
+          r.waiting = what;
+          const offs = [];
+          const look = () => {
+            const value = offs.length && check();
+            if (!value) return;
+            for (const off of offs.splice(0)) off();
+            resolve(value);
+          };
+          offs.push(
+            r.local.views.subscribe(look),
+            r.local.approvals.subscribe(look),
+            r.model.approvals.on('approvals', look)
+          );
+          look();
+        });
       r.ran = (agentId, path) =>
         until(() => r.results(agentId).at(-1)?.includes(path) && r.results(agentId).at(-1), path);
       globalThis.r = r;
@@ -285,26 +302,34 @@ test('a reload while a guest tool call waits rejoins the same review: it is aske
     steps: [bash('echo after-reload')],
     later: [answer('Reloaded.')],
   });
-  const seen = await page.evaluate(async () => {
-    const { owner, until, pause, open, mint, join, send, said, results, items, asked, decide } =
-      globalThis.r;
-    await open();
-    const guest = await join(await mint('user'));
-    await send(guest, 'Run it.');
-    await until(() => asked().length === 1, 'the call to be asked');
-    const before = asked()[0].id;
-    await globalThis.r.local.close();
-    await owner.restart();
-    await open();
-    await until(() => asked().length === 1, 'the call after the reload');
-    await pause(500);
-    const out = { same: asked()[0].id === before, asked: asked().length, items: items().length };
-    await decide('once');
-    await until(() => said().includes('Reloaded.'), 'the run after the reload');
-    out.results = results();
-    out.after = items().map((item) => item.state);
-    return out;
-  });
+  const seen = await page.run(
+    { label: 'a reload while a guest tool call waits', marker: () => globalThis.r.waiting ?? null },
+    async () => {
+      const r = globalThis.r;
+      const { owner, when, pause, open, mint, join, send, said, results, items, asked } = r;
+      r.waiting = 'the guest';
+      await open();
+      const guest = await join(await mint('user'));
+      await send(guest, 'Run it.');
+      await when(() => asked().length === 1, 'the call to be asked');
+      const before = asked()[0].id;
+      r.waiting = 'the reload';
+      await r.local.close();
+      await owner.restart();
+      await open();
+      await when(() => asked().length === 1, 'the call after the reload');
+      r.waiting = 'a second ask';
+      await pause(500);
+      const [again] = asked();
+      const out = { same: again.id === before, asked: asked().length, items: items().length };
+      r.waiting = 'the decision';
+      await r.model.approvals.decide(again.id, 'once');
+      await when(() => said().includes('Reloaded.'), 'the run after the reload');
+      out.results = results();
+      out.after = items().map((item) => item.state);
+      return out;
+    }
+  );
   assert.deepEqual(seen, {
     same: true,
     asked: 1,
