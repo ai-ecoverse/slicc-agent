@@ -203,7 +203,7 @@ const held = () => {
         const armed = heard((data) => data === 'armed');
         hold.postMessage('arm');
         await armed;
-        return heard((data) => data === 'held');
+        return { held: heard((data) => data === 'held') };
       },
       release: () => hold.postMessage('release'),
       reads: async () => {
@@ -236,7 +236,7 @@ test('memory: a memory read that never settles does not keep a newer cone from i
     window.agent = await window.heldMemory(files);
   }, files);
   await page.evaluate(async () => {
-    window.holding = await window.agent.arm();
+    window.holding = (await window.agent.arm()).held;
     await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
   });
   await page.evaluate(() => window.holding);
@@ -262,7 +262,7 @@ test('memory: after the agent host closes, no memory reload runs', async (t) => 
     window.agent = await window.heldMemory(files);
   }, files);
   await page.evaluate(async () => {
-    window.holding = await window.agent.arm();
+    window.holding = (await window.agent.arm()).held;
     await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
   });
   await page.evaluate(() => window.holding);
