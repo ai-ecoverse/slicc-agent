@@ -314,7 +314,6 @@ export function files({ grown = false, readme = '# Deploy\n\nRun ./deploy.sh\n' 
     'files/cones/cone/README.md': readme,
     'files/cones/cone/deploy.sh': '#!/bin/sh\nset -e\necho deploy\n',
     'files/cones/cone/.env': 'API_KEY=sk-test-not-a-real-key\n',
-    'files/cones/cone/.git/hooks/pre-commit': '#!/bin/sh\nexit 1\n',
     'files/cones/research/notes.md': 'Vendor A is cheaper.\n',
     'files/cones/research/certs/dev.pem':
       '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n',
@@ -327,6 +326,28 @@ export function files({ grown = false, readme = '# Deploy\n\nRun ./deploy.sh\n' 
     'sprinkles/dashboard/dashboard.shtml': SPRINKLE,
     'licks.json': json(licks),
     'git/gitconfig': '[user]\n\tname = Pat Example\n\temail = pat@example.com\n',
+  };
+}
+
+function totals(contents) {
+  const names = Object.keys(contents);
+  const under = (...tops) =>
+    names.filter((name) => tops.some((top) => name.startsWith(`${top}/`))).length;
+  const listed = licks;
+  return {
+    cones: 2,
+    scoops: 1,
+    frozen: 1,
+    files: under('files'),
+    bytes: Object.values(contents).reduce((sum, data) => sum + Buffer.byteLength(data), 0),
+    entries: names.length + 1,
+    attachments: under('attachments'),
+    skills: 1,
+    sprinkles: 1,
+    crontasks: listed.crontasks.length,
+    tasks: listed.tasks.length,
+    webhooks: listed.webhooks.length,
+    flagged: 2,
   };
 }
 
@@ -348,7 +369,7 @@ export function manifest(contents, overrides = {}) {
         memory: 'memory/cone.md',
         scoops: [
           {
-            key: '/scoops/helper::scoop_helper',
+            key: '/scoops/helper/workspace::scoop_helper',
             folder: 'helper',
             name: 'helper',
             conversation: 'scoop_helper',
@@ -387,6 +408,7 @@ export function manifest(contents, overrides = {}) {
     skipped: [
       { path: '/mnt/photos', reason: 'mount' },
       { path: '/workspace/node_modules', reason: 'cache' },
+      { path: '/workspace/.git/hooks', reason: 'cache' },
     ],
     flagged: [
       { path: 'files/cones/cone/.env', rule: 'env' },
@@ -396,7 +418,7 @@ export function manifest(contents, overrides = {}) {
     mcp: [{ name: 'docs', url: 'https://mcp.example.com/sse' }],
     secrets: ['github-token'],
     redactionCounts: { 'known-secret': 1 },
-    totals: { cones: 2, scoops: 1, frozen: 1, files: Object.keys(contents).length },
+    totals: totals(contents),
     ...overrides,
   };
 }
