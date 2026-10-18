@@ -657,7 +657,7 @@ test('a merge group with a reviewer change the self-guard did not pass is red, a
   assert.equal(posted().at(-1).state, 'error');
   assert.match(
     jobs.guard,
-    /uses: ai-ecoverse\/slicc-shared-web\/\.github\/actions\/cert-self-guard@fe97ae242f8ddcc824334cad287346d7df3f0bbb\n {8}with:\n {10}approval-label: cert-review-approved\n {10}paths: \|\n {12}\.github\/workflows\/cert\*\.yml\n {12}\.github\/workflows\/cert\*\.yaml\n {12}tools\/cert-review\/\*\*\n/
+    /uses: ai-ecoverse\/slicc-shared-web\/\.github\/actions\/cert-self-guard@f342d7cf558c817ce517bbbbc4cc46df6eac2f97\n {8}with:\n {10}approval-label: cert-review-approved\n {10}paths: \|\n {12}\.github\/workflows\/cert\*\.yml\n {12}\.github\/workflows\/cert\*\.yaml\n {12}tools\/cert-review\/\*\*\n/
   );
   assert.match(jobs.guard, /continue-on-error: true/);
   assert.match(jobs.guard, /fetch-depth: 0/);
@@ -808,7 +808,7 @@ test("the reviewer's paths are one list: the self-guard holds exactly what plan 
   }
   assert.equal(reviewsItself([{ filename: 'src/kernel/fd-table.ts' }]), false);
   assert.equal(reviewsItself([{ filename: '.github/workflows/release.yml' }]), false);
-  assert.match(jobs.guard, /cert-self-guard@fe97ae242f8ddcc824334cad287346d7df3f0bbb\n/);
+  assert.match(jobs.guard, /cert-self-guard@f342d7cf558c817ce517bbbbc4cc46df6eac2f97\n/);
 });
 
 test('the required cert-review never waits forever: a plan or lookup that fails before its status posts an error that asks for a re-run', () => {
