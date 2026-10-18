@@ -69,7 +69,7 @@
     "@ai-ecoverse/slicc-spectrum": "1.86.6",
     "@ai-ecoverse/wasm-bash": "5.3.0-19",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-9",
-    "@ai-ecoverse/wasm-git": "2.55.0-16",
+    "@ai-ecoverse/wasm-git": "2.55.0-17",
     "@biomejs/biome": "2.5.15",
     "@types/node": "24.19.2",
     "esbuild": "0.28.2",
