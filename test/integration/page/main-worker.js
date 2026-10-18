@@ -336,6 +336,13 @@ self.addEventListener('message', ({ data }) => {
   data?.judged?.postMessage(judged);
   if (data?.judgeTable) judgeTable = data.judgeTable;
   if (data?.abort) aborts.get(data.abort)?.abort();
+  if (data?.close)
+    running
+      .then((host) => host.close())
+      .then(
+        () => data.close.postMessage('closed'),
+        (error) => data.close.postMessage(error.message)
+      );
   if (!data?.approve) return;
   const controller = new AbortController();
   if (data.key) aborts.set(data.key, controller);

@@ -152,3 +152,129 @@ test('memory: a new cone gets its memory scope without a memory file changing', 
   assert.deepEqual(seen.first, { id: 'cone', label: 'sliccy', group: 'cones' });
   assert.deepEqual(seen.scope, { id: seen.created, label: 'second', group: 'cones' });
 });
+
+const held = () => {
+  window.heldMemory = async (files) => {
+    for (const [path, text] of Object.entries(files)) await window.write(path, text);
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel(
+      {},
+      { worker: new URL('/held-memory-kernel-worker.js', location.href) }
+    );
+    let worker;
+    const owner = await startAgent({
+      worker: () => {
+        worker = new Worker('/dist-test/main-worker.js', { type: 'module' });
+        return worker;
+      },
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const hold = new BroadcastChannel('held-memory');
+    const heard = (check) =>
+      new Promise((resolve) => {
+        const look = ({ data }) => {
+          if (!check(data)) return;
+          hold.removeEventListener('message', look);
+          resolve(data);
+        };
+        hold.addEventListener('message', look);
+      });
+    const scoped = (label) =>
+      new Promise((resolve) => {
+        let off = () => undefined;
+        const look = () => {
+          const scope = connection.memoryScopes.value?.find((item) => item.label === label);
+          if (!scope) return;
+          off();
+          resolve(scope);
+        };
+        off = connection.memoryScopes.subscribe(look);
+        look();
+      });
+    await scoped('sliccy');
+    return {
+      owner,
+      connection,
+      scoped,
+      heard,
+      arm: async () => {
+        const armed = heard((data) => data === 'armed');
+        hold.postMessage('arm');
+        await armed;
+        return { held: heard((data) => data === 'held') };
+      },
+      release: () => hold.postMessage('release'),
+      reads: async () => {
+        const counted = heard((data) => typeof data?.reads === 'number');
+        hold.postMessage('count');
+        return (await counted).reads;
+      },
+      close: () =>
+        new Promise((resolve) => {
+          const { port1, port2 } = new MessageChannel();
+          port1.onmessage = ({ data }) => resolve(data);
+          worker.postMessage({ close: port2 }, [port2]);
+        }),
+    };
+  };
+};
+
+const files = {
+  '/home/.pi/agent/memory/MEMORY.md': '## Notes\n\n### One\n\nShared note.\n',
+  '/home/.pi/agent/memory/held/MEMORY.md': '## Notes\n\n### Two\n\nHeld note.\n',
+  '/home/.pi/agent/agent-memory/reviewer/MEMORY.md': '## Notes\n\n### Three\n\nRole note.\n',
+};
+
+test('memory: a memory read that never settles does not keep a newer cone from its scope', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.init(held);
+  await page.goto('/');
+  await page.evaluate(async (files) => {
+    window.agent = await window.heldMemory(files);
+  }, files);
+  await page.evaluate(async () => {
+    window.holding = (await window.agent.arm()).held;
+    await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
+  });
+  await page.evaluate(() => window.holding);
+  const seen = await page.evaluate(async () => {
+    const { agent } = window;
+    const created = await agent.connection.control.createCone('second', BACKGROUND_CONTEXT);
+    const scope = await agent.scoped('second');
+    const first = await agent.scoped('first');
+    agent.release();
+    await agent.owner.release();
+    return { created: created.id, scope, first: first.label };
+  });
+  assert.deepEqual(seen.scope, { id: seen.created, label: 'second', group: 'cones' });
+  assert.equal(seen.first, 'first');
+});
+
+test('memory: after the agent host closes, no memory reload runs', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.init(held);
+  await page.goto('/');
+  await page.evaluate(async (files) => {
+    window.agent = await window.heldMemory(files);
+  }, files);
+  await page.evaluate(async () => {
+    window.holding = (await window.agent.arm()).held;
+    await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
+  });
+  await page.evaluate(() => window.holding);
+  assert.equal(await page.evaluate(() => window.agent.close()), 'closed');
+  const later = await page.evaluate(async () => {
+    const { agent } = window;
+    const before = await agent.reads();
+    agent.release();
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const after = await agent.reads();
+    await agent.owner.release();
+    return after - before;
+  });
+  assert.equal(later, 0);
+});
