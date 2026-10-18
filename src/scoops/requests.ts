@@ -113,7 +113,9 @@ export function controlPlane(
     await env.writeFile(`${responses}/${id}.out`, result.out, context);
     if (result.err !== undefined)
       await env.writeFile(`${responses}/${id}.err`, result.err, context);
-    await env.writeFile(`${responses}/${id}.code`, String(result.code), context);
+    const staged = `${responses}/.tmp-${id}.code`;
+    await env.writeFile(staged, String(result.code), context);
+    await env.renameFile(staged, `${responses}/${id}.code`, context);
     await env.remove(`${requests}/${id}`, { force: true }, context);
     await env.remove(`${responses}/${id}.ack`, { force: true }, context);
     await options.mirror?.(context).catch(() => undefined);
