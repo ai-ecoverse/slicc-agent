@@ -205,7 +205,7 @@ export async function attachMemory(
   const files = new MemoryFiles(env);
   const memories = replicatedState<MemoryEntry[]>([]);
   const scopes = replicatedState<MemoryScope[]>([]);
-  const reload = async (using: Context) => {
+  const load = async (using: Context) => {
     const found = await listPlaces(options, using);
     const entries: MemoryEntry[] = [];
     for (const place of found) entries.push(...(await files.entries(place, using)));
@@ -218,6 +218,12 @@ export async function attachMemory(
       }))
     );
     memories.replace(using, entries);
+  };
+  let loading: Promise<unknown> = Promise.resolve();
+  const reload = (using: Context) => {
+    const next = loading.then(() => load(using));
+    loading = next.catch(() => undefined);
+    return next;
   };
   const parts: Parts = { options, files, memories, scopes, reload };
   connect({
@@ -235,7 +241,15 @@ export async function attachMemory(
     clearTimeout(timer);
     timer = setTimeout(() => void reload(context).catch(() => undefined), options.reloadMs);
   };
-  const offCone = agents.onCone(schedule);
+  const named = () =>
+    JSON.stringify(Object.entries(agents.state().cones).map(([id, cone]) => [id, cone.name]));
+  let cones = named();
+  const offCones = agents.onChange(() => {
+    const next = named();
+    if (next === cones) return;
+    cones = next;
+    schedule();
+  });
   const watched = await env.watch(
     [
       { path: memoryRoot(home), recursive: true },
@@ -263,7 +277,7 @@ export async function attachMemory(
     command: (argv, caller, using) => command(parts, argv, caller, using),
     reload,
     async close(using) {
-      offCone();
+      offCones();
       clearTimeout(timer);
       await watcher?.close(using);
     },
