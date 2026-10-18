@@ -247,6 +247,37 @@ const judges = params.has('judge')
       }),
     ]
   : [];
+const triaged = params.get('triage');
+const clef = triaged
+  ? [
+      createProvider({
+        id: 'adobe',
+        name: 'Clef',
+        auth: { apiKey: { name: 'Clef', resolve: async () => ({ auth: {} }) } },
+        models: [{ ...classifier('clef-flash'), provider: 'adobe', api: 'clef-classify' }],
+        classifiers: {
+          'clef-classify': {
+            classify: async (model) => ({
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              timestamp: Date.now(),
+              stopReason: 'stop',
+              answers: {
+                triage: {
+                  type: 'choice',
+                  choice: triaged,
+                  confidence: 0.9,
+                  probabilities:
+                    triaged === 'ignore' ? { ignore: 0.9, act: 0.1 } : { act: 0.9, ignore: 0.1 },
+                },
+              },
+            }),
+          },
+        },
+      }),
+    ]
+  : [];
 const aborts = new Map();
 self.addEventListener('message', ({ data }) => {
   data?.judged?.postMessage(judged);
@@ -274,6 +305,7 @@ const running = runAgentWorker(self, {
   providers: [
     faux.provider,
     ...judges,
+    ...clef,
     ...e2e,
     ...(params.has('bedrock') ? [amazonBedrockProvider()] : []),
   ],

@@ -108,3 +108,132 @@ test('licks reach the cone through the production worker: a webhook, a file watc
   assert.equal(docs.body, 'changed /home/docs/guide.md');
   assert.ok(seen.replies >= 3);
 });
+
+test('agent send --lick=webhook turns an ntfy message or an MCP event into one webhook lick per id, triages, and refuses what a process may not send', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await page.evaluate(async () => {
+    await window.write('/home/.slicc/webhooks/gh.json', '{"message":"GitHub event"}');
+    await window.write(
+      '/home/.slicc/webhooks/quiet.json',
+      '{"message":"Quiet event","triage":"only releases"}'
+    );
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    window.kernel = await bootKernel();
+    const answers = Array.from({ length: 6 }, () => 'answer=Noted.').join('&');
+    const owner = await startAgent({
+      worker: () =>
+        new Worker(`/dist-test/main-worker.js?triage=ignore&${answers}`, { type: 'module' }),
+      kernel: { connect: () => window.kernel.connect() },
+    });
+    window.connection = await owner.connect();
+    window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
+    await window.agent.ready();
+    window.send = async (args, stdin) => {
+      const command = ['bash', '-c', 'agent send "$@"', 'agent', ...args];
+      const ran = await window.kernel.run(command, stdin ? { stdin } : {});
+      return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
+    };
+  });
+  await page.within(
+    60000,
+    async () =>
+      (await window.kernel.run(['bash', '-c', 'test -d /var/lib/slicc/agent/requests/in']))
+        .status === 0
+  );
+  const ntfy = JSON.stringify({
+    id: 'Xk2',
+    time: 1,
+    event: 'message',
+    topic: 'github',
+    title: 'push',
+    message: '{"ref":"refs/heads/main"}',
+    headers: { 'x-github-event': 'push', 'x-github-delivery': 'd-1' },
+    verified: false,
+    attachment: { name: 'payload.json', size: 70000, url: 'https://gateway.test/file/Xk2' },
+  });
+  const first = await page.evaluate(
+    (raw) => window.send(['cone', '--lick=webhook', '--source', 'gh', raw]),
+    ntfy
+  );
+  assert.deepEqual(first, { status: 0, stdout: '', stderr: '' });
+  await page.within(60000, () => window.licks().length === 1);
+  await page.within(60000, () => !window.agent.busy(window.agent.active()));
+  const again = await page.evaluate(
+    (raw) => window.send(['cone', '--lick=webhook', '--source', 'gh', raw]),
+    ntfy
+  );
+  assert.equal(again.status, 0, again.stderr);
+  const occurrence = JSON.stringify({
+    eventId: 'ev-7',
+    name: 'hook.received',
+    timestamp: '2026-10-17T11:00:00Z',
+    data: { hook: 'gh', action: 'opened' },
+  });
+  const stdin = await page.evaluate(
+    (raw) => window.send(['cone', '--lick=webhook', '--source', 'gh', '-'], raw),
+    occurrence
+  );
+  assert.equal(stdin.status, 0, stdin.stderr);
+  await page.within(60000, () => window.licks().length === 2);
+  await page.within(60000, () => !window.agent.busy(window.agent.active()));
+  const quiet = await page.evaluate(() =>
+    window.send(['cone', '--lick=webhook', '--source', 'quiet', 'a push to a branch'])
+  );
+  assert.equal(quiet.status, 0, quiet.stderr);
+  const refused = await page.evaluate(async () => ({
+    unknown: await window.send(['cone', '--lick=webhook', '--source', 'nope', '{}']),
+    fswatch: await window.send(['cone', '--lick=fswatch', 'changed']),
+    cron: await window.send(['cone', '--lick=cron', 'fake fire']),
+  }));
+  assert.deepEqual(refused.unknown, {
+    status: 1,
+    stdout: '',
+    stderr: 'agent: there is no webhook nope; add ~/.slicc/webhooks/nope.json\n',
+  });
+  assert.deepEqual(refused.fswatch, {
+    status: 2,
+    stdout: '',
+    stderr:
+      "agent: --lick=fswatch is the agent's own channel; a process may send --lick=cron or --lick=webhook\n",
+  });
+  assert.deepEqual(refused.cron, {
+    status: 1,
+    stdout: '',
+    stderr: 'agent: --lick=cron only works inside a cron job, which sets SLICC_CRON_JOB\n',
+  });
+  const triage = await page.within(60000, () => {
+    const found = (window.connection.transcript.value?.entries ?? []).filter(
+      (entry) => entry.kind === 'slicc.lick-triage'
+    );
+    return found.length === 1 && found[0].data;
+  });
+  assert.equal(triage.source, 'quiet');
+  assert.equal(triage.decision, 'ignore');
+  assert.equal(triage.triage, 'only releases');
+  assert.equal(triage.body, 'a push to a branch');
+  const licks = await page.evaluate(() =>
+    window.licks().map(({ channel, title, text, body }) => ({ channel, title, text, body }))
+  );
+  assert.deepEqual(licks, [
+    {
+      channel: 'webhook',
+      title: 'gh',
+      text: 'GitHub event',
+      body: [
+        "verified: false (the gateway couldn't check this request's signature)",
+        'x-github-event: push\nx-github-delivery: d-1',
+        '{"ref":"refs/heads/main"}',
+        'attachment payload.json, 70000 bytes, not fetched: https://gateway.test/file/Xk2',
+      ].join('\n\n'),
+    },
+    {
+      channel: 'webhook',
+      title: 'gh',
+      text: 'GitHub event',
+      body: JSON.stringify({ hook: 'gh', action: 'opened' }, null, 2),
+    },
+  ]);
+});

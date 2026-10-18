@@ -436,10 +436,8 @@ async function start(
     ...(people ? { dirs: () => people.lickDirs(), cronUser: people.cronUser.bind(people) } : {}),
   });
   await sources.start(BACKGROUND_CONTEXT);
-  await sources.boot(
-    { version: facts.version, boot: await kernelBoot(client) },
-    BACKGROUND_CONTEXT
-  );
+  const booted = { version: facts.version, boot: await kernelBoot(client) };
+  await sources.boot(booted, BACKGROUND_CONTEXT);
   const skillsRuntime = await skills.attach(
     {
       env: home,
@@ -523,6 +521,7 @@ async function start(
       freezer: freezer.command,
       models: modelsOfAgent(agent, settings, models, vault),
       panel: pages.command,
+      webhook: sources.webhook,
       mcp: mcp.direct,
       ...(options.assets ? { assets: options.assets } : {}),
     },

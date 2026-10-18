@@ -7,7 +7,7 @@ case "$as" in subagent|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; 
 who="${SLICC_AGENT:-}"
 if [ -z "$who" ] && [ -n "${SLICC_TAB:-}" ]; then who="tab:$SLICC_TAB"; fi
 cron=""
-if [ "${SLICC_CRON:-}" = 1 ]; then cron="${SLICC_CRON_JOB:-} ${SLICC_CRON_DUE:-} ${SLICC_CRON_MISSED:-0}"; fi
+if [ -n "${SLICC_CRON_JOB:-}" ]; then cron="${SLICC_CRON_JOB:-} ${SLICC_CRON_DUE:-} ${SLICC_CRON_MISSED:-0}"; fi
 
 submit() {
   local id="$1"

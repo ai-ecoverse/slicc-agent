@@ -63,8 +63,23 @@ export function legacyJobs(text: string): { jobs: LegacyJob[]; problems: CronPro
   return { jobs, problems };
 }
 
-export function sendCommand(target: LickTarget, message: string): string {
-  return `agent send ${target}${message ? ` ${quote(message)}` : ''}`;
+export function sendCommand(target: LickTarget, message: string, lick = true): string {
+  return `agent send ${target}${lick ? ' --lick=cron' : ''}${message ? ` ${quote(message)}` : ''}`;
+}
+
+export function relicked(table: string, jobs: readonly LegacyJob[]): string | undefined {
+  const named = new Map(jobs.map((job) => [job.name, job]));
+  const lines = table.split('\n');
+  let changed = false;
+  for (let at = 0; at + 1 < lines.length; at++) {
+    const job = named.get(NAMED.exec((lines[at] as string).trim())?.[1] ?? '');
+    const plain = job ? ` ${sendCommand(job.target, job.message, false)}` : '';
+    const line = (lines[at + 1] as string).trimEnd();
+    if (!job || !line.endsWith(plain) || !line.slice(0, -plain.length).trim()) continue;
+    lines[at + 1] = `${line.slice(0, -plain.length)} ${sendCommand(job.target, job.message)}`;
+    changed = true;
+  }
+  return changed ? lines.join('\n') : undefined;
 }
 
 type Ran = { code: number; out: string; err: string };
@@ -146,11 +161,28 @@ export async function installJobs(
     lines.push(`${job.schedule} ${job.command}`);
     origin.set(lines.length, job.line);
   }
-  const table = quote(`${lines.join('\n')}\n`);
-  const ran = await sh(env, `printf %s ${table} | crontab -u ${quote(user)} -`, context);
+  const ran = await writeTable(env, user, `${lines.join('\n')}\n`, context);
   if (ran.code === 0) return [];
   const found = refusals(ran.err, origin);
   return found.length ? found : [{ error: ran.err.trim() || `crontab exited with ${ran.code}` }];
+}
+
+function writeTable(env: ExecutionEnv, user: string, table: string, context: Context) {
+  return sh(env, `printf %s ${quote(table)} | crontab -u ${quote(user)} -`, context);
+}
+
+export async function relickJobs(
+  env: ExecutionEnv,
+  user: string,
+  jobs: readonly LegacyJob[],
+  context: Context
+): Promise<CronProblem[]> {
+  const current = await readTable(env, user, context);
+  if (typeof current !== 'string') return [current];
+  const table = relicked(current, jobs);
+  if (table === undefined) return [];
+  const ran = await writeTable(env, user, table, context);
+  return ran.code === 0 ? [] : [{ error: ran.err.trim() || `crontab exited with ${ran.code}` }];
 }
 
 export interface CronRun {
