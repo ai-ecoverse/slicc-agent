@@ -1,5 +1,16 @@
-import type { Context } from '@earendil-works/chord';
+import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { AssistantMessage, Message, ToolCall } from '@earendil-works/pi-ai';
+import { configure, type EntryDraft, type ModelRef, type Tx } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { type Agents, type AgentsState, freeFolder, type ScoopRecord, scoopId } from '../agents.ts';
+import { homeOf } from '../kernel/accounts.ts';
+import { quote } from '../kernel/env.ts';
+import type { KernelUsers } from '../kernel/users.ts';
+import type { Layout } from '../layout.ts';
+import { opfsFile } from '../opfs-pool.ts';
+import { TITLE_TURNS } from '../titles/extension.ts';
+import { place } from './v6-place.ts';
 import {
   checkLicks,
   checkManifest,
@@ -7,9 +18,23 @@ import {
   type Licks,
   type Manifest,
   type Transcript,
+  type V6Conversation,
+  type V6Message,
 } from './v6-schema.ts';
-import { ImportError, isLink, readEntry, type ZipEntry, zipEntries } from './zip.ts';
+import { Writer } from './v6-write.ts';
+import {
+  blobSource,
+  bytesSource,
+  ImportError,
+  isLink,
+  readEntry,
+  type ZipEntry,
+  type ZipSource,
+  zipEntries,
+} from './zip.ts';
 
+export const V6_KIND = 'slicc.v6';
+export const IMPORTS_DIR = '/var/lib/slicc/agent/imports';
 const MiB = 1024 ** 2;
 export const LIMITS = {
   archive: 2048 * MiB,
@@ -18,6 +43,13 @@ export const LIMITS = {
   transcript: 64 * MiB,
   total: 4096 * MiB,
   ratio: 200,
+};
+
+export type ImportProgress = {
+  phase: 'idle' | 'checking' | 'writing' | 'done' | 'failed';
+  done: number;
+  total: number;
+  text: string;
 };
 
 export interface ImportPreview {
@@ -34,21 +66,71 @@ export interface ImportPreview {
   flagged: number;
   providers: string[];
   mounts: string[];
+  already: number | null;
   text: string;
+}
+
+export interface ImportResult {
+  done: boolean;
+  preview: ImportPreview | null;
+  cones: string[];
+  report: string | null;
+  text: string;
+  error: string | null;
 }
 
 export type ImportSource = { path: string } | { bytes: Uint8Array };
 
+export interface ImportDeps {
+  agents: Agents;
+  env: ExecutionEnv;
+  layout: Layout;
+  users?: Pick<KernelUsers, 'add' | 'remove'>;
+  envOf?: (cone: string) => Promise<ExecutionEnv | undefined>;
+  opfs?: () => Promise<FileSystemDirectoryHandle>;
+  room?: () => Promise<number | undefined>;
+  now?: () => number;
+}
+
 export type Opened = {
   manifest: Manifest;
   entries: Map<string, ZipEntry>;
-  bytes: Uint8Array;
+  source: ZipSource;
   key: string;
 };
 
 export type Where =
   | { kind: 'data' | 'skip' | 'attachment' }
   | { kind: 'cone' | 'scoop' | 'home-user' | 'skill' | 'sprinkle'; folder: string; rest: string };
+
+export type Scoop = {
+  name: string;
+  six: string | null;
+  folder: string;
+  conversation?: V6Conversation;
+};
+
+export type Unit = {
+  key: string;
+  name: string;
+  title: string;
+  six: string | null;
+  memory: string | null;
+  doc?: Transcript;
+  main?: V6Conversation;
+  scoops: Scoop[];
+  frozenAt: number;
+  tail: string;
+  cone: string;
+  fresh: boolean;
+  record: boolean;
+  suffix: string;
+  home: string;
+  roots: Set<string>;
+  files: Map<string, string>;
+};
+
+export type Parsed = { data: Map<string, Uint8Array>; licks: Licks; units: Unit[] };
 
 export const day = (at: number | string) => new Date(at).toISOString().slice(0, 10);
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -138,15 +220,15 @@ function scan(list: readonly ZipEntry[], archive: number): Map<string, ZipEntry>
   return entries;
 }
 
-export async function openProfile(bytes: Uint8Array): Promise<Opened> {
-  if (bytes.length > LIMITS.archive) throw new ImportError('the zip is over 2 GiB');
-  const list = zipEntries(bytes);
+export async function openProfile(source: ZipSource): Promise<Opened> {
+  if (source.size > LIMITS.archive) throw new ImportError('the zip is over 2 GiB');
+  const list = await zipEntries(source);
   if (list.length > LIMITS.entries)
     throw new ImportError(`the zip has over ${LIMITS.entries} entries`);
   if (list[0]?.name !== 'manifest.json')
     throw new ImportError('manifest.json must be the first entry');
-  const entries = scan(list, bytes.length);
-  const manifest = checkManifest(json(await readEntry(bytes, list[0]), 'manifest.json'));
+  const entries = scan(list, source.size);
+  const manifest = checkManifest(json(await readEntry(source, list[0]), 'manifest.json'));
   const listed = new Set<string>();
   for (const file of manifest.files) {
     if (entries.get(file.path)?.size !== file.size || file.path === 'manifest.json')
@@ -161,7 +243,7 @@ export async function openProfile(bytes: Uint8Array): Promise<Opened> {
     whereOf(manifest, name);
   }
   const { exportId, part } = manifest;
-  return { manifest, entries, bytes, key: part ? `${exportId}#${part.index}` : exportId };
+  return { manifest, entries, source, key: part ? `${exportId}#${part.index}` : exportId };
 }
 
 const noLicks: Licks = { crontasks: [], tasks: [], webhooks: [] };
@@ -171,7 +253,7 @@ async function licksIn(opened: Opened, data?: Map<string, Uint8Array>): Promise<
   if (!name) return noLicks;
   const entry = opened.entries.get(name);
   if (!entry) throw new ImportError(`${name} is named in the manifest but not in the zip`);
-  return checkLicks(json(data?.get(name) ?? (await readEntry(opened.bytes, entry)), name));
+  return checkLicks(json(data?.get(name) ?? (await readEntry(opened.source, entry)), name));
 }
 
 const UNITS = [
@@ -180,7 +262,10 @@ const UNITS = [
   [1e3, 'KB'],
 ] as const;
 
-export async function previewOf(opened: Opened): Promise<ImportPreview> {
+export async function previewOf(
+  opened: Opened,
+  state: Readonly<AgentsState>
+): Promise<ImportPreview> {
   const { manifest } = opened;
   const licks = await licksIn(opened);
   const bytes = manifest.files
@@ -221,6 +306,7 @@ export async function previewOf(opened: Opened): Promise<ImportPreview> {
     flagged: manifest.flagged.length,
     providers: manifest.providers,
     mounts,
+    already: state.imports?.[opened.key]?.at ?? null,
     text: `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}. Re-enter in Settings: ${manifest.providers.join(', ') || 'nothing'}. Not imported: ${plural(mounts.length, 'mount')}.`,
   };
 }
@@ -230,13 +316,20 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function verify(opened: Opened): Promise<Map<string, Uint8Array>> {
+type Show = (phase: ImportProgress['phase'], done: number, total: number) => void;
+
+async function verify(opened: Opened, writer: Writer, stage: string | null, show: Show) {
   const data = new Map<string, Uint8Array>();
-  for (const file of opened.manifest.files) {
-    const bytes = await readEntry(opened.bytes, opened.entries.get(file.path) as ZipEntry);
+  const { files } = opened.manifest;
+  for (const [at, file] of files.entries()) {
+    writer.check();
+    const bytes = await readEntry(opened.source, opened.entries.get(file.path) as ZipEntry);
     if ((await sha256(bytes)) !== file.sha256.toLowerCase())
       throw new ImportError(`${file.path} doesn't match its sha256`);
-    if (whereOf(opened.manifest, file.path).kind === 'data') data.set(file.path, bytes);
+    const where = whereOf(opened.manifest, file.path);
+    if (where.kind === 'data') data.set(file.path, bytes);
+    else if (where.kind !== 'skip' && stage) await writer.put(`${stage}/${file.path}`, bytes, true);
+    show('checking', at + 1, files.length);
   }
   return data;
 }
@@ -251,6 +344,87 @@ function transcriptIn(data: Map<string, Uint8Array>, name: string | null): Trans
   } catch (error) {
     throw new ImportError(`${name}: ${(error as Error).message}`);
   }
+}
+
+function draft(
+  fields: Pick<Unit, 'key' | 'name' | 'title' | 'six' | 'memory' | 'scoops'> & {
+    doc?: Transcript;
+    main?: V6Conversation;
+  },
+  when: (string | null | undefined)[],
+  created: string
+): Unit {
+  const last = fields.main?.messages.at(-1)?.timestamp;
+  const frozenAt = [...when, last, created]
+    .map((value) => Date.parse(value ?? ''))
+    .find((at) => !Number.isNaN(at)) as number;
+  const tail = (fields.doc?.conversations ?? [])
+    .map((item) => item.messages.at(-1)?.id ?? '')
+    .join(',');
+  return {
+    ...fields,
+    frozenAt,
+    tail,
+    cone: '',
+    fresh: true,
+    record: true,
+    suffix: '',
+    home: '',
+    roots: new Set(),
+    files: new Map(),
+  };
+}
+
+export function unitsOf(manifest: Manifest, data: Map<string, Uint8Array>): Unit[] {
+  const cones = manifest.cones.map((cone) => {
+    const doc = transcriptIn(data, cone.transcript);
+    const all = doc?.conversations ?? [];
+    const main =
+      all.find((item) => item.id === cone.conversation) ?? all.find((item) => item.kind === 'cone');
+    const scoops = cone.scoops.map((scoop) => ({
+      name: scoop.name,
+      six: scoop.folder,
+      folder: '',
+      conversation:
+        all.find((item) => item.id === scoop.conversation) ??
+        all.find((item) => item.kind === 'scoop' && item.folder === scoop.folder),
+    }));
+    const title = doc?.session.title || cone.name;
+    return draft(
+      {
+        key: cone.key,
+        name: cone.name,
+        title,
+        six: cone.folder,
+        memory: cone.memory,
+        doc,
+        main,
+        scoops,
+      },
+      [doc?.session.updatedAt],
+      manifest.createdAt
+    );
+  });
+  const frozen = manifest.frozen.map((item) => {
+    const doc = transcriptIn(data, item.transcript) as Transcript;
+    const [main, ...rest] = [...doc.conversations].sort(
+      (a, b) => Number(b.kind === 'cone') - Number(a.kind === 'cone')
+    );
+    const title = item.title || doc.session.title;
+    const scoops = rest.map((conversation) => ({
+      name: conversation.name,
+      six: null,
+      folder: '',
+      conversation,
+    }));
+    const when = [item.frozenAt, doc.session.frozenAt, doc.session.updatedAt];
+    return draft(
+      { key: `frozen:${item.id}`, name: title, title, six: null, memory: null, doc, main, scoops },
+      when,
+      manifest.createdAt
+    );
+  });
+  return [...cones, ...frozen];
 }
 
 function present(data: Map<string, Uint8Array>, name: string | null | undefined) {
@@ -300,34 +474,373 @@ function related(manifest: Manifest, data: Map<string, Uint8Array>) {
   for (const name of transcripts) attached(manifest, name, transcriptIn(data, name) as Transcript);
 }
 
-async function checked(opened: Opened, data: Map<string, Uint8Array>): Promise<void> {
+async function parse(opened: Opened, data: Map<string, Uint8Array>): Promise<Parsed> {
   for (const [name, bytes] of data)
     if (name.startsWith('memory/') || name === opened.manifest.gitconfig) textOf(bytes, name);
   related(opened.manifest, data);
-  await licksIn(opened, data);
+  return { data, licks: await licksIn(opened, data), units: unitsOf(opened.manifest, data) };
 }
 
-async function bytesOf(
-  env: ExecutionEnv,
+function prior(state: Readonly<AgentsState>, origin: string, key: string) {
+  const known = new Set([
+    ...Object.keys(state.cones),
+    ...Object.values(state.frozen ?? {}).map((item) => item.cone),
+  ]);
+  return Object.values(state.imports ?? {})
+    .filter((item) => item.origin === origin && known.has(item.cones[key] as string))
+    .sort((a, b) => b.at - a.at)
+    .map((item) => ({ cone: item.cones[key] as string, tail: item.tails[key] as string }))[0];
+}
+
+async function assign(
+  deps: ImportDeps,
+  opened: Opened,
+  units: Unit[],
+  again: boolean,
+  date: string,
+  context: Context
+) {
+  const { agents } = deps;
+  const origin = opened.manifest.producer.origin;
+  let fresh = 0;
+  for (const unit of units) {
+    const before = again ? undefined : prior(agents.state(), origin, unit.key);
+    if (!before) fresh += 1;
+    if (!before) continue;
+    unit.cone = before.cone;
+    unit.fresh = false;
+    unit.record = before.tail !== unit.tail;
+    if (unit.record) unit.title = `${unit.title} (updated)`;
+    if (agents.state().cones[before.cone]) unit.suffix = `.v6-${date}`;
+  }
+  const first = fresh
+    ? await agents.update((_tx, doc) => {
+        doc.next += fresh;
+        return doc.next - fresh;
+      }, context)
+    : 0;
+  const taken: Record<string, ScoopRecord> = { ...agents.state().scoops };
+  let next = first;
+  for (const unit of units) {
+    if (unit.fresh) unit.cone = `cone-${next++}`;
+    unit.home = homeOf(unit.cone);
+    for (const scoop of unit.scoops) {
+      scoop.folder = freeFolder({ scoops: taken }, scoop.name);
+      taken[scoopId(scoop.folder)] = {} as ScoopRecord;
+    }
+  }
+}
+
+const ZERO = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function piMessage(
+  message: V6Message,
+  names: Map<string, string>,
+  files: Map<string, string>
+): Message {
+  const timestamp = Date.parse(message.timestamp);
+  const texts = message.content.flatMap((part) => {
+    if (part.type === 'text') return [{ type: 'text' as const, text: part.text }];
+    if (part.type === 'tool-call') return [];
+    const file = files.get(part.attachmentId);
+    return [
+      {
+        type: 'text' as const,
+        text: file ? `[Attached file: ${file}]` : '[An attachment SLICC 6 did not export]',
+      },
+    ];
+  });
+  if (message.role === 'user') return { role: 'user', content: texts, timestamp };
+  const id = message.toolCallId as string;
+  if (message.role === 'tool-result')
+    return {
+      role: 'toolResult',
+      toolCallId: id,
+      toolName: names.get(id) ?? 'tool',
+      content: texts,
+      isError: message.isError === true,
+      timestamp,
+    };
+  const calls = message.content.flatMap((part) => {
+    if (part.type !== 'tool-call') return [];
+    names.set(part.id, part.name);
+    const input = part.input;
+    const object = typeof input === 'object' && input !== null && !Array.isArray(input);
+    return [
+      {
+        type: 'toolCall' as const,
+        id: part.id,
+        name: part.name,
+        arguments: (object ? input : { input }) as ToolCall['arguments'],
+      },
+    ];
+  });
+  const assistant: AssistantMessage = {
+    role: 'assistant',
+    content: [...texts, ...calls],
+    api: message.model?.api ?? 'slicc-6',
+    provider: message.model?.provider ?? 'slicc-6',
+    model: message.model?.id ?? 'unknown',
+    usage: (message.usage as typeof ZERO | undefined) ?? ZERO,
+    stopReason: calls.length ? 'toolUse' : 'stop',
+    timestamp,
+  };
+  return assistant;
+}
+
+export function entriesOf(
+  conversation: V6Conversation | undefined,
+  files: Map<string, string>
+): EntryDraft[] {
+  const names = new Map<string, string>();
+  return (conversation?.messages ?? []).map((message) => ({
+    kind: V6_KIND,
+    data: { id: message.id },
+    model: [piMessage(message, names, files)],
+  }));
+}
+
+async function conversationIn(
+  tx: Tx,
+  conversation: V6Conversation | undefined,
+  unit: Unit,
+  model: ModelRef | undefined
+) {
+  const record = await tx.createConversation({ ownership: { kind: 'ownerless' } });
+  if (model) await configure(tx, record.id, { model });
+  for (const entry of entriesOf(conversation, unit.files)) await tx.appendEntry(record.id, entry);
+  return record.id as number;
+}
+
+function modelOf(conversation: V6Conversation | undefined): string {
+  const model = conversation?.messages.findLast((message) => message.model)?.model;
+  return model ? `${model.provider}/${model.id}` : '';
+}
+
+async function commit(
+  deps: ImportDeps,
+  opened: Opened,
+  units: Unit[],
+  at: number,
+  context: Context
+) {
+  const model = (await deps.agents.cone().agent(context)).model;
+  const origin = opened.manifest.producer.origin;
+  const last = TITLE_TURNS.at(-1) as number;
+  return deps.agents.update(async (tx, doc) => {
+    const made: string[] = [];
+    for (const unit of units.filter((item) => item.record)) {
+      const frozenId = `frozen-${doc.frozenNext ?? 1}`;
+      doc.frozenNext = (doc.frozenNext ?? 1) + 1;
+      const scoops: string[] = [];
+      for (const scoop of unit.scoops) {
+        const id = scoopId(scoop.folder);
+        if (doc.scoops[id])
+          throw new ImportError(`the scoop folder ${scoop.folder} was taken during the import`);
+        const conversation = await conversationIn(tx, scoop.conversation, unit, model);
+        doc.scoops[id] = {
+          name: scoop.name,
+          folder: scoop.folder,
+          cone: unit.cone,
+          conversation,
+          anchor: 0,
+          role: null,
+          kind: 'async',
+          parent: unit.cone,
+          depth: 1,
+          roots: null,
+          created: null,
+          dropped: null,
+          gone: true,
+          frozen: frozenId,
+          title: scoop.name,
+          titled: last,
+        };
+        scoops.push(id);
+      }
+      doc.frozen ??= {};
+      doc.frozen[frozenId] = {
+        cone: unit.cone,
+        name: unit.name,
+        conversation: await conversationIn(tx, unit.main, unit, model),
+        title: unit.title,
+        model: modelOf(unit.main),
+        messages: (unit.main?.messages ?? []).filter((message) => message.role !== 'tool-result')
+          .length,
+        frozenAt: unit.frozenAt,
+        scoops,
+        v6: { origin, key: unit.key },
+      };
+      made.push(frozenId);
+    }
+    doc.imports ??= {};
+    doc.imports[opened.key] = {
+      at,
+      origin,
+      cones: Object.fromEntries(units.map((unit) => [unit.key, unit.cone])),
+      tails: Object.fromEntries(units.map((unit) => [unit.key, unit.tail])),
+    };
+    return made;
+  }, context);
+}
+
+async function storageRoom(): Promise<number | undefined> {
+  const estimate = await globalThis.navigator?.storage?.estimate?.().catch(() => undefined);
+  return estimate?.quota === undefined ? undefined : estimate.quota - (estimate.usage ?? 0);
+}
+
+async function importOpened(
+  deps: ImportDeps,
+  opened: Opened,
+  options: { again: boolean; signal: AbortSignal; show: Show },
+  context: Context
+): Promise<ImportResult> {
+  const now = (deps.now ?? Date.now)();
+  const date = day(now);
+  const writer = new Writer(deps.env, context, options.signal);
+  const stage = `${IMPORTS_DIR}/${opened.key.replace('#', '-part')}`;
+  const total = opened.manifest.files.reduce((sum, file) => sum + file.size, 0);
+  const room = await (deps.room ?? storageRoom)();
+  if (room !== undefined && room < 2 * total)
+    throw new ImportError('there is not enough free storage for this import');
+  try {
+    await writer.sh(
+      `mkdir -p ${IMPORTS_DIR} && chmod 700 ${IMPORTS_DIR} && rm -rf ${quote(stage)} && mkdir -p ${quote(stage)}`
+    );
+    const data = await verify(opened, writer, stage, options.show);
+    const parsed = await parse(opened, data);
+    await assign(deps, opened, parsed.units, options.again, date, context);
+    const run = {
+      deps,
+      opened,
+      parsed,
+      writer,
+      stage,
+      date,
+      show: options.show,
+      fresh: new Map(),
+      ready: new Set<Unit>(),
+    };
+    let made: string[];
+    try {
+      await place(run);
+      made = await commit(deps, opened, parsed.units, now, context);
+    } catch (error) {
+      await writer.rollback();
+      throw error;
+    }
+    const cones = [...new Set(parsed.units.map((unit) => unit.cone))];
+    const providers = opened.manifest.providers;
+    return {
+      done: true,
+      preview: null,
+      cones,
+      report: null,
+      text: `Imported ${plural(made.length, 'frozen cone')} from ${opened.manifest.producer.origin}${made.length ? `: ${made.join(', ')}` : ''}.\nRe-enter in Settings: ${providers.join(', ') || 'nothing'}.\n`,
+      error: null,
+    };
+  } finally {
+    await deps.env.remove(stage, { recursive: true, force: true }, BACKGROUND_CONTEXT);
+  }
+}
+
+async function sourceOf(
+  deps: ImportDeps,
   source: ImportSource,
   context: Context
-): Promise<Uint8Array> {
-  if ('bytes' in source) return source.bytes;
-  const info = await env.fileInfo(source.path, context);
+): Promise<ZipSource> {
+  if ('bytes' in source) return bytesSource(source.bytes);
+  const { env } = deps;
+  const real = await env.canonicalPath(source.path, context);
+  const info = real.ok ? await env.fileInfo(real.value, context) : real;
   if (!info.ok) throw new ImportError(`can't read ${source.path}: ${info.error.message}`);
   if (info.value.size > LIMITS.archive) throw new ImportError('the zip is over 2 GiB');
-  const read = await env.readBinaryFile(source.path, context);
+  const file = await opfsFile(info.value.path, deps.opfs);
+  if (file?.size === info.value.size) return blobSource(file);
+  if (info.value.size > LIMITS.file)
+    throw new ImportError(`${source.path} isn't on seven's own disk; copy the zip to /tmp first`);
+  const read = await env.readBinaryFile(info.value.path, context);
   if (!read.ok) throw new ImportError(`can't read ${source.path}: ${read.error.message}`);
-  return read.value;
+  return bytesSource(read.value);
 }
 
-export async function checkProfile(
-  env: ExecutionEnv,
-  source: ImportSource,
-  context: Context
-): Promise<ImportPreview> {
-  const opened = await openProfile(await bytesOf(env, source, context));
-  const preview = await previewOf(opened);
-  await checked(opened, await verify(opened));
-  return preview;
+export interface Importer {
+  readonly progress: ReplicatedState<ImportProgress>;
+  run(
+    source: ImportSource,
+    options: { again?: boolean; preview?: boolean },
+    context: Context
+  ): Promise<ImportResult>;
+  cancel(): void;
+}
+
+export const IDLE: ImportProgress = { phase: 'idle', done: 0, total: 0, text: '' };
+
+export function createImporter(deps: ImportDeps): Importer {
+  const progress = replicatedState<ImportProgress>(IDLE);
+  let running: AbortController | undefined;
+  const result = (fields: Partial<ImportResult>): ImportResult => ({
+    done: false,
+    preview: null,
+    cones: [],
+    report: null,
+    text: '',
+    error: null,
+    ...fields,
+  });
+  return {
+    progress,
+    cancel: () => running?.abort(),
+    async run(source, options, context) {
+      if (running) return result({ error: 'an import is already running' });
+      const controller = new AbortController();
+      running = controller;
+      const show: Show = (phase, done, total) =>
+        progress.replace(BACKGROUND_CONTEXT, {
+          phase,
+          done,
+          total,
+          text: phase === 'checking' ? `Checking ${done}/${total}` : `Importing ${done}/${total}`,
+        });
+      try {
+        const opened = await openProfile(await sourceOf(deps, source, context));
+        const preview = await previewOf(opened, deps.agents.state());
+        if (options.preview) {
+          const writer = new Writer(deps.env, context, controller.signal);
+          await parse(opened, await verify(opened, writer, null, show));
+          progress.replace(BACKGROUND_CONTEXT, IDLE);
+          return result({ preview, text: `${preview.text}\n` });
+        }
+        if (preview.already !== null && !options.again)
+          return result({
+            preview,
+            text: `Already imported on ${day(preview.already)}; freezer import --again makes fresh copies.\n`,
+          });
+        const done = await importOpened(
+          deps,
+          opened,
+          { again: options.again === true, signal: controller.signal, show },
+          context
+        );
+        progress.replace(BACKGROUND_CONTEXT, { ...progress.value, phase: 'done', text: done.text });
+        return { ...done, preview };
+      } catch (error) {
+        const message =
+          error instanceof ImportError
+            ? error.message
+            : `the import failed: ${(error as Error).message}`;
+        progress.replace(BACKGROUND_CONTEXT, { phase: 'failed', done: 0, total: 0, text: message });
+        return result({ error: message });
+      } finally {
+        running = undefined;
+      }
+    },
+  };
 }

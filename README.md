@@ -486,13 +486,29 @@ pi durable keeps every conversation and entry in the session database, and has n
 
 #### Importing SLICC 6 profiles
 
-SLICC 6 exports a profile as a `slicc-profile` v1 zip (#6). `test/integration/fixtures/slicc6-profile-v1.zip` is the shared fixture: `test/integration/fixtures/slicc6-profile.mjs` makes it, and slicc checks in the same bytes. `freezer import --preview <zip>` is root's, and checks a profile without writing anything:
+SLICC 6 exports a profile as a `slicc-profile` v1 zip (#6). `test/integration/fixtures/slicc6-profile-v1.zip` is the shared fixture: `test/integration/fixtures/slicc6-profile.mjs` makes it, and slicc checks in the same bytes. `freezer import [--again] [--preview] <zip>` is root's. With `--preview`, it checks a profile without writing anything. Without it, it checks the same way and then imports:
 
 - **The zip:** read from its central directory, inflating with `DecompressionStream('deflate-raw')`. ZIP64 and encrypted entries are refused, and an entry that inflates past its stated size stops there.
+- **Reading by ranges:** the kernel's `/` is the OPFS root, so the worker resolves the path through the kernel, opens the same file through OPFS, and checks its size against the kernel's. It then reads the end record, the directory, and each entry as slices.
+  - Only transcripts, memory and licks are held in memory. File entries are hashed and staged one at a time.
+  - A zip that isn't on the OPFS root, such as one on a mount, is read whole up to 256 MiB. A larger one is refused: copy it to `/tmp` first.
+  - A zip that changes or vanishes while it's being read fails the import.
 - **Caps:** an archive of at most 2 GiB and 60,000 entries, any file at most 256 MiB, a transcript at most 64 MiB, at most 4 GiB in all, and no more than 200:1 expansion.
 - **Names:** `manifest.json` comes first. A name that is absolute, has an empty, `.` or `..` part, a `\`, a NUL or a drive letter is refused, as are symlinks, names that appear twice, names that `files[]` doesn't list, and names with no place in the profile's layout. Every file must match its size and sha256.
 - **Schemas:** the manifest, each transcript (a copy of slicc's `validateTranscriptDocumentV1`) and `licks.json` are checked. Memory and git config must be UTF-8.
 - **The answer:** one sentence on what the profile holds, such as cones, scoops, frozen sessions, file size, skills, crons, webhooks, credential-like files, the providers to re-enter in Settings, and the mounts that don't move.
+- **Conversations:** each six cone and each frozen session becomes a frozen cone with its own `cone-<n>` user. Its conversation is one `slicc.v6` entry per six message, turned into a pi-ai message. Its `FrozenRecord` carries `v6: { origin, key }`, and its row in the Freezer list has `v6: true`. The cone's scoops become stopped scoops of that frozen cone, and no scoop users are made.
+- **A thaw forks:** thawing a v6 cone forks its conversation, with the active cone's model, and adds a `slicc.thawed` note saying that six's `/workspace` is now `~/workspace`.
+- **Files:**
+  - a cone's workspace goes to `~/workspace`, its scoops' files to `~/scoops/<folder>`, and attachments to `~/v6-attachments`;
+  - six's `/home/user` goes to `/root/v6/home-user`;
+  - `.git/hooks` is skipped.
+  - A new cone's files are written as root and then given to the cone: `chown -R`, then `u=rwX,go=`, so files are `0600` and directories `0700`. Files for a cone that already exists are written through that cone's own kernel user.
+- **All or nothing:** the zip is checked and unpacked into `/var/lib/slicc/agent/imports/<exportId>/` (root, `0700`) before anything else is written. The conversations and every record land in one `agents.update` commit. If anything fails before that, everything already written is undone: new users and homes, and replaced files are restored. The staging folder is always removed.
+- **Idempotency:** `slicc.agents` keeps `imports[exportId]`, with when it was imported and which cone each six key became.
+  - Importing the same zip again does nothing: "Already imported on …". `--again` makes fresh copies.
+  - A newer export of the same origin imports a conversation only if it has grown, as a new frozen cone named "<title> (updated)".
+  - Its files replace only the files that changed. If that cone has been thawed since, they go to `~/workspace.v6-<date>` instead.
 
 ### Changes
 

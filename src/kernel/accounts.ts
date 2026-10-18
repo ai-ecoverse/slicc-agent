@@ -27,6 +27,10 @@ export function userOf(state: Readonly<AgentsState>, agentId: string): string | 
   return record ? scoopUser(record.folder) : undefined;
 }
 
+export function coneSpec(cone: string): UserSpec {
+  return { name: cone, groups: [SUDO_GROUP], homeMode: CONE_HOME_MODE, umask: CONE_UMASK };
+}
+
 export type Wanted = { agentId: string; cone: string | null; spec: UserSpec };
 
 export function wanted(state: Readonly<AgentsState>): Wanted[] {
@@ -37,7 +41,7 @@ export function wanted(state: Readonly<AgentsState>): Wanted[] {
   const out: Wanted[] = [...cones].map((cone) => ({
     agentId: `${CONE_PREFIX}${cone}`,
     cone: null,
-    spec: { name: cone, groups: [SUDO_GROUP], homeMode: CONE_HOME_MODE, umask: CONE_UMASK },
+    spec: coneSpec(cone),
   }));
   for (const [id, record] of Object.entries(state.scoops)) {
     if (record.gone || record.removed || record.dropped !== null) continue;

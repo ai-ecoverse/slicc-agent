@@ -402,9 +402,10 @@ function freezerOf(
     memory: ReturnType<typeof setupMemory>;
     titles: ReturnType<typeof setupTitles>;
     people: AgentUsers | undefined;
+    users: UserClients | undefined;
   }
 ) {
-  const { home, memory, titles, people } = parts;
+  const { home, memory, titles, people, users } = parts;
   return attachFreezer({
     harness: agent.harness,
     agents: agent.agents,
@@ -413,7 +414,11 @@ function freezerOf(
     title: titles.titleFn,
     cancelTitle: titles.cancel,
     ...(people ? { layout: people.layout } : {}),
-    imports: { env: home },
+    imports: {
+      env: home,
+      ...(users ? { users: users.users } : {}),
+      ...(people ? { envOf: (cone: string) => people.envOfAgent(`cone:${cone}`) } : {}),
+    },
   });
 }
 
@@ -514,7 +519,7 @@ async function start(
     },
     BACKGROUND_CONTEXT
   );
-  const freezer = freezerOf(agent, { home, memory, titles, people });
+  const freezer = freezerOf(agent, { home, memory, titles, people, users });
   licks.licks.guard(freezer.frozenTarget);
   const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped });
   const pages = createPages({ claim: sprinkles.claim });

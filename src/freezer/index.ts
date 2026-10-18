@@ -23,8 +23,15 @@ import type { LickTarget } from '../licks/lick.ts';
 import { copyAgent, SELECTION, storedAgent } from '../selection.ts';
 import { cleanTitle, TITLE_TURNS, titleDue } from '../titles/extension.ts';
 import { scrubTranscript } from '../titles/generate.ts';
-import { checkProfile } from './v6.ts';
-import { ImportError } from './zip.ts';
+import {
+  createImporter,
+  IDLE,
+  type ImportDeps,
+  type ImportProgress,
+  type ImportResult,
+  type ImportSource,
+  V6_KIND,
+} from './v6.ts';
 
 export type Answer = { code: number; out: string };
 
@@ -40,6 +47,7 @@ export interface FrozenCone {
   kind: ConversationKind;
   live: boolean;
   thawedAs: string | null;
+  v6?: true;
 }
 
 export const THAWED_KIND = 'slicc.thawed';
@@ -60,13 +68,20 @@ export interface FreezerAttach {
   cancelTitle?: (agentId: string) => void;
   now?: () => number;
   layout?: Layout;
-  imports?: { env: ExecutionEnv };
+  imports?: Omit<ImportDeps, 'agents' | 'layout' | 'now'>;
 }
 
 export type Asker = { user: string | null; cwd: string };
 
 export interface FreezerRuntime {
   readonly frozen: ReplicatedState<FrozenCone[]>;
+  readonly importing: ReplicatedState<ImportProgress>;
+  importProfile(
+    source: ImportSource,
+    options: { again?: boolean; preview?: boolean },
+    context: Context
+  ): Promise<ImportResult>;
+  cancelImport(): void;
   freeze(agentId: string, context: Context): Promise<string>;
   newChat(agentId: string, context: Context): Promise<string | null>;
   thaw(id: string, context: Context): Promise<string>;
@@ -87,8 +102,8 @@ export const USAGE = `usage:
   freezer list         every conversation: id, kind, name, title, messages, when
   freezer show <id>    a conversation as Markdown
   freezer thaw <id>    continue a stopped conversation as a cone
-  freezer import --preview <zip>
-                       check a SLICC 6 profile export (root only)
+  freezer import [--again] [--preview] <zip>
+                       import a SLICC 6 profile export as frozen cones (root only)
 
 Delete a cone, or start a new conversation, from the chat toolbar or the command palette.
 `;
@@ -100,12 +115,17 @@ function textOf(entry: EntryRecord): string {
   return answerText(entry.model?.[0]?.content).trim();
 }
 
+function said(entry: EntryRecord, role: 'user' | 'assistant'): boolean {
+  if (entry.kind === V6_KIND) return entry.model?.[0]?.role === role;
+  return entry.kind === `pi.${role}`;
+}
+
 export function modelName(model: { provider: string; modelId: string } | undefined): string {
   return model ? `${model.provider}/${model.modelId}` : '';
 }
 
 export function firstLine(entries: readonly EntryRecord[]): string {
-  const first = entries.find((entry) => entry.kind === 'pi.user' && textOf(entry));
+  const first = entries.find((entry) => said(entry, 'user') && textOf(entry));
   const line = first ? (textOf(first).split('\n')[0] as string).trim() : '';
   if (!line) return 'Untitled chat';
   return line.length > TITLE_LENGTH ? `${line.slice(0, TITLE_LENGTH - 1)}…` : line;
@@ -129,8 +149,8 @@ export function markdown(
     `${record.name} · ${record.model} · ${new Date(record.frozenAt).toISOString()}`,
   ];
   for (const entry of entries) {
-    if (entry.kind === 'pi.user' && textOf(entry)) out.push('', '## User', '', textOf(entry));
-    if (entry.kind !== 'pi.assistant') continue;
+    if (said(entry, 'user') && textOf(entry)) out.push('', '## User', '', textOf(entry));
+    if (!said(entry, 'assistant')) continue;
     const text = textOf(entry);
     const tools = calls(entry);
     if (!text && !tools.length) continue;
@@ -144,8 +164,7 @@ export function markdown(
 type Stats = Pick<FrozenCone, 'title' | 'model' | 'messages' | 'frozenAt'>;
 
 function counted(entries: readonly EntryRecord[]): number {
-  return entries.filter((entry) => entry.kind === 'pi.user' || entry.kind === 'pi.assistant')
-    .length;
+  return entries.filter((entry) => said(entry, 'user') || said(entry, 'assistant')).length;
 }
 
 function lastAt(entries: readonly EntryRecord[]): number {
@@ -231,6 +250,7 @@ async function rows(
       kind: 'cone',
       live: false,
       thawedAs: null,
+      ...(record.v6 ? { v6: true as const } : {}),
     });
   for (const [id, scoop] of Object.entries(state.scoops)) {
     if (scoop.removed) continue;
@@ -301,28 +321,25 @@ export function frozenTarget(state: Readonly<AgentsState>, target: LickTarget): 
 }
 
 async function importCommand(
-  options: FreezerAttach,
+  runtime: FreezerRuntime,
   args: readonly string[],
   asker: Asker | undefined,
   context: Context
 ): Promise<Answer> {
   if (asker?.user && asker.user !== ROOT_USER)
     return { code: 1, out: 'freezer: only root can import; run sudo freezer import\n' };
-  if (args.length !== 2 || args[0] !== '--preview') return { code: 2, out: USAGE };
-  if (!options.imports) return { code: 1, out: 'freezer: this agent imports nothing\n' };
-  const path = resolve(asker?.cwd ?? ROOT_HOME, args[1] as string);
-  try {
-    return {
-      code: 0,
-      out: `${(await checkProfile(options.imports.env, { path }, context)).text}\n`,
-    };
-  } catch (error) {
-    const message =
-      error instanceof ImportError
-        ? error.message
-        : `the check failed: ${(error as Error).message}`;
-    return { code: 1, out: `freezer: ${message}\n` };
-  }
+  const flags = args.filter((arg) => arg.startsWith('--'));
+  const paths = args.filter((arg) => !arg.startsWith('--'));
+  if (paths.length !== 1 || flags.some((flag) => flag !== '--again' && flag !== '--preview'))
+    return { code: 2, out: USAGE };
+  const result = await runtime.importProfile(
+    { path: resolve(asker?.cwd ?? ROOT_HOME, paths[0] as string) },
+    { again: flags.includes('--again'), preview: flags.includes('--preview') },
+    context
+  );
+  return result.error
+    ? { code: 1, out: `freezer: ${result.error}\n` }
+    : { code: 0, out: result.text };
 }
 
 async function command(
@@ -333,7 +350,7 @@ async function command(
   asker?: Asker
 ): Promise<Answer> {
   const verb = argv[0] ?? 'help';
-  if (verb === 'import') return importCommand(options, argv.slice(1), asker, context);
+  if (verb === 'import') return importCommand(runtime, argv.slice(1), asker, context);
   const listed = await runtime.refresh();
   if (verb === 'list') {
     const lines = listed.map(
@@ -500,7 +517,63 @@ function listing(harness: Harness, agents: Agents, seen: Seen | undefined) {
   return { frozen, refresh, touch, off };
 }
 
-async function thawFrozen(agents: Agents, id: string, context: Context): Promise<string> {
+export function v6Note(home: string, record: Pick<FrozenRecord, 'name'>): string {
+  return `This was ${record.name}, a conversation imported from SLICC 6, thawed as a cone. SLICC 6's /workspace is now ~/workspace (${home}/workspace), and its scoops' files are in ${home}/scoops. Paths in the conversation above are SLICC 6's.`;
+}
+
+async function forkV6(
+  options: FreezerAttach & { now: () => number },
+  record: FrozenRecord,
+  context: Context
+): Promise<Conversation> {
+  const { harness, agents } = options;
+  const layout = options.layout ?? LEGACY;
+  const conversation = await harness.conversation(record.conversation as ConversationId, context);
+  if (!conversation) throw new Error(`There is no conversation for ${record.name}.`);
+  const last = (await conversation.context(context)).entries.at(-1);
+  const cone = await activeCone(agents, context);
+  const agent = await cone.agent(context);
+  const created = {
+    ownership: { kind: 'ownerless' as const },
+    agent: {
+      model: agent.model as NonNullable<typeof agent.model>,
+      thinkingLevel: agent.thinkingLevel,
+      ...(layout.users ? {} : { cwd: HOME }),
+    },
+    init: copyAgent(await storedAgent(harness, cone.id, context), SELECTION),
+  };
+  const fork = last
+    ? await conversation.fork(last.id, created, context)
+    : await harness.createConversation(created, context);
+  const home = `/home/${record.cone}`;
+  await fork.submit(
+    {
+      type: 'write',
+      entry: {
+        kind: THAWED_KIND,
+        data: {
+          v6: true,
+          name: record.name,
+          kind: 'cone',
+          workspace: `${home}/workspace`,
+          kept: true,
+        },
+        model: [{ role: 'user', content: v6Note(home, record), timestamp: options.now() }],
+      },
+    },
+    context
+  );
+  return fork;
+}
+
+async function thawFrozen(
+  options: FreezerAttach & { now: () => number },
+  id: string,
+  context: Context
+): Promise<string> {
+  const { agents } = options;
+  const found = agents.state().frozen?.[id];
+  const fork = found?.v6 ? await forkV6(options, found, context) : undefined;
   const coneId = await agents.update((_tx, doc) => {
     const record = doc.frozen?.[id];
     if (!record) throw new Error(`There is no frozen chat ${id}.`);
@@ -509,7 +582,7 @@ async function thawFrozen(agents: Agents, id: string, context: Context): Promise
     if (!reuse) doc.next += 1;
     doc.cones[target] = {
       name: record.name,
-      conversation: record.conversation,
+      conversation: fork?.id ?? record.conversation,
       title: record.title,
       titled: TITLE_TURNS.at(-1) as number,
     };
@@ -588,6 +661,35 @@ function titling(options: FreezerAttach) {
   return { named, seen };
 }
 
+function importing(
+  options: FreezerAttach,
+  now: () => number
+): Pick<FreezerRuntime, 'importing' | 'importProfile' | 'cancelImport'> {
+  const importer = options.imports
+    ? createImporter({
+        ...options.imports,
+        agents: options.agents,
+        layout: options.layout ?? LEGACY,
+        now,
+      })
+    : undefined;
+  return {
+    importing: importer?.progress ?? replicatedState<ImportProgress>(IDLE),
+    importProfile: async (source, choices, context) =>
+      importer
+        ? importer.run(source, choices, context)
+        : {
+            done: false,
+            preview: null,
+            cones: [],
+            report: null,
+            text: '',
+            error: 'this agent imports nothing',
+          },
+    cancelImport: () => importer?.cancel(),
+  };
+}
+
 export function attachFreezer(options: FreezerAttach): FreezerRuntime {
   const { harness, agents } = options;
   const now = options.now ?? Date.now;
@@ -597,6 +699,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
     agents,
     options.title ? seen : undefined
   );
+
   const conversationOf = async (agentId: string, context: Context) => {
     const conversation = await agents.conversation(agentId, context);
     if (!conversation) throw new Error(`There is no cone ${agentId}.`);
@@ -644,6 +747,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
   };
   const runtime: FreezerRuntime = {
     frozen,
+    ...importing(options, now),
     async freeze(agentId, context) {
       const cone = agents.state().cones[agentId];
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
@@ -723,7 +827,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       }
       const scoop = state.scoops[id];
       if (scoop) return thawScoop({ ...options, now }, id, scoop, context);
-      return thawFrozen(agents, id, context);
+      return thawFrozen({ ...options, now }, id, context);
     },
     async discard(id, context) {
       const state = agents.state();

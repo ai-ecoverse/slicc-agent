@@ -48,6 +48,14 @@ export type FrozenRecord = {
   messages: number;
   frozenAt: number;
   scoops: string[];
+  v6?: { origin: string; key: string };
+};
+
+export type V6Import = {
+  at: number;
+  origin: string;
+  cones: Record<string, string>;
+  tails: Record<string, string>;
 };
 
 export function live(record: ScoopRecord): boolean {
@@ -61,6 +69,7 @@ export type AgentsState = {
   scoops: Record<string, ScoopRecord>;
   frozen?: Record<string, FrozenRecord>;
   frozenNext?: number;
+  imports?: Record<string, V6Import>;
 };
 
 export const AgentsDoc = defineDoc<AgentsState>({

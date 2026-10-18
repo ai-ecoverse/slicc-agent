@@ -523,8 +523,8 @@ function rewound(id: string, entry: EntryRecord): SystemMessage {
 }
 
 function thawed(id: string, entry: EntryRecord): SystemMessage {
-  const data = (entry.data ?? {}) as { name?: string; kind?: string };
-  const what = data.kind === 'agent' ? 'agent run' : 'scoop';
+  const data = (entry.data ?? {}) as { name?: string; kind?: string; v6?: boolean };
+  const what = data.v6 ? 'SLICC 6' : data.kind === 'agent' ? 'agent run' : 'scoop';
   return {
     id,
     role: 'system',
@@ -576,6 +576,12 @@ function secrets(id: string, entry: EntryRecord): SystemMessage {
   };
 }
 
+const V6_KINDS: Record<string, string> = {
+  user: 'pi.user',
+  assistant: 'pi.assistant',
+  toolResult: 'pi.tool-result',
+};
+
 function entryMessage(
   entry: EntryRecord,
   out: Message[],
@@ -589,6 +595,11 @@ function entryMessage(
 ): void {
   const id = `e${entry.id}`;
   const model = entry.model?.[0] as ModelMessage | undefined;
+  if (entry.kind === 'slicc.v6' && model) {
+    const kind = V6_KINDS[model.role as string];
+    if (kind) entryMessage({ ...entry, kind }, out, calls, delivered, notes);
+    return;
+  }
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   if (entry.kind === 'slicc.thawed') out.push(thawed(id, entry));
   else if (entry.kind === SECRETS_KIND) out.push(secrets(id, entry));
