@@ -118,3 +118,37 @@ test('memory: context files and memory reach the prompt, memory_write redacts se
   assert.match(seen.prompt, /Always answer in English\./);
   assert.match(seen.prompt, /The user is Sam\./);
 });
+
+test('memory: a new cone gets its memory scope without a memory file changing', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const owner = await startAgent({
+      worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const scoped = (label) =>
+      new Promise((resolve) => {
+        let off = () => undefined;
+        const look = () => {
+          const scope = connection.memoryScopes.value?.find((item) => item.label === label);
+          if (!scope) return;
+          off();
+          resolve(scope);
+        };
+        off = connection.memoryScopes.subscribe(look);
+        look();
+      });
+    const first = await scoped('sliccy');
+    const created = await connection.control.createCone('second', BACKGROUND_CONTEXT);
+    const scope = await scoped('second');
+    await owner.release();
+    return { first, created: created.id, scope };
+  });
+  assert.deepEqual(seen.first, { id: 'cone', label: 'sliccy', group: 'cones' });
+  assert.deepEqual(seen.scope, { id: seen.created, label: 'second', group: 'cones' });
+});
