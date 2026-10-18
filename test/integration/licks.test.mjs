@@ -292,6 +292,8 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
     ['gh', 'a3', { name: 'flood.txt', size: 4096, url: `${gw}/flood.txt` }],
     ['gh', 'a4', { name: 'gone.txt', size: 90000, url: `${gw}/gone.txt` }],
     ['gh', 'a5', { name: 'logo.png', size: 8, url: `${gw}/logo.png` }],
+    ['gh', 'a7', { name: 'moved.txt', size: 14, url: `${gw}/moved.txt` }],
+    ['gh', 'a8', { name: 'silent.txt', size: 14, url: `${gw}/silent.txt` }],
     ['quiet', 'a6', { name: 'release.json', size: 36, url: `${gw}/release.json` }],
   ];
   for (const [source, id, attachment] of sends) {
@@ -302,7 +304,7 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
     });
     assert.deepEqual(sent, { status: 0, stderr: '' });
   }
-  await page.within(60000, () => window.licks().length === 5);
+  await page.within(60000, () => window.licks().length === 7);
   const triage = await page.within(60000, () => {
     const found = (window.connection.transcript.value?.entries ?? []).filter(
       (entry) => entry.kind === 'slicc.lick-triage'
@@ -323,13 +325,17 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
     `${lead} flood.txt, 4096 bytes, not fetched: it is larger than its declared 4096 bytes: ${gw}/flood.txt`,
     `${lead} gone.txt, 90000 bytes, not fetched: it expired or was removed (404): ${gw}/gone.txt`,
     `${lead} logo.png, 8 bytes, image/png, binary, not inlined: ${gw}/logo.png`,
+    `${lead} moved.txt, 14 bytes, not fetched: the request failed: unexpected redirect: ${gw}/moved.txt`,
+    `${lead} silent.txt, 14 bytes, not fetched: the request failed: unexpected redirect: ${gw}/silent.txt`,
   ]);
   const fetched = await page.evaluate(() => window.gatewayLog());
   assert.deepEqual(fetched.sort(), [
     `${gw}/flood.txt`,
     `${gw}/gone.txt`,
     `${gw}/logo.png`,
+    `${gw}/moved.txt`,
     `${gw}/release.json`,
     `${gw}/release.json`,
+    `${gw}/silent.txt`,
   ]);
 });

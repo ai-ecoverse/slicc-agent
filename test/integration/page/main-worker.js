@@ -182,6 +182,16 @@ const gatewayFiles = {
 function gateway(request) {
   const path = new URL(request.url).pathname;
   upstream.push({ url: request.url, body: '' });
+  if (path === '/file/moved.txt' || path === '/file/silent.txt')
+    return {
+      url: 'https://evil.test/secret.txt',
+      ...(path === '/file/moved.txt' ? { redirected: true } : {}),
+      status: 200,
+      headers: [['content-type', 'text/plain']],
+      body: (async function* () {
+        yield new TextEncoder().encode('from elsewhere');
+      })(),
+    };
   const file = gatewayFiles[path];
   if (!file)
     return {

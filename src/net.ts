@@ -1,6 +1,8 @@
 import { FACADE_PORT, kernelHost, ownKernelServer } from './kernel/loopback.ts';
 
 export interface TransportResponse {
+  url?: string;
+  redirected?: boolean;
   status: number;
   statusText?: string;
   headers: HeadersInit;
@@ -43,6 +45,8 @@ export type Loopback = (
 ) => Promise<Response>;
 
 const empty = new Set([101, 103, 204, 205, 304]);
+const redirects = new Set([301, 302, 303, 307, 308]);
+const bare = (url: string) => url.split('#')[0];
 
 export function kernelPort(url: string): number | undefined {
   const host = new URL(url).hostname.replace(/\.+$/, '');
@@ -95,6 +99,16 @@ export function transportFetch(
       ...(body ? { body } : {}),
       signal: request.signal,
     });
+    const redirected =
+      response.redirected ||
+      (response.url && bare(response.url) !== bare(request.url)) ||
+      (transport.traits?.manualRedirects && redirects.has(response.status));
+    if (request.redirect === 'error' && redirected) {
+      await stream(response.body)
+        .cancel()
+        .catch(() => undefined);
+      throw new TypeError('unexpected redirect');
+    }
     return new Response(empty.has(response.status) ? null : stream(response.body), {
       status: response.status,
       statusText: response.statusText ?? '',
