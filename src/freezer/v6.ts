@@ -75,8 +75,15 @@ const safe = (name: string) =>
   !/^\/|^[A-Za-z]:|\\|\0/.test(name) &&
   name.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
 
+const HOOKS = /(^|\/)\.git\/hooks\//;
+
 export function whereOf(manifest: Manifest, name: string): Where {
-  if (/(^|\/)\.git\/hooks\//.test(name)) return { kind: 'skip' };
+  const where = placeOf(manifest, name);
+  const tree = where.kind === 'cone' || where.kind === 'scoop' || where.kind === 'home-user';
+  return tree && HOOKS.test(name) ? { kind: 'skip' } : where;
+}
+
+function placeOf(manifest: Manifest, name: string): Where {
   const [top = '', second = '', ...more] = name.split('/');
   const rest = more.join('/');
   if (
@@ -105,7 +112,8 @@ export function whereOf(manifest: Manifest, name: string): Where {
     scoops.some((scoop) => scoop.folder === folder)
   )
     return { kind: 'scoop', folder, rest: inner };
-  if ((top === 'skills' || top === 'sprinkles') && rest)
+  const listed = top === 'skills' ? manifest.skills : top === 'sprinkles' ? manifest.sprinkles : [];
+  if (rest && listed.some((item) => item.name === second))
     return { kind: top === 'skills' ? 'skill' : 'sprinkle', folder: second, rest };
   throw new ImportError(`${name} has no place in a SLICC 6 profile`);
 }
@@ -245,15 +253,57 @@ function transcriptIn(data: Map<string, Uint8Array>, name: string | null): Trans
   }
 }
 
+function present(data: Map<string, Uint8Array>, name: string | null | undefined) {
+  if (name && !data.has(name))
+    throw new ImportError(`${name} is named in the manifest but not in the zip`);
+}
+
+function attached(manifest: Manifest, name: string, doc: Transcript) {
+  const files = new Map(manifest.files.map((file) => [file.path, file]));
+  for (const item of doc.attachments) {
+    const file = files.get(item.path);
+    const same =
+      file !== undefined &&
+      file.size === item.byteLength &&
+      file.sha256.toLowerCase() === item.sha256.toLowerCase();
+    if (item.present && !(item.path.startsWith('attachments/') && same))
+      throw new ImportError(`${name}: attachment ${item.id} doesn't match ${item.path}`);
+  }
+}
+
+function related(manifest: Manifest, data: Map<string, Uint8Array>) {
+  const transcripts = [
+    ...manifest.cones.map((cone) => cone.transcript),
+    ...manifest.frozen.map((item) => item.transcript),
+  ].filter((name): name is string => name !== null);
+  const twice = transcripts.find((name, at) => transcripts.indexOf(name) !== at);
+  if (twice) throw new ImportError(`${twice} is named twice in the manifest`);
+  for (const name of [...manifest.cones.map((cone) => cone.memory), manifest.gitconfig])
+    present(data, name);
+  for (const [kind, items] of [
+    ['skills', manifest.skills],
+    ['sprinkles', manifest.sprinkles],
+  ] as const)
+    for (const item of items)
+      if (
+        item.path !== `${kind}/${item.name}/` ||
+        !manifest.files.some((file) => file.path.startsWith(item.path))
+      )
+        throw new ImportError(`${item.path} is named in the manifest but has no files`);
+  for (const cone of manifest.cones) {
+    const doc = transcriptIn(data, cone.transcript);
+    const ids = new Set(doc?.conversations.map((item) => item.id));
+    for (const id of [cone.conversation, ...cone.scoops.map((scoop) => scoop.conversation)])
+      if (id !== null && !ids.has(id))
+        throw new ImportError(`${cone.transcript ?? cone.folder} has no conversation ${id}`);
+  }
+  for (const name of transcripts) attached(manifest, name, transcriptIn(data, name) as Transcript);
+}
+
 async function checked(opened: Opened, data: Map<string, Uint8Array>): Promise<void> {
   for (const [name, bytes] of data)
     if (name.startsWith('memory/') || name === opened.manifest.gitconfig) textOf(bytes, name);
-  const { cones, frozen } = opened.manifest;
-  for (const name of [
-    ...cones.map((cone) => cone.transcript),
-    ...frozen.map((item) => item.transcript),
-  ])
-    transcriptIn(data, name);
+  related(opened.manifest, data);
   await licksIn(opened, data);
 }
 

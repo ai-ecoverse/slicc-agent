@@ -71,7 +71,40 @@ test('freezer import --preview checks a SLICC 6 profile export and says what is 
   assert.equal(usage.status, 2);
 });
 
+const coneDoc = () => JSON.parse(files()['transcripts/cone.json']);
+const plain = () => manifest(files());
+
 const refusals = [
+  [
+    'an undeclared skill',
+    () => profile({ contents: { ...files(), 'skills/rogue/SKILL.md': 'x' } }),
+    /skills\/rogue\/SKILL\.md has no place in a SLICC 6 profile/,
+  ],
+  [
+    'a missing memory file',
+    () =>
+      profile({
+        overrides: { cones: [{ ...plain().cones[0], memory: 'memory/gone.md' }, plain().cones[1]] },
+      }),
+    /memory\/gone\.md is named in the manifest but not in the zip/,
+  ],
+  [
+    'a conversation the transcript lacks',
+    () =>
+      profile({
+        overrides: { cones: [plain().cones[0], { ...plain().cones[1], conversation: 'cone_9' }] },
+      }),
+    /transcripts\/research\.json has no conversation cone_9/,
+  ],
+  [
+    'an attachment that does not match its file',
+    () => {
+      const doc = coneDoc();
+      doc.attachments[0].byteLength = 1;
+      return profile({ contents: { ...files(), 'transcripts/cone.json': JSON.stringify(doc) } });
+    },
+    /transcripts\/cone\.json: attachment a1 doesn't match attachments\//,
+  ],
   ['not a zip', () => Buffer.from('hello'), /this is not a zip file/],
   [
     'manifest not first',

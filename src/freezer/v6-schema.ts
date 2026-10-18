@@ -33,6 +33,7 @@ export type V6Attachment = {
   path: string;
   originalName: string;
   sha256: string;
+  byteLength: number;
   present: boolean;
 };
 
