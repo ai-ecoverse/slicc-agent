@@ -4,6 +4,7 @@ import {
   type ReplicatedState,
   replicatedState,
 } from '@earendil-works/chord';
+import { awaitWithContext, withCancel } from '@earendil-works/chord/context';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Agents } from '../agents.ts';
@@ -209,6 +210,7 @@ export async function attachMemory(
     const found = await listPlaces(options, using);
     const entries: MemoryEntry[] = [];
     for (const place of found) entries.push(...(await files.entries(place, using)));
+    if (using.abortSignal?.aborted) return;
     scopes.replace(
       using,
       found.map((place) => ({
@@ -219,11 +221,19 @@ export async function attachMemory(
     );
     memories.replace(using, entries);
   };
-  let loading: Promise<unknown> = Promise.resolve();
+  const life = withCancel(context);
+  let latest: Promise<void> = Promise.resolve();
+  let stop: (reason?: unknown) => void = () => undefined;
   const reload = (using: Context) => {
-    const next = loading.then(() => load(using));
-    loading = next.catch(() => undefined);
-    return next;
+    stop();
+    const run = withCancel(life.context);
+    stop = run.cancel;
+    const loading: Promise<void> = awaitWithContext(load(run.context), run.context).catch(
+      (error: unknown) =>
+        life.context.abortSignal?.aborted || latest === loading ? Promise.reject(error) : latest
+    );
+    latest = loading;
+    return awaitWithContext(loading, using);
   };
   const parts: Parts = { options, files, memories, scopes, reload };
   connect({
@@ -279,6 +289,7 @@ export async function attachMemory(
     async close(using) {
       offCones();
       clearTimeout(timer);
+      life.cancel();
       await watcher?.close(using);
     },
   };
