@@ -13,7 +13,7 @@ const options = {
     ['/', 'test/integration/page/'],
   ],
   isolated: true,
-  coverage: ['/dist-test/'],
+  coverage: env.SLICC_COVERAGE ? ['/dist-test/'] : [],
 };
 
 export const launch = (more = {}) => start({ ...options, ...more });
