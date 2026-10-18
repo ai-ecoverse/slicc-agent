@@ -61,6 +61,8 @@ agent send <handle> --follow-up "message"  # busy: after the current work
 agent stop <handle>
 ```
 
+`agent send cone --lick=cron "…"` in a crontab job and `agent send cone --lick=webhook --source <name> "$NTFY_RAW"` (or `-` for stdin) from an ntfy or mcpcat subscription send a lick instead of a message: see the `licks` skill.
+
 Stop every async scoop you no longer need. Stopping ends its work and removes it from the list; its transcript is kept, so rewinding a turn can bring it back, and its files stay in `/scoops/<handle>/`.
 
 ## From inside a scoop

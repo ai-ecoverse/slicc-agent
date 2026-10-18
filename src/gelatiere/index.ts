@@ -3,7 +3,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
 import { ROOT_USER } from '../layout.ts';
-import { installJobs, readTable, scheduleOf, sendCommand } from '../licks/crontab.ts';
+import { installJobs, readTable, relickJobs, scheduleOf, sendCommand } from '../licks/crontab.ts';
 import type { Licks } from '../licks/licks.ts';
 import type { Roles } from '../roles/roles.ts';
 import type { Scoops } from '../scoops/service.ts';
@@ -130,6 +130,13 @@ async function schedule(g: G, handle: string, context: Context): Promise<string 
   const job = { name: ROLE, schedule: SCHEDULE, command };
   const problems = await installJobs(g.options.env, user, [job], context);
   return problems.length ? problems.map((problem) => problem.error).join('; ') : undefined;
+}
+
+async function relick(g: G, context: Context): Promise<void> {
+  const handle = handleOf(g.options.agents);
+  if (!handle) return;
+  const job = { name: ROLE, schedule: SCHEDULE, target: `scoop:${handle}` as const, message: PASS };
+  await relickJobs(g.options.env, await cronUserOf(g, handle), [{ ...job, line: 0 }], context);
 }
 
 export const SHIPPED = [
@@ -546,7 +553,12 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
         return true;
       }),
   };
-  const seeded = seed(g, BACKGROUND_CONTEXT, false).catch((): Seeded => 'none');
+  const seeded = seed(g, BACKGROUND_CONTEXT, false)
+    .catch((): Seeded => 'none')
+    .then(async (state) => {
+      await relick(g, BACKGROUND_CONTEXT).catch(() => undefined);
+      return state;
+    });
   return {
     seeded,
     async command(argv, caller, context) {

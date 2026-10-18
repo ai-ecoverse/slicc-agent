@@ -74,7 +74,7 @@ test('a ~/.slicc/crontab line moves into the kernel crontab and comes back as on
   });
   assert.equal(
     table,
-    "# name: probe\n0 * * * * env > /tmp/cron-env\n# name: standup\n0 * * * * agent send cone 'Check the build'\n"
+    "# name: probe\n0 * * * * env > /tmp/cron-env\n# name: standup\n0 * * * * agent send cone --lick=cron 'Check the build'\n"
   );
   const moved = await page.evaluate(async () => ({
     old: (await window.sh('test -e /home/.slicc/crontab; echo $?')).stdout,
@@ -167,7 +167,10 @@ test("a scoop's line in a cone's ~/.slicc/crontab goes into the scoop user's own
     },
     user
   );
-  assert.equal(table, `# name: nightly\n0 * * * * agent send scoop:${handle} 'Nightly pass'\n`);
+  assert.equal(
+    table,
+    `# name: nightly\n0 * * * * agent send scoop:${handle} --lick=cron 'Nightly pass'\n`
+  );
   const cone = await page.evaluate(
     async () => (await window.kernel.run(['crontab', '-u', 'cone', '-l'])).status
   );
@@ -187,4 +190,64 @@ test("a scoop's line in a cone's ~/.slicc/crontab goes into the scoop user's own
   assert.equal(licks[0].body, 'Nightly pass');
   assert.match(licks[0].text, /^nightly fired at \d{4}-\d\d-\d\d 11:00$/);
   assert.deepEqual(await page.evaluate(() => window.cronLicks('cone')), []);
+});
+
+test('jobs migrated before --lick=cron are rewritten at start and fire as cron licks, while a plain agent send in a job is just a message', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const base = await page.evaluate(async () => {
+    await window.write('/home/.slicc/crontab.migrated', '0 * * * * standup Check the build\n');
+    await window.write('/home/.slicc/crontab', '\n');
+    const base = await window.boot();
+    const old = [
+      '# name: standup',
+      "0 * * * * agent send cone 'Check the build'",
+      '# name: plain',
+      "0 * * * * agent send helper 'Just a message'",
+      '',
+    ].join('\n');
+    const installed = await window.kernel.run(['crontab', '-'], { stdin: old });
+    if (installed.status !== 0) throw new Error(installed.stderr);
+    await window.start(false);
+    return base;
+  });
+  const table = await page.within(60000, async () => {
+    const listed = await window.kernel.run(['crontab', '-l']);
+    return listed.stdout.includes('--lick=cron') && listed.stdout;
+  });
+  assert.equal(
+    table,
+    "# name: standup\n0 * * * * agent send cone --lick=cron 'Check the build'\n# name: plain\n0 * * * * agent send helper 'Just a message'\n"
+  );
+  const kept = await page.evaluate(async () => ({
+    empty: (await window.sh('cat /home/.slicc/crontab')).stdout,
+    migrated: (await window.sh('cat /home/.slicc/crontab.migrated')).stdout,
+  }));
+  assert.deepEqual(kept, { empty: '\n', migrated: '0 * * * * standup Check the build\n' });
+  const spawned = await page.evaluate(() =>
+    window.sh('agent --async --name helper --prompt "Stand by"')
+  );
+  assert.equal(spawned.status, 0, spawned.stderr);
+  await page.within(60000, () => !window.agent.busy('scoop:helper'));
+  await page.within(
+    30000,
+    async () => (await window.stamped('standup')) && window.stamped('plain')
+  );
+  await page.evaluate((now) => window.clock(now), base + 61_000);
+  const scoop = await page.within(60000, () => {
+    const found = window.agent
+      .messages('scoop:helper')
+      .filter((message) => message.role === 'user' && message.text === 'Just a message');
+    return found.length === 1 && found;
+  });
+  assert.equal(scoop.length, 1);
+  const licks = await page.within(60000, () => {
+    const found = window.cronLicks();
+    return found.length === 1 && found;
+  });
+  assert.equal(licks[0].title, 'standup');
+  assert.equal(licks[0].body, 'Check the build');
+  await page.within(60000, () => !window.agent.busy(window.agent.active()));
+  assert.deepEqual(await page.evaluate(() => window.cronLicks('scoop:helper')), []);
 });

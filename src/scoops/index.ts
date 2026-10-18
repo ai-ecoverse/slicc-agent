@@ -55,6 +55,7 @@ export interface AttachOptions {
   freezer?: CliOptions['freezer'];
   models?: CliOptions['models'];
   panel?: CliOptions['panel'];
+  webhook?: CliOptions['webhook'];
   mcp?: (names: readonly string[]) => ToolRegistration[];
   layout?: Layout;
   enforced?: boolean;
@@ -346,6 +347,7 @@ export function setupScoops(
         ...(options.models ? { models: options.models } : {}),
         layout,
         ...(options.panel ? { panel: options.panel } : {}),
+        ...(options.webhook ? { webhook: options.webhook } : {}),
         licks,
       });
       const plane = planeOf(env, cli, options, context);

@@ -6,9 +6,11 @@ import { reviewersOf } from '../guests/scoop.ts';
 import { CONE_PREFIX } from '../kernel/accounts.ts';
 import { resolve } from '../kernel/paths.ts';
 import { agentOfUser, type Layout, LEGACY, ROOT_USER } from '../layout.ts';
-import { type CronRun, cronLick } from '../licks/crontab.ts';
-import type { LickTarget } from '../licks/lick.ts';
+import { cronLick } from '../licks/crontab.ts';
+import { webhookDelivery } from '../licks/events.ts';
+import { LICK_CHANNELS, type LickTarget } from '../licks/lick.ts';
 import type { Licks } from '../licks/licks.ts';
+import { scopedName, type WebhookDelivery } from '../licks/sources.ts';
 import { findRole, type Roles } from '../roles/roles.ts';
 import type { Request, Runner } from './requests.ts';
 import { type Answer, findScoop, modelOf, type Scoops } from './service.ts';
@@ -27,6 +29,7 @@ export const USAGE = `usage:
   agent <cwd> <allowed-commands> <prompt>                         the same as a synchronous run, in v6's form
   agent list [--agents] | status <handle> | rename <handle> <name>
   agent send <handle> [--follow-up] (<message> | --file <path> | -)
+  agent send <target> --lick=<cron|webhook> [--source <name>] (<message> | --file <path> | -)
   agent send parent <note>                                        from a scoop: a progress note to its cone
   agent wait <handle>... [--timeout <seconds>] [--notify]
   agent stop <handle>
@@ -56,6 +59,7 @@ export interface CliOptions {
   layout?: Layout;
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
   licks?: Pick<Licks, 'deliver'>;
+  webhook?: (name: string, delivery: WebhookDelivery, context: Context) => Promise<boolean>;
 }
 
 export interface PanelCaller {
@@ -386,9 +390,8 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   );
 }
 
-function cronTarget(deps: Deps, request: Request): LickTarget | Answer {
+function cronTarget(deps: Deps, request: Request, name: string): LickTarget | Answer {
   const state = deps.agents.state();
-  const name = request.argv[1] ?? '';
   if (!name) return fail('send needs cone or a scoop handle', 2);
   const user = request.user && request.user !== ROOT_USER ? request.user : undefined;
   const own = user ? agentOfUser(state, user) : undefined;
@@ -406,21 +409,94 @@ function cronTarget(deps: Deps, request: Request): LickTarget | Answer {
   return (findScoop(state, name, cone)?.[0] as LickTarget | undefined) ?? home;
 }
 
+const PROCESS_LICKS = ['cron', 'webhook'];
+
+function expanded(argv: readonly string[]): string[] {
+  return argv.flatMap((arg) => {
+    const at = arg.indexOf('=');
+    const name = arg.slice(0, at);
+    return at > 0 && (name === '--lick' || name === '--source') ? [name, arg.slice(at + 1)] : [arg];
+  });
+}
+
+function refusedChannel(channel: string): Answer {
+  const own = (LICK_CHANNELS as readonly string[]).includes(channel);
+  const what = own
+    ? `--lick=${channel} is the agent's own channel`
+    : `there is no lick channel "${channel}"`;
+  return fail(
+    `${what}; a process may send ${PROCESS_LICKS.map((name) => `--lick=${name}`).join(' or ')}`,
+    2
+  );
+}
+
 async function cronSend(
   deps: Deps,
+  licks: Pick<Licks, 'deliver'>,
   request: Request,
-  run: CronRun,
+  parsed: Flags,
   context: Context
 ): Promise<Answer> {
-  if (!deps.licks) return fail('licks are not available in this agent');
-  const parsed = flags(request.argv.slice(2), ['--file']);
-  const unknown = [...parsed.switches].find((flag) => flag !== '--follow-up');
-  if (unknown) return fail(`unknown option ${unknown}`, 2);
-  const target = cronTarget(deps, request);
+  if (!request.cron)
+    return fail('--lick=cron only works inside a cron job, which sets SLICC_CRON_JOB');
+  if (last(parsed, '--source') !== undefined)
+    return fail("--source is for --lick=webhook; a cron lick is named by its job's # name:", 2);
+  const target = cronTarget(deps, request, parsed.rest[0] ?? '');
   if (isAnswer(target)) return target;
-  const text = (await message(deps, parsed, request, context)).trim();
-  await deps.licks.deliver(cronLick(run, target, text), context);
+  const text = (await message(deps, unnamed(parsed), request, context)).trim();
+  await licks.deliver(cronLick(request.cron, target, text), context);
   return ok('');
+}
+
+function webhookScope(deps: Deps, request: Request): string | null | Answer {
+  const user = request.user && request.user !== ROOT_USER ? request.user : undefined;
+  if (!user) return null;
+  const own = agentOfUser(deps.agents.state(), user);
+  if (!own) return fail(`${user} is no cone or scoop`);
+  if (own.startsWith('scoop:')) return fail("a scoop can't send webhook licks; its cone can");
+  return own.slice(CONE_PREFIX.length);
+}
+
+async function webhookSend(
+  deps: Deps,
+  request: Request,
+  parsed: Flags,
+  context: Context
+): Promise<Answer> {
+  if (!deps.webhook) return fail('webhooks are not available in this agent');
+  const source = last(parsed, '--source');
+  if (!source)
+    return fail('--lick=webhook needs --source <name>, for ~/.slicc/webhooks/<name>.json', 2);
+  if (parsed.rest[0] !== 'cone')
+    return fail('a webhook lick goes to the cone: agent send cone --lick=webhook …', 2);
+  const scope = webhookScope(deps, request);
+  if (isAnswer(scope)) return scope;
+  const text = await message(deps, unnamed(parsed), request, context);
+  if (!text.trim()) return fail('send needs a message, --file or -', 2);
+  const delivered = await deps.webhook(
+    scopedName(source, scope),
+    webhookDelivery(text.trimEnd()),
+    context
+  );
+  return delivered
+    ? ok('')
+    : fail(`there is no webhook ${source}; add ~/.slicc/webhooks/${source}.json`);
+}
+
+function unnamed(parsed: Flags): Flags {
+  return { ...parsed, rest: parsed.rest.slice(1) };
+}
+
+async function lickSend(deps: Deps, request: Request, context: Context): Promise<Answer> {
+  const parsed = flags(request.argv.slice(1), ['--file', '--lick', '--source']);
+  const unknown = [...parsed.switches][0];
+  if (unknown) return fail(`unknown option ${unknown}`, 2);
+  const channel = last(parsed, '--lick') ?? '';
+  if (!PROCESS_LICKS.includes(channel)) return refusedChannel(channel);
+  if (!deps.licks) return fail('licks are not available in this agent');
+  return channel === 'cron'
+    ? cronSend(deps, deps.licks, request, parsed, context)
+    : webhookSend(deps, request, parsed, context);
 }
 
 async function latest(
@@ -614,8 +690,9 @@ export function createCli(options: CliOptions): Runner {
     },
     async run(request, context) {
       try {
-        if (request.cron && request.as === 'agent' && request.argv[0] === 'send')
-          return await cronSend(deps, request, request.cron, context);
+        const argv = expanded(request.argv);
+        if (request.as === 'agent' && argv[0] === 'send' && argv.includes('--lick'))
+          return await lickSend(deps, { ...request, argv }, context);
         return await dispatch(deps, request, callerOf(options.agents, request), context);
       } catch (error) {
         return fail((error as Error).message);

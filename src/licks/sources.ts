@@ -5,7 +5,14 @@ import type { Activity } from '../kernel/activity.ts';
 import { ROOT_USER } from '../layout.ts';
 import { type BootFacts, bootLicks, LicksHostDoc } from './boot.ts';
 import { type ConfigError, parseWebhook, type WebhookEntry } from './config.ts';
-import { type CronJob, installJobs, legacyJobs, sendCommand } from './crontab.ts';
+import {
+  type CronJob,
+  installJobs,
+  type LegacyJob,
+  legacyJobs,
+  relickJobs,
+  sendCommand,
+} from './crontab.ts';
 import { type ConfigFiles, configFiles, Watches } from './fswatch.ts';
 import type { LickChannel, LickTarget } from './lick.ts';
 import type { LickEvent, Licks } from './licks.ts';
@@ -48,6 +55,7 @@ export interface WebhookDelivery {
   id?: string;
   headers?: Record<string, string>;
   body: unknown;
+  verified?: boolean;
 }
 
 export interface LickSources {
@@ -85,8 +93,9 @@ export function configLick(
     source: `config:${file}`,
     title: `Invalid ${file}`,
     text,
-    body:
-      channel === 'cron'
+    body: error.file.endsWith('/crontab.migrated')
+      ? "Its jobs in the kernel crontab still lack --lick=cron, so they don't fire as cron licks; add it with crontab -."
+      : channel === 'cron'
         ? 'Not moved into the kernel crontab until the file is fixed; the installed crontab is unchanged.\nThe format is in the slicc-agent README.'
         : 'Ignored until the file is fixed.\nThe formats are in the slicc-agent README.',
     target: scopedTarget('cone', cone),
@@ -94,6 +103,8 @@ export function configLick(
     eventId: hash(`${file}\n${text}`),
   };
 }
+
+export const UNVERIFIED = "verified: false (the gateway couldn't check this request's signature)";
 
 export function webhookLick(
   name: string,
@@ -110,7 +121,9 @@ export function webhookLick(
     source: name,
     title: name,
     text: entry.message || `Webhook ${name} received a request`,
-    body: [headers, payload].filter(Boolean).join('\n\n'),
+    body: [delivery.verified === false ? UNVERIFIED : '', headers, payload]
+      .filter(Boolean)
+      .join('\n\n'),
     target: entry.target,
     coalesce: false,
     ...(delivery.id ? { eventId: delivery.id } : {}),
@@ -156,6 +169,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     return found;
   };
   let webhooks = new Map<string, WebhookEntry>();
+  const relicked = new Set<string>();
   let control: FileWatcher | undefined;
   let controlled = '';
   let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
@@ -174,7 +188,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     const errors: { error: ConfigError; place: LickDir }[] = [];
     const hooks = new Map<string, WebhookEntry>();
     for (const place of places) {
-      const crontab = await migrate(place, context);
+      const crontab = [...(await relick(place, context)), ...(await migrate(place, context))];
       const watchErrors = await watchesOf(place).reconcile(`${place.dir}/watches`, context);
       const found = await webhooksIn(files, `${place.dir}/webhooks`, context);
       for (const entry of found.entries.values()) {
@@ -195,21 +209,45 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     await watchControl(places, context);
   }
 
+  function byUser(place: LickDir, jobs: readonly LegacyJob[]): Map<string, LegacyJob[]> {
+    const users = new Map<string, LegacyJob[]>();
+    for (const job of jobs) {
+      const user = options.cronUser?.(job.target, place) ?? place.cone ?? ROOT_USER;
+      users.set(user, [...(users.get(user) ?? []), job]);
+    }
+    return users;
+  }
+
+  async function relick(place: LickDir, context: Context): Promise<ConfigError[]> {
+    if (relicked.has(place.dir)) return [];
+    relicked.add(place.dir);
+    const file = `${place.dir}/crontab.migrated`;
+    const text = await files.read(file, context);
+    if (text === undefined) return [];
+    const errors: ConfigError[] = [];
+    for (const [user, list] of byUser(place, legacyJobs(text).jobs))
+      for (const problem of await relickJobs(env, user, list, context))
+        errors.push({ file, ...problem });
+    return errors;
+  }
+
   async function migrate(place: LickDir, context: Context): Promise<ConfigError[]> {
     const file = `${place.dir}/crontab`;
     const text = await files.read(file, context);
-    if (text === undefined) return [];
+    if (!text?.trim()) return [];
     const { jobs, problems } = legacyJobs(text);
     if (problems.length) return problems.map((problem) => ({ file, ...problem }));
     const users = new Map<string, CronJob[]>();
-    for (const job of jobs) {
-      const user = options.cronUser?.(job.target, place) ?? place.cone ?? ROOT_USER;
-      const command = sendCommand(job.target, job.message);
-      users.set(user, [
-        ...(users.get(user) ?? []),
-        { name: job.name, schedule: job.schedule, command, line: job.line },
-      ]);
-    }
+    for (const [user, list] of byUser(place, jobs))
+      users.set(
+        user,
+        list.map((job) => ({
+          name: job.name,
+          schedule: job.schedule,
+          command: sendCommand(job.target, job.message),
+          line: job.line,
+        }))
+      );
     const errors: ConfigError[] = [];
     for (const [user, list] of users)
       for (const problem of await installJobs(env, user, list, context))

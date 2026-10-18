@@ -16,7 +16,7 @@ export const LICKS_SECTION = [
   'count is how many events were merged into one lick while you were busy. Act on a lick when it matters for the task at hand, and otherwise acknowledge it in one short sentence.',
   'A lick with severity="error" reports a problem that needs fixing, such as an invalid configuration file; severity="warn" means something works in a degraded way, such as a file watch that may have missed changes. A lick with actions="confirm dismiss" waits for a decision: call lick_confirm or lick_dismiss with its id. Licks without actions need no tool call.',
   'File watches and webhooks are files the user and you can edit: ~/.slicc/watches/<name>.json and ~/.slicc/webhooks/<name>.json. The format is in the slicc-agent README; a malformed file comes back as a lick naming the problem.',
-  'Schedules are the kernel crontab: `crontab -l` shows yours and `crontab -` installs one from standard input (it refuses a table with errors and keeps the old one). A line such as `0 9 * * mon-fri agent send cone "Summarize yesterday"` comes back as a cron lick at that time, and `# name: <id>` on the line above names it.',
+  'Schedules are the kernel crontab: `crontab -l` shows yours and `crontab -` installs one from standard input (it refuses a table with errors and keeps the old one). A line such as `0 9 * * mon-fri agent send cone --lick=cron "Summarize yesterday"` comes back as a cron lick at that time, and `# name: <id>` on the line above names it.',
 ].join('\n');
 
 function decisionTool(licks: Licks, action: LickAction, conversation: ConversationLookup) {
