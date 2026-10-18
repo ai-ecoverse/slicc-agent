@@ -484,6 +484,16 @@ pi durable keeps every conversation and entry in the session database, and has n
   - The gelatiere's pass reads frozen chats with it.
 - **The panel:** `AgentControl` has `freeze` (Delete cone), `newChat` (New conversation), `thaw` and `discard` (Remove).
 
+#### Importing SLICC 6 profiles
+
+SLICC 6 exports a profile as a `slicc-profile` v1 zip (#6). `test/integration/fixtures/slicc6-profile-v1.zip` is the shared fixture: `test/integration/fixtures/slicc6-profile.mjs` makes it, and slicc checks in the same bytes. `freezer import --preview <zip>` is root's, and checks a profile without writing anything:
+
+- **The zip:** read from its central directory, inflating with `DecompressionStream('deflate-raw')`. ZIP64 and encrypted entries are refused, and an entry that inflates past its stated size stops there.
+- **Caps:** an archive of at most 2 GiB and 60,000 entries, any file at most 256 MiB, a transcript at most 64 MiB, at most 4 GiB in all, and no more than 200:1 expansion.
+- **Names:** `manifest.json` comes first. A name that is absolute, has an empty, `.` or `..` part, a `\`, a NUL or a drive letter is refused, as are symlinks, names that appear twice, names that `files[]` doesn't list, and names with no place in the profile's layout. Every file must match its size and sha256.
+- **Schemas:** the manifest, each transcript (a copy of slicc's `validateTranscriptDocumentV1`) and `licks.json` are checked. Memory and git config must be UTF-8.
+- **The answer:** one sentence on what the profile holds, such as cones, scoops, frozen sessions, file size, skills, crons, webhooks, credential-like files, the providers to re-enter in Settings, and the mounts that don't move.
+
 ### Changes
 
 pi has no git integration and no changes list; pi coding-agent leaves that to the user's git. So the Changes surface is git, run in the kernel, and works only when git is installed and only in git repos.

@@ -54,7 +54,12 @@ export interface CliOptions {
   now?: () => number;
   memory?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   gelatiere?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
-  freezer?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
+  freezer?: (
+    argv: readonly string[],
+    caller: string | null,
+    context: Context,
+    asker?: { user: string | null; cwd: string }
+  ) => Promise<Answer>;
   models?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   layout?: Layout;
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
@@ -644,7 +649,10 @@ async function dispatch(
       : fail('the gelatiere is not available in this agent');
   if (request.as === 'freezer')
     return deps.freezer
-      ? deps.freezer(request.argv, who.id, context)
+      ? deps.freezer(request.argv, who.id, context, {
+          user: request.user ?? null,
+          cwd: request.cwd,
+        })
       : fail('the freezer is not available in this agent');
   if (request.as === 'models')
     return deps.models

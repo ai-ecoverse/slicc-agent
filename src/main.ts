@@ -33,7 +33,7 @@ import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { imageReads } from './images/index.ts';
 import { createActivity } from './kernel/activity.ts';
-import { agentUsers, warnSupport } from './kernel/agent-users.ts';
+import { type AgentUsers, agentUsers, warnSupport } from './kernel/agent-users.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
@@ -394,6 +394,28 @@ function setupTitles(
   return { titleFn, cancel: titles.cancel, label: labeler(models, settings) };
 }
 
+function freezerOf(
+  agent: Agent,
+  parts: {
+    home: SliccKernelEnv;
+    memory: ReturnType<typeof setupMemory>;
+    titles: ReturnType<typeof setupTitles>;
+    people: AgentUsers | undefined;
+  }
+) {
+  const { home, memory, titles, people } = parts;
+  return attachFreezer({
+    harness: agent.harness,
+    agents: agent.agents,
+    env: home,
+    extract: memory.extract,
+    title: titles.titleFn,
+    cancelTitle: titles.cancel,
+    ...(people ? { layout: people.layout } : {}),
+    imports: { env: home },
+  });
+}
+
 async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
@@ -491,15 +513,7 @@ async function start(
     },
     BACKGROUND_CONTEXT
   );
-  const freezer = attachFreezer({
-    harness: agent.harness,
-    agents: agent.agents,
-    env: home,
-    extract: memory.extract,
-    title: titles.titleFn,
-    cancelTitle: titles.cancel,
-    ...(people ? { layout: people.layout } : {}),
-  });
+  const freezer = freezerOf(agent, { home, memory, titles, people });
   licks.licks.guard(freezer.frozenTarget);
   const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped });
   const pages = createPages({ claim: sprinkles.claim });

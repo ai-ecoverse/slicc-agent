@@ -17,11 +17,14 @@ import {
   type ScoopRecord,
 } from '../agents.ts';
 import { HOME } from '../kernel/env.ts';
-import { type Layout, LEGACY } from '../layout.ts';
+import { resolve } from '../kernel/paths.ts';
+import { type Layout, LEGACY, ROOT_HOME, ROOT_USER } from '../layout.ts';
 import type { LickTarget } from '../licks/lick.ts';
 import { copyAgent, SELECTION, storedAgent } from '../selection.ts';
 import { cleanTitle, TITLE_TURNS, titleDue } from '../titles/extension.ts';
 import { scrubTranscript } from '../titles/generate.ts';
+import { checkProfile } from './v6.ts';
+import { ImportError } from './zip.ts';
 
 export type Answer = { code: number; out: string };
 
@@ -57,7 +60,10 @@ export interface FreezerAttach {
   cancelTitle?: (agentId: string) => void;
   now?: () => number;
   layout?: Layout;
+  imports?: { env: ExecutionEnv };
 }
+
+export type Asker = { user: string | null; cwd: string };
 
 export interface FreezerRuntime {
   readonly frozen: ReplicatedState<FrozenCone[]>;
@@ -68,7 +74,12 @@ export interface FreezerRuntime {
   refresh(): Promise<readonly FrozenCone[]>;
   touch(): void;
   frozenTarget(target: LickTarget): Frozen | undefined;
-  command(argv: readonly string[], caller: string | null, context: Context): Promise<Answer>;
+  command(
+    argv: readonly string[],
+    caller: string | null,
+    context: Context,
+    asker?: Asker
+  ): Promise<Answer>;
   close(): void;
 }
 
@@ -76,6 +87,8 @@ export const USAGE = `usage:
   freezer list         every conversation: id, kind, name, title, messages, when
   freezer show <id>    a conversation as Markdown
   freezer thaw <id>    continue a stopped conversation as a cone
+  freezer import --preview <zip>
+                       check a SLICC 6 profile export (root only)
 
 Delete a cone, or start a new conversation, from the chat toolbar or the command palette.
 `;
@@ -287,13 +300,40 @@ export function frozenTarget(state: Readonly<AgentsState>, target: LickTarget): 
   return owner && record ? { id: owner, name: record.name, at: record.frozenAt } : undefined;
 }
 
+async function importCommand(
+  options: FreezerAttach,
+  args: readonly string[],
+  asker: Asker | undefined,
+  context: Context
+): Promise<Answer> {
+  if (asker?.user && asker.user !== ROOT_USER)
+    return { code: 1, out: 'freezer: only root can import; run sudo freezer import\n' };
+  if (args.length !== 2 || args[0] !== '--preview') return { code: 2, out: USAGE };
+  if (!options.imports) return { code: 1, out: 'freezer: this agent imports nothing\n' };
+  const path = resolve(asker?.cwd ?? ROOT_HOME, args[1] as string);
+  try {
+    return {
+      code: 0,
+      out: `${(await checkProfile(options.imports.env, { path }, context)).text}\n`,
+    };
+  } catch (error) {
+    const message =
+      error instanceof ImportError
+        ? error.message
+        : `the check failed: ${(error as Error).message}`;
+    return { code: 1, out: `freezer: ${message}\n` };
+  }
+}
+
 async function command(
   options: FreezerAttach,
   runtime: FreezerRuntime,
   argv: readonly string[],
-  context: Context
+  context: Context,
+  asker?: Asker
 ): Promise<Answer> {
   const verb = argv[0] ?? 'help';
+  if (verb === 'import') return importCommand(options, argv.slice(1), asker, context);
   const listed = await runtime.refresh();
   if (verb === 'list') {
     const lines = listed.map(
@@ -696,7 +736,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
     refresh,
     touch,
     frozenTarget: (target) => frozenTarget(agents.state(), target),
-    command: (argv, _caller, context) => command(options, runtime, argv, context),
+    command: (argv, _caller, context, asker) => command(options, runtime, argv, context, asker),
     close: () => off(),
   };
   return runtime;
