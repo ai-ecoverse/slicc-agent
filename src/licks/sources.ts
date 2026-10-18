@@ -234,7 +234,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
   async function migrate(place: LickDir, context: Context): Promise<ConfigError[]> {
     const file = `${place.dir}/crontab`;
     const text = await files.read(file, context);
-    if (text === undefined) return [];
+    if (!text?.trim()) return [];
     const { jobs, problems } = legacyJobs(text);
     if (problems.length) return problems.map((problem) => ({ file, ...problem }));
     const users = new Map<string, CronJob[]>();

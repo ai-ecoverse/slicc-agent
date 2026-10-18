@@ -198,6 +198,7 @@ test('jobs migrated before --lick=cron are rewritten at start and fire as cron l
   await page.goto('/');
   const base = await page.evaluate(async () => {
     await window.write('/home/.slicc/crontab.migrated', '0 * * * * standup Check the build\n');
+    await window.write('/home/.slicc/crontab', '\n');
     const base = await window.boot();
     const old = [
       '# name: standup',
@@ -219,6 +220,11 @@ test('jobs migrated before --lick=cron are rewritten at start and fire as cron l
     table,
     "# name: standup\n0 * * * * agent send cone --lick=cron 'Check the build'\n# name: plain\n0 * * * * agent send helper 'Just a message'\n"
   );
+  const kept = await page.evaluate(async () => ({
+    empty: (await window.sh('cat /home/.slicc/crontab')).stdout,
+    migrated: (await window.sh('cat /home/.slicc/crontab.migrated')).stdout,
+  }));
+  assert.deepEqual(kept, { empty: '\n', migrated: '0 * * * * standup Check the build\n' });
   const spawned = await page.evaluate(() =>
     window.sh('agent --async --name helper --prompt "Stand by"')
   );
