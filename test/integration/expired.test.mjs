@@ -52,15 +52,10 @@ const helpers = () => {
       await seal(window.nextSeal);
       return { sealed: true };
     };
-    const watch = (status) => {
-      const seen = [];
-      const timer = setInterval(() => seen.push({ status: status(), at: Date.now() }), 20);
-      return { seen, stop: () => clearInterval(timer) };
-    };
     const model = createAgentModel(await owner.connect(), { storage: localStorage, login });
     await model.agent.ready();
     const adobe = () => model.settings.accounts().find((account) => account.id === 'adobe');
-    return { owner, ...model, adobe, signIns, seal, watch };
+    return { owner, ...model, adobe, signIns, seal };
   };
 };
 
@@ -109,18 +104,12 @@ test('an Adobe record that expires while the page is open turns the account expi
   await page.goto('/');
   const seen = await page.evaluate(
     async ({ query, record }) => {
-      const { owner, adobe, seal, watch } = await window.openAdobe(query);
+      const { owner, adobe, seal } = await window.openAdobe(query);
       const expiresAt = Date.now() + 3000;
       await seal({ ...record, expiresAt });
-      const watching = watch(() => adobe()?.status);
+      const connected = await window.until(() => adobe()?.status === 'connected');
       await window.until(() => adobe()?.status === 'expired', 1000);
-      watching.stop();
-      const expired = watching.seen.find((item) => item.status === 'expired');
-      const result = {
-        connected: watching.seen.some((item) => item.status === 'connected'),
-        early: expired ? expired.at < expiresAt : null,
-        after: adobe()?.status,
-      };
+      const result = { connected, early: Date.now() < expiresAt, after: adobe()?.status };
       await owner.release();
       return result;
     },
@@ -205,20 +194,13 @@ test('an MCP token that expires while the page is open turns its account expired
           },
         })
       );
-      const { owner, settings, seal, watch } = await window.openAdobe(query);
+      const { owner, settings, seal } = await window.openAdobe(query);
       const docs = () => settings.accounts().find((account) => account.id === 'mcp:docs');
       await window.until(() => docs());
       const expiresAt = Date.now() + 3000;
       await seal({ ...record, expiresAt });
-      const watching = watch(() => docs()?.status);
       await window.until(() => docs()?.status === 'expired', 1000);
-      watching.stop();
-      const expired = watching.seen.find((item) => item.status === 'expired');
-      const result = {
-        early: expired ? expired.at < expiresAt : null,
-        after: docs()?.status,
-        auth: docs()?.auth,
-      };
+      const result = { early: Date.now() < expiresAt, after: docs()?.status, auth: docs()?.auth };
       await owner.release();
       return result;
     },
