@@ -37,6 +37,12 @@ self.addEventListener('message', ({ data }) => {
     upstream,
     vault: self.fakeVault?.log.map(({ op, provider, server }) => ({ op, provider, server })) ?? [],
   });
+  if (data?.seal && self.fakeVault) {
+    self.fakeVault.remove(data.seal.name);
+    self.fakeVault.add(data.seal);
+    self.fakeVault.publish({ needed: true, version: self.fakeVault.version });
+    data.sealed?.postMessage(true);
+  }
 });
 const HOLD = Symbol('hold');
 const held = (_context, options) =>
@@ -119,6 +125,10 @@ const json = (body) => ({
     yield new TextEncoder().encode(JSON.stringify(body));
   })(),
 });
+const json401 = () => ({
+  ...json({ error: { message: 'Invalid token', type: 'authentication_error' } }),
+  status: 401,
+});
 const holdModel = (request) =>
   new Promise((_resolve, reject) => {
     const seen = { url: request.url, held: 'holding' };
@@ -143,11 +153,11 @@ function model(request) {
     return json({ usage: { weekly: { percent: 40, resetsAt: params.get('resets') } } });
   if (path !== '/v1/chat/completions')
     return { status: 404, headers: [], body: (async function* () {})() };
-  upstream.push({
-    authorization:
-      request.headers.find(([name]) => name.toLowerCase() === 'authorization')?.[1] ?? null,
-    body: new TextDecoder().decode(request.body),
-  });
+  const authorization =
+    request.headers.find(([name]) => name.toLowerCase() === 'authorization')?.[1] ?? null;
+  upstream.push({ authorization, body: new TextDecoder().decode(request.body) });
+  if (params.has('e2e-revoked') && authorization === `Bearer ${params.get('e2e-revoked')}`)
+    return json401();
   const chunk = (delta, finish) =>
     `data: ${JSON.stringify({ id: 'e2e', object: 'chat.completion.chunk', created: 1, model: 'e2e-1', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
   const body = upstream.at(-1).body;

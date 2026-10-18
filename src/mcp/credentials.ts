@@ -3,7 +3,7 @@ import { type McpServerConfig, placeholders } from './config.ts';
 export const MCP_CREDENTIAL_PREFIX = 'mcp:';
 
 export interface McpRecords {
-  mcp(server: string, name?: string): { placeholder: string } | undefined;
+  mcp(server: string, name?: string): { placeholder: string; state?: string } | undefined;
 }
 
 async function digest(text: string): Promise<string> {
@@ -24,6 +24,14 @@ export function secretNames(config: McpServerConfig): string[] {
   return [...names];
 }
 
+export function heldRecords(server: string, config: McpServerConfig, records: McpRecords) {
+  const names = secretNames(config);
+  if (!names.length) return [records.mcp(server)];
+  return names.map(
+    (name) => records.mcp(server, name) ?? (names.length === 1 ? records.mcp(server) : undefined)
+  );
+}
+
 export type Resolved =
   | { ok: true; headers: Record<string, string> }
   | { ok: false; missing: string[] };
@@ -35,9 +43,8 @@ export function resolveHeaders(
 ): Resolved {
   const names = secretNames(config);
   if (!names.length) return { ok: true, headers: { ...config.headers } };
-  const placeholder = (name: string) =>
-    (records.mcp(server, name) ?? (names.length === 1 ? records.mcp(server) : undefined))
-      ?.placeholder;
+  const held = heldRecords(server, config, records);
+  const placeholder = (name: string) => held[names.indexOf(name)]?.placeholder;
   const missing = names.filter((name) => !placeholder(name));
   if (missing.length) return { ok: false, missing };
   const headers: Record<string, string> = {};

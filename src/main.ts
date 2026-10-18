@@ -262,7 +262,8 @@ async function modelsOf(
   scope.fetch = vaultFetch(
     vault,
     transport,
-    modelRoute(bases, () => records.state.value)
+    modelRoute(bases, () => records.state.value),
+    records.rejecting
   );
   const endpoints = vaultEndpoints(vault);
   void endpoints.models(bases()).catch(() => undefined);

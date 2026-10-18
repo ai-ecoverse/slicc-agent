@@ -276,6 +276,7 @@ export async function createAgentSettings(
       if (secret !== null)
         throw new Error(signIn.has(providerId) ? SIGN_IN_NEEDS_VAULT : KEY_NEEDS_VAULT);
       if (given !== null) await fields.set(providerId, given);
+      records.reconnected(providerId);
       await reread(context);
       if (signIn.has(providerId)) await discover([providerId]);
       await refresh(context);

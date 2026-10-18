@@ -117,13 +117,19 @@ async function through(op: Op, inner: Fetch, request: Request): Promise<Response
   }
 }
 
-export function vaultFetch(vault: Port, inner: Fetch, route: ModelRoute): Fetch {
+export function vaultFetch(
+  vault: Port,
+  inner: Fetch,
+  route: ModelRoute,
+  rejecting: (provider: string) => () => void = () => () => undefined
+): Fetch {
   return async (input, init) => {
     const request = new Request(input, init);
     const provider = absent(vault) ? undefined : route(request);
     if (provider === undefined) return inner(request);
     const target: RefreshTarget | undefined = provider === null ? undefined : { provider };
-    return through(
+    const rejected = provider === null ? undefined : rejecting(provider);
+    const response = await through(
       {
         prepare: (outgoing) => vault.model(provider ?? undefined, outgoing),
         ...(target ? { refresh: () => vault.refresh(target) } : {}),
@@ -131,6 +137,8 @@ export function vaultFetch(vault: Port, inner: Fetch, route: ModelRoute): Fetch 
       inner,
       request
     );
+    if (response.status === 401) rejected?.();
+    return response;
   };
 }
 

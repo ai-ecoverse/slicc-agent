@@ -327,5 +327,7 @@ export function serveVault(port, values, version = 1, options = {}) {
 
 export function fakeVault(values, version = 1, options = {}) {
   const channel = new MessageChannel();
-  return { port: channel.port1, ...serveVault(channel.port2, values, version, options) };
+  return Object.assign(serveVault(channel.port2, values, version, options), {
+    port: channel.port1,
+  });
 }

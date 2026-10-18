@@ -5,7 +5,7 @@ import type { AccountState } from '../services.ts';
 import type { McpCatalog } from './catalog.ts';
 import type { McpServerEntry } from './config.ts';
 import type { McpServerConnection } from './connection.ts';
-import { type McpRecords, resolveHeaders, secretNames } from './credentials.ts';
+import { heldRecords, type McpRecords, resolveHeaders, secretNames } from './credentials.ts';
 import { MCP_ACCOUNT } from './label.ts';
 import { beginSignIn, finishSignIn, type McpSignIn, type StoredOAuth } from './oauth.ts';
 
@@ -33,8 +33,13 @@ function kindOf(connection: McpServerConnection): Kind {
   return secretNames(connection.entry.config).length ? 'token' : 'oauth';
 }
 
-function row(connection: McpServerConnection, kind: Kind, stored: boolean): AccountState {
-  const rejected = connection.state === 'needs-auth';
+function row(
+  connection: McpServerConnection,
+  kind: Kind,
+  stored: boolean,
+  expired: boolean
+): AccountState {
+  const rejected = connection.state === 'needs-auth' || (stored && expired);
   return {
     id: `${MCP_ACCOUNT}${connection.name}`,
     provider: connection.name,
@@ -82,7 +87,10 @@ export function mcpAccounts(
             ? resolveHeaders(connection.name, connection.entry.config, records).ok
             : await sources.oauth(connection.entry).signedIn();
         if (kind === 'oauth' && !stored && connection.state !== 'needs-auth') continue;
-        rows.push(row(connection, kind, stored));
+        const expired = heldRecords(connection.name, connection.entry.config, records).some(
+          (record) => record?.state === 'expired'
+        );
+        rows.push(row(connection, kind, stored, expired));
       }
       return rows;
     },
