@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
+  awaitAttestations,
   covers,
   groupVerdict,
   mergedPrs,
@@ -29,6 +30,8 @@ const { values } = parseArgs({
 const { version, repo } = values;
 const problems = [];
 const facts = {};
+let waiting = '';
+let servedAt = Date.now();
 const one = (text) =>
   String(text ?? '')
     .replace(/\s+/g, ' ')
@@ -62,17 +65,24 @@ function npmView(spec, field) {
   }
 }
 
+const budget = Date.now() + Number(values.wait) * 1000;
+
 async function meta() {
-  const until = Date.now() + Number(values.wait) * 1000;
+  const until = budget;
   let waited = false;
   for (;;) {
     const m = npmView(`${NAME}@${version}`);
     if (m?.version === version && m.dist?.tarball) {
       const head = await fetch(m.dist.tarball, { method: 'HEAD' });
-      if (head.ok) return m;
+      if (head.ok) {
+        servedAt = Date.now();
+        return m;
+      }
     }
-    if (Date.now() > until)
-      throw new Error(`npm doesn't serve ${NAME}@${version} after ${values.wait} s`);
+    if (Date.now() > until) {
+      waiting = `npm doesn't serve ${NAME}@${version} yet after ${values.wait} s: not a supply-chain problem, re-run this job once it does`;
+      return undefined;
+    }
     if (!waited)
       console.log(`npm doesn't serve ${NAME}@${version} yet: waiting up to ${values.wait} s`);
     waited = true;
@@ -97,10 +107,18 @@ async function download(m) {
 }
 
 async function provenance(m) {
-  const url = m.dist.attestations?.url;
-  if (!url) return problems.push('no attestations on npm');
-  const res = await fetch(url);
-  if (!res.ok) return problems.push(`attestations answered ${res.status}`);
+  const view = () => npmView(`${NAME}@${version}`);
+  const answer = await awaitAttestations({
+    url: async () =>
+      m.dist.attestations?.url ? m.dist.attestations.url : view()?.dist?.attestations?.url,
+    fetch,
+    modified: () => npmView(NAME, 'time')?.modified,
+    servedAt,
+    deadline: budget,
+    sleep,
+  });
+  if (answer.problem) return problems.push(answer.problem);
+  const res = answer.res;
   const bundle = ((await res.json()).attestations ?? []).find(
     (b) => b.predicateType === 'https://slsa.dev/provenance/v1'
   );
@@ -127,11 +145,19 @@ function signatures() {
       cwd: dir,
     });
     let out;
-    try {
-      out = sh('npm', ['audit', 'signatures'], { cwd: dir });
-    } catch (error) {
-      out = `${error.stdout ?? ''}${error.stderr ?? ''}`;
-      problems.push(`npm audit signatures failed: ${one(out).slice(0, 300)}`);
+    for (;;) {
+      try {
+        out = sh('npm', ['audit', 'signatures'], { cwd: dir });
+        break;
+      } catch (error) {
+        out = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+        if (/E404|404 Not Found/.test(out) && /attestations/.test(out) && Date.now() < budget) {
+          execFileSync('sleep', ['30']);
+          continue;
+        }
+        problems.push(`npm audit signatures failed: ${one(out).slice(0, 300)}`);
+        break;
+      }
     }
     if (!/verified attestation/.test(out))
       problems.push('npm audit signatures verified no attestation');
@@ -197,6 +223,11 @@ try {
     process.exit(0);
   }
   const m = await meta();
+  if (!m) {
+    summary(waiting);
+    console.log(`::error title=verify on npm::${waiting}`);
+    process.exit(1);
+  }
   await download(m);
   if (facts.sha512) {
     await provenance(m);
