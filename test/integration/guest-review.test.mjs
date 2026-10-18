@@ -107,6 +107,21 @@ async function boot(page, { query = '', crash = null, judge = false, files = {} 
         }
         throw new Error(`timed out waiting for ${what}`);
       };
+      const heard = (models, check) =>
+        Promise.all(
+          models.map(
+            (model) =>
+              new Promise((resolve) => {
+                const look = () => {
+                  if (!check(model)) return;
+                  off();
+                  resolve();
+                };
+                const off = model.agent.on('messages', look);
+                look();
+              })
+          )
+        );
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const hub = {
         minted: 0,
@@ -155,6 +170,7 @@ async function boot(page, { query = '', crash = null, judge = false, files = {} 
         owner,
         join,
         until,
+        heard,
         pause,
         said,
         asked,
@@ -176,7 +192,7 @@ test('three tabs of one seat share one queue: the owner is asked one message at 
   const page = await chrome.page(t);
   await boot(page, { query: 'answer=One.&answer=Two.&answer=Three.' });
   const seen = await page.evaluate(async () => {
-    const { join, until, said, asked, queue, listed, open } = globalThis.r;
+    const { join, until, heard, said, asked, queue, listed, open } = globalThis.r;
     const { model, seat } = await open();
     const tabs = [await join(seat), await join(seat), await join(seat)];
     for (const [index, tab] of tabs.entries())
@@ -188,7 +204,9 @@ test('three tabs of one seat share one queue: the owner is asked one message at 
       await until(() => listed(model).length === 1, 'one message to be asked');
       out.shown.push(listed(model));
       await model.approvals.decide(model.approvals.list()[0].id, 'once');
-      await until(() => said(model).includes(`agent: ${answer}`), `the answer ${answer}`);
+      await heard([model, ...tabs.map((tab) => tab.model)], (seer) =>
+        said(seer).includes(`agent: ${answer}`)
+      );
     }
     await until(() => tabs.every((tab) => queue(tab).length === 0), 'the queues to empty');
     out.ownerSees = said(model);
