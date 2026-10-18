@@ -237,3 +237,105 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
     },
   ]);
 });
+
+test('an ntfy attachment on the gateway is fetched into the webhook lick, within its limits, and triage reads it', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await page.evaluate(async () => {
+    await window.write('/home/.slicc/webhooks/gh.json', '{"message":"GitHub event"}');
+    await window.write(
+      '/home/.slicc/webhooks/quiet.json',
+      '{"message":"Quiet event","triage":"only releases"}'
+    );
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    window.kernel = await bootKernel();
+    const answers = Array.from({ length: 10 }, () => 'answer=Noted.').join('&');
+    const owner = await startAgent({
+      worker: () => {
+        window.worker = new Worker(`/dist-test/main-worker.js?gateway&triage=ignore&${answers}`, {
+          type: 'module',
+        });
+        return window.worker;
+      },
+      kernel: { connect: () => window.kernel.connect() },
+    });
+    window.connection = await owner.connect();
+    window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
+    await window.agent.ready();
+    window.send = async (source, raw) => {
+      const command = ['bash', '-c', 'agent send "$@"', 'agent', 'cone', '--lick=webhook'];
+      const ran = await window.kernel.run([...command, '--source', source, raw]);
+      return { status: ran.status, stderr: ran.stderr };
+    };
+    window.gatewayLog = () => {
+      const channel = new MessageChannel();
+      const answer = new Promise((resolve) => {
+        channel.port1.onmessage = ({ data }) => resolve(data.upstream.map(({ url }) => url));
+      });
+      window.worker.postMessage({ upstream: channel.port2 }, [channel.port2]);
+      return answer;
+    };
+  });
+  await page.within(
+    60000,
+    async () =>
+      (await window.kernel.run(['bash', '-c', 'test -d /var/lib/slicc/agent/requests/in']))
+        .status === 0
+  );
+  const gw = 'https://ntfy.sliccy.ai/file';
+  const release = '{"action":"released","tag":"v1.2.0"}';
+  const sends = [
+    ['gh', 'a1', { name: 'release.json', size: 36, url: `${gw}/release.json` }],
+    ['gh', 'a2', { name: 'release.json', size: 36, url: 'https://evil.test/file/release.json' }],
+    ['gh', 'a3', { name: 'flood.txt', size: 4096, url: `${gw}/flood.txt` }],
+    ['gh', 'a4', { name: 'gone.txt', size: 90000, url: `${gw}/gone.txt` }],
+    ['gh', 'a5', { name: 'logo.png', size: 8, url: `${gw}/logo.png` }],
+    ['gh', 'a7', { name: 'moved.txt', size: 14, url: `${gw}/moved.txt` }],
+    ['gh', 'a8', { name: 'silent.txt', size: 14, url: `${gw}/silent.txt` }],
+    ['quiet', 'a6', { name: 'release.json', size: 36, url: `${gw}/release.json` }],
+  ];
+  for (const [source, id, attachment] of sends) {
+    const raw = JSON.stringify({ id, topic: 'github', message: 'You received a file', attachment });
+    const sent = await page.evaluate(({ source, raw }) => window.send(source, raw), {
+      source,
+      raw,
+    });
+    assert.deepEqual(sent, { status: 0, stderr: '' });
+  }
+  await page.within(60000, () => window.licks().length === 7);
+  const triage = await page.within(60000, () => {
+    const found = (window.connection.transcript.value?.entries ?? []).filter(
+      (entry) => entry.kind === 'slicc.lick-triage'
+    );
+    return found.length === 1 && found[0].data;
+  });
+  assert.equal(triage.source, 'quiet');
+  assert.equal(triage.decision, 'ignore');
+  assert.equal(
+    triage.body,
+    `You received a file\n\nattachment release.json, 36 bytes:\n${release}`
+  );
+  const bodies = await page.evaluate(() => window.licks().map(({ body }) => body));
+  const lead = 'You received a file\n\nattachment';
+  assert.deepEqual(bodies, [
+    `${lead} release.json, 36 bytes:\n${release}`,
+    `${lead} release.json, 36 bytes, not fetched: https://evil.test/file/release.json`,
+    `${lead} flood.txt, 4096 bytes, not fetched: it is larger than its declared 4096 bytes: ${gw}/flood.txt`,
+    `${lead} gone.txt, 90000 bytes, not fetched: it expired or was removed (404): ${gw}/gone.txt`,
+    `${lead} logo.png, 8 bytes, image/png, binary, not inlined: ${gw}/logo.png`,
+    `${lead} moved.txt, 14 bytes, not fetched: the request failed: unexpected redirect: ${gw}/moved.txt`,
+    `${lead} silent.txt, 14 bytes, not fetched: the request failed: unexpected redirect: ${gw}/silent.txt`,
+  ]);
+  const fetched = await page.evaluate(() => window.gatewayLog());
+  assert.deepEqual(fetched.sort(), [
+    `${gw}/flood.txt`,
+    `${gw}/gone.txt`,
+    `${gw}/logo.png`,
+    `${gw}/moved.txt`,
+    `${gw}/release.json`,
+    `${gw}/release.json`,
+    `${gw}/silent.txt`,
+  ]);
+});

@@ -45,7 +45,7 @@ export interface LicksSetup {
   ): LickSources;
 }
 
-export function setupLicks(registry: Registry): LicksSetup {
+export function setupLicks(registry: Registry, fetcher?: typeof fetch): LicksSetup {
   let bind: (host: LicksHost) => void = () => undefined;
   const host = new Promise<LicksHost>((resolve) => {
     bind = resolve;
@@ -68,6 +68,7 @@ export function setupLicks(registry: Registry): LicksSetup {
         root,
         cone: () => agent.cone(),
         licks,
+        ...(fetcher ? { fetch: fetcher } : {}),
       });
     },
   };

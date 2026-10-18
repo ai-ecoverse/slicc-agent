@@ -1,3 +1,4 @@
+import type { Attachment } from './attachment.ts';
 import type { WebhookDelivery } from './sources.ts';
 
 type Json = Record<string, unknown>;
@@ -23,12 +24,17 @@ function headersOf(value: unknown): { headers?: Record<string, string> } {
   return kept.length ? { headers: Object.fromEntries(kept) } : {};
 }
 
-export function attachmentLine(value: unknown): string {
-  if (typeof value !== 'object' || value === null) return '';
+function attachmentOf(value: unknown): { attachment?: Attachment } {
+  if (typeof value !== 'object' || value === null) return {};
   const { name, size, url } = value as Json;
-  if (!isText(url)) return '';
-  const bytes = typeof size === 'number' && Number.isFinite(size) ? `, ${size} bytes` : '';
-  return `attachment ${isText(name) ? name : 'file'}${bytes}, not fetched: ${url}`;
+  if (!isText(url)) return {};
+  return {
+    attachment: {
+      url,
+      ...(isText(name) ? { name } : {}),
+      ...(typeof size === 'number' && Number.isFinite(size) ? { size } : {}),
+    },
+  };
 }
 
 function ntfy(json: Json): WebhookDelivery {
@@ -36,7 +42,8 @@ function ntfy(json: Json): WebhookDelivery {
   return {
     id: `ntfy:${json.topic}/${json.id}`,
     ...headersOf(json.headers),
-    body: [message, attachmentLine(json.attachment)].filter(Boolean).join('\n\n'),
+    body: message,
+    ...attachmentOf(json.attachment),
     ...(json.verified === false ? { verified: false } : {}),
   };
 }
