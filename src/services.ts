@@ -18,6 +18,7 @@ import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
 import { contract } from './serving.ts';
+import type { SkillPackage, SkillSource } from './skills/skills.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 
 export type SendMode = 'steer' | 'followUp' | 'reject';
@@ -360,6 +361,8 @@ export interface Command {
   name: string;
   description: string;
   kind: 'prompt' | 'skill' | 'action';
+  source?: SkillSource;
+  package?: SkillPackage;
 }
 
 export const TRANSCRIPT_STATES = keys<AgentTranscript>({

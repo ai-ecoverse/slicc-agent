@@ -9,6 +9,13 @@ export type SkillFiles = Pick<ExecutionEnv, 'readTextFile' | 'listDir' | 'canoni
 
 export type SkillSource = 'user' | 'global' | 'package' | 'builtin';
 
+export const PNPM_DIR = '/usr/local/share/pnpm/';
+
+export interface SkillPackage {
+  name: string;
+  version?: string;
+}
+
 export interface Skill {
   name: string;
   description: string;
@@ -16,6 +23,7 @@ export interface Skill {
   baseDir: string;
   source: SkillSource;
   disableModelInvocation: boolean;
+  package?: SkillPackage;
 }
 
 export interface Diagnostic {
@@ -160,6 +168,44 @@ export async function loadSkills(
     }
   }
   return { skills: [...byName.values()], diagnostics: [...diagnostics, ...collisions] };
+}
+
+async function packageAt(
+  files: SkillFiles,
+  real: string,
+  context: Context
+): Promise<SkillPackage | undefined> {
+  for (let dir = real; dir.startsWith(PNPM_DIR); dir = dirname(dir)) {
+    const read = await files.readTextFile(`${dir}/package.json`, context);
+    if (!read.ok) continue;
+    let manifest: { name?: unknown; version?: unknown };
+    try {
+      manifest = JSON.parse(read.value);
+    } catch {
+      continue;
+    }
+    if (typeof manifest.name !== 'string') continue;
+    return {
+      name: manifest.name,
+      ...(typeof manifest.version === 'string' ? { version: manifest.version } : {}),
+    };
+  }
+  return undefined;
+}
+
+export async function labelPackages(
+  files: SkillFiles,
+  skills: readonly Skill[],
+  context: Context
+): Promise<Skill[]> {
+  return Promise.all(
+    skills.map(async (skill) => {
+      if (skill.source !== 'global') return skill;
+      const real = await files.canonicalPath(skill.baseDir, context);
+      const found = real.ok ? await packageAt(files, real.value, context) : undefined;
+      return found ? { ...skill, source: 'package' as const, package: found } : skill;
+    })
+  );
 }
 
 function escapeXml(text: string): string {
