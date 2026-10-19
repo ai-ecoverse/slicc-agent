@@ -18,7 +18,7 @@ type = "sealed"
 [secrets]
 GH_TOKEN = { provider = "seven", value = "${GH}" }
 SHELLY = { provider = "seven", value = "${SHELLY}" }
-LOCAL = { default = "plain-local-value" }
+LOCAL = { default = "plain-local-value", env = false }
 
 [[proxy.rules]]
 secret = "GH_TOKEN"
@@ -156,17 +156,44 @@ test('fnox secrets: without fnox the prompt and /secrets say secrets are unavail
   assert.ok(!seen.sealed.some((request) => request.op === 'materialize'));
 });
 
-test('fnox secrets: a fnox that exits non-zero shows why secrets are unavailable', async (t) => {
+test('fnox secrets: a fnox that exits non-zero says the config has an error, and never quotes it', async (t) => {
+  const leaky = 'plain-leaky-value-9911';
   const seen = await agentWith(t, {
-    config: 'broken [[[',
+    config: `[secrets]\nLOCAL = "${leaky}"\n`,
     fnox: true,
     sealed: SEALED,
     steps: [{ answer: 'Seen.' }],
   });
+  const line = 'Secrets are unavailable: the fnox config has an error; check /etc/fnox/config.toml';
+  assert.ok(systemOf(seen.requests).includes(line), systemOf(seen.requests));
+  assert.ok(seen.listed.startsWith(line), seen.listed);
+  for (const text of [seen.entries, ...seen.requests]) assert.ok(!text.includes(leaky));
+  assert.ok(!systemOf(seen.requests).includes(GH));
+});
+
+test('fnox secrets: an unsealed secret fnox exec would hand out keeps shell grants off, and says so', async (t) => {
+  const exposed = CONFIG.replace(
+    'LOCAL = { default = "plain-local-value", env = false }',
+    'LOCAL = { default = "plain-local-value" }'
+  );
+  const seen = await agentWith(t, {
+    config: exposed,
+    fnox: true,
+    sealed: SEALED,
+    steps: [
+      { tool: { name: 'bash', args: { command: 'echo "local:${LOCAL:-unset}"' } } },
+      { answer: 'Done.' },
+    ],
+  });
+  const off =
+    'Shell grants are off: fnox exec would also give every command the unsealed fnox secrets LOCAL; seal them or set env = false for them.';
   const system = systemOf(seen.requests);
-  assert.match(system, /Secrets are unavailable: fnox env --describe failed: [^\n]+/);
-  assert.match(seen.listed, /^Secrets are unavailable: fnox env --describe failed: /);
-  assert.ok(!system.includes(GH));
+  assert.ok(system.includes(off), system);
+  assert.ok(system.includes(`- SHELLY = ${SHELLY}\n`), system);
+  assert.ok(seen.listed.endsWith(off), seen.listed);
+  assert.ok(!seen.sealed.some((request) => request.op === 'materialize'));
+  assert.ok(seen.entries.includes('local:unset'), seen.entries);
+  assert.ok(!seen.entries.includes('plain-local-value'));
 });
 
 test('fnox secrets: an empty config with no sealed secrets shows no secrets', async (t) => {

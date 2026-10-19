@@ -11,9 +11,9 @@ import {
 import type { Names, SecretListing, SecretName } from './names.ts';
 import type { Scrub } from './scrub.ts';
 import type { Vault } from './vault.ts';
-import { listedLine, SECRETS_KIND, unavailableLine } from './view.ts';
+import { exposedLine, listedLine, SECRETS_KIND, unavailableLine } from './view.ts';
 
-export { listedLine, SECRETS_KIND, unavailableLine };
+export { exposedLine, listedLine, SECRETS_KIND, unavailableLine };
 
 export const SECRETS = 'slicc-secrets';
 export const SECRETS_COMMAND = '/secrets';
@@ -92,7 +92,7 @@ export async function scrubResult(
   };
 }
 
-function where(name: SecretName): string {
+function where(name: SecretName, granted: boolean): string {
   const rules = name.rules.map((rule) =>
     [
       rule.domain,
@@ -104,7 +104,7 @@ function where(name: SecretName): string {
       .filter(Boolean)
       .join(', ')
   );
-  const shell = name.exec === 'shell' ? ['in every bash'] : [];
+  const shell = name.exec === 'shell' && granted ? ['in every bash'] : [];
   const sealed = name.placeholder === null ? ['not sealed'] : [];
   const config = name.fnox ? [] : ['not in the fnox config'];
   const parts = [...rules, ...shell, ...sealed, ...config];
@@ -117,10 +117,12 @@ export const NO_SECRETS =
 export function renderSecrets(listing: SecretListing): string {
   if (listing.error !== null) return unavailableLine(listing.error);
   if (!listing.names.length) return NO_SECRETS;
+  const granted = !listing.exposed.length;
   const lines = listing.names.map(
-    (name) => `- ${name.name} = ${name.placeholder ?? `$${name.name}`}${where(name)}`
+    (name) => `- ${name.name} = ${name.placeholder ?? `$${name.name}`}${where(name, granted)}`
   );
-  return [MODEL_LINE, '', ...lines].join('\n');
+  const off = granted ? [] : ['', exposedLine(listing.exposed)];
+  return [MODEL_LINE, '', ...lines, ...off].join('\n');
 }
 
 export function secretsEntry(listing: SecretListing) {
@@ -129,16 +131,23 @@ export function secretsEntry(listing: SecretListing) {
     data: {
       names: structuredClone(listing.names) as unknown as JsonValue,
       error: listing.error,
+      exposed: [...listing.exposed],
     },
     model: [{ role: 'user' as const, content: listedLine(listing), timestamp: Date.now() }],
   };
 }
 
+export function granting(listing: SecretListing): boolean {
+  return (
+    listing.error === null &&
+    !listing.exposed.length &&
+    listing.names.some((name) => name.exec === 'shell')
+  );
+}
+
 export function shellGrants(names: Pick<Names, 'state'>) {
   return (argv: readonly string[]): readonly string[] =>
-    names.state.value.names.some((name) => name.exec === 'shell')
-      ? [...SHELL_GRANTS, ...argv]
-      : argv;
+    granting(names.state.value) ? [...SHELL_GRANTS, ...argv] : argv;
 }
 
 export function secretsExtension(deps: {

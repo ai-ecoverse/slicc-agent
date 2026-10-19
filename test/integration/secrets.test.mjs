@@ -258,7 +258,7 @@ test('secrets: with no vault the agent is unchanged, and /secrets answers locall
   assert.deepEqual(seen.vault, { port: 'none', needed: false, version: 0, locked: 'no', held: 0 });
   assert.match(
     seen.listed,
-    /^Secrets are unavailable: fnox isn't installed; the vault refused list: /
+    /^Secrets are unavailable: fnox isn't installed; the vault refused to list secrets \(ENOTCONN\)\.$/
   );
 });
 

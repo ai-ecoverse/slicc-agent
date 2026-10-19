@@ -18,9 +18,14 @@ export function unavailableLine(reason: string): string {
   return `Secrets are unavailable: ${reason.replace(/\.+$/, '')}.`;
 }
 
+export function exposedLine(exposed: readonly string[]): string {
+  return `Shell grants are off: fnox exec would also give every command the unsealed fnox secrets ${exposed.join(', ')}; seal them or set env = false for them.`;
+}
+
 export function listedLine(
-  listing: Pick<SecretListing, 'names'> & { error?: string | null }
+  listing: Pick<SecretListing, 'names'> & { error?: string | null; exposed?: string[] }
 ): string {
   if (listing.error) return unavailableLine(listing.error);
-  return `The user listed secrets: ${listing.names.length ? listing.names.map((name) => name.name).join(', ') : 'none'}.`;
+  const listed = `The user listed secrets: ${listing.names.length ? listing.names.map((name) => name.name).join(', ') : 'none'}.`;
+  return listing.exposed?.length ? `${listed} ${exposedLine(listing.exposed)}` : listed;
 }

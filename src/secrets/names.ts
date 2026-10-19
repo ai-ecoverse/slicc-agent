@@ -21,6 +21,7 @@ export interface SecretName {
 export interface SecretListing {
   names: SecretName[];
   error: string | null;
+  exposed: string[];
 }
 
 export const DESCRIBE = 'fnox env --json --describe';
@@ -28,6 +29,8 @@ export const RULES = 'fnox proxy rules --json';
 export const SEALED_LIST = `exec 3<>/dev/sealed && printf '%s' '{"v":1,"op":"list"}' >&3 && cat <&3`;
 export const NO_PROXY = 'No [proxy] configuration found';
 export const MISSING = "fnox isn't installed";
+export const EXPOSED =
+  'shell grants are off: fnox exec would also give every command the unsealed fnox secrets';
 
 const FNOX_ENV = /(^|[\s;&|(])fnox\s+env(\s|$)/;
 const DESCRIBING = /(^|\s)--describe(\s|$)/;
@@ -69,19 +72,42 @@ function json(text: string): unknown {
   }
 }
 
-const line = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 200);
+const line = (text: string) => text.replace(/\s+/g, ' ').trim();
 
-export function parseDescribe(text: string): string[] {
+export class Unavailable extends Error {
+  readonly detail: string | undefined;
+  constructor(shown: string, detail?: string) {
+    super(shown);
+    this.detail = detail;
+  }
+}
+
+const word = (value: unknown, shape: RegExp) =>
+  typeof value === 'string' && shape.test(value) ? value : undefined;
+
+export interface FnoxKey {
+  name: string;
+  injected: boolean;
+}
+
+export function parseDescribe(text: string): FnoxKey[] {
   const keys = (json(text) as { keys?: unknown } | null | undefined)?.keys;
-  if (!Array.isArray(keys)) throw new Error('fnox env --describe printed unparseable output');
+  if (!Array.isArray(keys)) throw new Unavailable('fnox env --describe printed unparseable output');
   return keys.flatMap((item: Record<string, unknown> | null) =>
-    item?.kind === 'secret' && typeof item.key === 'string' ? [item.key] : []
+    item?.kind === 'secret' && typeof item.key === 'string'
+      ? [
+          {
+            name: item.key,
+            injected: (item.injectable as { exec?: unknown } | undefined)?.exec !== false,
+          },
+        ]
+      : []
   );
 }
 
 export function parseRules(text: string): Map<string, SecretRule[]> {
   const rules = (json(text) as { rules?: unknown } | null | undefined)?.rules;
-  if (!Array.isArray(rules)) throw new Error('fnox proxy rules printed unparseable output');
+  if (!Array.isArray(rules)) throw new Unavailable('fnox proxy rules printed unparseable output');
   const out = new Map<string, SecretRule[]>();
   for (const rule of rules as (Record<string, unknown> | null)[]) {
     if (typeof rule?.secret !== 'string') continue;
@@ -93,11 +119,15 @@ export function parseRules(text: string): Map<string, SecretRule[]> {
 
 export function parseSealed(text: string): Omit<SecretName, 'fnox'>[] {
   const reply = json(text) as { secrets?: unknown; error?: { code?: unknown; message?: unknown } };
-  if (reply?.error)
-    throw new Error(
-      `the vault refused list: ${line(`${reply.error.code ?? ''} ${reply.error.message ?? ''}`)}`
+  if (reply?.error) {
+    const code = word(reply.error.code, /^[A-Z][A-Z0-9_]{0,31}$/);
+    throw new Unavailable(
+      code ? `the vault refused to list secrets (${code})` : 'the vault refused to list secrets',
+      `${String(reply.error.code ?? '')} ${String(reply.error.message ?? '')}`
     );
-  if (!Array.isArray(reply?.secrets)) throw new Error("the vault's list reply is unparseable");
+  }
+  if (!Array.isArray(reply?.secrets))
+    throw new Unavailable("the vault's list reply is unparseable");
   return reply.secrets.flatMap((item: Record<string, unknown> | null) => {
     if (typeof item?.name !== 'string' || typeof item.placeholder !== 'string') return [];
     const exec = EXEC.has(item.exec as string) ? (item.exec as SecretName['exec']) : false;
@@ -107,24 +137,25 @@ export function parseSealed(text: string): Omit<SecretName, 'fnox'>[] {
 }
 
 export function joinNames(
-  keys: readonly string[],
+  keys: readonly FnoxKey[],
   proposed: ReadonlyMap<string, SecretRule[]>,
   sealed: readonly Omit<SecretName, 'fnox'>[]
-): SecretName[] {
+): SecretListing {
   const vault = new Map(sealed.map((item) => [item.name, item]));
   const rules = (name: string, own: SecretRule[]) =>
     own.length ? own : (proposed.get(name) ?? []);
-  const named = keys.map((name): SecretName => {
+  const named = keys.map(({ name }): SecretName => {
     const held = vault.get(name);
     return held
       ? { ...held, rules: rules(name, held.rules), fnox: true }
       : { name, placeholder: null, exec: false, rules: rules(name, []), fnox: true };
   });
-  const known = new Set(keys);
+  const known = new Set(keys.map((key) => key.name));
   const extra = sealed
     .filter((item) => !known.has(item.name))
     .map((item) => ({ ...item, rules: rules(item.name, item.rules), fnox: false }));
-  return [...named, ...extra];
+  const exposed = keys.filter((key) => key.injected && !vault.has(key.name)).map((key) => key.name);
+  return { names: [...named, ...extra], error: null, exposed };
 }
 
 interface Ran {
@@ -149,19 +180,23 @@ async function run(
     },
     context
   );
-  if (!ran.ok) throw new Error(`${label}: ${line(ran.error.message)}`);
+  if (!ran.ok)
+    throw new Unavailable(`${label} couldn't run (${ran.error.code})`, ran.error.message);
   return { code: ran.value.exitCode ?? 1, ...out };
 }
 
-function failed(label: string, ran: Ran): Error {
-  if (ran.code === 127) return new Error(MISSING);
-  const message = (json(ran.stdout) as { error?: { message?: unknown } } | undefined)?.error
-    ?.message;
-  return new Error(
-    typeof message === 'string'
-      ? `${label} failed: ${line(message)}`
-      : `${label} exited ${ran.code}`
-  );
+const KINDS: Record<string, string> = {
+  config: 'the fnox config has an error; check /etc/fnox/config.toml',
+};
+
+function failed(label: string, ran: Ran): Unavailable {
+  if (ran.code === 127) return new Unavailable(MISSING);
+  const error = (json(ran.stdout) as { error?: { kind?: unknown; message?: unknown } } | undefined)
+    ?.error;
+  const kind = word(error?.kind, /^[a-z][a-z_]{0,31}$/);
+  const detail = typeof error?.message === 'string' ? error.message : undefined;
+  if (kind) return new Unavailable(KINDS[kind] ?? `${label} failed (${kind})`, detail);
+  return new Unavailable(`${label} exited ${ran.code}`, detail);
 }
 
 async function describe(env: ExecutionEnv, context: Context) {
@@ -180,24 +215,40 @@ async function rules(env: ExecutionEnv, context: Context) {
 
 async function sealed(env: ExecutionEnv, context: Context) {
   const ran = await run(env, '/dev/sealed', SEALED_LIST, context);
-  if (ran.code !== 0) throw new Error(`/dev/sealed couldn't be read (exit ${ran.code})`);
+  if (ran.code !== 0) throw new Unavailable(`/dev/sealed couldn't be read (exit ${ran.code})`);
   return parseSealed(ran.stdout);
 }
 
-const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
+export interface Listed {
+  listing: SecretListing;
+  details: string[];
+}
 
-export async function listNames(env: ExecutionEnv, context: Context): Promise<SecretListing> {
+export async function listNames(env: ExecutionEnv, context: Context): Promise<Listed> {
   const [keys, proposed, held] = await Promise.allSettled([
     describe(env, context),
     rules(env, context),
     sealed(env, context),
   ]);
   if (keys.status === 'fulfilled' && proposed.status === 'fulfilled' && held.status === 'fulfilled')
-    return { names: joinNames(keys.value, proposed.value, held.value), error: null };
-  const errors = [keys, proposed, held].flatMap((item) =>
-    item.status === 'rejected' ? [reason(item.reason)] : []
+    return { listing: joinNames(keys.value, proposed.value, held.value), details: [] };
+  const failures = [keys, proposed, held].flatMap((item) =>
+    item.status === 'rejected'
+      ? [
+          item.reason instanceof Unavailable
+            ? item.reason
+            : new Unavailable('listing failed', String(item.reason)),
+        ]
+      : []
   );
-  return { names: [], error: [...new Set(errors)].join('; ') };
+  return {
+    listing: {
+      names: [],
+      error: [...new Set(failures.map((item) => item.message))].join('; '),
+      exposed: [],
+    },
+    details: failures.flatMap((item) => (item.detail ? [line(item.detail)] : [])),
+  };
 }
 
 export interface Names {
@@ -208,20 +259,35 @@ export interface Names {
 
 export function secretNames(
   env: ExecutionEnv,
-  vault: Pick<Vault, 'state'>,
+  vault: Pick<Vault, 'state' | 'texts'>,
   warn: (message: string) => void = (message) => console.warn(message)
 ): Names {
-  const state = replicatedState<SecretListing>({ names: [], error: null });
+  const state = replicatedState<SecretListing>({ names: [], error: null, exposed: [] });
   let version = vault.state.value.version;
   let warned: string | null = null;
   let lock: Promise<unknown> = Promise.resolve();
+  const report = async (listing: SecretListing, details: string[]) => {
+    const said = listing.error ?? (listing.exposed.length ? EXPOSED : null);
+    const fresh = said !== warned;
+    warned = said;
+    if (said && fresh) {
+      const shown = details.length
+        ? await vault.texts(details).then(
+            (texts) => texts.join('; ').slice(0, 200),
+            () => ''
+          )
+        : '';
+      const named = listing.error ? '' : listing.exposed.join(', ');
+      warn(
+        `slicc-secrets: ${listing.error ? `secrets are unavailable: ${said}` : `${said}: ${named}`}${shown ? ` (${shown})` : ''}`
+      );
+    }
+  };
   const refresh = (context: Context) => {
     const run = lock.then(async () => {
-      const listing = await listNames(env, context);
-      if (listing.error && listing.error !== warned)
-        warn(`slicc-secrets: secrets are unavailable: ${listing.error}`);
-      warned = listing.error;
+      const { listing, details } = await listNames(env, context);
       state.replace(context, listing);
+      void report(listing, details);
     });
     lock = run.catch(() => undefined);
     return run;
