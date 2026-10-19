@@ -517,8 +517,9 @@ function listing(harness: Harness, agents: Agents, seen: Seen | undefined) {
   return { frozen, refresh, touch, off };
 }
 
-export function v6Note(home: string, record: Pick<FrozenRecord, 'name'>): string {
-  return `This was ${record.name}, a conversation imported from SLICC 6, thawed as a cone. SLICC 6's /workspace is now ~/workspace (${home}/workspace), and its scoops' files are in ${home}/scoops. Paths in the conversation above are SLICC 6's.`;
+export function v6Note(home: string, record: Pick<FrozenRecord, 'name' | 'v6'>): string {
+  const suffix = record.v6?.suffix ?? '';
+  return `This was ${record.name}, a conversation imported from SLICC 6, thawed as a cone. SLICC 6's /workspace is now ~/workspace${suffix} (${home}/workspace${suffix}), and its scoops' files are in ${home}/scoops${suffix}. Paths in the conversation above are SLICC 6's.`;
 }
 
 async function forkV6(
@@ -555,7 +556,7 @@ async function forkV6(
           v6: true,
           name: record.name,
           kind: 'cone',
-          workspace: `${home}/workspace`,
+          workspace: `${home}/workspace${record.v6?.suffix ?? ''}`,
           kept: true,
         },
         model: [{ role: 'user', content: v6Note(home, record), timestamp: options.now() }],
@@ -566,13 +567,42 @@ async function forkV6(
   return fork;
 }
 
+async function thawInto(
+  options: FreezerAttach & { now: () => number },
+  runtime: Pick<FreezerRuntime, 'newChat'>,
+  id: string,
+  context: Context
+): Promise<string> {
+  const { agents } = options;
+  const record = agents.state().frozen?.[id] as FrozenRecord;
+  const fork = await forkV6(options, record, context);
+  await runtime.newChat(record.cone, context);
+  await agents.setConversation(record.cone, fork, context);
+  await agents.update((_tx, doc) => {
+    const cone = doc.cones[record.cone] as ConeRecord;
+    cone.title = record.title;
+    cone.titled = TITLE_TURNS.at(-1) as number;
+    for (const scoop of record.scoops) {
+      const entry = doc.scoops[scoop];
+      if (!entry) continue;
+      delete entry.frozen;
+      entry.cone = record.cone;
+    }
+    delete doc.frozen?.[id];
+  }, context);
+  await agents.selectCone(record.cone, context);
+  return record.cone;
+}
+
 async function thawFrozen(
   options: FreezerAttach & { now: () => number },
+  runtime: Pick<FreezerRuntime, 'newChat'>,
   id: string,
   context: Context
 ): Promise<string> {
   const { agents } = options;
   const found = agents.state().frozen?.[id];
+  if (found?.v6 && agents.state().cones[found.cone]) return thawInto(options, runtime, id, context);
   const fork = found?.v6 ? await forkV6(options, found, context) : undefined;
   const coneId = await agents.update((_tx, doc) => {
     const record = doc.frozen?.[id];
@@ -803,7 +833,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       const conversation = await conversationOf(agentId, context);
       const before = (await conversation.context(context)).entries;
       const title = cone.title;
-      if (!before.some((entry) => entry.kind === 'pi.user')) return null;
+      if (!before.some((entry) => said(entry, 'user'))) return null;
       const fresh = await freshLike(harness, conversation, context);
       await agents.setConversation(agentId, fresh, context);
       await conversation.abort(context).catch(() => undefined);
@@ -827,7 +857,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       }
       const scoop = state.scoops[id];
       if (scoop) return thawScoop({ ...options, now }, id, scoop, context);
-      return thawFrozen({ ...options, now }, id, context);
+      return thawFrozen({ ...options, now }, runtime, id, context);
     },
     async discard(id, context) {
       const state = agents.state();

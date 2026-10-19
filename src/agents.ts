@@ -48,7 +48,7 @@ export type FrozenRecord = {
   messages: number;
   frozenAt: number;
   scoops: string[];
-  v6?: { origin: string; key: string };
+  v6?: { origin: string; key: string; suffix?: string };
 };
 
 export type V6Import = {

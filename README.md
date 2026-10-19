@@ -498,7 +498,7 @@ SLICC 6 exports a profile as a `slicc-profile` v1 zip (#6). `test/integration/fi
 - **Schemas:** the manifest, each transcript (a copy of slicc's `validateTranscriptDocumentV1`) and `licks.json` are checked. Memory and git config must be UTF-8.
 - **The answer:** one sentence on what the profile holds, such as cones, scoops, frozen sessions, file size, skills, crons, webhooks, credential-like files, the providers to re-enter in Settings, and the mounts that don't move.
 - **Conversations:** each six cone and each frozen session becomes a frozen cone with its own `cone-<n>` user. Its conversation is one `slicc.v6` entry per six message, turned into a pi-ai message. Its `FrozenRecord` carries `v6: { origin, key }`, and its row in the Freezer list has `v6: true`. The cone's scoops become stopped scoops of that frozen cone, and no scoop users are made.
-- **A thaw forks:** thawing a v6 cone forks its conversation, with the active cone's model, and adds a `slicc.thawed` note saying that six's `/workspace` is now `~/workspace`.
+- **A thaw forks:** thawing a v6 cone forks its conversation, with the active cone's model, and adds a `slicc.thawed` note saying that six's `/workspace` is now `~/workspace`. If that cone is live already, as it is for an "(updated)" conversation whose earlier import was thawed, the cone's current conversation goes to the Freezer, and the cone carries on with the updated one in the same home. Its note then names `~/workspace.v6-<date>`.
 - **Files:**
   - a cone's workspace goes to `~/workspace`, its scoops' files to `~/scoops/<folder>`, and attachments to `~/v6-attachments`;
   - six's `/home/user` goes to `/root/v6/home-user`;

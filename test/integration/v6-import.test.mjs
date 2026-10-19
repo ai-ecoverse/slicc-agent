@@ -468,7 +468,23 @@ test('a newer export of the same profile adds only the conversations that grew, 
       kept: await out('cat /home/cone-2/workspace/README.md'),
       beside: await out('cat /home/cone-2/workspace.v6-*/README.md'),
       notes: await out('cat /home/cone-3/workspace/notes.md'),
+      thawed: (await window.connection.control.thaw('frozen-4', BACKGROUND_CONTEXT)).id,
     };
+  });
+  const after = await page.within(30000, () => {
+    const rows = window.connection.frozen.value.filter((row) => !row.live && row.kind === 'cone');
+    const entries = window.connection.transcript.value.entries;
+    const note = entries.findLast((entry) => entry.kind === 'slicc.thawed');
+    return (
+      !rows.some((row) => row.id === 'frozen-4') && {
+        rows: rows.map(({ id, title, v6 }) => `${id} ${title}${v6 ? ' v6' : ''}`).sort(),
+        active: window.connection.agents.value.active,
+        note: note?.model[0].content,
+        grown: entries.some((entry) =>
+          JSON.stringify(entry.model ?? '').includes('Added --dry-run.')
+        ),
+      }
+    );
   });
   assert.equal(seen.first, 0);
   assert.match(seen.second, /^Imported 1 frozen cone from https:\/\/www\.sliccy\.ai: frozen-4\./);
@@ -480,6 +496,18 @@ test('a newer export of the same profile adds only the conversations that grew, 
   assert.equal(seen.kept, '# Deploy\n\nRun ./deploy.sh\nmy seven edit\n');
   assert.equal(seen.beside, '# Deploy\n\nRun ./deploy.sh --dry-run first\n');
   assert.equal(seen.notes, 'Vendor B is faster.\n');
+  assert.equal(seen.thawed, 'cone-2');
+  assert.equal(after.active, 'cone-2');
+  assert.equal(after.grown, true);
+  assert.match(
+    after.note,
+    /SLICC 6's \/workspace is now ~\/workspace\.v6-\d{4}-\d\d-\d\d \(\/home\/cone-2\/workspace\.v6-/
+  );
+  assert.deepEqual(after.rows, [
+    'frozen-2 Research notes v6',
+    'frozen-3 Old planning chat v6',
+    'frozen-5 Fix the deploy script',
+  ]);
 });
 
 test('a profile of a few hundred MB imports, read from the zip by ranges', async (t) => {

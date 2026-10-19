@@ -676,7 +676,7 @@ async function commit(
           .length,
         frozenAt: unit.frozenAt,
         scoops,
-        v6: { origin, key: unit.key },
+        v6: { origin, key: unit.key, ...(unit.suffix ? { suffix: unit.suffix } : {}) },
       };
       made.push(frozenId);
     }
