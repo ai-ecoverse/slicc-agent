@@ -6,6 +6,7 @@ import type {
   FrozenCone,
   Message,
   Outgoing,
+  ProfileImportProgress,
   SlashCommand,
   SystemMessage,
   Thinking,
@@ -20,8 +21,9 @@ import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
 import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
 import { shownLabel } from '../titles/shown.ts';
-import { attempt } from './attempt.ts';
+import { attempt, warn } from './attempt.ts';
 import { Emitter } from './emitter.ts';
+import { IDLE_IMPORT, importProfile, type ShownImport } from './import-port.ts';
 import { CONNECT_IT, isBusy, providerName, queued, toMessages } from './messages.ts';
 import { readUrl, sendAttachments } from './outgoing.ts';
 import { merged, proposalNotices, proposalQueue } from './proposals.ts';
@@ -115,6 +117,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       this.emit('frozen', this.frozen());
       this.emit('agents', this.list());
     });
+    connection.importing?.subscribe(() => this.emit('importing', this.importing()));
     this.#ready = new Promise((resolve) => {
       connection.transcript.subscribe(() => {
         this.#refresh();
@@ -642,7 +645,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
 
   frozen(): readonly FrozenCone[] {
     return (this.#connection.frozen?.value ?? []).map(
-      ({ id, name, title, model, messages, frozenAt, kind, live, thawedAs }) => ({
+      ({ id, name, title, model, messages, frozenAt, kind, live, thawedAs, v6 }) => ({
         id,
         name,
         title,
@@ -652,8 +655,21 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
         kind,
         live,
         ...(thawedAs ? { thawedAs } : {}),
+        ...(v6 ? { v6 } : {}),
       })
     );
+  }
+
+  importProfile(file: Blob, options: { preview: boolean; again?: boolean }): Promise<ShownImport> {
+    return importProfile(this.#connection, file, options);
+  }
+
+  importCancel(): void {
+    void this.#connection.control.importCancel(BACKGROUND_CONTEXT).catch(warn);
+  }
+
+  importing(): ProfileImportProgress {
+    return this.#connection.importing?.value ?? IDLE_IMPORT;
   }
 
   thaw(id: string): Agent | null {

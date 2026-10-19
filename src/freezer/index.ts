@@ -339,7 +339,7 @@ async function importCommand(
   );
   return result.error
     ? { code: 1, out: `freezer: ${result.error}\n` }
-    : { code: 0, out: result.text };
+    : { code: 0, out: result.line };
 }
 
 async function command(
@@ -693,7 +693,8 @@ function titling(options: FreezerAttach) {
 
 function importing(
   options: FreezerAttach,
-  now: () => number
+  now: () => number,
+  refresh: () => Promise<unknown>
 ): Pick<FreezerRuntime, 'importing' | 'importProfile' | 'cancelImport'> {
   const importer = options.imports
     ? createImporter({
@@ -707,13 +708,17 @@ function importing(
     importing: importer?.progress ?? replicatedState<ImportProgress>(IDLE),
     importProfile: async (source, choices, context) =>
       importer
-        ? importer.run(source, choices, context)
+        ? importer.run(source, choices, context).then(async (result) => {
+            if (result.done) await refresh();
+            return result;
+          })
         : {
             done: false,
             preview: null,
             cones: [],
             report: null,
             text: '',
+            line: '',
             error: 'this agent imports nothing',
           },
     cancelImport: () => importer?.cancel(),
@@ -777,7 +782,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
   };
   const runtime: FreezerRuntime = {
     frozen,
-    ...importing(options, now),
+    ...importing(options, now, refresh),
     async freeze(agentId, context) {
       const cone = agents.state().cones[agentId];
       if (!cone) throw new Error(`There is no cone ${agentId}.`);

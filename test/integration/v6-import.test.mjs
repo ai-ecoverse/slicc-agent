@@ -20,13 +20,13 @@ const helpers = () => {
     await writable.write(bytes);
     await writable.close();
   };
-  window.start = async () => {
+  window.start = async (query = '') => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     window.kernel = await bootKernel();
     const answers = Array.from({ length: 6 }, (_, n) => `answer=Answer ${n + 1}.`).join('&');
     const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
+      worker: () => new Worker(`/dist-test/main-worker.js?${answers}${query}`, { type: 'module' }),
       kernel: {
         connect: (options) =>
           window.kernel.connect(options?.user ? { user: options.user } : undefined),
@@ -107,11 +107,11 @@ const helpers = () => {
       .sort((a, b) => a.id.localeCompare(b.id));
 };
 
-async function booted(t) {
+async function booted(t, query = '') {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(() => window.start());
+  await page.evaluate((query) => window.start(query), query);
   return page;
 }
 
@@ -121,6 +121,8 @@ const upload = (page, path, bytes) =>
     [path, Buffer.from(bytes).toString('base64')]
   );
 
+const today = () => new Date().toISOString().slice(0, 10);
+
 test('freezer import --preview checks a SLICC 6 profile export and says what is in it', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
@@ -128,7 +130,7 @@ test('freezer import --preview checks a SLICC 6 profile export and says what is 
   assert.equal(ran.status, 0, ran.stderr);
   assert.equal(
     ran.stdout,
-    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: anthropic, openai. Not imported: 1 mount.\n'
+    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. SLICC 7 has no accounts for Anthropic and OpenAI. Not imported: 1 mount.\n'
   );
   const usage = await page.evaluate(() => window.imported('/tmp/profile.zip', '--bogus'));
   assert.equal(usage.status, 2);
@@ -322,27 +324,51 @@ test('freezer import refuses a damaged or unsafe profile and changes nothing', a
   assert.deepEqual(plain.users, []);
 });
 
-test('freezer import turns a SLICC 6 profile into frozen cones with their files at cone modes, and a thaw forks one', async (t) => {
+test('freezer import turns a SLICC 6 profile into frozen cones, with files, memory, skills, crons off, webhooks off and a report; a thaw forks one', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
+  const preview = await page.evaluate(
+    async (data) => {
+      const answer = await window.connection.control.importProfile(
+        { upload: null, data, again: false, preview: true },
+        BACKGROUND_CONTEXT
+      );
+      return { text: answer.preview.text, done: answer.done, rows: window.rows().length };
+    },
+    Buffer.from(await readFile(FIXTURE)).toString('base64')
+  );
+  assert.deepEqual(preview, {
+    text: 'SLICC 6 profile from www.sliccy.ai, exported 12 Jul 2026. SLICC 7 has no accounts for Anthropic and OpenAI.',
+    done: false,
+    rows: 0,
+  });
   const ran = await page.evaluate(() => window.imported('/tmp/profile.zip'));
   assert.equal(ran.status, 0, ran.stdout + ran.stderr);
   assert.match(
     ran.stdout,
-    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nRe-enter in Settings: anthropic, openai\.\n$/
+    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nSLICC 7 has no accounts for Anthropic and OpenAI\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
   );
   await page.within(30000, () => window.rows().length === 3);
   const seen = await page.evaluate(async () => {
     const out = async (command) => (await window.sh(command)).stdout;
     return {
       rows: window.rows(),
+      progress: window.connection.importing.value.phase,
       modes: await out(
-        'stat -c "%U %a %n" /home/cone-2 /home/cone-2/workspace /home/cone-2/workspace/.env /home/cone-2/workspace/deploy.sh /home/cone-2/scoops/helper/out.txt /home/cone-3/workspace/certs/dev.pem'
+        'stat -c "%U %a %n" /home/cone-2 /home/cone-2/workspace /home/cone-2/workspace/.env /home/cone-2/workspace/deploy.sh /home/cone-2/scoops/helper/out.txt /home/cone-3/workspace/certs/dev.pem /usr/share/skills/deploy-notes /usr/share/skills/deploy-notes/SKILL.md'
       ),
       env: await out('cat /home/cone-2/workspace/.env'),
       attachment: await out('ls /home/cone-2/v6-attachments'),
       homeUser: await out('cat /root/v6/home-user/todo.txt'),
+      memory: await out('cat /root/.pi/agent/memory/MEMORY.md'),
+      coneMemory: await out('cat /root/.pi/agent/memory/cone-2/MEMORY.md'),
+      crontab: await out('crontab -u cone-2 -l'),
+      webhooks: await out('ls /home/cone-2/.slicc/webhooks'),
+      webhook: await out('cat /home/cone-2/.slicc/webhooks/github-push.json.v6'),
+      sprinkle: await out('ls /home/cone-2/sprinkles/dashboard'),
+      git: await out('cat /root/.gitconfig'),
       staging: await out('ls -A /var/lib/slicc/agent/imports'),
+      report: await out('cat /root/v6-import-*.md'),
     };
   });
   assert.deepEqual(seen.rows, [
@@ -350,6 +376,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones with their files 
     { id: 'frozen-2', name: 'research', title: 'Research notes', messages: 2 },
     { id: 'frozen-3', name: 'Old planning chat', title: 'Old planning chat', messages: 2 },
   ]);
+  assert.equal(seen.progress, 'done');
   assert.equal(
     seen.modes,
     [
@@ -359,13 +386,60 @@ test('freezer import turns a SLICC 6 profile into frozen cones with their files 
       'cone-2 600 /home/cone-2/workspace/deploy.sh',
       'cone-2 600 /home/cone-2/scoops/helper/out.txt',
       'cone-3 600 /home/cone-3/workspace/certs/dev.pem',
+      'root 755 /usr/share/skills/deploy-notes',
+      'root 644 /usr/share/skills/deploy-notes/SKILL.md',
       '',
     ].join('\n')
   );
   assert.equal(seen.env, 'API_KEY=sk-test-not-a-real-key\n');
   assert.match(seen.attachment, /^[0-9a-f]{12}-screenshot\.png\n$/);
   assert.equal(seen.homeUser, 'Water the plants\n');
+  assert.equal(
+    seen.memory,
+    `## Imported from SLICC 6 (${today()})\n\n### Shared\n\nThe user prefers short answers.\n`
+  );
+  assert.equal(
+    seen.coneMemory,
+    `## Imported from SLICC 6 (${today()})\n\n### Project\n\nDeploys go through deploy.sh.\n`
+  );
+  assert.ok(
+    seen.crontab
+      .split('\n')
+      .filter(Boolean)
+      .every((line) => line.startsWith('#')),
+    seen.crontab
+  );
+  assert.match(seen.crontab, /^# # name: standup\n# 0 9 \* \* 1-5 agent send cone --lick=cron$/m);
+  assert.match(
+    seen.crontab,
+    /^# 30 8 \* \* \* agent send scoop:helper --lick=cron 'Summarize the build logs'$/m
+  );
+  assert.match(
+    seen.crontab,
+    /^# standup had a SLICC 6 filter, not imported: event => event\.day !== "sat"$/m
+  );
+  assert.equal(seen.webhooks, 'github-push.json.v6\n');
+  assert.deepEqual(JSON.parse(seen.webhook), { target: 'scoop:helper' });
+  assert.equal(seen.sprinkle, 'dashboard.shtml\n');
+  assert.equal(seen.git, '[user]\n\tname = Pat Example\n\temail = pat@example.com\n');
   assert.equal(seen.staging, '');
+  for (const part of [
+    '- Fix the deploy script: frozen cone frozen-1, home /home/cone-2, with helper',
+    '- the skill deploy-notes, for every agent, in /usr/share/skills/deploy-notes',
+    '- crons, imported off: 2 in crontab -u cone-2',
+    '- a webhook, imported off: /home/cone-2/.slicc/webhooks/github-push.json.v6',
+    '- /mnt/photos: mount',
+    "- a SLICC 6 task that cron can't express: interval 3600000: Check the build",
+    '| /home/cone-2/workspace/.env | 31 B | environment file, often holds keys |',
+    '| /home/cone-3/workspace/certs/dev.pem | 59 B | PEM file, may be a private key |',
+    "Delete or move these if you don't need them here.",
+    '- Anthropic: SLICC 7 has no such provider',
+    'These never move: the GitHub token.',
+    '- Mount these folders again: /mnt/photos.',
+    '- Add these MCP servers again: docs (https://mcp.example.com/sse).',
+    '- These sprinkles call SLICC APIs other than slicc.lick and may need edits: dashboard (slicc.readFile).',
+  ])
+    assert.ok(seen.report.includes(part), `the report lacks ${part}:\n${seen.report}`);
   const thawed = await page.evaluate(async () => {
     const thaw = await window.connection.control.thaw('frozen-1', BACKGROUND_CONTEXT);
     await window.agent.select(thaw.id);
@@ -397,6 +471,94 @@ test('freezer import turns a SLICC 6 profile into frozen cones with their files 
     /^Already imported on \d{4}-\d\d-\d\d; freezer import --again makes fresh copies\.\n$/
   );
   assert.equal(twice.rows, 2);
+});
+
+test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge, and a zip too big to send as data refused', async (t) => {
+  const page = await booted(t, '&anthropic&openai');
+  const zip = Buffer.from(await readFile(FIXTURE)).toString('base64');
+  const seen = await page.evaluate(async (zip) => {
+    const blob = new Blob([Uint8Array.from(atob(zip), (char) => char.charCodeAt(0))]);
+    const phases = [];
+    window.agent.on('importing', (value) => phases.push(value.phase));
+    const preview = await window.agent.importProfile(blob, { preview: true });
+    const done = await window.agent.importProfile(blob, { preview: false });
+    const listedAtOnce = window.agent
+      .frozen()
+      .filter((row) => row.v6 && done.cones.includes(row.id))
+      .map((row) => row.id)
+      .sort();
+    const again = await window.agent.importProfile(blob, { preview: true });
+    const badges = window.agent.frozen().filter((row) => row.v6).length;
+    const models = [
+      ...new Set(
+        window.agent
+          .frozen()
+          .filter((row) => row.v6)
+          .map((row) => row.model)
+      ),
+    ];
+    const uploads = (await window.sh('ls -A /var/lib/slicc/agent/imports')).stdout;
+    const refused = await window.agent
+      .importProfile(new Blob(['not a zip']), { preview: true })
+      .then(
+        () => 'resolved',
+        (error) => error.message
+      );
+    return {
+      preview: preview.preview,
+      done,
+      models,
+      listedAtOnce,
+      already: again.preview.already,
+      phases,
+      badges,
+      uploads,
+      refused,
+      progress: window.agent.importing().phase,
+    };
+  }, zip);
+  assert.equal(seen.preview.origin, 'https://www.sliccy.ai');
+  assert.equal(seen.preview.createdAt, Date.parse('2026-07-12T10:00:00.000Z'));
+  assert.equal(seen.preview.exportId, undefined);
+  assert.deepEqual(seen.preview.providers, ['anthropic', 'openai']);
+  assert.equal(seen.preview.text, 'SLICC 6 profile from www.sliccy.ai, exported 12 Jul 2026.');
+  assert.equal(
+    seen.done.text,
+    'From www.sliccy.ai. Sign in to Anthropic and OpenAI again before you thaw them.'
+  );
+  assert.deepEqual(seen.preview.flagged, [
+    'files/cones/cone/.env',
+    'files/cones/research/certs/dev.pem',
+  ]);
+  assert.deepEqual(seen.done.cones, ['frozen-1', 'frozen-2', 'frozen-3']);
+  assert.deepEqual(seen.listedAtOnce, ['frozen-1', 'frozen-2', 'frozen-3']);
+  assert.match(seen.done.report, /^\/root\/v6-import-\d{4}-\d\d-\d\d\.md$/);
+  assert.equal(typeof seen.already, 'number');
+  assert.ok(
+    seen.phases.includes('checking') &&
+      seen.phases.includes('writing') &&
+      seen.phases.includes('done'),
+    seen.phases.join()
+  );
+  assert.equal(seen.badges, 3);
+  assert.deepEqual(seen.models, ['Claude Sonnet 4.5 (latest)']);
+  assert.equal(seen.uploads, '');
+  assert.equal(seen.refused, 'This is not a zip file.');
+  assert.equal(seen.progress, 'failed');
+  const remote = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const agent = await (
+      await (await root.getDirectoryHandle('var')).getDirectoryHandle('lib')
+    ).getDirectoryHandle('slicc');
+    await (await agent.getDirectoryHandle('agent')).removeEntry('imports', { recursive: true });
+    return window.agent
+      .importProfile(new Blob([new Uint8Array(17 * 1024 * 1024)]), { preview: true })
+      .then(
+        () => 'resolved',
+        (error) => error.message
+      );
+  });
+  assert.match(remote, /^This profile is too big to send from this device\./);
 });
 
 test('a failed freezer import leaves nothing behind, and the same zip imports once the problem is gone', async (t) => {
@@ -537,6 +699,112 @@ test('a profile of a few hundred MB imports, read from the zip by ranges', async
   assert.deepEqual(
     lines.slice(1),
     [0, 1, 2].map((n) => `${size} /root/v6/home-user/big-${n}.bin`)
+  );
+});
+
+test('cancelling a large import while it writes rolls it back and leaves nothing behind', async (t) => {
+  const page = await booted(t);
+  const size = 100 * 1024 ** 2;
+  const hash = createHash('sha256');
+  const block = Buffer.alloc(1024 ** 2);
+  for (let n = 0; n < size / block.length; n++) hash.update(block);
+  const sha256 = hash.digest('hex');
+  const big = [0, 1, 2].map((n) => ({ path: `files/home-user/big-${n}.bin`, size, sha256 }));
+  const contents = files();
+  const head = manifest(contents, { files: [...manifest(contents).files, ...big] });
+  const small = [
+    ['manifest.json', Buffer.from(JSON.stringify(head)).toString('base64')],
+    ...Object.entries(contents).map(([name, data]) => [name, Buffer.from(data).toString('base64')]),
+  ];
+  await page.evaluate(([small, big]) => window.bigZip('/tmp/big.zip', small, big), [small, big]);
+  const seen = await page.evaluate(async () => {
+    const look = async () => ({
+      homes: (await window.sh('ls -A /home')).stdout,
+      root: (await window.sh('ls -A /root')).stdout,
+      skills: (await window.sh('ls -A /usr/share/skills')).stdout,
+      imports: (await window.sh('ls -A /var/lib/slicc/agent/imports')).stdout,
+      users: (await window.kernel.users.list()).map((user) => user.name),
+      rows: window.rows().length,
+    });
+    const before = await look();
+    const root = await navigator.storage.getDirectory();
+    const file = await (
+      await (await root.getDirectoryHandle('tmp')).getFileHandle('big.zip')
+    ).getFile();
+    const phases = [];
+    let cancelled = false;
+    window.agent.on('importing', (value) => {
+      phases.push(value.phase);
+      if (value.phase === 'writing' && !cancelled) {
+        cancelled = true;
+        window.agent.importCancel();
+      }
+    });
+    const refused = await window.agent.importProfile(file, { preview: false }).then(
+      () => 'resolved',
+      (error) => error.message
+    );
+    return { before, after: await look(), refused, phases, cancelled };
+  });
+  assert.equal(seen.cancelled, true, seen.phases.join());
+  assert.equal(seen.refused, 'The import was cancelled.');
+  assert.deepEqual(seen.after, seen.before);
+});
+
+test('freezer import never writes memory through a symlink, and leaves its target and everything else alone', async (t) => {
+  const page = await booted(t);
+  await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
+  const seen = await page.evaluate(async () => {
+    await window.sh(
+      'mkdir -p /root/.pi/agent/memory && echo keep > /etc/kept && ln -s /etc/kept /root/.pi/agent/memory/MEMORY.md'
+    );
+    const ran = await window.imported('/tmp/profile.zip');
+    return {
+      ran,
+      kept: (await window.sh('cat /etc/kept')).stdout,
+      homes: (await window.sh('ls -A /home')).stdout,
+      rows: window.rows().length,
+    };
+  });
+  assert.equal(seen.ran.status, 1);
+  assert.equal(
+    seen.ran.stderr,
+    "freezer: /root/.pi/agent/memory/MEMORY.md is a symlink, and the import won't write memory through it\n"
+  );
+  assert.equal(seen.kept, 'keep\n');
+  assert.equal(seen.rows, 0);
+  assert.doesNotMatch(seen.homes, /cone-/);
+});
+
+test('a newer export with changed crons replaces the earlier commented-out jobs by name and keeps their scoop target', async (t) => {
+  const page = await booted(t);
+  await upload(page, '/tmp/v1.zip', await readFile(FIXTURE));
+  const licks = JSON.parse(files()['licks.json']);
+  licks.tasks[0].prompt = 'Summarize the logs again';
+  await upload(
+    page,
+    '/tmp/v2.zip',
+    profile({
+      contents: { ...files(), 'licks.json': JSON.stringify(licks) },
+      overrides: { exportId: EXPORT_ID.replace(/^6f/, '5d') },
+    })
+  );
+  const table = await page.evaluate(async () => {
+    await window.imported('/tmp/v1.zip');
+    await window.imported('/tmp/v2.zip');
+    return (await window.sh('crontab -u cone-2 -l')).stdout;
+  });
+  assert.equal(table.match(/# # name: v6-task-1/g).length, 1, table);
+  assert.match(
+    table,
+    /^# 30 8 \* \* \* agent send scoop:helper --lick=cron 'Summarize the logs again'$/m
+  );
+  assert.ok(
+    table
+      .split('\n')
+      .filter(Boolean)
+      .every((line) => line.startsWith('#')),
+    table
   );
 });
 

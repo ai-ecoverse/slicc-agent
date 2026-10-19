@@ -3,6 +3,7 @@ import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' 
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { createProvider } from '@earendil-works/pi-ai/models';
 import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
+import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -10,6 +11,7 @@ import {
   fauxThinking,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
+import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { MemoryStorage } from '@earendil-works/pi-durable';
 import { adobeProvider, openOpfsSqliteStorage, runAgentWorker } from '../../../src/index.ts';
 import { fakeVault } from '../fixtures/fake-vault.mjs';
@@ -321,6 +323,10 @@ const judges = params.has('judge')
       }),
     ]
   : [];
+const accounts = [
+  ...(params.has('anthropic') ? [anthropicProvider()] : []),
+  ...(params.has('openai') ? [openaiProvider()] : []),
+];
 const triaged = params.get('triage');
 const clef = triaged
   ? [
@@ -388,6 +394,7 @@ const running = runAgentWorker(self, {
     ...judges,
     ...clef,
     ...e2e,
+    ...accounts,
     ...(params.has('bedrock') ? [amazonBedrockProvider()] : []),
   ],
   storage: params.has('persist')

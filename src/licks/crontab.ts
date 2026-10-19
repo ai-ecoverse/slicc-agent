@@ -167,7 +167,7 @@ export async function installJobs(
   return found.length ? found : [{ error: ran.err.trim() || `crontab exited with ${ran.code}` }];
 }
 
-function writeTable(env: ExecutionEnv, user: string, table: string, context: Context) {
+export function writeTable(env: ExecutionEnv, user: string, table: string, context: Context) {
   return sh(env, `printf %s ${quote(table)} | crontab -u ${quote(user)} -`, context);
 }
 

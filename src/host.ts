@@ -24,6 +24,7 @@ import type { ChangesRuntime } from './changes/index.ts';
 import { createAgentControl, type HostLicks, type HostScoops } from './control.ts';
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
+import { IDLE, type ImportProgress } from './freezer/v6.ts';
 import { createGuests, type Guests } from './guests/index.ts';
 import type { ScoopReviewHost } from './guests/scoop.ts';
 import { admitGuest, guestOpener } from './guests/serve.ts';
@@ -308,6 +309,7 @@ export async function hostAgent(
     memories: options.memory?.memories ?? replicatedState<MemoryEntry[]>([]),
     memoryScopes: options.memory?.scopes ?? replicatedState<MemoryScope[]>([]),
     frozen: options.freezer?.frozen ?? replicatedState<FrozenCone[]>([]),
+    importing: options.freezer?.importing ?? replicatedState<ImportProgress>(IDLE),
     changes:
       options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
     monitor: monitor.state,

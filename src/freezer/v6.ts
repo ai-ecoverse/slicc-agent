@@ -10,7 +10,8 @@ import type { KernelUsers } from '../kernel/users.ts';
 import type { Layout } from '../layout.ts';
 import { opfsFile } from '../opfs-pool.ts';
 import { TITLE_TURNS } from '../titles/extension.ts';
-import { place } from './v6-place.ts';
+import { IMPORTS_DIR } from './paths.ts';
+import { type Notes, place, reportOf } from './v6-place.ts';
 import {
   checkLicks,
   checkManifest,
@@ -34,7 +35,6 @@ import {
 } from './zip.ts';
 
 export const V6_KIND = 'slicc.v6';
-export const IMPORTS_DIR = '/var/lib/slicc/agent/imports';
 const MiB = 1024 ** 2;
 export const LIMITS = {
   archive: 2048 * MiB,
@@ -63,11 +63,12 @@ export interface ImportPreview {
   skills: string[];
   crons: number;
   webhooks: number;
-  flagged: number;
+  flagged: string[];
   providers: string[];
   mounts: string[];
   already: number | null;
   text: string;
+  line: string;
 }
 
 export interface ImportResult {
@@ -76,15 +77,31 @@ export interface ImportResult {
   cones: string[];
   report: string | null;
   text: string;
+  line: string;
   error: string | null;
 }
 
-export type ImportSource = { path: string } | { bytes: Uint8Array };
+type ReadSource = { path: string } | { bytes: Uint8Array };
+
+export type ImportSource = ReadSource | { upload: string };
+
+const UPLOAD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export const uploadPath = (id: string) => `${IMPORTS_DIR}/upload-${id}.zip`;
+
+function uploaded(source: ImportSource): { path: string } | undefined {
+  if (!('upload' in source)) return undefined;
+  if (!UPLOAD.test(source.upload)) throw new ImportError("that upload isn't one of the agent's");
+  return { path: uploadPath(source.upload) };
+}
 
 export interface ImportDeps {
   agents: Agents;
   env: ExecutionEnv;
   layout: Layout;
+  memoryHome: string;
+  providers?: readonly Account[];
+  catalog?: { getModel(provider: string, id: string): { name: string } | undefined };
   users?: Pick<KernelUsers, 'add' | 'remove'>;
   envOf?: (cone: string) => Promise<ExecutionEnv | undefined>;
   opfs?: () => Promise<FileSystemDirectoryHandle>;
@@ -256,15 +273,77 @@ async function licksIn(opened: Opened, data?: Map<string, Uint8Array>): Promise<
   return checkLicks(json(data?.get(name) ?? (await readEntry(opened.source, entry)), name));
 }
 
+const ACCOUNTS: Record<string, string> = {
+  'bedrock-camp': 'amazon-bedrock',
+  bedrock: 'amazon-bedrock',
+};
+
+export function accountsOf(providers: readonly string[]): string[] {
+  return [...new Set(providers.map((name) => ACCOUNTS[name] ?? name))];
+}
+
 const UNITS = [
-  [1e9, 'GB'],
-  [1e6, 'MB'],
-  [1e3, 'KB'],
+  [1024 ** 3, 'GB'],
+  [1024 ** 2, 'MB'],
+  [1024, 'KB'],
 ] as const;
+
+export type Account = { readonly id: string; readonly name?: string | undefined };
+
+const NAMES: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  'github-copilot': 'GitHub Copilot',
+  google: 'Google',
+  azure: 'Azure',
+  'azure-openai': 'Azure OpenAI',
+  'azure-ai-foundry': 'Azure AI Foundry',
+  'amazon-bedrock': 'Amazon Bedrock',
+  adobe: 'Adobe',
+  openrouter: 'OpenRouter',
+  mistral: 'Mistral',
+  groq: 'Groq',
+  xai: 'xAI',
+  deepseek: 'DeepSeek',
+  'local-llm': 'Local LLM',
+};
+
+export function listed(names: readonly string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names.join('');
+}
+
+export function accountsSplit(providers: readonly string[], known?: readonly Account[]) {
+  const accounts = accountsOf(providers);
+  const ids = new Map((known ?? []).map((account) => [account.id, account.name]));
+  const again = known ? accounts.filter((id) => ids.has(id)) : accounts;
+  const missing = accounts.filter((id) => !again.includes(id));
+  const nameOf = (id: string) => ids.get(id) || NAMES[id] || id;
+  const lacking = missing.length
+    ? `SLICC 7 has no accounts for ${listed(missing.map(nameOf))}.`
+    : '';
+  const settings = again.length ? `Re-enter in Settings: ${listed(again.map(nameOf))}.` : '';
+  const signIn = again.length
+    ? `Sign in to ${listed(again.map(nameOf))} again before you thaw them.`
+    : '';
+  return { again, missing, nameOf, lacking, settings, signIn };
+}
+
+const said = (...parts: string[]) => parts.filter(Boolean).join(' ');
+
+const words = (at: string) =>
+  new Date(at).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+
+const hostOf = (origin: string) => (URL.canParse(origin) ? new URL(origin).host : origin);
 
 export async function previewOf(
   opened: Opened,
-  state: Readonly<AgentsState>
+  state: Readonly<AgentsState>,
+  known?: readonly Account[]
 ): Promise<ImportPreview> {
   const { manifest } = opened;
   const licks = await licksIn(opened);
@@ -277,9 +356,8 @@ export async function previewOf(
     .map((item) => item.path.replace(/^\/mnt\//, ''));
   const crons =
     licks.crontasks.length + licks.tasks.filter((task) => task.scheduleType === 'cron').length;
-  const host = URL.canParse(manifest.producer.origin)
-    ? new URL(manifest.producer.origin).host
-    : manifest.producer.origin;
+  const host = hostOf(manifest.producer.origin);
+  const split = accountsSplit(manifest.providers, known);
   const [at, unit] = UNITS.find(([at]) => bytes >= at) ?? (UNITS[2] as (typeof UNITS)[2]);
   const size = `${(bytes / at).toFixed(1)} ${unit}`;
   const parts = [
@@ -303,11 +381,20 @@ export async function previewOf(
     skills: manifest.skills.map((skill) => skill.name),
     crons,
     webhooks: licks.webhooks.length,
-    flagged: manifest.flagged.length,
-    providers: manifest.providers,
+    flagged: manifest.flagged.map((item) => item.path),
+    providers: split.again,
     mounts,
     already: state.imports?.[opened.key]?.at ?? null,
-    text: `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}. Re-enter in Settings: ${manifest.providers.join(', ') || 'nothing'}. Not imported: ${plural(mounts.length, 'mount')}.`,
+    text: said(
+      `SLICC 6 profile from ${host}, exported ${words(manifest.createdAt)}.`,
+      split.lacking
+    ),
+    line: said(
+      `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}.`,
+      split.settings,
+      split.lacking,
+      `Not imported: ${plural(mounts.length, 'mount')}.`
+    ),
   };
 }
 
@@ -619,9 +706,10 @@ async function conversationIn(
   return record.id as number;
 }
 
-function modelOf(conversation: V6Conversation | undefined): string {
+function modelOf(deps: ImportDeps, conversation: V6Conversation | undefined): string {
   const model = conversation?.messages.findLast((message) => message.model)?.model;
-  return model ? `${model.provider}/${model.id}` : '';
+  if (!model) return '';
+  return deps.catalog?.getModel(model.provider, model.id)?.name ?? `${model.provider}/${model.id}`;
 }
 
 async function commit(
@@ -671,7 +759,7 @@ async function commit(
         name: unit.name,
         conversation: await conversationIn(tx, unit.main, unit, model),
         title: unit.title,
-        model: modelOf(unit.main),
+        model: modelOf(deps, unit.main),
         messages: (unit.main?.messages ?? []).filter((message) => message.role !== 'tool-result')
           .length,
         frozenAt: unit.frozenAt,
@@ -717,6 +805,16 @@ async function importOpened(
     const data = await verify(opened, writer, stage, options.show);
     const parsed = await parse(opened, data);
     await assign(deps, opened, parsed.units, options.again, date, context);
+    const notes: Notes = {
+      lines: [],
+      skipped: [],
+      shadowed: [],
+      tasks: [],
+      sprinkles: new Map(),
+      crons: [],
+      webhooks: [],
+      placed: new Map(),
+    };
     const run = {
       deps,
       opened,
@@ -724,6 +822,7 @@ async function importOpened(
       writer,
       stage,
       date,
+      notes,
       show: options.show,
       fresh: new Map(),
       ready: new Set<Unit>(),
@@ -736,14 +835,17 @@ async function importOpened(
       await writer.rollback();
       throw error;
     }
-    const cones = [...new Set(parsed.units.map((unit) => unit.cone))];
-    const providers = opened.manifest.providers;
+    const report = await reportOf(run, made).catch((error: Error) => `nowhere (${error.message})`);
+    const split = accountsSplit(opened.manifest.providers, deps.providers);
+    const { origin } = opened.manifest.producer;
+    const settings = said(split.settings, split.lacking);
     return {
       done: true,
       preview: null,
-      cones,
-      report: null,
-      text: `Imported ${plural(made.length, 'frozen cone')} from ${opened.manifest.producer.origin}${made.length ? `: ${made.join(', ')}` : ''}.\nRe-enter in Settings: ${providers.join(', ') || 'nothing'}.\n`,
+      cones: made,
+      report,
+      text: said(`From ${hostOf(origin)}.`, split.signIn),
+      line: `Imported ${plural(made.length, 'frozen cone')} from ${origin}${made.length ? `: ${made.join(', ')}` : ''}.\n${settings ? `${settings}\n` : ''}The report is ${report}.\n`,
       error: null,
     };
   } finally {
@@ -753,7 +855,7 @@ async function importOpened(
 
 async function sourceOf(
   deps: ImportDeps,
-  source: ImportSource,
+  source: ReadSource,
   context: Context
 ): Promise<ZipSource> {
   if ('bytes' in source) return bytesSource(source.bytes);
@@ -792,6 +894,7 @@ export function createImporter(deps: ImportDeps): Importer {
     cones: [],
     report: null,
     text: '',
+    line: '',
     error: null,
     ...fields,
   });
@@ -807,21 +910,26 @@ export function createImporter(deps: ImportDeps): Importer {
           phase,
           done,
           total,
-          text: phase === 'checking' ? `Checking ${done}/${total}` : `Importing ${done}/${total}`,
+          text: `${phase === 'checking' ? 'Checking' : 'Importing'} ${done} of ${total}`,
         });
+      let upload: { path: string } | undefined;
       try {
-        const opened = await openProfile(await sourceOf(deps, source, context));
-        const preview = await previewOf(opened, deps.agents.state());
+        upload = uploaded(source);
+        const opened = await openProfile(
+          await sourceOf(deps, upload ?? (source as ReadSource), context)
+        );
+        const preview = await previewOf(opened, deps.agents.state(), deps.providers);
         if (options.preview) {
           const writer = new Writer(deps.env, context, controller.signal);
           await parse(opened, await verify(opened, writer, null, show));
           progress.replace(BACKGROUND_CONTEXT, IDLE);
-          return result({ preview, text: `${preview.text}\n` });
+          return result({ preview, text: preview.text, line: `${preview.line}\n` });
         }
         if (preview.already !== null && !options.again)
           return result({
             preview,
-            text: `Already imported on ${day(preview.already)}; freezer import --again makes fresh copies.\n`,
+            text: `Already imported on ${day(preview.already)}.`,
+            line: `Already imported on ${day(preview.already)}; freezer import --again makes fresh copies.\n`,
           });
         const done = await importOpened(
           deps,
@@ -840,6 +948,7 @@ export function createImporter(deps: ImportDeps): Importer {
         return result({ error: message });
       } finally {
         running = undefined;
+        if (upload) await deps.env.remove(upload.path, { force: true }, BACKGROUND_CONTEXT);
       }
     },
   };

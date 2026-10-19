@@ -804,3 +804,46 @@ test('a guest link has at most four calls in flight: further calls are answered 
   }
   assert.equal(seen.closed, false);
 });
+
+test('a guest cannot import a SLICC 6 profile: importProfile and importCancel are refused, and the guest contract has no import', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, `answer=Hello.&directory=/import-${Date.now()}`);
+  const seen = await page.evaluate(async () => {
+    const { owner } = globalThis.seats;
+    const local = await owner.connect();
+    await local.control.guestOpen(
+      {
+        id: 'pat',
+        label: 'Pat',
+        agentId: 'cone',
+        expiresAt: null,
+        gates: { messages: 'off', tools: 'user' },
+      },
+      BACKGROUND_CONTEXT
+    );
+    const guest = await connectGuest(await owner.port({ guest: { id: 'pat', label: 'Pat' } }));
+    const refused = (call) =>
+      call.then(
+        () => 'resolved',
+        (error) => error.message
+      );
+    const result = {
+      importProfile: await refused(
+        guest.control.importProfile(
+          { upload: null, data: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==', again: false, preview: false },
+          BACKGROUND_CONTEXT
+        )
+      ),
+      importCancel: await refused(guest.control.importCancel(BACKGROUND_CONTEXT)),
+      importing: guest.importing === undefined,
+      frozen: (await local.frozen?.value)?.length ?? 0,
+    };
+    await guest.close();
+    await local.close();
+    await owner.release();
+    return result;
+  });
+  assert.match(seen.importProfile, /a guest can only watch and send messages/i);
+  assert.match(seen.importCancel, /a guest can only watch and send messages/i);
+  assert.equal(seen.importing, true);
+});

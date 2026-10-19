@@ -12,7 +12,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { answerText } from './agent.ts';
 import type { Agents, ScoopRecord } from './agents.ts';
-import { type ShownAttachment, splitUser, userParts } from './attachments.ts';
+import { fromBase64, type ShownAttachment, splitUser, userParts } from './attachments.ts';
 import type { ChangesRuntime } from './changes/index.ts';
 import type { Cones } from './cone.ts';
 import type { Deliveries } from './deliveries.ts';
@@ -84,9 +84,17 @@ const noApprovals: AgentControl['decide'] = async () => ({
   error: 'This agent has no approvals.',
 });
 
+type FreezerControl = Pick<
+  FreezerRuntime,
+  'freeze' | 'newChat' | 'thaw' | 'discard' | 'importProfile' | 'cancelImport'
+>;
+
 function freezerControl(
-  freezer: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'> | undefined
-): Pick<AgentControl, 'freeze' | 'newChat' | 'thaw' | 'discard'> {
+  freezer: FreezerControl | undefined
+): Pick<
+  AgentControl,
+  'freeze' | 'newChat' | 'thaw' | 'discard' | 'importProfile' | 'importCancel'
+> {
   const needed = () => {
     if (!freezer) throw new Error('This agent has no freezer.');
     return freezer;
@@ -101,6 +109,25 @@ function freezerControl(
         await needed().discard(id, context);
         return id;
       }),
+    importProfile: (request, context) =>
+      freezer
+        ? freezer.importProfile(
+            request.data === null
+              ? { upload: request.upload ?? '' }
+              : { bytes: fromBase64(request.data) },
+            { again: request.again, preview: request.preview },
+            context
+          )
+        : Promise.resolve({
+            done: false,
+            preview: null,
+            cones: [],
+            report: null,
+            text: '',
+            line: '',
+            error: 'This agent has no freezer.',
+          }),
+    importCancel: async () => freezer?.cancelImport(),
   };
 }
 
@@ -353,7 +380,7 @@ export function createAgentControl(
   skills?: Pick<SkillsRuntime, 'expand' | 'commandsFor'>,
   sprinkles?: Pick<SprinklesRuntime, 'send' | 'call'>,
   memory?: Pick<MemoryRuntime, 'save' | 'remove'>,
-  freezer?: Pick<FreezerRuntime, 'freeze' | 'newChat' | 'thaw' | 'discard'>,
+  freezer?: FreezerControl,
   changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>,
   monitor?: Pick<Monitor, 'open' | 'close'>,
   secrets?: () => readonly SecretName[],
