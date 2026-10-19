@@ -360,8 +360,10 @@ test('the plan reviews every non-draft behaviour change, records a skip as not b
     ['--action', 'opened', '--labels', '', '--draft', 'true'],
     ['--action', 'synchronize', '--labels', ''],
   ]) {
+    const count = statuses().length;
     const waiting = await plan(extra);
     assert.match(waiting.out, /go=false/, extra.join(' '));
+    assert.equal(statuses().length, count + 1, extra.join(' '));
     assert.equal(statuses().at(-1).state, 'failure');
     assert.match(
       statuses().at(-1).description,
@@ -527,8 +529,8 @@ test("the workflow: same-repo non-draft PRs review the merge ref with main's own
   for (const name of ['plan', 'pack', 'suite'])
     assert.match(jobs[name], /git fetch -q --no-tags --depth=2 origin "\$GITHUB_SHA"/);
   assert.match(jobs.plan, /echo "commit=\$GITHUB_SHA"/);
-  assert.match(jobs.plan, /DRAFT: \$\{\{ github\.event\.pull_request\.draft \}\}/);
-  assert.match(jobs.plan, /--draft "\$DRAFT"/);
+  assert.match(jobs.plan, /PR_DRAFT: \$\{\{ github\.event\.pull_request\.draft \}\}/);
+  assert.doesNotMatch(jobs.plan, /--draft/);
   assert.doesNotMatch(workflow, /merge-ok/);
   assert.match(jobs.plan, /echo "parent=\$\(git rev-parse "\$GITHUB_SHA\^1"\)"/);
   assert.match(jobs.pack, /^ {4}runs-on: ubuntu-latest$/m);
