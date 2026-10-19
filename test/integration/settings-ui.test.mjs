@@ -217,3 +217,102 @@ test('an MCP token account carries its server URL, and Settings says it moved on
   );
   assert.equal(seen.reconnect, true);
 });
+
+test('adding a Cloudflare or Azure provider in Settings saves its tenant fields as the vault record’s settings', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const until = async (check, tries = 500) => {
+      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
+      return check();
+    };
+    const find = (root, selector) => {
+      const found = root.querySelector(selector);
+      if (found) return found;
+      for (const node of root.querySelectorAll('*'))
+        if (node.shadowRoot) {
+          const inner = find(node.shadowRoot, selector);
+          if (inner) return inner;
+        }
+      return null;
+    };
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const owner = await startAgent({
+      worker: () => new Worker('/dist-test/main-worker.js?registry&vault', { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const model = createAgentModel(await owner.connect(), { storage: localStorage });
+    await model.agent.ready();
+    const vault = createDummyModel({ storage: localStorage, vault: 'empty' }).vault;
+    model.vault = vault;
+    await until(() =>
+      model.settings.providers().some((option) => option.id === 'cloudflare-workers-ai')
+    );
+    const settings = document.createElement('slicc-settings');
+    settings.model = model;
+    document.body.append(settings);
+    const root = () => settings.shadowRoot;
+    const type = (input, value) => {
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    };
+    const add = async (id, values) => {
+      await until(() => find(root(), '[data-action="add-provider"]'));
+      find(root(), '[data-action="add-provider"]').click();
+      await until(() => find(root(), `[role="option"][data-provider="${id}"]`));
+      find(root(), `[role="option"][data-provider="${id}"]`).click();
+      const form = () => find(root(), `form[data-id="${id}"]`);
+      await until(() => form()?.querySelector('input[data-field="value"]'));
+      type(form().querySelector('input[data-field="value"]'), values.key);
+      for (const [name, value] of Object.entries(values.fields))
+        type(form().querySelector(`[data-account-field="${name}"]`), value);
+      form().requestSubmit();
+      await until(() => vault.puts.some((put) => put.options?.provider === id));
+      await until(() => model.settings.accounts().some((account) => account.id === id));
+      return vault.puts.find((put) => put.options?.provider === id);
+    };
+    const cloudflare = await add('cloudflare-workers-ai', {
+      key: 'cf-token-key-0001',
+      fields: { account: '0123456789abcdef0123456789abcdef' },
+    });
+    const azure = await add('azure', {
+      key: 'azure-key-00000001',
+      fields: { endpoint: 'my-resource' },
+    });
+    const stored = (id) =>
+      model.settings
+        .accounts()
+        .find((account) => account.id === id)
+        .fields.map((field) => [field.name, field.value ?? null]);
+    const result = {
+      cloudflare,
+      azure,
+      cloudflareFields: stored('cloudflare-workers-ai'),
+      azureFields: stored('azure'),
+    };
+    await owner.release();
+    return result;
+  });
+  assert.equal(seen.cloudflare.name, 'CLOUDFLARE_WORKERS_AI_API_KEY');
+  assert.deepEqual(seen.cloudflare.options, {
+    kind: 'model',
+    provider: 'cloudflare-workers-ai',
+    settings: { CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef' },
+  });
+  assert.deepEqual(seen.cloudflareFields, [['account', '0123456789abcdef0123456789abcdef']]);
+  assert.equal(seen.azure.name, 'AZURE_OPENAI_API_KEY');
+  assert.deepEqual(seen.azure.options, {
+    kind: 'model',
+    provider: 'azure',
+    settings: { AZURE_OPENAI_RESOURCE_NAME: 'my-resource' },
+  });
+  assert.deepEqual(seen.azureFields, [
+    ['endpoint', 'my-resource'],
+    ['deployments', null],
+  ]);
+});
