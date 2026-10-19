@@ -33,6 +33,15 @@ function kindOf(connection: McpServerConnection): Kind {
   return secretNames(connection.entry.config).length ? 'token' : 'oauth';
 }
 
+export function serverUrl(raw: string): string {
+  const url = new URL(raw);
+  url.username = '';
+  url.password = '';
+  url.search = '';
+  url.hash = '';
+  return url.href;
+}
+
 function row(
   connection: McpServerConnection,
   kind: Kind,
@@ -54,6 +63,7 @@ function row(
     needs: null,
     group: 'mcp',
     store: 'vault',
+    url: serverUrl(connection.entry.config.url),
     ...(kind === 'token' ? { secret: 'token' as const } : {}),
   };
 }

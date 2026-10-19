@@ -488,6 +488,7 @@ export interface AccountState {
   description?: string;
   keyUrl?: string;
   vaultName?: string;
+  url?: string;
 }
 
 export interface AccountField {

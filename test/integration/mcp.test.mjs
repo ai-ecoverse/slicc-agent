@@ -382,3 +382,32 @@ test('a retry right after a cancelled MCP sign-in keeps its own state, even when
     docs.close();
   }
 });
+
+test('an MCP account carries its server URL without the query or fragment, for the page to register with the vault', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await page.evaluate(() =>
+    window.write(
+      '/home/.pi/agent/mcp.json',
+      JSON.stringify({
+        mcpServers: {
+          docs: {
+            url: 'https://mcp.test/mcp?v=2#part',
+            headers: { Authorization: 'Bearer ${DOCS_TOKEN}' },
+          },
+        },
+      })
+    )
+  );
+  await page.evaluate(() => window.start('relay=mcp.test&vault'));
+  await page.within(60000, () =>
+    window.model.settings.accounts().some((account) => account.id === 'mcp:docs')
+  );
+  const account = await page.evaluate(() =>
+    window.model.settings.accounts().find((entry) => entry.id === 'mcp:docs')
+  );
+  assert.equal(account.url, 'https://mcp.test/mcp');
+  assert.equal(account.group, 'mcp');
+  assert.equal(account.secret, 'token');
+});
