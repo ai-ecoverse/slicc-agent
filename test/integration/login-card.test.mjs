@@ -156,6 +156,11 @@ test('the expired-session card names the Adobe account, and its Log in opens the
   assert.equal(part.action, 'login');
   assert.equal(part.account, 'adobe');
   assert.equal(part.message, 'Your Adobe session has expired.');
+  assert.equal(part.detail, 'Log in again to continue.');
+  const expired = await page.evaluate(() =>
+    window.loginTest.card().querySelector('.detail').textContent.trim()
+  );
+  assert.equal(expired, 'Log in again to continue.');
   const clicked = await page.evaluate(() => {
     const before = window.opens.length;
     window.loginTest.card().querySelector('[data-action=login]').click();
@@ -168,10 +173,20 @@ test('the expired-session card names the Adobe account, and its Log in opens the
     await window.until(() => typeof window.finishLogin === 'function');
     return {
       button: card().querySelector('[data-action=login]').textContent.trim(),
+      detail: card().querySelector('.detail').textContent.trim(),
       status: model.settings.accounts().find((account) => account.id === 'adobe').status,
     };
   });
-  assert.deepEqual(signing, { button: 'Signing in…', status: 'signing-in' });
+  assert.ok(
+    ['Log in again to continue.', 'Continue in the sign-in window that opened.'].includes(
+      signing.detail
+    ),
+    signing.detail
+  );
+  assert.deepEqual(
+    { button: signing.button, status: signing.status },
+    { button: 'Signing in…', status: 'signing-in' }
+  );
   await shoot(page, 'signing-in');
   const signedIn = await page.evaluate(
     async (record) => {
