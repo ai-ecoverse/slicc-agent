@@ -58,6 +58,7 @@
     "lint:chord": "node scripts/verdict.mjs check-chord scripts/check-chord.mjs",
     "lint:patches": "node scripts/verdict.mjs check-patches scripts/check-patches.mjs",
     "lint:vault-pi": "node scripts/verdict.mjs check-vault-pi scripts/check-vault-pi.mjs",
+    "reach": "node scripts/verdict.mjs reach scripts/reach.mjs",
     "format": "biome check --write .",
     "trust": "npx fledgling sync -y --skip-publish",
     "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",

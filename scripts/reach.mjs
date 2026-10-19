@@ -1,0 +1,216 @@
+import { writeFileSync } from 'node:fs';
+import { isMain } from './main.mjs';
+
+export const ORIGIN = 'https://seven.sliccy.ai';
+const SIMPLE = new Set(['accept', 'accept-language', 'content-language', 'user-agent']);
+const STRIPPED = 'x-stainless-';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'POST']);
+const TIMEOUT_MS = 15_000;
+
+export const BEDROCK_HEADERS = [
+  'amz-sdk-invocation-id',
+  'amz-sdk-request',
+  'authorization',
+  'content-type',
+  'x-amz-user-agent',
+];
+
+const ENV = {
+  AZURE_OPENAI_RESOURCE_NAME: 'example',
+  CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+  CLOUDFLARE_GATEWAY_ID: 'seven-reach',
+};
+
+const ADOBE_CONFIG = {
+  clientId: 'reach',
+  scopes: 'openid',
+  imsEnvironment: 'prod',
+  models: [
+    { id: 'reach-anthropic', name: 'Reach Anthropic' },
+    { id: 'reach-openai', name: 'Reach OpenAI', api: 'openai' },
+  ],
+};
+
+export function needed(names) {
+  return [
+    ...new Set(
+      names
+        .map((name) => name.toLowerCase())
+        .filter((name) => !SIMPLE.has(name) && !name.startsWith(STRIPPED))
+    ),
+  ].sort();
+}
+
+const list = (value) =>
+  (value ?? '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+
+export function allows(answer, method, names) {
+  if (!answer || answer.status < 200 || answer.status > 299) return false;
+  const origin = answer.headers['access-control-allow-origin'];
+  if (origin !== '*' && origin !== ORIGIN) return false;
+  const methods = list(answer.headers['access-control-allow-methods']);
+  if (
+    !SAFE_METHODS.has(method) &&
+    !methods.includes('*') &&
+    !methods.includes(method.toLowerCase())
+  )
+    return false;
+  const headers = list(answer.headers['access-control-allow-headers']);
+  return headers.includes('*') || names.every((name) => headers.includes(name));
+}
+
+export function judge(results) {
+  if (results.some((result) => result.answer && !result.allowed)) return 'cors-free';
+  if (results.length && results.every((result) => result.allowed)) return 'direct';
+  return 'unknown';
+}
+
+export async function preflight(request, fetcher = globalThis.fetch) {
+  try {
+    const response = await fetcher(request.url, {
+      method: 'OPTIONS',
+      headers: {
+        origin: ORIGIN,
+        'access-control-request-method': request.method,
+        ...(request.names.length
+          ? { 'access-control-request-headers': request.names.join(',') }
+          : {}),
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    return { status: response.status, headers: Object.fromEntries(response.headers) };
+  } catch {
+    return null;
+  }
+}
+
+const dummy = (name) =>
+  name === 'authorization'
+    ? 'Bearer reach-0000'
+    : name === 'content-type'
+      ? 'application/json'
+      : 'reach-0000';
+
+export async function answered(request, fetcher = globalThis.fetch) {
+  try {
+    const response = await fetcher(request.url, {
+      method: request.method,
+      headers: {
+        origin: ORIGIN,
+        ...Object.fromEntries(request.names.map((name) => [name, dummy(name)])),
+      },
+      ...(request.method === 'GET' || request.method === 'HEAD' ? {} : { body: '{}' }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    return { status: response.status, headers: Object.fromEntries(response.headers) };
+  } catch {
+    return null;
+  }
+}
+
+export function readable(answer) {
+  const origin = answer?.headers['access-control-allow-origin'];
+  return origin === '*' || origin === ORIGIN;
+}
+
+function canned(url) {
+  const path = new URL(url).pathname;
+  if (path.endsWith('/v1/config')) return Response.json(ADOBE_CONFIG);
+  return Response.json({ error: { message: 'reach' } }, { status: 401 });
+}
+
+export async function captured(providers) {
+  const { createModels } = await import('@earendil-works/pi-ai/models');
+  const sent = [];
+  const native = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    sent.push({ url: request.url, method: request.method, headers: [...request.headers.keys()] });
+    return canned(request.url);
+  };
+  try {
+    const credentials = {
+      read: async () => ({ type: 'api_key', key: 'reach-0000', env: ENV }),
+      list: async () => providers.map((provider) => ({ providerId: provider.id, type: 'api_key' })),
+      modify: async () => undefined,
+      delete: async () => undefined,
+    };
+    const models = createModels({ credentials });
+    for (const provider of providers) models.setProvider(provider);
+    await models
+      .refresh({ providers: providers.map((provider) => provider.id) })
+      .catch(() => undefined);
+    const requests = new Map();
+    for (const provider of providers) {
+      const own = [];
+      if (provider.id === 'amazon-bedrock') {
+        own.push({
+          url: 'https://bedrock-runtime.us-west-2.amazonaws.com/model/reach/converse-stream',
+          method: 'POST',
+          names: BEDROCK_HEADERS,
+        });
+      } else {
+        const byApi = new Map(models.getModels(provider.id).map((model) => [model.api, model]));
+        for (const model of byApi.values()) {
+          sent.length = 0;
+          const stream = models.streamSimple(
+            model,
+            { messages: [{ role: 'user', content: 'reach', timestamp: 0 }] },
+            { maxRetries: 0 }
+          );
+          for await (const _event of stream);
+          const request = sent.find((entry) => entry.method !== 'GET') ?? sent[0];
+          if (request)
+            own.push({ url: request.url, method: request.method, names: needed(request.headers) });
+        }
+      }
+      requests.set(provider.id, own);
+    }
+    return requests;
+  } finally {
+    globalThis.fetch = native;
+  }
+}
+
+export async function reach(providers, listings, fetcher) {
+  const requests = await captured(providers);
+  const rows = [];
+  for (const provider of providers) {
+    const results = [];
+    for (const request of requests.get(provider.id) ?? []) {
+      const answer = await preflight(request, fetcher);
+      const passed = allows(answer, request.method, request.names);
+      const reply = passed ? await answered(request, fetcher) : null;
+      results.push({
+        ...request,
+        answer: passed ? reply : answer,
+        allowed: passed && readable(reply),
+      });
+    }
+    const verdict = judge(results);
+    const listed = listings.get(provider.id)?.corsFree ? 'cors-free' : 'direct';
+    rows.push({ id: provider.id, verdict, listed, results });
+  }
+  return rows;
+}
+
+export const disagreeing = (rows) =>
+  rows.filter((row) => row.verdict !== 'unknown' && row.verdict !== row.listed);
+
+if (isMain(import.meta.url)) {
+  const { sliccProviders } = await import('../src/settings.ts');
+  const { LISTINGS } = await import('../src/providers.ts');
+  const rows = await reach(sliccProviders(), LISTINGS);
+  for (const row of rows) console.log(`reach: ${row.id} ${row.verdict}`);
+  const off = disagreeing(rows);
+  if (process.env.REACH_REPORT)
+    writeFileSync(process.env.REACH_REPORT, JSON.stringify({ rows, disagreeing: off }, null, 2));
+  console.log(
+    `reach: PASS ${rows.length} providers checked, ${off.length} disagree with the listings${off.length ? `: ${off.map((row) => `${row.id} is ${row.verdict}, listed ${row.listed}`).join('; ')}` : ''}`
+  );
+}

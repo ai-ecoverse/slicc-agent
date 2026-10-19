@@ -351,7 +351,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     env: 'XAI_API_KEY',
     description: 'Grok models from xAI.',
     keyUrl: 'https://console.x.ai',
-    cors: false,
+    cors: true,
   },
   {
     id: 'meta',
@@ -359,7 +359,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     env: 'META_API_KEY',
     description: 'Meta’s Muse models.',
     keyUrl: 'https://developer.meta.ai',
-    cors: false,
+    cors: true,
   },
   {
     id: 'vercel-ai-gateway',
@@ -501,7 +501,7 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
       description: 'Claude and other models on AWS, with a Bedrock API key.',
       keyUrl: 'https://console.aws.amazon.com/bedrock/home#/api-keys',
       auth: 'fields',
-      corsFree: true,
+      corsFree: false,
       vaultName: 'AWS_BEARER_TOKEN_BEDROCK',
       fields: [REGION_FIELD],
     },
@@ -511,7 +511,7 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
     {
       description: 'Models through Adobe’s LLM proxy, with your Adobe ID.',
       auth: 'oauth',
-      corsFree: true,
+      corsFree: false,
       vaultName: 'ADOBE_IMS_TOKEN',
     },
   ],
