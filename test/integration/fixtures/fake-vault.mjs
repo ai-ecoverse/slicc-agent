@@ -13,7 +13,18 @@ class Refused extends Error {
 }
 
 const strip = ({ value: _value, url: _url, refresh: _refresh, ...shown }) => shown;
+const templated = (base, url) => {
+  const source = base
+    .replace(/\/+$/, '')
+    .split(/(\{[^}]+\})/)
+    .map((part) =>
+      /^\{[^}]+\}$/.test(part) ? '[^./]+' : part.replace(/[.*+?^$()|[\]\\]/g, '\\$&')
+    )
+    .join('');
+  return new RegExp(`^${source}(?:[/?#]|$)`).test(url.href);
+};
 const under = (base, url) => {
+  if (base.includes('{')) return templated(base, url);
   const own = new URL(base);
   const path = own.pathname.replace(/\/+$/, '');
   return (

@@ -496,6 +496,7 @@ export interface AccountField {
   required?: boolean;
   placeholder?: string;
   help?: string;
+  customBase?: true;
 }
 
 export interface ProviderOption {

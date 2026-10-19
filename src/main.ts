@@ -47,7 +47,7 @@ import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
 import { pageOnly, type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
-import { VAULT_KNOWN } from './providers.ts';
+import { AZURE, azureBase, VAULT_KNOWN } from './providers.ts';
 import { createPages } from './remote/pages.ts';
 import { identity } from './scoops/identity.ts';
 import { type Assets, packageAssets, type ScoopsRuntime, setupScoops } from './scoops/index.ts';
@@ -199,7 +199,8 @@ async function secretsFor(home: SliccKernelEnv, vault: Vault) {
 
 export function modelBases(
   providers: readonly Provider[],
-  models: Pick<ReturnType<typeof createSliccModels>, 'getModels'>
+  models: Pick<ReturnType<typeof createSliccModels>, 'getModels'>,
+  env: (providerId: string) => Readonly<Record<string, string>> | undefined = () => undefined
 ): ModelBases[] {
   return providers.map((provider) => ({
     provider: provider.id,
@@ -209,6 +210,7 @@ export function modelBases(
           provider.baseUrl,
           ...models.getModels(provider.id).map((model) => model.baseUrl),
           ...(provider.id === BEDROCK ? BEDROCK_ENDPOINTS : []),
+          ...(provider.id === AZURE ? [azureBase(env(provider.id) ?? {})] : []),
         ].filter((url): url is string => typeof url === 'string' && url !== '')
       ),
     ],
@@ -259,7 +261,7 @@ async function modelsOf(
   const fields = await providerFields(store, providers);
   const credentials = vaultCredentials(records, fields.env);
   const models = createSliccModels(credentials, providers);
-  const bases = () => modelBases(providers, models);
+  const bases = () => modelBases(providers, models, fields.env);
   const own = () => bases().filter(({ provider }) => !VAULT_KNOWN.has(provider));
   scope.fetch = vaultFetch(
     vault,

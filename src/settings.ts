@@ -16,7 +16,7 @@ import { abortableBedrock } from './bedrock.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import { BEDROCK, preferredModel } from './preferred.ts';
-import { ADDED_FIRST, KEY_PROVIDERS, LISTINGS } from './providers.ts';
+import { ADDED_FIRST, type FieldSpec, KEY_PROVIDERS, LISTINGS } from './providers.ts';
 import type { KeysMoved } from './secrets/legacy.ts';
 import type { VaultRecords } from './secrets/records.ts';
 import type { PlainStore } from './secrets/store.ts';
@@ -34,10 +34,13 @@ export { BEDROCK, PREFERRED_MODELS, preferredModel } from './preferred.ts';
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
 export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
 
-export const ACCOUNT_FIELDS: Readonly<Record<string, readonly AccountField[]>> = {
-  [BEDROCK]: [{ name: 'region', label: 'Region' }],
-};
-const FIELD_ENV: Readonly<Record<string, string>> = { region: 'AWS_REGION' };
+const specs = (providerId: string): readonly FieldSpec[] => LISTINGS.get(providerId)?.fields ?? [];
+
+export const ACCOUNT_FIELDS: Readonly<Record<string, readonly AccountField[]>> = Object.fromEntries(
+  [...LISTINGS.keys()]
+    .filter((id) => specs(id).length)
+    .map((id) => [id, specs(id).map(({ env: _env, ...field }) => field)])
+);
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
 export const KEY_NEEDS_VAULT = "API keys are kept in seven's vault: update seven";
 
@@ -239,19 +242,30 @@ export async function providerFields(
     env(providerId) {
       const fields = known.get(providerId);
       if (!fields) return undefined;
-      return Object.fromEntries(
-        Object.entries(fields).flatMap(([name, value]) =>
-          FIELD_ENV[name] ? [[FIELD_ENV[name], value]] : []
-        )
+      return Object.assign(
+        {},
+        ...specs(providerId).flatMap((spec) => {
+          const value = fields[spec.name];
+          const env = value === undefined ? '' : spec.env(value);
+          return typeof env === 'string' ? [] : [env];
+        })
       );
     },
     async set(providerId, fields) {
-      const allowed = new Set((ACCOUNT_FIELDS[providerId] ?? []).map((field) => field.name));
-      const kept = Object.fromEntries(
-        Object.entries(fields ?? {}).filter(
-          ([name, value]) => allowed.has(name) && typeof value === 'string' && value.trim() !== ''
-        )
-      );
+      const kept: Record<string, string> = {};
+      for (const spec of specs(providerId)) {
+        const given = fields?.[spec.name];
+        const value = typeof given === 'string' ? given.trim() : '';
+        const stored = known.get(providerId)?.[spec.name];
+        if (!value && spec.required && fields && stored) kept[spec.name] = stored;
+        else if (!value && spec.required && fields)
+          throw new Error(`${spec.label} can’t be empty.`);
+        else if (value) {
+          const problem = spec.env(value);
+          if (typeof problem === 'string') throw new Error(problem);
+          kept[spec.name] = value;
+        }
+      }
       const next = Object.keys(kept).length ? kept : undefined;
       if (next) known.set(providerId, next);
       else known.delete(providerId);
@@ -350,8 +364,8 @@ export async function createAgentSettings(
       }
       if (secret !== null)
         throw new Error(signIn.has(providerId) ? SIGN_IN_NEEDS_VAULT : KEY_NEEDS_VAULT);
-      if (LISTINGS.has(providerId)) await fields.add(providerId);
       if (given !== null) await fields.set(providerId, given);
+      if (LISTINGS.has(providerId)) await fields.add(providerId);
       records.reconnected(providerId);
       await reread(context);
       if (signIn.has(providerId)) await discover([providerId]);

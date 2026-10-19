@@ -1,8 +1,11 @@
 import type { Provider } from '@earendil-works/pi-ai';
 import { antLingProvider } from '@earendil-works/pi-ai/providers/ant-ling';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
+import { azureProvider } from '@earendil-works/pi-ai/providers/azure';
 import { basetenProvider } from '@earendil-works/pi-ai/providers/baseten';
 import { cerebrasProvider } from '@earendil-works/pi-ai/providers/cerebras';
+import { cloudflareAIGatewayProvider } from '@earendil-works/pi-ai/providers/cloudflare-ai-gateway';
+import { cloudflareWorkersAIProvider } from '@earendil-works/pi-ai/providers/cloudflare-workers-ai';
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
 import { fireworksProvider } from '@earendil-works/pi-ai/providers/fireworks';
 import { groqProvider } from '@earendil-works/pi-ai/providers/groq';
@@ -32,6 +35,19 @@ import { xiaomiTokenPlanSgpProvider } from '@earendil-works/pi-ai/providers/xiao
 import { zaiProvider } from '@earendil-works/pi-ai/providers/zai';
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn';
 
+export interface FieldInput {
+  name: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+  customBase?: true;
+}
+
+export interface FieldSpec extends FieldInput {
+  env(value: string): Record<string, string> | string;
+}
+
 export interface KeyProvider {
   id: string;
   make: () => Provider;
@@ -39,9 +55,126 @@ export interface KeyProvider {
   description: string;
   keyUrl: string;
   cors: boolean;
+  fields?: readonly FieldSpec[];
 }
 
+const RESOURCE = /^[a-z0-9][a-z0-9-]{0,62}$/i;
+const DEPLOYMENTS = /^[^=,\s]+\s*=\s*[^=,\s]+(\s*,\s*[^=,\s]+\s*=\s*[^=,\s]+)*$/;
+
+export function httpsBase(value: string): URL | undefined {
+  const url = URL.parse(value);
+  if (url?.protocol !== 'https:' || url.username || url.password) return undefined;
+  return url.port === '' || url.port === '443' ? url : undefined;
+}
+
+function azureEndpoint(value: string): Record<string, string> | string {
+  if (RESOURCE.test(value)) return { AZURE_OPENAI_RESOURCE_NAME: value };
+  const url = httpsBase(value);
+  if (!url)
+    return 'Enter your Azure resource name, or its endpoint as an https:// address without a port or a user name.';
+  return { AZURE_OPENAI_BASE_URL: url.href.replace(/\/+$/, '') };
+}
+
+export const AZURE = 'azure';
+
+export function azureBase(env: Readonly<Record<string, string>>): string | undefined {
+  if (env.AZURE_OPENAI_BASE_URL) return env.AZURE_OPENAI_BASE_URL;
+  const name = env.AZURE_OPENAI_RESOURCE_NAME;
+  return name ? `https://${name}.openai.azure.com/openai/v1` : undefined;
+}
+
+const REGION = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/;
+const ACCOUNT = /^[0-9a-f]{32}$/i;
+const GATEWAY = /^[A-Za-z0-9_-]{1,64}$/;
+
+const checked =
+  (pattern: RegExp, env: string, problem: string) =>
+  (value: string): Record<string, string> | string =>
+    pattern.test(value) ? { [env]: value } : problem;
+
+export const REGION_FIELD: FieldSpec = {
+  name: 'region',
+  label: 'Region',
+  placeholder: 'us-west-2',
+  help: 'The AWS region your Bedrock models run in. Leave it empty for us-west-2.',
+  env: checked(REGION, 'AWS_REGION', 'Enter an AWS region such as us-west-2.'),
+};
+
+const ACCOUNT_FIELD: FieldSpec = {
+  name: 'account',
+  label: 'Account ID',
+  required: true,
+  placeholder: '0123456789abcdef0123456789abcdef',
+  help: 'The 32-character ID on your Cloudflare dashboard’s account overview.',
+  env: checked(
+    ACCOUNT,
+    'CLOUDFLARE_ACCOUNT_ID',
+    'A Cloudflare account ID is 32 characters of 0–9 and a–f.'
+  ),
+};
+
 export const KEY_PROVIDERS: readonly KeyProvider[] = [
+  {
+    id: 'azure',
+    make: azureProvider,
+    env: 'AZURE_OPENAI_API_KEY',
+    description: 'OpenAI models deployed in your own Azure OpenAI or AI Foundry resource.',
+    keyUrl: 'https://portal.azure.com',
+    cors: true,
+    fields: [
+      {
+        name: 'endpoint',
+        label: 'Endpoint',
+        required: true,
+        placeholder: 'my-resource or https://my-resource.openai.azure.com',
+        help: 'Your resource’s name, or its endpoint address from Keys and Endpoint.',
+        customBase: true,
+        env: azureEndpoint,
+      },
+      {
+        name: 'deployments',
+        label: 'Deployments',
+        placeholder: 'gpt-5.4=my-gpt',
+        help: 'Only for deployments named differently from their model, as model=deployment, separated by commas.',
+        env: (value) =>
+          DEPLOYMENTS.test(value)
+            ? { AZURE_OPENAI_DEPLOYMENT_NAME_MAP: value }
+            : 'Write each deployment as model=deployment, separated by commas.',
+      },
+    ],
+  },
+  {
+    id: 'cloudflare-workers-ai',
+    make: cloudflareWorkersAIProvider,
+    env: 'CLOUDFLARE_API_KEY',
+    description: 'Open models on Cloudflare Workers AI, in your Cloudflare account.',
+    keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+    cors: false,
+    fields: [ACCOUNT_FIELD],
+  },
+  {
+    id: 'cloudflare-ai-gateway',
+    make: cloudflareAIGatewayProvider,
+    env: 'CLOUDFLARE_API_KEY',
+    description: 'Models from many labs through your Cloudflare AI Gateway.',
+    keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+    cors: false,
+    fields: [
+      ACCOUNT_FIELD,
+      {
+        name: 'gateway',
+        label: 'Gateway ID',
+        required: true,
+        placeholder: 'my-gateway',
+        help: 'The name of your gateway under AI › AI Gateway.',
+        env: checked(
+          GATEWAY,
+          'CLOUDFLARE_GATEWAY_ID',
+          'A gateway ID is letters, digits, - and _, up to 64 characters.'
+        ),
+      },
+    ],
+  },
   {
     id: 'anthropic',
     make: anthropicProvider,
@@ -308,6 +441,7 @@ export interface Listing {
   auth: ProviderAuth;
   corsFree: boolean;
   vaultName: string;
+  fields?: readonly FieldSpec[];
 }
 
 const upper = (text: string) => text.toUpperCase().replace(/[^A-Z0-9]/g, '_');
@@ -333,6 +467,7 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
       auth: 'fields',
       corsFree: true,
       vaultName: 'AWS_BEARER_TOKEN_BEDROCK',
+      fields: [REGION_FIELD],
     },
   ],
   [
@@ -349,9 +484,10 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
     {
       description: entry.description,
       keyUrl: entry.keyUrl,
-      auth: 'api-key',
+      auth: entry.fields ? 'fields' : 'api-key',
       corsFree: !entry.cors,
       vaultName: named.get(entry.id) as string,
+      ...(entry.fields ? { fields: entry.fields } : {}),
     },
   ]),
 ]);
