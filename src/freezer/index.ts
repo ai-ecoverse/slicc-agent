@@ -339,7 +339,7 @@ async function importCommand(
   );
   return result.error
     ? { code: 1, out: `freezer: ${result.error}\n` }
-    : { code: 0, out: result.text };
+    : { code: 0, out: result.line };
 }
 
 async function command(
@@ -718,6 +718,7 @@ function importing(
             cones: [],
             report: null,
             text: '',
+            line: '',
             error: 'this agent imports nothing',
           },
     cancelImport: () => importer?.cancel(),

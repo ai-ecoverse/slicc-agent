@@ -5,8 +5,8 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
+import { IMPORTS_DIR } from '../freezer/paths.ts';
 import type { ImportPreview } from '../freezer/v6.ts';
-import { IMPORTS_DIR } from '../layout.ts';
 import { opfsDirectory } from '../opfs-pool.ts';
 
 export const DATA_MAX = 16 * 1024 * 1024;
@@ -57,7 +57,12 @@ function sentence(text: string): string {
   return /[.!?]$/.test(said) ? said : `${said}.`;
 }
 
-export function shownPreview({ exportId: _, createdAt, ...rest }: ImportPreview): ShownPreview {
+export function shownPreview({
+  exportId: _,
+  line: __,
+  createdAt,
+  ...rest
+}: ImportPreview): ShownPreview {
   return { ...rest, createdAt: Date.parse(createdAt) };
 }
 

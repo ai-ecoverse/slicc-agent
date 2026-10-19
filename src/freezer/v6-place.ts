@@ -205,24 +205,39 @@ async function placeMemory(run: Run) {
   ];
   for (const place of places) {
     const bytes = data.get(place.name);
-    if (
-      bytes &&
-      (await remember(run.writer, place.file, textOf(bytes, place.name), {
-        file: place.rest,
-        date: run.date,
-      }))
-    )
+    const done = bytes
+      ? await remember(run.writer, place.file, textOf(bytes, place.name), {
+          file: place.rest,
+          date: run.date,
+        })
+      : 'none';
+    if (done === 'merged')
       run.notes.lines.push(`memory, under "Imported from SLICC 6 (${run.date})", in ${place.file}`);
+    if (done === 'aside')
+      run.notes.lines.push(`memory, in ${place.rest}: ${place.file} has no room left for it`);
   }
 }
 
-function router(maps: Maps) {
+function earlier(run: Run, unit: Unit, name: string): LickTarget | undefined {
+  const found = Object.entries(run.deps.agents.state().scoops).filter(
+    ([, record]) => record.cone === unit.cone && record.name === name && !record.removed
+  );
+  return found.at(-1)?.[0] as LickTarget | undefined;
+}
+
+function router(run: Run, maps: Maps) {
   return (folder: string | null | undefined): [Unit, LickTarget] | undefined => {
     const cone = folder ? maps.byFolder.get(folder) : undefined;
     if (cone) return [cone, 'cone'];
     const owner = folder ? maps.owners.get(folder) : undefined;
-    const scoop = owner?.record ? owner.scoops.find((item) => item.six === folder) : undefined;
-    if (owner && scoop) return [owner, `scoop:${scoop.folder}`];
+    const scoop = owner?.scoops.find((item) => item.six === folder);
+    const target =
+      owner && scoop
+        ? owner.record
+          ? (`scoop:${scoop.folder}` as LickTarget)
+          : earlier(run, owner, scoop.name)
+        : undefined;
+    if (owner && target) return [owner, target];
     const unit = owner ?? maps.primary;
     return unit ? [unit, 'cone'] : undefined;
   };
@@ -237,7 +252,7 @@ const flat = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 async function placeLicks(run: Run, maps: Maps) {
   const { licks } = run.parsed;
-  const route = router(maps);
+  const route = router(run, maps);
   const crons = new Map<Unit, CronLine[]>();
   const add = (found: [Unit, LickTarget] | undefined, line: Omit<CronLine, 'target'>) => {
     const why = !SCHEDULE.test(line.schedule)

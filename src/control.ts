@@ -124,6 +124,7 @@ function freezerControl(
             cones: [],
             report: null,
             text: '',
+            line: '',
             error: 'This agent has no freezer.',
           }),
     importCancel: async () => freezer?.cancelImport(),

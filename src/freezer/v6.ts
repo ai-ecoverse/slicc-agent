@@ -7,9 +7,10 @@ import { type Agents, type AgentsState, freeFolder, type ScoopRecord, scoopId } 
 import { homeOf } from '../kernel/accounts.ts';
 import { quote } from '../kernel/env.ts';
 import type { KernelUsers } from '../kernel/users.ts';
-import { IMPORTS_DIR, type Layout } from '../layout.ts';
+import type { Layout } from '../layout.ts';
 import { opfsFile } from '../opfs-pool.ts';
 import { TITLE_TURNS } from '../titles/extension.ts';
+import { IMPORTS_DIR } from './paths.ts';
 import { type Notes, place, reportOf } from './v6-place.ts';
 import {
   checkLicks,
@@ -67,6 +68,7 @@ export interface ImportPreview {
   mounts: string[];
   already: number | null;
   text: string;
+  line: string;
 }
 
 export interface ImportResult {
@@ -75,6 +77,7 @@ export interface ImportResult {
   cones: string[];
   report: string | null;
   text: string;
+  line: string;
   error: string | null;
 }
 
@@ -284,12 +287,26 @@ const UNITS = [
   [1024, 'KB'],
 ] as const;
 
-function settled(providers: readonly string[], known?: readonly string[]): string {
-  const missing = known ? providers.filter((name) => !known.includes(name)) : [];
-  const again = providers.filter((name) => !missing.includes(name));
-  const lacking = missing.length ? ` Seven has no accounts for ${missing.join(', ')}.` : '';
-  return `Re-enter in Settings: ${again.join(', ') || 'nothing'}.${lacking}`;
+export function accountsSplit(providers: readonly string[], known?: readonly string[]) {
+  const accounts = accountsOf(providers);
+  const missing = known ? accounts.filter((name) => !known.includes(name)) : [];
+  const again = accounts.filter((name) => !missing.includes(name));
+  const lacking = missing.length ? `SLICC 7 has no accounts for ${missing.join(', ')}.` : '';
+  const settings = again.length ? `Re-enter in Settings: ${again.join(', ')}.` : '';
+  return { again, lacking, settings };
 }
+
+const said = (...parts: string[]) => parts.filter(Boolean).join(' ');
+
+const words = (at: string) =>
+  new Date(at).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+
+const hostOf = (origin: string) => (URL.canParse(origin) ? new URL(origin).host : origin);
 
 export async function previewOf(
   opened: Opened,
@@ -307,9 +324,8 @@ export async function previewOf(
     .map((item) => item.path.replace(/^\/mnt\//, ''));
   const crons =
     licks.crontasks.length + licks.tasks.filter((task) => task.scheduleType === 'cron').length;
-  const host = URL.canParse(manifest.producer.origin)
-    ? new URL(manifest.producer.origin).host
-    : manifest.producer.origin;
+  const host = hostOf(manifest.producer.origin);
+  const split = accountsSplit(manifest.providers, known);
   const [at, unit] = UNITS.find(([at]) => bytes >= at) ?? (UNITS[2] as (typeof UNITS)[2]);
   const size = `${(bytes / at).toFixed(1)} ${unit}`;
   const parts = [
@@ -334,10 +350,19 @@ export async function previewOf(
     crons,
     webhooks: licks.webhooks.length,
     flagged: manifest.flagged.map((item) => item.path),
-    providers: accountsOf(manifest.providers),
+    providers: split.again,
     mounts,
     already: state.imports?.[opened.key]?.at ?? null,
-    text: `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}. ${settled(accountsOf(manifest.providers), known)} Not imported: ${plural(mounts.length, 'mount')}.`,
+    text: said(
+      `SLICC 6 profile from ${host}, exported ${words(manifest.createdAt)}.`,
+      split.lacking
+    ),
+    line: said(
+      `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}.`,
+      split.settings,
+      split.lacking,
+      `Not imported: ${plural(mounts.length, 'mount')}.`
+    ),
   };
 }
 
@@ -778,13 +803,16 @@ async function importOpened(
       throw error;
     }
     const report = await reportOf(run, made).catch((error: Error) => `nowhere (${error.message})`);
-    const providers = accountsOf(opened.manifest.providers);
+    const split = accountsSplit(opened.manifest.providers, deps.providers);
+    const { origin } = opened.manifest.producer;
+    const settings = said(split.settings, split.lacking);
     return {
       done: true,
       preview: null,
       cones: made,
       report,
-      text: `Imported ${plural(made.length, 'frozen cone')} from ${opened.manifest.producer.origin}${made.length ? `: ${made.join(', ')}` : ''}.\n${settled(providers, deps.providers)}\nThe report is ${report}.\n`,
+      text: `Imported ${plural(made.length, 'frozen cone')} from ${hostOf(origin)}.`,
+      line: `Imported ${plural(made.length, 'frozen cone')} from ${origin}${made.length ? `: ${made.join(', ')}` : ''}.\n${settings ? `${settings}\n` : ''}The report is ${report}.\n`,
       error: null,
     };
   } finally {
@@ -833,6 +861,7 @@ export function createImporter(deps: ImportDeps): Importer {
     cones: [],
     report: null,
     text: '',
+    line: '',
     error: null,
     ...fields,
   });
@@ -861,12 +890,13 @@ export function createImporter(deps: ImportDeps): Importer {
           const writer = new Writer(deps.env, context, controller.signal);
           await parse(opened, await verify(opened, writer, null, show));
           progress.replace(BACKGROUND_CONTEXT, IDLE);
-          return result({ preview, text: `${preview.text}\n` });
+          return result({ preview, text: preview.text, line: `${preview.line}\n` });
         }
         if (preview.already !== null && !options.again)
           return result({
             preview,
-            text: `Already imported on ${day(preview.already)}; freezer import --again makes fresh copies.\n`,
+            text: `Already imported on ${day(preview.already)}.`,
+            line: `Already imported on ${day(preview.already)}; freezer import --again makes fresh copies.\n`,
           });
         const done = await importOpened(
           deps,

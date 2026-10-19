@@ -54,8 +54,22 @@ export class Writer {
     return true;
   }
 
+  readonly #real = new Set<string>(['/']);
+
+  async direct(path: string): Promise<void> {
+    for (let at = dirname(path); !this.#real.has(at); at = dirname(at)) {
+      const real = await this.env.canonicalPath(at, this.context);
+      if (!real.ok) continue;
+      if (real.value !== at)
+        throw new ImportError(`${at} leads through a symlink, and the import won't write there`);
+      this.#real.add(at);
+      break;
+    }
+  }
+
   async put(path: string, content: Uint8Array | string, fresh: boolean, env = this.env) {
     this.check();
+    if (env === this.env) await this.direct(path);
     const bytes = typeof content === 'string' ? encoder.encode(content) : content;
     if (!fresh && !(await this.tree(dirname(path), env))) {
       const old = await env.readBinaryFile(path, this.context);
@@ -115,24 +129,28 @@ export async function remember(
   file: string,
   text: string,
   rest: { file: string; date: string }
-): Promise<boolean> {
+): Promise<'merged' | 'aside' | 'none'> {
   const body = text.replace(/^#{1,2}(\s)/gm, '###$1').trim();
-  if (!body) return false;
+  if (!body) return 'none';
+  await writer.direct(file);
+  const real = await writer.env.canonicalPath(file, writer.context);
+  if (real.ok && real.value !== file)
+    throw new ImportError(`${file} is a symlink, and the import won't write memory through it`);
   const read = await writer.env.readTextFile(file, writer.context);
   const before = read.ok ? read.value.trimEnd() : '';
-  if (before.includes(body)) return false;
+  if (before.includes(body)) return 'none';
   const joined = (section: string) => `${before}${before ? '\n\n' : ''}${section}\n`;
   const heading = `## Imported from SLICC 6 (${rest.date})\n\n`;
-  let whole = joined(`${heading}${body}`);
-  if (!fits(whole)) {
-    await writer.put(rest.file, `${text.trimEnd()}\n`, false);
-    const lines = body.split('\n');
-    const tail = `\n\nThe rest is in ${rest.file}.`;
-    do lines.pop();
-    while (lines.length && !fits(joined(`${heading}${lines.join('\n')}${tail}`)));
-    whole = joined(`${heading}${lines.join('\n')}${tail}`.replace(/^\n+/, ''));
-  }
-  return writer.put(file, whole, false);
+  const whole = joined(`${heading}${body}`);
+  if (fits(whole)) return (await writer.put(file, whole, false)) ? 'merged' : 'none';
+  await writer.put(rest.file, `${text.trimEnd()}\n`, false);
+  const lines = body.split('\n');
+  const tail = `The rest is in ${rest.file}.`;
+  const cut = () => joined(`${heading}${[...lines, '', tail].join('\n')}`);
+  while (lines.length && !fits(cut())) lines.pop();
+  if (!lines.length) return 'aside';
+  await writer.put(file, cut(), false);
+  return 'merged';
 }
 
 export type CronLine = {
@@ -151,21 +169,20 @@ export async function installCrons(
 ) {
   const before = await readTable(writer.env, user, writer.context);
   if (typeof before !== 'string') throw new ImportError(`crontab -u ${user}: ${before.error}`);
-  const lines = crons
-    .map(
-      (cron) =>
-        `# # name: ${cron.name}\n# ${cron.schedule} ${sendCommand(cron.target, cron.message)}`
-    )
-    .filter((line) => !before.includes(line));
-  if (!lines.length) return 0;
+  const blocks = crons.map(
+    (cron) => `# # name: ${cron.name}\n# ${cron.schedule} ${sendCommand(cron.target, cron.message)}`
+  );
+  const changed = blocks.filter((block) => !before.includes(block)).length;
+  if (!changed) return 0;
   const head = `# SLICC 6 crons, imported off on ${date}. Remove "# " from a job's two lines to turn it on.`;
   const notes = crons
-    .filter((cron) => cron.filter && lines.some((line) => line.includes(`name: ${cron.name}\n`)))
+    .filter((cron) => cron.filter)
     .map(
       (cron) =>
         `# ${cron.name} had a SLICC 6 filter, not imported: ${(cron.filter as string).replace(/\s+/g, ' ')}`
     );
-  const table = `${before}${before && !before.endsWith('\n') ? '\n' : ''}${[head, ...notes, ...lines].join('\n')}\n`;
+  const kept = withoutImported(before, new Set(crons.map((cron) => cron.name)));
+  const table = `${[...kept, head, ...notes, ...blocks].join('\n')}\n`;
   writer.later(async () =>
     before
       ? writeTable(writer.env, user, before, BACKGROUND_CONTEXT)
@@ -173,7 +190,24 @@ export async function installCrons(
   );
   const ran = await writeTable(writer.env, user, table, writer.context);
   if (ran.code !== 0) throw new ImportError(`crontab -u ${user}: ${ran.err.trim()}`);
-  return lines.length;
+  return changed;
+}
+
+export function withoutImported(table: string, names: ReadonlySet<string>): string[] {
+  const lines = table.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  const out: string[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at] as string;
+    const named = /^# # name: (\S+)$/.exec(line);
+    if (named && names.has(named[1] as string)) at++;
+    else if (
+      !line.startsWith('# SLICC 6 crons, imported off on ') &&
+      !/^# (\S+) had a SLICC 6 filter/.test(line)
+    )
+      out.push(line);
+  }
+  return out;
 }
 
 export function userSection(text: string): string {

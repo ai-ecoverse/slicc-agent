@@ -2,10 +2,10 @@ import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Agents, AgentsState } from '../agents.ts';
 import { FIRST_CONE } from '../agents.ts';
+import { IMPORTS_DIR } from '../freezer/paths.ts';
 import type { GelatiereAttach } from '../gelatiere/index.ts';
 import {
   AGENT_DIR,
-  IMPORTS_DIR,
   type Layout,
   LEGACY,
   ROOT_HOME,

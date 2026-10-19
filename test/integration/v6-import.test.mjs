@@ -130,7 +130,7 @@ test('freezer import --preview checks a SLICC 6 profile export and says what is 
   assert.equal(ran.status, 0, ran.stderr);
   assert.equal(
     ran.stdout,
-    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: nothing. Seven has no accounts for anthropic, openai. Not imported: 1 mount.\n'
+    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. SLICC 7 has no accounts for anthropic, openai. Not imported: 1 mount.\n'
   );
   const usage = await page.evaluate(() => window.imported('/tmp/profile.zip', '--bogus'));
   assert.equal(usage.status, 2);
@@ -338,7 +338,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
     Buffer.from(await readFile(FIXTURE)).toString('base64')
   );
   assert.deepEqual(preview, {
-    text: 'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: nothing. Seven has no accounts for anthropic, openai. Not imported: 1 mount.',
+    text: 'SLICC 6 profile from www.sliccy.ai, exported 12 Jul 2026. SLICC 7 has no accounts for anthropic, openai.',
     done: false,
     rows: 0,
   });
@@ -346,7 +346,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
   assert.equal(ran.status, 0, ran.stdout + ran.stderr);
   assert.match(
     ran.stdout,
-    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nRe-enter in Settings: nothing\. Seven has no accounts for anthropic, openai\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
+    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nSLICC 7 has no accounts for anthropic, openai\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
   );
   await page.within(30000, () => window.rows().length === 3);
   const seen = await page.evaluate(async () => {
@@ -733,6 +733,63 @@ test('cancelling a large import while it writes rolls it back and leaves nothing
   assert.equal(seen.cancelled, true, seen.phases.join());
   assert.equal(seen.refused, 'The import was cancelled.');
   assert.deepEqual(seen.after, seen.before);
+});
+
+test('freezer import never writes memory through a symlink, and leaves its target and everything else alone', async (t) => {
+  const page = await booted(t);
+  await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
+  const seen = await page.evaluate(async () => {
+    await window.sh(
+      'mkdir -p /root/.pi/agent/memory && echo keep > /etc/kept && ln -s /etc/kept /root/.pi/agent/memory/MEMORY.md'
+    );
+    const ran = await window.imported('/tmp/profile.zip');
+    return {
+      ran,
+      kept: (await window.sh('cat /etc/kept')).stdout,
+      homes: (await window.sh('ls -A /home')).stdout,
+      rows: window.rows().length,
+    };
+  });
+  assert.equal(seen.ran.status, 1);
+  assert.equal(
+    seen.ran.stderr,
+    "freezer: /root/.pi/agent/memory/MEMORY.md is a symlink, and the import won't write memory through it\n"
+  );
+  assert.equal(seen.kept, 'keep\n');
+  assert.equal(seen.rows, 0);
+  assert.doesNotMatch(seen.homes, /cone-/);
+});
+
+test('a newer export with changed crons replaces the earlier commented-out jobs by name and keeps their scoop target', async (t) => {
+  const page = await booted(t);
+  await upload(page, '/tmp/v1.zip', await readFile(FIXTURE));
+  const licks = JSON.parse(files()['licks.json']);
+  licks.tasks[0].prompt = 'Summarize the logs again';
+  await upload(
+    page,
+    '/tmp/v2.zip',
+    profile({
+      contents: { ...files(), 'licks.json': JSON.stringify(licks) },
+      overrides: { exportId: EXPORT_ID.replace(/^6f/, '5d') },
+    })
+  );
+  const table = await page.evaluate(async () => {
+    await window.imported('/tmp/v1.zip');
+    await window.imported('/tmp/v2.zip');
+    return (await window.sh('crontab -u cone-2 -l')).stdout;
+  });
+  assert.equal(table.match(/# # name: v6-task-1/g).length, 1, table);
+  assert.match(
+    table,
+    /^# 30 8 \* \* \* agent send scoop:helper --lick=cron 'Summarize the logs again'$/m
+  );
+  assert.ok(
+    table
+      .split('\n')
+      .filter(Boolean)
+      .every((line) => line.startsWith('#')),
+    table
+  );
 });
 
 test('the fixture is what the generator makes', async () => {
