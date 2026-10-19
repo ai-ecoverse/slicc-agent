@@ -23,7 +23,8 @@ export interface RemoteControl {
   watch(request?: {
     since?: string | null;
     thinking?: boolean;
-  }): Promise<{ head: string; gap?: true; events: AsyncIterable<RemoteEvent> }>;
+    busy?: boolean;
+  }): Promise<{ head: string; gap?: true; busy?: boolean; events: AsyncIterable<RemoteEvent> }>;
   abort(): Promise<{ aborted: boolean }>;
 }
 
@@ -94,14 +95,14 @@ export function remoteControl(
         events: events(service, result.stream),
       };
     },
-    async watch({ since = null, thinking = false } = {}) {
+    async watch({ since = null, thinking = false, busy = false } = {}) {
       const service = need();
-      const result = opened(
-        await service.watch({ agentId: agent(), since, thinking }, BACKGROUND_CONTEXT)
-      );
+      const request = { agentId: agent(), since, thinking, ...(busy ? { busy: true } : {}) };
+      const result = opened(await service.watch(request, BACKGROUND_CONTEXT));
       return {
         head: result.head ?? '',
         ...(result.gap ? { gap: true as const } : {}),
+        ...(typeof result.busy === 'boolean' ? { busy: result.busy } : {}),
         events: events(service, result.stream),
       };
     },

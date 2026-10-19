@@ -17,6 +17,7 @@ export type RemoteEvent =
   | { t: 'run'; state: 'start' | 'end'; reason?: EndReason }
   | { t: 'notice'; id: string; text: string }
   | { t: 'error'; id: string; message: string; detail?: string }
+  | { t: 'busy'; busy: boolean; why?: string[] }
   | { t: 'end'; reason: EndReason; message?: string };
 
 type Json = Record<string, unknown>;

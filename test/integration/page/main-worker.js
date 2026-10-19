@@ -72,10 +72,28 @@ const held = (_context, options) =>
     if (options?.signal?.aborted) done();
     options?.signal?.addEventListener('abort', done, { once: true });
   });
+const gates = new Map();
+const gate = (name) => {
+  if (!gates.has(name)) gates.set(name, Promise.withResolvers());
+  return gates.get(name);
+};
+self.addEventListener('message', ({ data }) => {
+  if (data?.gate) gate(data.gate).resolve();
+});
+const gated = (name, message) => async (context, options, state, model) => {
+  await gate(name).promise;
+  return recorded(message)(context, options, state, model);
+};
+const scoopSteps = params.getAll('scoop-step').map((spec) => {
+  const { gate: name, answer } = JSON.parse(spec);
+  const message = fauxAssistantMessage(answer);
+  return name ? gated(name, message) : recorded(message);
+});
 const steps = [
   ...params.getAll('step').map((spec) => {
-    const { tool, answer, think, error, hold } = JSON.parse(spec);
+    const { tool, answer, think, error, hold, gate: name } = JSON.parse(spec);
     if (hold) return HOLD;
+    if (name) return { gate: name, message: fauxAssistantMessage(answer) };
     if (error) return fauxAssistantMessage([], { stopReason: 'error', errorMessage: error });
     if (think) return fauxAssistantMessage([fauxThinking(think), fauxText(answer)]);
     return tool
@@ -98,7 +116,10 @@ const steps = [
   ),
   ...params.getAll('answer').map((answer) => fauxAssistantMessage(answer)),
 ];
-const queued = steps.map((step) => (step === HOLD ? held : recorded(step)));
+const queued = steps.map((step) => {
+  if (step === HOLD) return held;
+  return step.gate ? gated(step.gate, step.message) : recorded(step);
+});
 let titles = 0;
 const titling = (context) =>
   context.messages.length === 1 &&
@@ -110,6 +131,8 @@ const labelling = (context) =>
 const dispatch = (context, ...rest) => {
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
   if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
+  if (scoopSteps.length && JSON.stringify(context).includes('You are the scoop'))
+    return scoopSteps.shift()(context, ...rest);
   const step = queued.shift();
   if (!step) throw new Error('No more faux responses queued');
   return step(context, ...rest);
