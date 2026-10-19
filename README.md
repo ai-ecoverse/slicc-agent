@@ -529,7 +529,7 @@ SLICC 6 exports a profile as a `slicc-profile` v1 zip (#6). `test/integration/fi
   - the providers to re-enter in Settings, and the secrets that never move;
   - next steps: mounts, MCP servers, turning crons and webhooks on, and sprinkles to check.
 - **The panel:**
-  - `AgentControl.importProfile({ path, data, again, preview })` imports a zip named by a kernel path, or sent as base64 `data`. `importCancel()` stops a running import.
+  - `AgentControl.importProfile({ upload, data, again, preview })` imports an upload the adapter streamed into the imports folder, or a zip sent as base64 `data`. `upload` must be a uuid: the worker maps it to `/var/lib/slicc/agent/imports/upload-<uuid>.zip` and removes that file afterwards, whether the import succeeded, failed or was cancelled. `importCancel()` stops a running import and rolls it back. Guests can call neither.
   - The transcript service's `importing` state gives the phase and "Checking n/m" or "Importing n/m".
   - The spectrum adapter's `importProfile(blob, { preview, again })` streams the picked file into `/var/lib/slicc/agent/imports/` (root, `0700`) through OPFS and passes its path. On a device without that folder, it sends files of up to 16 MiB as `data`.
   - `FrozenCone.v6` marks imported rows.

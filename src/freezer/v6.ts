@@ -78,7 +78,19 @@ export interface ImportResult {
   error: string | null;
 }
 
-export type ImportSource = { path: string } | { bytes: Uint8Array };
+type ReadSource = { path: string } | { bytes: Uint8Array };
+
+export type ImportSource = ReadSource | { upload: string };
+
+const UPLOAD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export const uploadPath = (id: string) => `${IMPORTS_DIR}/upload-${id}.zip`;
+
+function uploaded(source: ImportSource): { path: string } | undefined {
+  if (!('upload' in source)) return undefined;
+  if (!UPLOAD.test(source.upload)) throw new ImportError("that upload isn't one of the agent's");
+  return { path: uploadPath(source.upload) };
+}
 
 export interface ImportDeps {
   agents: Agents;
@@ -774,7 +786,7 @@ async function importOpened(
 
 async function sourceOf(
   deps: ImportDeps,
-  source: ImportSource,
+  source: ReadSource,
   context: Context
 ): Promise<ZipSource> {
   if ('bytes' in source) return bytesSource(source.bytes);
@@ -830,8 +842,12 @@ export function createImporter(deps: ImportDeps): Importer {
           total,
           text: phase === 'checking' ? `Checking ${done}/${total}` : `Importing ${done}/${total}`,
         });
+      let upload: { path: string } | undefined;
       try {
-        const opened = await openProfile(await sourceOf(deps, source, context));
+        upload = uploaded(source);
+        const opened = await openProfile(
+          await sourceOf(deps, upload ?? (source as ReadSource), context)
+        );
         const preview = await previewOf(opened, deps.agents.state());
         if (options.preview) {
           const writer = new Writer(deps.env, context, controller.signal);
@@ -861,6 +877,7 @@ export function createImporter(deps: ImportDeps): Importer {
         return result({ error: message });
       } finally {
         running = undefined;
+        if (upload) await deps.env.remove(upload.path, { force: true }, BACKGROUND_CONTEXT);
       }
     },
   };

@@ -327,13 +327,16 @@ test('freezer import refuses a damaged or unsafe profile and changes nothing', a
 test('freezer import turns a SLICC 6 profile into frozen cones, with files, memory, skills, crons off, webhooks off and a report; a thaw forks one', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
-  const preview = await page.evaluate(async () => {
-    const answer = await window.connection.control.importProfile(
-      { path: '/tmp/profile.zip', data: null, again: false, preview: true },
-      BACKGROUND_CONTEXT
-    );
-    return { text: answer.preview.text, done: answer.done, rows: window.rows().length };
-  });
+  const preview = await page.evaluate(
+    async (data) => {
+      const answer = await window.connection.control.importProfile(
+        { upload: null, data, again: false, preview: true },
+        BACKGROUND_CONTEXT
+      );
+      return { text: answer.preview.text, done: answer.done, rows: window.rows().length };
+    },
+    Buffer.from(await readFile(FIXTURE)).toString('base64')
+  );
   assert.deepEqual(preview, {
     text: 'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: anthropic, openai. Not imported: 1 mount.',
     done: false,

@@ -113,7 +113,7 @@ function freezerControl(
       freezer
         ? freezer.importProfile(
             request.data === null
-              ? { path: request.path ?? '' }
+              ? { upload: request.upload ?? '' }
               : { bytes: fromBase64(request.data) },
             { again: request.again, preview: request.preview },
             context

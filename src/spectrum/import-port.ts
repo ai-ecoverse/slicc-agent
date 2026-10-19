@@ -17,7 +17,7 @@ export interface ShownImport {
 
 export const IDLE_IMPORT: ImportProgress = { phase: 'idle', done: 0, total: 0, text: '' };
 
-type Upload = { path: string | null; data: string | null; done(): Promise<void> };
+type Upload = { upload: string | null; data: string | null; done(): Promise<void> };
 
 const TOO_BIG =
   'This profile is too big to send from this device. Import it in the browser that runs SLICC, or with freezer import there.';
@@ -40,15 +40,16 @@ export async function upload(
       () => undefined
     );
   if (dir) {
-    const name = `upload-${crypto.randomUUID()}.zip`;
+    const id = crypto.randomUUID();
+    const name = `upload-${id}.zip`;
     const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
     await file.stream().pipeTo(writable);
     const done = () => dir.removeEntry(name).catch(() => undefined);
-    return { path: `${IMPORTS_DIR}/${name}`, data: null, done };
+    return { upload: id, data: null, done };
   }
   if (file.size > DATA_MAX) throw new Error(TOO_BIG);
   const data = base64(new Uint8Array(await file.arrayBuffer()));
-  return { path: null, data, done: async () => undefined };
+  return { upload: null, data, done: async () => undefined };
 }
 
 function sentence(text: string): string {
@@ -94,7 +95,12 @@ export async function importProfile(
   const sent = await upload(file, root);
   try {
     const answer = await connection.control.importProfile(
-      { path: sent.path, data: sent.data, again: options.again === true, preview: options.preview },
+      {
+        upload: sent.upload,
+        data: sent.data,
+        again: options.again === true,
+        preview: options.preview,
+      },
       BACKGROUND_CONTEXT
     );
     if (answer.error) throw new Error(sentence(answer.error));

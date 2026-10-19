@@ -131,7 +131,7 @@ export interface AgentControl {
 }
 
 export interface ImportRequest {
-  path: string | null;
+  upload: string | null;
   data: string | null;
   again: boolean;
   preview: boolean;
