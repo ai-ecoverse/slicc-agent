@@ -42,13 +42,13 @@ jobs:
         with:
           script: |
             const { readFileSync } = await import('node:fs');
-            const { disagreeing } = JSON.parse(readFileSync(process.env.REACH_REPORT, 'utf8'));
+            const { rows, disagreeing } = JSON.parse(readFileSync(process.env.REACH_REPORT, 'utf8'));
             const title = 'Provider reachability disagrees with the listings';
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const { data: open } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', per_page: 100 });
             const found = open.find((issue) => issue.title === title && !issue.pull_request);
             if (!disagreeing.length) {
-              if (!found) return;
+              if (!found || !rows.every((row) => row.verdict === row.listed)) return;
               await github.rest.issues.createComment({ ...context.repo, issue_number: found.number, body: `The nightly reach run ${run} found every listing agreeing again.` });
               await github.rest.issues.update({ ...context.repo, issue_number: found.number, state: 'closed', state_reason: 'completed' });
               return;
