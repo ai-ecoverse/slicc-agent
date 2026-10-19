@@ -2,9 +2,10 @@ import type { Context } from '@earendil-works/chord';
 import type { Conversation, Harness, TaskId } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Activity } from '../kernel/activity.ts';
+import type { Jobs } from '../kernel/jobs.ts';
 import { ROOT_USER } from '../layout.ts';
 import { type Attachment, attachmentPart } from './attachment.ts';
-import { type BootFacts, bootLicks, LicksHostDoc } from './boot.ts';
+import { type BootFacts, booting, LicksHostDoc } from './boot.ts';
 import { type ConfigError, parseWebhook, type WebhookEntry } from './config.ts';
 import {
   type CronJob,
@@ -29,6 +30,7 @@ export interface LickSourcesOptions {
   licks: Licks;
   flushEvery?: number;
   activity?: Activity;
+  jobs?: Jobs;
   dirs?: () => readonly LickDir[] | Promise<readonly LickDir[]>;
   cronUser?: (target: LickTarget, place: LickDir) => string | undefined;
   fetch?: typeof fetch;
@@ -170,6 +172,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
   const { harness, env, licks, home } = options;
   const files = configFiles(env);
   const deliver = (event: LickEvent, context: Context) => licks.deliver(event, context);
+  const boots = booting(harness, options.cone, deliver, options.jobs);
   const dirsOf = options.dirs ?? (() => [{ dir: `${home}/${SLICC_DIR}`, home, cone: null }]);
   const watching = new Map<string, Watches>();
   const watchesOf = (place: LickDir) => {
@@ -319,7 +322,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
       }, options.flushEvery ?? 2000);
     },
     reconcile,
-    boot: (facts, context) => bootLicks(harness, options.cone(), deliver, facts, context),
+    boot: boots.boot,
     async webhook(name, delivery, context) {
       const entry = webhooks.get(name);
       if (!entry) return false;
@@ -331,6 +334,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     },
     async close(context) {
       closed = true;
+      boots.stop();
       clearTimeout(reconcileTimer);
       clearInterval(flushTimer);
       await control?.close(context);

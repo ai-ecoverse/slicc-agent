@@ -339,3 +339,61 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
     `${gw}/silent.txt`,
   ]);
 });
+
+test('after a page reload, the session-reload lick lists the background job that was still running and no finished command that mentions nohup', async (t) => {
+  const page = await chrome.page(t);
+  const persist = `/.slicc/reload-${Date.now()}`;
+  const bash = (command) =>
+    `tool=${encodeURIComponent(JSON.stringify({ name: 'bash', args: { command } }))}`;
+  const commands = [
+    "cat > /tmp/reload-note.txt <<'EOF'\nstart the server with nohup next time\nEOF\nwc -c /tmp/reload-note.txt",
+    'nohup sleep 600 > /dev/null 2>&1 &\necho started',
+    'nohup echo done > /tmp/reload-done.txt',
+  ];
+  const open = (query) =>
+    page.evaluate(async (query) => {
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      window.kernel = await bootKernel();
+      const booted = Date.now();
+      const owner = await startAgent({
+        worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+        kernel: { connect: () => window.kernel.connect() },
+      });
+      window.connection = await owner.connect();
+      window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
+      await window.agent.ready();
+      return booted;
+    }, query);
+  await page.init(helpers);
+  await page.goto('/');
+  const booted = await open(
+    `persist=${persist}&${commands.map(bash).join('&')}&answer=Started.&answer=Noted.`
+  );
+  const reply = await page.evaluate(() =>
+    window.connection.prompt('Write the note, start the server, then mark it done.')
+  );
+  assert.equal(reply, 'Started.');
+  const before = await page.evaluate(async () => {
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const client = await attachKernel(await window.kernel.connect());
+    const table = await client.ps();
+    return {
+      sleeping: table.filter((row) => row.argv.join(' ') === 'sleep 600').length,
+      licks: window.licks().length,
+    };
+  });
+  assert.deepEqual(before, { sleeping: 1, licks: 0 });
+  await page.within(5000, (at) => Date.now() >= Math.floor(at / 1000) * 1000 + 1000, booted);
+  await page.reload();
+  await open(`persist=${persist}&answer=Noted.&answer=Noted.`);
+  const lick = await page.within(60000, () =>
+    window.licks().find((found) => found.channel === 'session-reload')
+  );
+  assert.equal(lick.title, 'The kernel restarted');
+  assert.equal(
+    lick.body,
+    'Background commands that are no longer running:\nnohup sleep 600 > /dev/null 2>&1 & …'
+  );
+  assert.doesNotMatch(lick.body, /reload-note|reload-done/);
+});

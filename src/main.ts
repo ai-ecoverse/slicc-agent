@@ -37,6 +37,7 @@ import { type AgentUsers, agentUsers, warnSupport } from './kernel/agent-users.t
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
+import { backgroundJobs } from './kernel/jobs.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
 import { AGENT_DIR, ROOT_HOME } from './layout.ts';
 import { setupLicks } from './licks/index.ts';
@@ -450,13 +451,18 @@ async function start(
   const skills = setupSkills(registry, licks.licks);
   registry.install(secretsExtension({ names, vault }));
   const titles = setupTitles(registry, models, home, at, () => opened);
-  const [activity, groups] = [createActivity(), processGroups(client)];
+  const [activity, groups, jobs] = [
+    createActivity(),
+    processGroups(client),
+    backgroundJobs(client),
+  ];
   const model = options.model ?? (await ready.defaultModel());
   let opened: Agent | undefined;
   const people = users ? agentUsers(users, client, home, () => opened?.agents) : undefined;
   const environment = kernelEnvironment(client, {
     activity,
     groups,
+    jobs,
     identify: identity(() => opened?.agents, model),
     scrub: vault,
     spawn: shellGrants(names),
@@ -469,6 +475,7 @@ async function start(
     env: home,
     home: HOME,
     activity,
+    jobs,
     ...(people ? { dirs: () => people.lickDirs(), cronUser: people.cronUser.bind(people) } : {}),
   });
   await sources.start(BACKGROUND_CONTEXT);
