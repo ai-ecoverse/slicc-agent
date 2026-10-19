@@ -13,6 +13,7 @@ import {
 import type { SendAttachment } from '../attachments.ts';
 import { holdText, type VaultState } from '../secrets/vault.ts';
 import type { Delivered, SendMode, SendRequest, SendResponse } from '../services.ts';
+import { watchBusy } from './busy.ts';
 import { type EndReason, idOf, Mapper, type RemoteEvent, replayOf } from './events.ts';
 
 export const VAULT_BACK = 'the vault is answering again';
@@ -38,7 +39,14 @@ export const MAX_QUEUED = 10000;
 export const IDLE_MS = 120000;
 
 export type RemoteOpened =
-  | { ok: true; stream: string; delivered: Delivered | null; head: string | null; gap: boolean }
+  | {
+      ok: true;
+      stream: string;
+      delivered: Delivered | null;
+      head: string | null;
+      gap: boolean;
+      busy?: boolean;
+    }
   | { ok: false; code: string; message: string };
 
 export interface RemoteBatch {
@@ -58,7 +66,7 @@ export interface AgentRemote {
     context: Context
   ): Promise<RemoteOpened>;
   watch(
-    request: { agentId: string | null; since: string | null; thinking: boolean },
+    request: { agentId: string | null; since: string | null; thinking: boolean; busy?: boolean },
     context: Context
   ): Promise<RemoteOpened>;
   next(stream: string, waitMs: number, context: Context): Promise<RemoteBatch>;
@@ -252,11 +260,12 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
       conversation.id,
       cancel.context
     );
-    const open = (onEvents: (batch: readonly AgentEvent[]) => void) => {
+    const open = (onEvents: (batch: readonly AgentEvent[]) => void, ended?: () => void) => {
       let off = () => undefined as void;
       const stream = new Stream<RemoteEvent>(
         async () => {
           off();
+          ended?.();
           await events.stop();
           cancel.cancel();
         },
@@ -323,9 +332,13 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
       const mapper = new Mapper(request.thinking);
       for (const entry of watched.snapshot.entries) mapper.entry(entry);
       mapper.partial(partial);
-      const { id, stream } = watched.open((batch) =>
-        stream.push(batch.flatMap((event) => followed(mapper, event)))
-      );
+      const busy = request.busy
+        ? await watchBusy(host.harness, watched, (events) => stream.push(events), context)
+        : undefined;
+      const { id, stream } = watched.open((batch) => {
+        const mapped = batch.flatMap((event) => followed(mapper, event));
+        stream.push(busy ? busy.gate.before(mapped) : mapped);
+      }, busy?.stop);
       if (at >= 0) {
         const own = all[at] as RemoteEvent;
         const sinceId = idOf(own);
@@ -334,7 +347,14 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
         const replay = own.t === 'text' || own.t === 'thinking' ? [own] : [];
         stream.push([...replay, ...all.slice(last + 1)]);
       }
-      return { ok: true, stream: id, delivered: null, head, gap };
+      return {
+        ok: true,
+        stream: id,
+        delivered: null,
+        head,
+        gap,
+        ...(busy ? { busy: busy.opened } : {}),
+      };
     },
     async next(id, waitMs, context) {
       const stream = streams.get(id);
