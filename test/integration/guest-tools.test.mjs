@@ -134,15 +134,33 @@ async function boot(page, options = {}) {
         await until(() => !r.asked().some((item) => item.id === first.id), 'the answer');
         return first;
       };
-      r.when = (check, what) =>
-        new Promise((resolve) => {
+      r.when = (check, what, quietMs = 60_000) =>
+        new Promise((resolve, reject) => {
           r.waiting = what;
           const offs = [];
-          const look = () => {
-            const value = offs.length && check();
-            if (!value) return;
+          let done = false;
+          let timer;
+          const stop = (settle, value) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
             for (const off of offs.splice(0)) off();
-            resolve(value);
+            settle(value);
+          };
+          const arm = () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+              stop(
+                reject,
+                new Error(`no progress for ${Math.round(quietMs / 1000)} s waiting for ${what}`)
+              );
+            }, quietMs);
+          };
+          const look = () => {
+            if (done || !offs.length) return;
+            arm();
+            const value = check();
+            if (value) stop(resolve, value);
           };
           offs.push(
             r.local.views.subscribe(look),
@@ -150,6 +168,7 @@ async function boot(page, options = {}) {
             r.model.approvals.on('approvals', look)
           );
           look();
+          if (!done) arm();
         });
       r.ran = (agentId, path) =>
         until(() => r.results(agentId).at(-1)?.includes(path) && r.results(agentId).at(-1), path);
