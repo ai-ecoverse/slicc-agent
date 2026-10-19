@@ -72,6 +72,8 @@ function stream(body: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
   });
 }
 
+const TELEMETRY = 'x-stainless-';
+
 export function transportFetch(
   transport: Transport,
   origin: string,
@@ -95,7 +97,7 @@ export function transportFetch(
     const response = await transport.fetch({
       url: request.url,
       method: request.method,
-      headers: [...request.headers],
+      headers: [...request.headers].filter(([name]) => !name.startsWith(TELEMETRY)),
       ...(body ? { body } : {}),
       signal: request.signal,
     });
