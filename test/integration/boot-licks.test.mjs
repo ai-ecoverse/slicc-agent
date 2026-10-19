@@ -177,3 +177,24 @@ test('a reload caused by the turn a reload lick started does not wake the agent 
     ANSWER,
   ]);
 });
+
+test('a run a reload interrupts on a discovered model is resumed and answered', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, [{ version: '6.6.0', calls: [bash('sleep 30')] }, { version: '6.6.0' }]);
+  const seen = await page.evaluate(async () => {
+    const { local, until, restart, shape, settle } = globalThis.r;
+    const sent = await local.control.send(
+      { text: 'Wait.', whenBusy: 'followUp', requestId: null },
+      BACKGROUND_CONTEXT
+    );
+    await until(
+      () => local.views.value?.cone?.docs?.['pi.live']?.tools?.length,
+      'the running tool call'
+    );
+    await restart();
+    await until(() => shape().length === 3, 'the answer after the reload');
+    return { shape: await settle('the resumed run'), sent: Boolean(sent.submissionId) };
+  });
+  assert.equal(seen.sent, true);
+  assert.deepEqual(seen.shape, ['user:Wait.', 'tool', ANSWER]);
+});
