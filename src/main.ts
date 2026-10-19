@@ -37,15 +37,16 @@ import { type AgentUsers, agentUsers, warnSupport } from './kernel/agent-users.t
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
+import { backgroundJobs } from './kernel/jobs.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
 import { AGENT_DIR, ROOT_HOME } from './layout.ts';
-import { setupLicks } from './licks/index.ts';
+import { type Licks, setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
 import { type McpAccounts, setupMcp } from './mcp/index.ts';
 import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
-import { pageOnly, type Transport, transportFetch } from './net.ts';
+import { pageOnly, type Reach, type Transport, transportFetch, transportReach } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { AZURE, azureBase, VAULT_KNOWN } from './providers.ts';
 import { createPages } from './remote/pages.ts';
@@ -327,6 +328,7 @@ async function prepare(
     transport,
     facts,
     ...made,
+    reach: transportReach(kernel.client),
     registry: baseRegistry(facts, scope.location.origin),
   };
 }
@@ -342,17 +344,19 @@ function modelsOfAgent(
 }
 
 async function settingsOf(
-  made: Awaited<ReturnType<typeof modelsOf>>,
+  made: Awaited<ReturnType<typeof modelsOf>> & { reach: Reach },
   mcp: McpAccounts,
-  moved: { agent: Agent; vault: Vault; wiped: Wiped }
+  moved: { agent: Agent; vault: Vault; wiped: Wiped; licks: Licks }
 ) {
-  const { models, records, fields, providers, own, endpoints } = made;
+  const { models, records, fields, providers, own, endpoints, reach } = made;
   const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
   const settings = await createAgentSettings(models, { records, fields }, providers, {
     mcp,
     moved: keys,
+    reach,
   });
   settings.state.subscribe(() => void endpoints.models(own()).catch(() => undefined));
+  settings.state.subscribe(() => void moved.licks.flush(BACKGROUND_CONTEXT).catch(() => undefined));
   return settings;
 }
 
@@ -450,13 +454,18 @@ async function start(
   const skills = setupSkills(registry, licks.licks);
   registry.install(secretsExtension({ names, vault }));
   const titles = setupTitles(registry, models, home, at, () => opened);
-  const [activity, groups] = [createActivity(), processGroups(client)];
+  const [activity, groups, jobs] = [
+    createActivity(),
+    processGroups(client),
+    backgroundJobs(client),
+  ];
   const model = options.model ?? (await ready.defaultModel());
   let opened: Agent | undefined;
   const people = users ? agentUsers(users, client, home, () => opened?.agents) : undefined;
   const environment = kernelEnvironment(client, {
     activity,
     groups,
+    jobs,
     identify: identity(() => opened?.agents, model),
     scrub: vault,
     spawn: shellGrants(names),
@@ -470,6 +479,7 @@ async function start(
     home: HOME,
     models,
     activity,
+    jobs,
     ...(people ? { dirs: () => people.lickDirs(), cronUser: people.cronUser.bind(people) } : {}),
   });
   await sources.start(BACKGROUND_CONTEXT);
@@ -530,8 +540,7 @@ async function start(
   );
   const freezer = freezerOf(agent, { home, memory, titles, people, users, ready });
   licks.licks.guard(freezer.frozenTarget);
-  const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped });
-  settings.state.subscribe(() => void licks.licks.flush(BACKGROUND_CONTEXT).catch(() => undefined));
+  const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped, licks: licks.licks });
   const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(
     {

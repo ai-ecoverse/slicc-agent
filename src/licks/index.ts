@@ -4,6 +4,7 @@ import type { Conversation, ConversationId, Harness, Registry } from '@earendil-
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
 import type { Activity } from '../kernel/activity.ts';
+import type { Jobs } from '../kernel/jobs.ts';
 import { licksExtension } from './extension.ts';
 import type { LickChannel, LickTarget } from './lick.ts';
 import { createLicks, type Licks, type LicksHost } from './licks.ts';
@@ -48,6 +49,7 @@ export interface LicksSetup {
       models?: Pick<Models, 'getModel'>;
       flushEvery?: number;
       activity?: Activity;
+      jobs?: Jobs;
       dirs?: () => Promise<readonly LickDir[]>;
       cronUser?: (target: LickTarget, place: LickDir) => string | undefined;
     }

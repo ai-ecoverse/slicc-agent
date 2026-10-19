@@ -1,0 +1,65 @@
+name: Reach
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reach
+  cancel-in-progress: false
+
+jobs:
+  reach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+
+      - run: npm ci --ignore-scripts
+
+      - name: preflight every provider
+        env:
+          REACH_REPORT: ${{ runner.temp }}/reach.json
+        run: npm run --silent reach
+
+      - name: open or update the issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          REACH_REPORT: ${{ runner.temp }}/reach.json
+        with:
+          script: |
+            const { readFileSync } = await import('node:fs');
+            const { rows, disagreeing } = JSON.parse(readFileSync(process.env.REACH_REPORT, 'utf8'));
+            const title = 'Provider reachability disagrees with the listings';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', per_page: 100 });
+            const found = open.find((issue) => issue.title === title && !issue.pull_request);
+            if (!disagreeing.length) {
+              if (!found || !rows.every((row) => row.verdict === row.listed)) return;
+              await github.rest.issues.createComment({ ...context.repo, issue_number: found.number, body: `The nightly reach run ${run} found every listing agreeing again.` });
+              await github.rest.issues.update({ ...context.repo, issue_number: found.number, state: 'closed', state_reason: 'completed' });
+              return;
+            }
+            const table = disagreeing.map((row) => `| \`${row.id}\` | ${row.verdict} | ${row.listed} |`);
+            const body = [
+              `The nightly reach run ${run} found providers whose verdict from \`https://seven.sliccy.ai\` isn't their listing's \`needs\` (\`corsFree\` in \`src/providers.ts\`).`,
+              '',
+              '| provider | answers browsers | listed |',
+              '| --- | --- | --- |',
+              ...table,
+            ].join('\n');
+            if (found) await github.rest.issues.update({ ...context.repo, issue_number: found.number, body });
+            else await github.rest.issues.create({ ...context.repo, title, body });

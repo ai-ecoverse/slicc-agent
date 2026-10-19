@@ -294,9 +294,25 @@ const relay = {
     return { status: response.status, headers: [...response.headers], body: chunks(response.body) };
   },
 };
+const routes = new Set();
+if (params.has('route')) relay.traits = { crossOrigin: params.get('route') };
+self.addEventListener('message', ({ data }) => {
+  if (!data?.traits) return;
+  relay.traits = data.traits;
+  for (const listener of routes) listener(data.traits);
+  data.routed?.postMessage(true);
+});
+const routed = params.has('route')
+  ? {
+      onTraits: (listener) => {
+        routes.add(listener);
+        return () => routes.delete(listener);
+      },
+    }
+  : {};
 const attach =
   relayed || params.has('gateway') || registry.length
-    ? async (port) => Object.assign(await attachKernel(port), { transport: relay })
+    ? async (port) => Object.assign(await attachKernel(port), { transport: relay, ...routed })
     : undefined;
 const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]

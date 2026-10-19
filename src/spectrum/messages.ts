@@ -373,11 +373,13 @@ export function origins(entries: readonly EntryRecord[]): Map<number, From> {
   return out;
 }
 
+type NotifyLick = LickMessage & { summary?: string; report?: string };
+
 function lickMessage(
   id: string,
   entry: EntryRecord,
   decisions: ReadonlyMap<string, LickDecision>
-): LickMessage | undefined {
+): NotifyLick | undefined {
   const lick = entryLick(entry);
   if (!lick) return undefined;
   const state = lick.actions?.length ? (decisions.get(lick.id) ?? 'pending') : undefined;
@@ -392,6 +394,8 @@ function lickMessage(
     ...(lick.count > 1 ? { count: lick.count } : {}),
     ...(state ? { state } : {}),
     ...(lick.severity ? { severity: lick.severity } : {}),
+    ...(lick.summary ? { summary: lick.summary } : {}),
+    ...(lick.report ? { report: lick.report } : {}),
   };
 }
 
@@ -581,13 +585,21 @@ function asked(
 }
 
 function secrets(id: string, entry: EntryRecord): SystemMessage {
-  const data = (entry.data ?? {}) as { names?: SecretName[] };
+  const data = (entry.data ?? {}) as {
+    names?: SecretName[];
+    error?: string | null;
+    exposed?: string[];
+  };
   return {
     id,
     role: 'system',
     kind: 'notice',
-    title: 'Secrets listed',
-    text: listedLine(data.names ?? []),
+    title: data.error ? 'Secrets unavailable' : 'Secrets listed',
+    text: listedLine({
+      names: data.names ?? [],
+      error: data.error ?? null,
+      exposed: data.exposed ?? [],
+    }),
     createdAt: entry.model?.[0]?.timestamp ?? 0,
   };
 }

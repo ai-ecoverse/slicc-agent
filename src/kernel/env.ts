@@ -23,6 +23,7 @@ import type { KernelClient, KernelProcess } from './client.ts';
 import { type ExecHooks, execute } from './exec.ts';
 import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from './files.ts';
 import type { ProcessGroups } from './groups.ts';
+import type { Jobs } from './jobs.ts';
 import { dirname, normalize, resolve } from './paths.ts';
 import { nativeWatch, type PollOptions, pollWatch, RESCAN_MS } from './watch.ts';
 
@@ -32,6 +33,7 @@ export interface KernelEnvOptions {
   watch?: PollOptions;
   activity?: Activity;
   groups?: ProcessGroups;
+  jobs?: Jobs;
   owner?: number;
   exports?: Readonly<Record<string, string>>;
   scrub?: Scrub;
@@ -81,6 +83,7 @@ export class SliccKernelEnv implements ExecutionEnv {
   readonly #poll: PollOptions;
   readonly #activity: Activity | undefined;
   readonly #groups: ProcessGroups | undefined;
+  readonly #jobs: Jobs | undefined;
   readonly #owner: number | undefined;
   readonly #exports: Readonly<Record<string, string>> | undefined;
   readonly #hooks: ExecHooks;
@@ -93,6 +96,7 @@ export class SliccKernelEnv implements ExecutionEnv {
     this.#poll = options.watch ?? {};
     this.#activity = options.activity;
     this.#groups = options.groups;
+    this.#jobs = options.jobs;
     this.#owner = options.owner;
     this.#exports = options.exports;
     this.#scrub = options.scrub;
@@ -359,20 +363,27 @@ export class SliccKernelEnv implements ExecutionEnv {
   ): Promise<Result<ShellExecResult, ExecutionError>> {
     const ended = this.#activity?.began();
     const line = typeof command === 'string' ? prefixed(command, this.#exports) : command;
+    const jobs = this.#jobs;
+    const client = this.#client;
+    let recorded: Promise<void> | undefined;
+    const tracked =
+      jobs && typeof command === 'string'
+        ? (process: KernelProcess) => {
+            recorded = jobs.started(client, command, process);
+          }
+        : undefined;
     const groups = this.#groups;
     const owner = this.#owner;
-    if (!groups || owner === undefined)
-      return execute(
-        this.#client,
-        this.cwd,
-        line,
-        options,
-        context,
-        undefined,
-        undefined,
-        this.#hooks
-      ).finally(ended);
-    return this.#grouped(groups, owner, line, options, context).finally(ended);
+    const run =
+      !groups || owner === undefined
+        ? execute(client, this.cwd, line, options, context, tracked, undefined, this.#hooks)
+        : this.#grouped(groups, owner, line, options, context, tracked);
+    return run
+      .then(async (result) => {
+        await recorded;
+        return result;
+      })
+      .finally(ended);
   }
 
   async #grouped(
@@ -380,13 +391,15 @@ export class SliccKernelEnv implements ExecutionEnv {
     owner: number,
     line: string | readonly string[],
     options: ShellExecOptions | undefined,
-    context: Context
+    context: Context,
+    tracked: ((process: KernelProcess) => void) | undefined
   ): Promise<Result<ShellExecResult, ExecutionError>> {
     for (let wait = groups.pending(owner); wait; wait = groups.pending(owner)) await wait;
     const pgid = groups.shared(owner);
     const release = pgid === undefined && groups.joins() ? groups.reserve(owner) : () => undefined;
     const spawned = (process: KernelProcess) => {
       groups.track(owner, process);
+      tracked?.(process);
       release();
     };
     const join = groups.joins()

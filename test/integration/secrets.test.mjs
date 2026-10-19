@@ -256,7 +256,10 @@ test('secrets: with no vault the agent is unchanged, and /secrets answers locall
   captured.push(...seen.requests.map((text, at) => ({ what: `plain request ${at}`, text })));
   assert.equal(seen.answer, 'Plain.');
   assert.deepEqual(seen.vault, { port: 'none', needed: false, version: 0, locked: 'no', held: 0 });
-  assert.equal(seen.listed, 'The user listed secrets: none.');
+  assert.match(
+    seen.listed,
+    /^Secrets are unavailable: fnox isn't installed; the vault refused to list secrets \(ENOTCONN\)\.$/
+  );
 });
 
 test('secrets: a model call goes out prepared by the vault, with the key filled in and the body scrubbed', async (t) => {
