@@ -1,21 +1,22 @@
 import { writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { isMain } from './main.mjs';
 
 export const ORIGIN = 'https://seven.sliccy.ai';
-const SIMPLE = new Set(['accept', 'accept-language', 'content-language', 'user-agent']);
+const SIMPLE = new Set([
+  'accept',
+  'accept-language',
+  'content-language',
+  'content-length',
+  'host',
+  'user-agent',
+]);
 const STRIPPED = 'x-stainless-';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'POST']);
 const TIMEOUT_MS = 15_000;
 
-export const BEDROCK_HEADERS = [
-  'amz-sdk-invocation-id',
-  'amz-sdk-request',
-  'authorization',
-  'content-type',
-  'x-amz-user-agent',
-];
-
 const ENV = {
+  AWS_REGION: 'us-west-2',
   AZURE_OPENAI_RESOURCE_NAME: 'example',
   CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
   CLOUDFLARE_GATEWAY_ID: 'seven-reach',
@@ -47,7 +48,7 @@ export function needed(names) {
     ...new Set(
       names
         .map((name) => name.toLowerCase())
-        .filter((name) => !SIMPLE.has(name) && !name.startsWith(STRIPPED))
+        .filter((name) => !SIMPLE.has(name) && !name.startsWith(STRIPPED) && !name.startsWith(':'))
     ),
   ].sort();
 }
@@ -140,6 +141,17 @@ export async function captured(providers) {
   const { createModels } = await import('@earendil-works/pi-ai/models');
   const sent = [];
   const native = globalThis.fetch;
+  const handlers = createRequire(import.meta.url)('@smithy/node-http-handler');
+  const originals = [handlers.NodeHttpHandler, handlers.NodeHttp2Handler].map((handler) => [
+    handler.prototype,
+    handler.prototype.handle,
+  ]);
+  for (const [prototype] of originals)
+    prototype.handle = async (request) => {
+      const url = `${request.protocol}//${request.hostname}${request.path}`;
+      sent.push({ url, method: request.method, headers: Object.keys(request.headers) });
+      throw new Error('reach captures this request');
+    };
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     sent.push({ url: request.url, method: request.method, headers: [...request.headers.keys()] });
@@ -176,32 +188,25 @@ export async function captured(providers) {
         await models.classify(model, CLASSIFY).catch(() => undefined);
       for (const entry of sent)
         own.push({ url: entry.url, method: entry.method, names: needed(entry.headers) });
-      if (provider.id === 'amazon-bedrock') {
-        own.push({
-          url: 'https://bedrock-runtime.us-west-2.amazonaws.com/model/reach/converse-stream',
-          method: 'POST',
-          names: BEDROCK_HEADERS,
-        });
-      } else {
-        const byApi = new Map(models.getModels(provider.id).map((model) => [model.api, model]));
-        for (const model of byApi.values()) {
-          sent.length = 0;
-          const stream = models.streamSimple(
-            model,
-            { messages: [{ role: 'user', content: 'reach', timestamp: 0 }] },
-            { maxRetries: 0 }
-          );
-          for await (const _event of stream);
-          const request = sent.find((entry) => entry.method !== 'GET') ?? sent[0];
-          if (request)
-            own.push({ url: request.url, method: request.method, names: needed(request.headers) });
-        }
+      const byApi = new Map(models.getModels(provider.id).map((model) => [model.api, model]));
+      for (const model of byApi.values()) {
+        sent.length = 0;
+        const stream = models.streamSimple(
+          model,
+          { messages: [{ role: 'user', content: 'reach', timestamp: 0 }] },
+          { maxRetries: 0 }
+        );
+        for await (const _event of stream);
+        const request = sent.find((entry) => entry.method !== 'GET') ?? sent[0];
+        if (request)
+          own.push({ url: request.url, method: request.method, names: needed(request.headers) });
       }
       requests.set(provider.id, unique(own));
     }
     return requests;
   } finally {
     globalThis.fetch = native;
+    for (const [prototype, handle] of originals) prototype.handle = handle;
   }
 }
 

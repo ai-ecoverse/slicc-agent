@@ -43,17 +43,23 @@ jobs:
           script: |
             const { readFileSync } = await import('node:fs');
             const { disagreeing } = JSON.parse(readFileSync(process.env.REACH_REPORT, 'utf8'));
-            if (!disagreeing.length) return;
             const title = 'Provider reachability disagrees with the listings';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', per_page: 100 });
+            const found = open.find((issue) => issue.title === title && !issue.pull_request);
+            if (!disagreeing.length) {
+              if (!found) return;
+              await github.rest.issues.createComment({ ...context.repo, issue_number: found.number, body: `The nightly reach run ${run} found every listing agreeing again.` });
+              await github.rest.issues.update({ ...context.repo, issue_number: found.number, state: 'closed', state_reason: 'completed' });
+              return;
+            }
             const rows = disagreeing.map((row) => `| \`${row.id}\` | ${row.verdict} | ${row.listed} |`);
             const body = [
-              `The nightly reach run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId} found providers whose verdict from \`https://seven.sliccy.ai\` isn't their listing's \`needs\` (\`corsFree\` in \`src/providers.ts\`).`,
+              `The nightly reach run ${run} found providers whose verdict from \`https://seven.sliccy.ai\` isn't their listing's \`needs\` (\`corsFree\` in \`src/providers.ts\`).`,
               '',
               '| provider | answers browsers | listed |',
               '| --- | --- | --- |',
               ...rows,
             ].join('\n');
-            const { data: open } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', per_page: 100 });
-            const found = open.find((issue) => issue.title === title && !issue.pull_request);
             if (found) await github.rest.issues.update({ ...context.repo, issue_number: found.number, body });
             else await github.rest.issues.create({ ...context.repo, title, body });
