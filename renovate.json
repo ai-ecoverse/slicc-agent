@@ -6,7 +6,7 @@
       "groupName": "patched dependencies",
       "matchPackageNames": ["@earendil-works/**", "@aws-sdk/middleware-websocket"],
       "automerge": false,
-      "labels": ["patched-dependency"]
+      "labels": ["patched-dependency", "pi-ai-lockstep"]
     },
     {
       "description": "@aws-sdk/middleware-websocket keeps a caret range, the same kind pi-ai's @aws-sdk/client-bedrock-runtime asks for, so npm and pnpm resolve one copy for both and the aws-websocket-abort-signal patch reaches the class the Bedrock client uses.",
