@@ -65,3 +65,160 @@ test('Settings shows Bedrock’s region as a picker of its regions, on the regio
   );
   assert.ok(seen.items.some(([value]) => value === 'us-west-2'));
 });
+
+test('in Settings a blocked provider is shown in the picker but can’t be picked, and becomes pickable when a CORS-free route appears', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const until = async (check, tries = 500) => {
+      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
+      return check();
+    };
+    const find = (root, selector) => {
+      const found = root.querySelector(selector);
+      if (found) return found;
+      for (const node of root.querySelectorAll('*'))
+        if (node.shadowRoot) {
+          const inner = find(node.shadowRoot, selector);
+          if (inner) return inner;
+        }
+      return null;
+    };
+    await import('/node_modules/@ai-ecoverse/slicc-spectrum/dist/slicc-ui.js');
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    let worker;
+    const owner = await startAgent({
+      worker: () =>
+        (worker = new Worker('/dist-test/main-worker.js?registry&vault&route=cors', {
+          type: 'module',
+        })),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const model = createAgentModel(await owner.connect(), { storage: localStorage });
+    await model.agent.ready();
+    await until(() => model.settings.providers().some((option) => option.id === 'nvidia'));
+    const settings = document.createElement('slicc-settings');
+    settings.model = model;
+    document.body.append(settings);
+    const root = () => settings.shadowRoot;
+    await until(() => find(root(), '[data-action="add-provider"]'));
+    find(root(), '[data-action="add-provider"]').click();
+    const option = (id) => find(root(), `[role="option"][data-provider="${id}"]`);
+    await until(() => option('nvidia') && option('groq'));
+    const state = (id) => ({
+      disabled: option(id).getAttribute('aria-disabled'),
+      blocked: option(id).hasAttribute('data-blocked'),
+      text: option(id).textContent.replace(/\s+/g, ' ').trim(),
+    });
+    const before = { nvidia: state('nvidia'), groq: state('groq') };
+    const channel = new MessageChannel();
+    const routed = new Promise((resolve) => {
+      channel.port1.onmessage = () => resolve();
+    });
+    worker.postMessage({ traits: { crossOrigin: 'any' }, routed: channel.port2 }, [channel.port2]);
+    await routed;
+    await until(() => option('nvidia') && !option('nvidia').hasAttribute('data-blocked'));
+    const after = state('nvidia');
+    await owner.release();
+    return { before, after };
+  });
+  assert.equal(seen.before.nvidia.disabled, 'true');
+  assert.equal(seen.before.nvidia.blocked, true);
+  assert.match(seen.before.nvidia.text, /Needs the SLICC extension or CLI/);
+  assert.equal(seen.before.groq.disabled, 'false');
+  assert.equal(seen.before.groq.blocked, false);
+  assert.doesNotMatch(seen.before.groq.text, /Needs the SLICC extension or CLI/);
+  assert.equal(seen.after.disabled, 'false');
+  assert.equal(seen.after.blocked, false);
+  assert.doesNotMatch(seen.after.text, /Needs the SLICC extension or CLI/);
+});
+
+test('an MCP token account carries its server URL, and Settings says it moved once mcp.json points the server elsewhere', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const record = {
+    kind: 'mcp',
+    name: 'DOCS_TOKEN',
+    server: 'docs',
+    placeholder: 'fnox_proxy_docs',
+    value: 'docs-token-0001',
+  };
+  const seen = await page.evaluate(async (record) => {
+    const until = async (check, tries = 1000) => {
+      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
+      return check();
+    };
+    const find = (root, selector) => {
+      const found = root.querySelector(selector);
+      if (found) return found;
+      for (const node of root.querySelectorAll('*'))
+        if (node.shadowRoot) {
+          const inner = find(node.shadowRoot, selector);
+          if (inner) return inner;
+        }
+      return null;
+    };
+    const write = async (path, text) => {
+      let dir = await navigator.storage.getDirectory();
+      const parts = path.split('/').filter(Boolean);
+      const name = parts.pop();
+      for (const part of parts) dir = await dir.getDirectoryHandle(part, { create: true });
+      const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
+      await writable.write(text);
+      await writable.close();
+    };
+    const config = (url) =>
+      JSON.stringify({
+        mcpServers: { docs: { url, headers: { Authorization: 'Bearer ${DOCS_TOKEN}' } } },
+      });
+    await write('/home/.pi/agent/mcp.json', config('https://mcp.test/mcp'));
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const query = `relay=mcp.test&vault&record=${encodeURIComponent(JSON.stringify(record))}`;
+    const owner = await startAgent({
+      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const model = createAgentModel(await owner.connect(), { storage: localStorage });
+    await model.agent.ready();
+    model.vault = createDummyModel({ storage: localStorage, vault: 'empty' }).vault;
+    localStorage.setItem(
+      'slicc-spectrum.mcp-endpoints',
+      JSON.stringify({ docs: 'https://mcp.test/mcp' })
+    );
+    const docs = () => model.settings.accounts().find((account) => account.id === 'mcp:docs');
+    await until(() => docs()?.status === 'connected' && docs()?.url);
+    const settings = document.createElement('slicc-settings');
+    settings.model = model;
+    document.body.append(settings);
+    const row = () => find(settings.shadowRoot, '.account[data-id="mcp:docs"]');
+    await until(() => row());
+    const before = {
+      url: docs().url,
+      moved: Boolean(row().querySelector('[data-notice="moved"]')),
+    };
+    await write('/home/.pi/agent/mcp.json', config('https://mcp.test/v2/mcp'));
+    await until(() => docs()?.url === 'https://mcp.test/v2/mcp' && docs()?.status === 'connected');
+    await until(() => row()?.querySelector('[data-notice="moved"]'));
+    const note = row()
+      ?.querySelector('[data-notice="moved"]')
+      ?.textContent.replace(/\s+/g, ' ')
+      .trim();
+    const reconnect = Boolean(row()?.querySelector('[data-action="reconnect-mcp"]'));
+    await owner.release();
+    return { before, after: docs().url, note, reconnect };
+  }, record);
+  assert.deepEqual(seen.before, { url: 'https://mcp.test/mcp', moved: false });
+  assert.equal(seen.after, 'https://mcp.test/v2/mcp');
+  assert.equal(
+    seen.note,
+    'The server moved to https://mcp.test/v2/mcp. Reconnect to send the token there.'
+  );
+  assert.equal(seen.reconnect, true);
+});

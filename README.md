@@ -158,7 +158,7 @@ The first provider is AWS Bedrock with a Bedrock API key as the bearer token; th
 
 ### In slicc-spectrum
 
-`@ai-ecoverse/slicc-spectrum` is an optional peer dependency, `^1.94.1`. 1.94.0 is the first release with the provider picker (`providers()`, `remove`, `vaultName`, `customBase`, a field's `options` and `value`), and 1.94.1 shows a field with `options` as an `sp-picker` on its `value`, so Settings opens Bedrock's region picker on the region the account stored. `test/integration/settings-ui.test.mjs` checks that in a real `<slicc-settings>`.
+`@ai-ecoverse/slicc-spectrum` is an optional peer dependency, `^1.96.0`. 1.94.0 is the first release with the provider picker (`providers()`, `remove`, `vaultName`, `customBase`, a field's `options` and `value`); 1.94.1 shows a field with `options` as an `sp-picker` on its `value`; 1.95.0 shows a `blocked` provider in the picker as unpickable with “Needs the SLICC extension or CLI”; and 1.96.0 registers an MCP token's server URL (`Account.url`) with the vault itself, after a “Connect to {url}?” confirm, and offers Reconnect when the URL moves. `test/integration/settings-ui.test.mjs` checks each in a real `<slicc-settings>`: Bedrock's region picker on the stored region, a blocked provider that can't be picked until a CORS-free route appears, and the moved note once `mcp.json` points a connected server elsewhere.
 
 `@ai-ecoverse/slicc-agent/spectrum` turns an `AgentConnection` into slicc-spectrum's `AgentPort`, so `<slicc-app>` shows the real agent:
 
