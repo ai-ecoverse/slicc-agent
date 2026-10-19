@@ -279,9 +279,9 @@ export function accountsOf(providers: readonly string[]): string[] {
 }
 
 const UNITS = [
-  [1e9, 'GB'],
-  [1e6, 'MB'],
-  [1e3, 'KB'],
+  [1024 ** 3, 'GB'],
+  [1024 ** 2, 'MB'],
+  [1024, 'KB'],
 ] as const;
 
 function settled(providers: readonly string[], known?: readonly string[]): string {
