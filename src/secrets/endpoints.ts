@@ -1,4 +1,4 @@
-import type { McpServerEntry, ModelEndpoint } from '@ai-ecoverse/slicc-vault';
+import type { McpServerEntry } from '@ai-ecoverse/slicc-vault';
 import type { ModelRoute } from './fetch.ts';
 import type { AgentRecord } from './records.ts';
 import type { Vault } from './vault.ts';
@@ -74,18 +74,6 @@ export function modelRoute(
   };
 }
 
-export function modelEndpoints(bases: readonly ModelBases[]): ModelEndpoint[] {
-  const seen = new Set<string>();
-  return bases.flatMap(({ provider, urls }) =>
-    urls.filter(modelUrl).flatMap((url) => {
-      const key = `${provider} ${url}`;
-      if (seen.has(key)) return [];
-      seen.add(key);
-      return [{ provider, url }];
-    })
-  );
-}
-
 export interface McpServerSource {
   server: string;
   url: string;
@@ -111,19 +99,17 @@ export function mcpEndpoints(
 }
 
 export interface Endpoints {
-  models(bases: readonly ModelBases[]): Promise<void>;
   servers(servers: readonly McpServerSource[]): Promise<void>;
   token(server: string, url: string): Promise<void>;
   close(): void;
 }
 
 export function vaultEndpoints(vault: Pick<Vault, 'state' | 'connected' | 'endpoints'>): Endpoints {
-  let model: ModelEndpoint[] = [];
   let servers: readonly McpServerSource[] = [];
   const tokens = new Map<string, string>();
   let last = '';
   const send = async (force = false) => {
-    const set = { model, mcp: mcpEndpoints(servers, tokens) };
+    const set = { mcp: mcpEndpoints(servers, tokens) };
     const key = JSON.stringify(set);
     if (!vault.connected || (!force && key === last)) return;
     last = key;
@@ -139,10 +125,6 @@ export function vaultEndpoints(vault: Pick<Vault, 'state' | 'connected' | 'endpo
     if (opened) void send(true).catch(() => undefined);
   });
   return {
-    models(bases) {
-      model = modelEndpoints(bases);
-      return send();
-    },
     servers(next) {
       servers = next;
       return send();
