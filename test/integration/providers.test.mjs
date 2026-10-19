@@ -167,7 +167,7 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
   const account = '0123456789abcdef0123456789abcdef';
   const seen = await page.evaluate(
     async ({ query, account }) => {
-      const { owner, settings, agent, put, log } = await window.openRegistry(query);
+      const { owner, settings, agent, put, unput, log } = await window.openRegistry(query);
       await window.until(() => settings.providers().length > 0);
       const option = settings.providers().find((entry) => entry.id === 'cloudflare-workers-ai');
       const bedrock = settings.providers().find((entry) => entry.id === 'amazon-bedrock');
@@ -191,6 +191,21 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
         status: settings.accounts().find((entry) => entry.id === option.id)?.status,
         models: settings.models().filter((entry) => entry.id.startsWith(`${option.id}/`)).length,
       };
+      const row = () => settings.accounts().find((entry) => entry.id === option.id);
+      settings.disconnect(option.id);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const kept = row()?.status;
+      await unput(option.vaultName);
+      await settings.remove(option.id);
+      await window.until(() => !row());
+      const cleaned = row() === undefined;
+      await put({
+        kind: 'model',
+        name: option.vaultName,
+        provider: option.id,
+        placeholder: 'fnox_proxy_cf',
+        value: 'cf-token-key-0001',
+      });
       await settings.connect(option.id, undefined, { account });
       await window.until(
         () => settings.accounts().find((entry) => entry.id === option.id)?.status === 'connected'
@@ -202,7 +217,18 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
         'Hello Cloudflare.'
       );
       const { upstream } = await log();
-      const result = { option, bedrock, refused, empty, pending, added, reply, upstream };
+      const result = {
+        option,
+        bedrock,
+        refused,
+        empty,
+        pending,
+        kept,
+        cleaned,
+        added,
+        reply,
+        upstream,
+      };
       await owner.release();
       return result;
     },
@@ -223,6 +249,8 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
   assert.equal(seen.refused, 'A Cloudflare account ID is 32 characters of 0–9 and a–f.');
   assert.equal(seen.empty, 'Account ID can’t be empty.');
   assert.deepEqual(seen.pending, { status: 'disconnected', models: 0 });
+  assert.equal(seen.kept, 'disconnected');
+  assert.equal(seen.cleaned, true);
   assert.deepEqual(
     seen.added.fields.map((field) => field.name),
     ['account']
