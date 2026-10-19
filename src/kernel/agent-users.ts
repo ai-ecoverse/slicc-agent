@@ -5,6 +5,7 @@ import { FIRST_CONE } from '../agents.ts';
 import type { GelatiereAttach } from '../gelatiere/index.ts';
 import {
   AGENT_DIR,
+  IMPORTS_DIR,
   type Layout,
   LEGACY,
   ROOT_HOME,
@@ -231,7 +232,7 @@ export function agentUsers(
     },
     async start(opened) {
       await root.exec(
-        `mkdir -p ${SESSIONS.tmp} ${AGENT_DIR} ${SHARED_DIR} && chmod 1777 ${SESSIONS.tmp} && chmod 755 ${AGENT_DIR} && chmod 700 ${SHARED_DIR}`,
+        `mkdir -p ${SESSIONS.tmp} ${AGENT_DIR} ${SHARED_DIR} ${IMPORTS_DIR} && chmod 1777 ${SESSIONS.tmp} && chmod 755 ${AGENT_DIR} && chmod 700 ${SHARED_DIR} ${IMPORTS_DIR}`,
         undefined,
         BACKGROUND_CONTEXT
       );

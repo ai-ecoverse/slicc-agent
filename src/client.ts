@@ -12,6 +12,7 @@ import type { ApprovalPolicy } from './approvals/policy.ts';
 import type { Approval } from './approvals/record.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
+import type { ImportProgress } from './freezer/v6.ts';
 import type { GuestSeat } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import { controlAnswer, pageAnswer, remoteAnswer, settingsAnswer } from './readonly.ts';
@@ -56,6 +57,7 @@ export interface AgentConnection {
   readonly memories?: ReplicatedState<MemoryEntry[]>;
   readonly memoryScopes?: ReplicatedState<MemoryScope[]>;
   readonly frozen?: ReplicatedState<FrozenCone[]>;
+  readonly importing?: ReplicatedState<ImportProgress>;
   readonly changes?: ReplicatedState<ChangesView>;
   readonly monitor?: ReplicatedState<MonitorFeed>;
   readonly vault?: ReplicatedState<VaultState>;
@@ -242,6 +244,7 @@ export async function connectAgent(
     memories: hold<MemoryEntry[]>(state('memories')),
     memoryScopes: hold<MemoryScope[]>(state('memoryScopes')),
     frozen: hold<FrozenCone[]>(state('frozen')),
+    importing: hold<ImportProgress>(state('importing')),
     changes: hold<ChangesView>(state('changes')),
     monitor: hold<MonitorFeed>(state('monitor')),
     vault: hold<VaultState>(state('vault')),

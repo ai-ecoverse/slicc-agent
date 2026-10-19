@@ -10,6 +10,7 @@ export const ROOT_USER = 'root';
 export const AGENT_DIR = '/etc/slicc/agent';
 export const ROOT_HOME = '/root';
 export const SHARED_DIR = '/var/lib/slicc/agent/shared';
+export const IMPORTS_DIR = '/var/lib/slicc/agent/imports';
 
 export type Persist = 'tmp' | 'durable';
 

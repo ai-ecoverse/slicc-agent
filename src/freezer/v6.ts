@@ -7,10 +7,10 @@ import { type Agents, type AgentsState, freeFolder, type ScoopRecord, scoopId } 
 import { homeOf } from '../kernel/accounts.ts';
 import { quote } from '../kernel/env.ts';
 import type { KernelUsers } from '../kernel/users.ts';
-import type { Layout } from '../layout.ts';
+import { IMPORTS_DIR, type Layout } from '../layout.ts';
 import { opfsFile } from '../opfs-pool.ts';
 import { TITLE_TURNS } from '../titles/extension.ts';
-import { place } from './v6-place.ts';
+import { type Notes, place, reportOf } from './v6-place.ts';
 import {
   checkLicks,
   checkManifest,
@@ -34,7 +34,6 @@ import {
 } from './zip.ts';
 
 export const V6_KIND = 'slicc.v6';
-export const IMPORTS_DIR = '/var/lib/slicc/agent/imports';
 const MiB = 1024 ** 2;
 export const LIMITS = {
   archive: 2048 * MiB,
@@ -63,7 +62,7 @@ export interface ImportPreview {
   skills: string[];
   crons: number;
   webhooks: number;
-  flagged: number;
+  flagged: string[];
   providers: string[];
   mounts: string[];
   already: number | null;
@@ -85,6 +84,8 @@ export interface ImportDeps {
   agents: Agents;
   env: ExecutionEnv;
   layout: Layout;
+  memoryHome: string;
+  providers?: readonly string[];
   users?: Pick<KernelUsers, 'add' | 'remove'>;
   envOf?: (cone: string) => Promise<ExecutionEnv | undefined>;
   opfs?: () => Promise<FileSystemDirectoryHandle>;
@@ -256,6 +257,15 @@ async function licksIn(opened: Opened, data?: Map<string, Uint8Array>): Promise<
   return checkLicks(json(data?.get(name) ?? (await readEntry(opened.source, entry)), name));
 }
 
+const ACCOUNTS: Record<string, string> = {
+  'bedrock-camp': 'amazon-bedrock',
+  bedrock: 'amazon-bedrock',
+};
+
+export function accountsOf(providers: readonly string[]): string[] {
+  return [...new Set(providers.map((name) => ACCOUNTS[name] ?? name))];
+}
+
 const UNITS = [
   [1e9, 'GB'],
   [1e6, 'MB'],
@@ -303,11 +313,11 @@ export async function previewOf(
     skills: manifest.skills.map((skill) => skill.name),
     crons,
     webhooks: licks.webhooks.length,
-    flagged: manifest.flagged.length,
-    providers: manifest.providers,
+    flagged: manifest.flagged.map((item) => item.path),
+    providers: accountsOf(manifest.providers),
     mounts,
     already: state.imports?.[opened.key]?.at ?? null,
-    text: `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}. Re-enter in Settings: ${manifest.providers.join(', ') || 'nothing'}. Not imported: ${plural(mounts.length, 'mount')}.`,
+    text: `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}. Re-enter in Settings: ${accountsOf(manifest.providers).join(', ') || 'nothing'}. Not imported: ${plural(mounts.length, 'mount')}.`,
   };
 }
 
@@ -717,6 +727,16 @@ async function importOpened(
     const data = await verify(opened, writer, stage, options.show);
     const parsed = await parse(opened, data);
     await assign(deps, opened, parsed.units, options.again, date, context);
+    const notes: Notes = {
+      lines: [],
+      skipped: [],
+      shadowed: [],
+      tasks: [],
+      sprinkles: new Map(),
+      crons: [],
+      webhooks: [],
+      placed: new Map(),
+    };
     const run = {
       deps,
       opened,
@@ -724,6 +744,7 @@ async function importOpened(
       writer,
       stage,
       date,
+      notes,
       show: options.show,
       fresh: new Map(),
       ready: new Set<Unit>(),
@@ -736,14 +757,14 @@ async function importOpened(
       await writer.rollback();
       throw error;
     }
-    const cones = [...new Set(parsed.units.map((unit) => unit.cone))];
-    const providers = opened.manifest.providers;
+    const report = await reportOf(run, made).catch((error: Error) => `nowhere (${error.message})`);
+    const providers = accountsOf(opened.manifest.providers);
     return {
       done: true,
       preview: null,
-      cones,
-      report: null,
-      text: `Imported ${plural(made.length, 'frozen cone')} from ${opened.manifest.producer.origin}${made.length ? `: ${made.join(', ')}` : ''}.\nRe-enter in Settings: ${providers.join(', ') || 'nothing'}.\n`,
+      cones: made,
+      report,
+      text: `Imported ${plural(made.length, 'frozen cone')} from ${opened.manifest.producer.origin}${made.length ? `: ${made.join(', ')}` : ''}.\nRe-enter in Settings: ${providers.join(', ') || 'nothing'}.\nThe report is ${report}.\n`,
       error: null,
     };
   } finally {

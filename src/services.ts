@@ -10,6 +10,7 @@ import type { AgentSudo } from './approvals/sudo.ts';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
+import type { ImportProgress, ImportResult } from './freezer/v6.ts';
 import type { GuestOpened, Proposed, ProposeRequest } from './guests/index.ts';
 import type { GuestDraft, GuestGates, GuestSeat } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
@@ -103,6 +104,8 @@ export interface AgentControl {
   newChat(agentId: string, context: Context): Promise<Created>;
   thaw(frozenId: string, context: Context): Promise<Created>;
   discard(frozenId: string, context: Context): Promise<Created>;
+  importProfile(request: ImportRequest, context: Context): Promise<ImportResult>;
+  importCancel(context: Context): Promise<void>;
   changesOpen(context: Context): Promise<void>;
   changeAccept(path: string, context: Context): Promise<Created>;
   changeRevert(path: string, context: Context): Promise<Created>;
@@ -125,6 +128,13 @@ export interface AgentControl {
     reason: string | null,
     context: Context
   ): Promise<ApprovalDecided>;
+}
+
+export interface ImportRequest {
+  path: string | null;
+  data: string | null;
+  again: boolean;
+  preview: boolean;
 }
 
 export interface ImageRef {
@@ -280,6 +290,8 @@ export const CONTROL_METHODS = keys<AgentControl>({
   newChat: true,
   thaw: true,
   discard: true,
+  importProfile: true,
+  importCancel: true,
   changesOpen: true,
   changeAccept: true,
   changeRevert: true,
@@ -330,6 +342,7 @@ export interface AgentTranscript {
   readonly memories: ReplicatedState<MemoryEntry[]>;
   readonly memoryScopes: ReplicatedState<MemoryScope[]>;
   readonly frozen: ReplicatedState<FrozenCone[]>;
+  readonly importing: ReplicatedState<ImportProgress>;
   readonly changes: ReplicatedState<ChangesView>;
   readonly monitor: ReplicatedState<MonitorFeed>;
   readonly vault: ReplicatedState<VaultState>;
@@ -360,6 +373,7 @@ export const TRANSCRIPT_STATES = keys<AgentTranscript>({
   memories: true,
   memoryScopes: true,
   frozen: true,
+  importing: true,
   changes: true,
   monitor: true,
   vault: true,

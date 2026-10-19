@@ -509,6 +509,30 @@ SLICC 6 exports a profile as a `slicc-profile` v1 zip (#6). `test/integration/fi
   - Importing the same zip again does nothing: "Already imported on …". `--again` makes fresh copies.
   - A newer export of the same origin imports a conversation only if it has grown, as a new frozen cone named "<title> (updated)".
   - Its files replace only the files that changed. If that cone has been thawed since, they go to `~/workspace.v6-<date>` instead.
+- **Memory:** six's global `CLAUDE.md` goes into "Everyone" (`<home>/.pi/agent/memory/MEMORY.md`) and a cone's into that cone's memory file. Each goes under `## Imported from SLICC 6 (<date>)`, with six's headings turned into entries. Memory's budget is 16 KiB and 200 lines: what doesn't fit stays in `/root/v6/memory/<cone>.md`, and the section says where.
+- **Skills:**
+  - Profile skills go to `/usr/share/skills/<name>/` (root, `0755`/`0644`), for every agent. Names are cleaned to seven's rule (`a-z`, `0-9`, `-`, at most 64 characters).
+  - A skill already there with the same files is left alone.
+  - A different skill of the same name goes to the primary cone's own `~/.pi/agent/skills/<name>/`, where it shadows the global one for that cone only.
+- **Sprinkles:** they go to the primary cone's `~/sprinkles/<name>/`, and the report names the ones that call `slicc.*` APIs other than `slicc.lick`.
+- **Crons, off:** six's crontasks and its cron-scheduled tasks become **commented-out** jobs in the cone user's kernel crontab (root's without kernel users):
+  ```
+  # # name: <name>
+  # <schedule> agent send <cone|scoop:<folder>> --lick=cron '<prompt>'
+  ```
+  The schedule must be cron syntax. A six filter is kept as a comment, and interval and once tasks are listed in the report.
+- **Webhooks, off:** each becomes `~/.slicc/webhooks/<name>.json.v6`. The lick sources skip `.v6` files until they're renamed to `.json`.
+- **Git:** only the `[user]` name and email from six's `.gitconfig` go to `/root/.gitconfig`, and only when that file has no `[user]` section yet.
+- **The report:** `/root/v6-import-<date>.md` lists:
+  - what was imported and what was skipped;
+  - a "Review these files" table of credential-like files, giving each one's seven path, size and why it was flagged;
+  - the providers to re-enter in Settings, and the secrets that never move;
+  - next steps: mounts, MCP servers, turning crons and webhooks on, and sprinkles to check.
+- **The panel:**
+  - `AgentControl.importProfile({ path, data, again, preview })` imports a zip named by a kernel path, or sent as base64 `data`. `importCancel()` stops a running import.
+  - The transcript service's `importing` state gives the phase and "Checking n/m" or "Importing n/m".
+  - The spectrum adapter's `importProfile(blob, { preview, again })` streams the picked file into `/var/lib/slicc/agent/imports/` (root, `0700`) through OPFS and passes its path. On a device without that folder, it sends files of up to 16 MiB as `data`.
+  - `FrozenCone.v6` marks imported rows.
 
 ### Changes
 

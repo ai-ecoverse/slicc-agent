@@ -152,6 +152,7 @@ async function webhooksIn(
   const errors: ConfigError[] = [];
   const into = new Map<string, WebhookEntry>();
   for (const name of await files.list(dir, context)) {
+    if (name.endsWith('.v6')) continue;
     const file = `${dir}/${name}`;
     const json = await files.read(file, context);
     if (json === undefined) continue;
