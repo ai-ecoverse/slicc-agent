@@ -5,6 +5,7 @@ import {
   type EntryRecord,
   type Harness,
 } from '@earendil-works/pi-durable';
+import type { Job, Jobs } from '../kernel/jobs.ts';
 import type { Deliver } from './fswatch.ts';
 
 type HostState = {
@@ -13,6 +14,7 @@ type HostState = {
   boot: string | null;
   mark: number;
   upgrades: number;
+  jobs?: Job[];
 };
 
 export const LicksHostDoc = defineDoc<HostState>({
@@ -27,7 +29,7 @@ export interface BootFacts {
   boot: string | null;
 }
 
-const BACKGROUND = /(?:&\s*$|&\s*disown\b|\bnohup\b|\bsetsid\b)/m;
+export const LISTED = 5;
 
 interface Block {
   type?: string;
@@ -61,8 +63,14 @@ function upgraded(from: string, to: string, upgrades: number) {
   } as const;
 }
 
-function restarted(boot: string, commands: readonly string[]) {
-  const background = commands.filter((command) => BACKGROUND.test(command)).slice(-5);
+export function backgroundList(jobs: readonly Job[]): string[] {
+  const commands = [...new Set(jobs.map((job) => job.command))];
+  const more = commands.length - LISTED;
+  return more > 0 ? [...commands.slice(-LISTED), `…and ${more} more`] : commands;
+}
+
+function restarted(boot: string, jobs: readonly Job[]) {
+  const background = backgroundList(jobs);
   return {
     channel: 'session-reload',
     source: 'kernel',
@@ -81,17 +89,21 @@ export async function bootLicks(
   cone: Conversation,
   deliver: Deliver,
   facts: BootFacts,
-  context: Context
+  context: Context,
+  jobs?: Jobs,
+  listen?: () => void
 ): Promise<void> {
   const state = await harness.snapshot(LicksHostDoc, context);
+  listen?.();
   const previous = state?.agent ?? null;
   if (previous !== null && previous !== facts.version)
     await deliver(upgraded(previous, facts.version, state?.upgrades ?? 0), context);
   const { entries } = await cone.context(context);
+  const before = state?.jobs ?? [];
   if (facts.boot !== null && state?.boot && facts.boot !== state.boot) {
     const commands = bashCommands(entries, state.mark);
-    if (commands.length) await deliver(restarted(facts.boot, commands), context);
-  }
+    if (commands.length || before.length) await deliver(restarted(facts.boot, before), context);
+  } else if (facts.boot !== null && facts.boot === state?.boot) jobs?.adopt(before);
   const { entries: after } = await cone.context(context);
   const mark = Number(after.at(-1)?.id ?? 0);
   await harness.commit(async (tx) => {
@@ -102,5 +114,42 @@ export async function bootLicks(
       doc.boot = facts.boot;
       doc.mark = mark;
     }
+    doc.jobs = jobs?.list() ?? [];
   }, context);
+}
+
+function recordJobs(harness: Harness, jobs: Jobs, context: Context): () => void {
+  let chain: Promise<void> = Promise.resolve();
+  return jobs.watch(() => {
+    chain = chain
+      .then(() =>
+        harness.commit(async (tx) => {
+          (await tx.doc(LicksHostDoc)).jobs = jobs.list();
+        }, context)
+      )
+      .catch(() => undefined);
+    return chain;
+  });
+}
+
+export function booting(
+  harness: Harness,
+  cone: () => Conversation,
+  deliver: Deliver,
+  jobs: Jobs | undefined
+) {
+  let stopped = false;
+  let off = () => undefined as void;
+  return {
+    async boot(facts: BootFacts, context: Context): Promise<void> {
+      await bootLicks(harness, cone(), deliver, facts, context, jobs, () => {
+        off();
+        if (jobs && !stopped) off = recordJobs(harness, jobs, context);
+      });
+    },
+    stop() {
+      stopped = true;
+      off();
+    },
+  };
 }
