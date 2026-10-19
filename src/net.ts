@@ -39,6 +39,21 @@ export function pageOnly(transport: Transport | undefined): boolean {
   return transport?.traits?.crossOrigin === 'cors' && !linkedExit(transport);
 }
 
+export interface Reach {
+  free(): boolean;
+  onChange(listener: () => void): () => void;
+}
+
+export function transportReach(client: {
+  transport: Transport;
+  onTraits?: (listener: () => void) => () => void;
+}): Reach {
+  return {
+    free: () => !client.transport.traits?.unavailable && !pageOnly(client.transport),
+    onChange: (listener) => client.onTraits?.(() => listener()) ?? (() => undefined),
+  };
+}
+
 export type Loopback = (
   request: Request,
   options: { port: number; signal?: AbortSignal }

@@ -481,6 +481,7 @@ export interface AccountState {
   status: 'connected' | 'disconnected' | 'expired';
   auth: 'api-key' | 'oauth';
   needs: 'cors-free-transport' | null;
+  blocked?: 'cors-free-transport';
   group?: 'providers' | 'mcp';
   secret?: 'api-key' | 'token';
   store?: 'vault';
@@ -509,6 +510,7 @@ export interface ProviderOption {
   fields?: AccountField[];
   keyUrl?: string;
   needs?: 'cors-free-transport';
+  blocked?: 'cors-free-transport';
   vaultName?: string;
 }
 
