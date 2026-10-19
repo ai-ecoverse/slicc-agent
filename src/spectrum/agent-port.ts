@@ -192,7 +192,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     this.#note(agentId, { kind: 'notice', text });
   }
 
-  #note(agentId: string, shown: Pick<SystemMessage, 'kind' | 'text' | 'title' | 'action'>): void {
+  #note(
+    agentId: string,
+    shown: Pick<SystemMessage, 'kind' | 'text' | 'title' | 'action' | 'account'>
+  ): void {
     const notes = this.#notices.get(agentId) ?? [];
     notes.push({
       at: this.#messages.get(agentId)?.length ?? 0,
@@ -218,6 +221,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
             title,
             text: CONNECT_IT,
             action: 'settings',
+            account: account.id,
           });
       },
       () => undefined

@@ -32,6 +32,7 @@ import type { SecretName } from '../secrets/names.ts';
 import { listedLine, SECRETS_KIND } from '../secrets/view.ts';
 import type { Delivered } from '../services.ts';
 import { SPRINKLE_KIND } from '../sprinkles/kind.ts';
+import { warn } from './attempt.ts';
 
 type Json = Record<string, unknown>;
 
@@ -222,6 +223,15 @@ function proxyRefusal(error: string): { message: string; detail: string } {
 }
 
 export const CONNECT_IT = 'Connect it in Settings › Accounts.';
+export const LOG_IN_AGAIN = 'Log in again to continue.';
+
+const logged = new Set<string>();
+
+function logOnce(error: string): void {
+  if (logged.has(error)) return;
+  logged.add(error);
+  warn(`slicc-agent: the Adobe session expired: ${error}`);
+}
 
 export function providerName(provider: string | undefined, fallback = 'The provider'): string {
   return providerNames[provider ?? ''] ?? fallback;
@@ -240,33 +250,39 @@ export function errorPart(error: string, provider?: string): MessagePart {
     };
   }
   const name = providerName(provider);
+  const account = provider ? { account: provider } : {};
   if (unconnected.test(error))
     return {
       type: 'error',
       message: `${name} isn't connected.`,
       detail: CONNECT_IT,
       action: 'settings',
+      ...account,
     };
   if (action === 'settings' && provider === 'adobe') {
-    return adobeAuth.test(error)
-      ? {
-          type: 'error',
-          message: 'Your Adobe session has expired.',
-          detail: error,
-          action: 'login',
-        }
-      : { type: 'error', ...proxyRefusal(error), action: 'retry' };
+    if (!adobeAuth.test(error)) return { type: 'error', ...proxyRefusal(error), action: 'retry' };
+    logOnce(error);
+    return {
+      type: 'error',
+      message: 'Your Adobe session has expired.',
+      detail: LOG_IN_AGAIN,
+      action: 'login',
+      ...account,
+    };
   }
-  const lead =
-    action === 'settings'
-      ? missing.test(error)
-        ? `${name} needs an API key.`
-        : `${name} rejected the API key.`
-      : action === 'change-model'
-        ? "This model isn't available with the current account."
-        : null;
-  return lead
-    ? { type: 'error', message: lead, detail: error, action }
+  if (action === 'settings') {
+    const lead = missing.test(error)
+      ? `${name} needs an API key.`
+      : `${name} rejected the API key.`;
+    return { type: 'error', message: lead, detail: error, action, ...account };
+  }
+  return action === 'change-model'
+    ? {
+        type: 'error',
+        message: "This model isn't available with the current account.",
+        detail: error,
+        action,
+      }
     : { type: 'error', message: error, action };
 }
 
