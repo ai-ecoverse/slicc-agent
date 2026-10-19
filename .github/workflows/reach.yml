@@ -53,13 +53,13 @@ jobs:
               await github.rest.issues.update({ ...context.repo, issue_number: found.number, state: 'closed', state_reason: 'completed' });
               return;
             }
-            const rows = disagreeing.map((row) => `| \`${row.id}\` | ${row.verdict} | ${row.listed} |`);
+            const table = disagreeing.map((row) => `| \`${row.id}\` | ${row.verdict} | ${row.listed} |`);
             const body = [
               `The nightly reach run ${run} found providers whose verdict from \`https://seven.sliccy.ai\` isn't their listing's \`needs\` (\`corsFree\` in \`src/providers.ts\`).`,
               '',
               '| provider | answers browsers | listed |',
               '| --- | --- | --- |',
-              ...rows,
+              ...table,
             ].join('\n');
             if (found) await github.rest.issues.update({ ...context.repo, issue_number: found.number, body });
             else await github.rest.issues.create({ ...context.repo, title, body });
