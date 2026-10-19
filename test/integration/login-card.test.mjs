@@ -178,16 +178,11 @@ test('the expired-session card names the Adobe account, and its Log in opens the
       status: model.settings.accounts().find((account) => account.id === 'adobe').status,
     };
   });
-  assert.ok(
-    ['Log in again to continue.', 'Continue in the sign-in window that opened.'].includes(
-      signing.detail
-    ),
-    signing.detail
-  );
-  assert.deepEqual(
-    { button: signing.button, status: signing.status },
-    { button: 'Signing in…', status: 'signing-in' }
-  );
+  assert.deepEqual(signing, {
+    button: 'Signing in…',
+    detail: 'Continue in the sign-in window that opened.',
+    status: 'signing-in',
+  });
   await shoot(page, 'signing-in');
   const signedIn = await page.evaluate(
     async (record) => {
@@ -195,6 +190,7 @@ test('the expired-session card names the Adobe account, and its Log in opens the
       await window.finishLogin(record);
       await window.until(() => card().dataset.login === 'connected');
       return {
+        title: card().querySelector('.lead').textContent.trim(),
         detail: card().querySelector('.detail').textContent.trim(),
         retry: Boolean(card().querySelector('[data-action=retry]')),
         status: model.settings.accounts().find((account) => account.id === 'adobe').status,
@@ -203,6 +199,7 @@ test('the expired-session card names the Adobe account, and its Log in opens the
     adobeRecord({ value: 'e2e-ims-token-0002', expiresAt: Date.now() + 86_400_000 + 1000 })
   );
   assert.deepEqual(signedIn, {
+    title: 'Signed in to Adobe again.',
     detail: 'Signed in. Retry to send it again.',
     retry: true,
     status: 'connected',
