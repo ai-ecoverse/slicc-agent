@@ -28,19 +28,36 @@ export function holdLock(locks: LockManager, name: string): Promise<() => void> 
   });
 }
 
-async function opaque(
+const opfsRoot = () => navigator.storage.getDirectory();
+
+export async function opfsDirectory(
   root: FileSystemDirectoryHandle,
-  directory: string
+  path: string
 ): Promise<FileSystemDirectoryHandle | undefined> {
   let dir = root;
   try {
-    for (const part of [...directory.split('/').filter(Boolean), '.opaque']) {
-      dir = await dir.getDirectoryHandle(part);
-    }
+    for (const part of path.split('/').filter(Boolean)) dir = await dir.getDirectoryHandle(part);
   } catch {
     return undefined;
   }
   return dir;
+}
+
+export async function opfsFile(
+  path: string,
+  root: () => Promise<FileSystemDirectoryHandle> = opfsRoot
+): Promise<File | undefined> {
+  const at = path.lastIndexOf('/');
+  const dir = await Promise.resolve()
+    .then(root)
+    .then(
+      (handle) => opfsDirectory(handle, path.slice(0, at)),
+      () => undefined
+    );
+  return dir
+    ?.getFileHandle(path.slice(at + 1))
+    .then((handle) => handle.getFile())
+    .catch(() => undefined);
 }
 
 async function acquirable(dir: FileSystemDirectoryHandle): Promise<boolean> {
@@ -59,8 +76,8 @@ async function acquirable(dir: FileSystemDirectoryHandle): Promise<boolean> {
 const pause = (ms: number) => new Promise((resume) => setTimeout(resume, ms));
 
 export async function settlePool(directory: string, access: PoolAccess = {}): Promise<void> {
-  const root = await (access.root ?? (() => navigator.storage.getDirectory()))();
-  const dir = await opaque(root, directory);
+  const root = await (access.root ?? opfsRoot)();
+  const dir = await opfsDirectory(root, `${directory}/.opaque`);
   if (!dir) return;
   const attempts = access.attempts ?? 50;
   for (let attempt = 1; attempt <= attempts; attempt++) {
