@@ -36,7 +36,7 @@ test('an agent CLI never reads an exit code the control plane has created but no
   assert.equal(left, 'empty');
 });
 
-test('an agent CLI still gets an exit code when renaming the staged code into place fails', async (t) => {
+test('an agent CLI still gets a complete exit code when rename fails and the fallback write is slow', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   await page.evaluate(async () => {

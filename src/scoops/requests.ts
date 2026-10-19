@@ -114,12 +114,14 @@ export function controlPlane(
     const staged = `${responses}/.tmp-${id}.code`;
     const publish = async (code: number) => {
       const body = String(code);
-      const written = await env.writeFile(staged, body, context);
-      if (written.ok) {
-        let renamed = await env.renameFile(staged, codePath, context);
-        if (!renamed.ok) renamed = await env.renameFile(staged, codePath, context);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const stage = attempt === 0 ? staged : `${responses}/.tmp-${id}-${attempt}.code`;
+        const written = await env.writeFile(stage, body, context);
+        if (!written.ok) continue;
+        let renamed = await env.renameFile(stage, codePath, context);
+        if (!renamed.ok) renamed = await env.renameFile(stage, codePath, context);
         if (renamed.ok) return true;
-        await env.remove(staged, { force: true }, context);
+        await env.remove(stage, { force: true }, context);
       }
       return (await env.writeFile(codePath, body, context)).ok;
     };
