@@ -40,7 +40,7 @@ import { processGroups } from './kernel/groups.ts';
 import { backgroundJobs } from './kernel/jobs.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
 import { AGENT_DIR, ROOT_HOME } from './layout.ts';
-import { setupLicks } from './licks/index.ts';
+import { type Licks, setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
 import { type McpAccounts, setupMcp } from './mcp/index.ts';
 import type { MemoryEntry } from './memory/format.ts';
@@ -346,7 +346,7 @@ function modelsOfAgent(
 async function settingsOf(
   made: Awaited<ReturnType<typeof modelsOf>> & { reach: Reach },
   mcp: McpAccounts,
-  moved: { agent: Agent; vault: Vault; wiped: Wiped }
+  moved: { agent: Agent; vault: Vault; wiped: Wiped; licks: Licks }
 ) {
   const { models, records, fields, providers, own, endpoints, reach } = made;
   const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
@@ -356,6 +356,7 @@ async function settingsOf(
     reach,
   });
   settings.state.subscribe(() => void endpoints.models(own()).catch(() => undefined));
+  settings.state.subscribe(() => void moved.licks.flush(BACKGROUND_CONTEXT).catch(() => undefined));
   return settings;
 }
 
@@ -476,6 +477,7 @@ async function start(
   const sources = licks.attach(agent, {
     env: home,
     home: HOME,
+    models,
     activity,
     jobs,
     ...(people ? { dirs: () => people.lickDirs(), cronUser: people.cronUser.bind(people) } : {}),
@@ -538,7 +540,7 @@ async function start(
   );
   const freezer = freezerOf(agent, { home, memory, titles, people, users, ready });
   licks.licks.guard(freezer.frozenTarget);
-  const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped });
+  const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped, licks: licks.licks });
   const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(
     {

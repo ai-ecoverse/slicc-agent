@@ -1,4 +1,5 @@
 import type { Context } from '@earendil-works/chord';
+import type { Models } from '@earendil-works/pi-ai/models';
 import type { Conversation, ConversationId, Harness, Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
@@ -31,6 +32,13 @@ export function lickResolver(agent: LicksAgent) {
   };
 }
 
+export function modelReady(models: Pick<Models, 'getModel'>) {
+  return async (conversation: Conversation, context: Context) => {
+    const { model } = await conversation.agent(context);
+    return model !== undefined && models.getModel(model.provider, model.modelId) !== undefined;
+  };
+}
+
 export interface LicksSetup {
   licks: Licks;
   attach(
@@ -38,6 +46,7 @@ export interface LicksSetup {
     options: {
       env: ExecutionEnv;
       home: string;
+      models?: Pick<Models, 'getModel'>;
       flushEvery?: number;
       activity?: Activity;
       jobs?: Jobs;
@@ -61,9 +70,13 @@ export function setupLicks(registry: Registry, fetcher?: typeof fetch): LicksSet
   registry.install(licksExtension(licks, lookup));
   return {
     licks,
-    attach(agent, options) {
+    attach(agent, { models, ...options }) {
       const { harness, root } = agent;
-      bind({ harness, resolve: lickResolver(agent) });
+      bind({
+        harness,
+        resolve: lickResolver(agent),
+        ...(models ? { runnable: modelReady(models) } : {}),
+      });
       return createLickSources({
         ...options,
         harness,

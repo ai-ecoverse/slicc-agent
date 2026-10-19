@@ -7,6 +7,8 @@ import {
 } from '@earendil-works/pi-durable';
 import type { Job, Jobs } from '../kernel/jobs.ts';
 import type { Deliver } from './fswatch.ts';
+import type { LickChannel } from './lick.ts';
+import { entryLick } from './state.ts';
 
 type HostState = {
   cron: Record<string, { task: number }>;
@@ -29,6 +31,8 @@ export interface BootFacts {
   boot: string | null;
 }
 
+const BOOT_CHANNELS: ReadonlySet<LickChannel> = new Set(['upgrade', 'session-reload']);
+
 export const LISTED = 5;
 
 interface Block {
@@ -39,8 +43,13 @@ interface Block {
 
 export function bashCommands(entries: readonly EntryRecord[], after: number): string[] {
   const commands: string[] = [];
+  let reacting = false;
   for (const entry of entries) {
-    if (entry.kind !== 'pi.assistant' || Number(entry.id) <= after) continue;
+    if (entry.kind === 'pi.user') {
+      const lick = entryLick(entry);
+      reacting = lick !== undefined && BOOT_CHANNELS.has(lick.channel);
+    }
+    if (reacting || entry.kind !== 'pi.assistant' || Number(entry.id) <= after) continue;
     const content = (entry.model?.[0] as { content?: unknown } | undefined)?.content;
     for (const block of Array.isArray(content) ? (content as Block[]) : []) {
       const command = block.arguments?.command;
