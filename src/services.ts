@@ -498,6 +498,7 @@ export interface AccountField {
   placeholder?: string;
   help?: string;
   customBase?: true;
+  vaultSetting?: string;
   options?: readonly { value: string; label: string }[];
   value?: string;
 }
