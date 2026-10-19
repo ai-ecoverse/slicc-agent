@@ -473,6 +473,7 @@ const running = runAgentWorker(self, {
 if (params.has('vault')) {
   const records = params.getAll('record').map((record) => JSON.parse(record));
   const models = [
+    ...(params.has('e2e') ? [{ provider: 'adobe', url: `https://${MODEL_HOST}` }] : []),
     ...(params.has('bedrock')
       ? [{ provider: 'amazon-bedrock', url: 'https://bedrock-runtime.us-west-2.amazonaws.com' }]
       : []),

@@ -529,7 +529,3 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
 ]);
 
 export const ADDED_FIRST: readonly string[] = ['amazon-bedrock', 'adobe'];
-
-export const VAULT_KNOWN: ReadonlySet<string> = new Set(
-  [...LISTINGS.keys()].filter((id) => id !== 'adobe')
-);

@@ -3,7 +3,6 @@ import type {
   AgentRecord,
   ErrorCode,
   McpServerEntry,
-  ModelEndpoint,
   OAuthConfig,
   OutgoingRequest,
 } from '@ai-ecoverse/slicc-vault';
@@ -47,7 +46,6 @@ export interface Granted {
 }
 
 export interface EndpointSet {
-  model: ModelEndpoint[];
   mcp: McpServerEntry[];
 }
 
@@ -171,7 +169,7 @@ export class Vault implements Scrub {
   }
 
   async endpoints(set: EndpointSet): Promise<void> {
-    await this.#call('endpoints', { model: set.model, mcp: set.mcp });
+    await this.#call('endpoints', { mcp: set.mcp });
   }
 
   stream(): ScrubStream {
