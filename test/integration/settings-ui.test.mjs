@@ -199,17 +199,12 @@ test('an MCP token account carries its server URL, and Settings says it moved on
     document.body.append(settings);
     const row = () => find(settings.shadowRoot, '.account[data-id="mcp:docs"]');
     await until(() => row());
-    const before = {
-      url: docs().url,
-      moved: Boolean(row().querySelector('[data-notice="moved"]')),
-    };
+    const moved = () => find(settings.shadowRoot, '[data-notice="moved"]');
+    const before = { url: docs().url, moved: Boolean(moved()) };
     await write('/home/.pi/agent/mcp.json', config('https://mcp.test/v2/mcp'));
     await until(() => docs()?.url === 'https://mcp.test/v2/mcp' && docs()?.status === 'connected');
-    await until(() => row()?.querySelector('[data-notice="moved"]'));
-    const note = row()
-      ?.querySelector('[data-notice="moved"]')
-      ?.textContent.replace(/\s+/g, ' ')
-      .trim();
+    await until(() => moved());
+    const note = moved()?.textContent.replace(/\s+/g, ' ').trim();
     const reconnect = Boolean(row()?.querySelector('[data-action="reconnect-mcp"]'));
     await owner.release();
     return { before, after: docs().url, note, reconnect };
