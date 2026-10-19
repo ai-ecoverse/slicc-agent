@@ -785,6 +785,8 @@ Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.js
 
 **One Chord.** `@earendil-works/chord` is pinned to the version pi-durable pins (1.3.0), so the link, the serving code and pi-durable's state layer share one copy. `npm run lint:chord` (part of `npm run lint`) fails if the lockfile has a second Chord that the agent would load, or none. The `slicc-agent-5` devDependency brings its own Chord 1.2 for the version tests only, which the check skips because it's dev-only.
 
+**pi-ai in lockstep with the vault.** The vault fills a model key only under the endpoints of its built-in table, which it generates from its own pi-ai pin and publishes as `"piAi"` in its package.json (slicc-vault 1.12.2 and later). `npm run lint:vault-pi` (part of `npm run lint`) fails when the installed `@ai-ecoverse/slicc-vault`'s `piAi` has another minor than our `@earendil-works/pi-ai`, or when it has none (an older vault). Renovate's `patched dependencies` group carries the `pi-ai-lockstep` label, as the vault's pi-ai updates do, so the two are found and bumped together.
+
 ## Develop
 
 ```sh

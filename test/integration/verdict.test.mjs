@@ -19,6 +19,7 @@ const step =
 const callers = [
   ['lint:chord', 'check-chord', scripts['lint:chord']],
   ['lint:patches', 'check-patches', scripts['lint:patches']],
+  ['lint:vault-pi', 'check-vault-pi', scripts['lint:vault-pi']],
   ['the release.yml publish step', 'publish', step?.replace(/^ {10}/gm, '')],
 ];
 
