@@ -497,6 +497,8 @@ export interface AccountField {
   placeholder?: string;
   help?: string;
   customBase?: true;
+  options?: readonly { value: string; label: string }[];
+  value?: string;
 }
 
 export interface ProviderOption {

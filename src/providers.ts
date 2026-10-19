@@ -35,6 +35,11 @@ import { xiaomiTokenPlanSgpProvider } from '@earendil-works/pi-ai/providers/xiao
 import { zaiProvider } from '@earendil-works/pi-ai/providers/zai';
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn';
 
+export interface FieldOption {
+  value: string;
+  label: string;
+}
+
 export interface FieldInput {
   name: string;
   label: string;
@@ -42,6 +47,8 @@ export interface FieldInput {
   placeholder?: string;
   help?: string;
   customBase?: true;
+  options?: readonly FieldOption[];
+  value?: string;
 }
 
 export interface FieldSpec extends FieldInput {
@@ -92,11 +99,38 @@ const checked =
   (value: string): Record<string, string> | string =>
     pattern.test(value) ? { [env]: value } : problem;
 
+const BEDROCK_REGIONS: readonly (readonly [string, string])[] = [
+  ['ap-northeast-1', 'Asia Pacific (Tokyo)'],
+  ['ap-northeast-2', 'Asia Pacific (Seoul)'],
+  ['ap-northeast-3', 'Asia Pacific (Osaka)'],
+  ['ap-south-1', 'Asia Pacific (Mumbai)'],
+  ['ap-south-2', 'Asia Pacific (Hyderabad)'],
+  ['ap-southeast-1', 'Asia Pacific (Singapore)'],
+  ['ap-southeast-2', 'Asia Pacific (Sydney)'],
+  ['ca-central-1', 'Canada (Central)'],
+  ['eu-central-1', 'Europe (Frankfurt)'],
+  ['eu-central-2', 'Europe (Zurich)'],
+  ['eu-north-1', 'Europe (Stockholm)'],
+  ['eu-south-1', 'Europe (Milan)'],
+  ['eu-south-2', 'Europe (Spain)'],
+  ['eu-west-1', 'Europe (Ireland)'],
+  ['eu-west-2', 'Europe (London)'],
+  ['eu-west-3', 'Europe (Paris)'],
+  ['sa-east-1', 'South America (São Paulo)'],
+  ['us-east-1', 'US East (N. Virginia)'],
+  ['us-gov-east-1', 'AWS GovCloud (US-East)'],
+  ['us-gov-west-1', 'AWS GovCloud (US-West)'],
+  ['us-west-2', 'US West (Oregon)'],
+];
+
+export const DEFAULT_REGION = 'us-west-2';
+
 export const REGION_FIELD: FieldSpec = {
   name: 'region',
   label: 'Region',
-  placeholder: 'us-west-2',
-  help: 'The AWS region your Bedrock models run in. Leave it empty for us-west-2.',
+  help: 'The AWS region your Bedrock models run in.',
+  options: BEDROCK_REGIONS.map(([value, label]) => ({ value, label: `${label}, ${value}` })),
+  value: DEFAULT_REGION,
   env: checked(REGION, 'AWS_REGION', 'Enter an AWS region such as us-west-2.'),
 };
 

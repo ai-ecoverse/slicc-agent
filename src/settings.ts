@@ -16,7 +16,13 @@ import { abortableBedrock } from './bedrock.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import { BEDROCK, preferredModel } from './preferred.ts';
-import { ADDED_FIRST, type FieldSpec, KEY_PROVIDERS, LISTINGS } from './providers.ts';
+import {
+  ADDED_FIRST,
+  DEFAULT_REGION,
+  type FieldSpec,
+  KEY_PROVIDERS,
+  LISTINGS,
+} from './providers.ts';
 import type { KeysMoved } from './secrets/legacy.ts';
 import type { VaultRecords } from './secrets/records.ts';
 import type { PlainStore } from './secrets/store.ts';
@@ -32,7 +38,7 @@ import type {
 export { BEDROCK, PREFERRED_MODELS, preferredModel } from './preferred.ts';
 
 export const DEFAULT_MODEL = { provider: BEDROCK, modelId: 'us.anthropic.claude-sonnet-5-5' };
-export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: 'us-west-2' };
+export const DEFAULT_REGIONS: Readonly<Record<string, string>> = { [BEDROCK]: DEFAULT_REGION };
 
 const specs = (providerId: string): readonly FieldSpec[] => LISTINGS.get(providerId)?.fields ?? [];
 
@@ -150,13 +156,27 @@ function listed(
     fields.get(providerId) !== undefined;
 }
 
+function filled(
+  fields: readonly AccountField[],
+  stored: Readonly<Record<string, string>> | undefined
+): AccountField[] {
+  return fields.map((field) => {
+    const value = stored?.[field.name]?.trim() || field.value;
+    const options =
+      field.options && value && !field.options.some((option) => option.value === value)
+        ? [{ value, label: value }, ...field.options]
+        : field.options;
+    return { ...field, ...(options ? { options: [...options] } : {}), ...(value ? { value } : {}) };
+  });
+}
+
 function accounts(
   records: Pick<VaultRecords, 'model'>,
   providers: Provider[],
-  ready: (providerId: string) => boolean
+  given: Pick<ProviderFields, 'ready' | 'get'>
 ): AccountState[] {
   return providers.map((provider) => {
-    const record = ready(provider.id) ? records.model(provider.id) : undefined;
+    const record = given.ready(provider.id) ? records.model(provider.id) : undefined;
     const fields = ACCOUNT_FIELDS[provider.id];
     const listing = LISTINGS.get(provider.id);
     return {
@@ -168,7 +188,7 @@ function accounts(
       needs: listing?.corsFree ? 'cors-free-transport' : null,
       group: 'providers',
       store: 'vault',
-      ...(fields ? { fields: fields.map((field) => ({ ...field })) } : {}),
+      ...(fields ? { fields: filled(fields, given.get(provider.id)) } : {}),
       ...(listing
         ? {
             description: listing.description,
@@ -193,7 +213,7 @@ function offered(providers: Provider[]): ProviderOption[] {
           description: listing.description,
           auth: listing.auth,
           vaultName: listing.vaultName,
-          ...(fields ? { fields: fields.map((field) => ({ ...field })) } : {}),
+          ...(fields ? { fields: filled(fields, undefined) } : {}),
           ...(listing.keyUrl ? { keyUrl: listing.keyUrl } : {}),
           ...(listing.corsFree ? { needs: 'cors-free-transport' as const } : {}),
         },
@@ -322,7 +342,7 @@ export async function createAgentSettings(
     return {
       models: choices(models, providers, stored),
       labels: labels(models, shown, stored),
-      accounts: [...accounts(records, shown, fields.ready), ...((await mcp?.accounts()) ?? [])],
+      accounts: [...accounts(records, shown, fields), ...((await mcp?.accounts()) ?? [])],
       providers: offered(providers),
       budget: await budget(records, usage),
       ...(moved?.state.value?.length

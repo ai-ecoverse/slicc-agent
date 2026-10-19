@@ -252,8 +252,15 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
   assert.equal(seen.kept, 'disconnected');
   assert.equal(seen.cleaned, true);
   assert.deepEqual(
-    seen.added.fields.map((field) => field.name),
-    ['account']
+    seen.added.fields.map((field) => [field.name, field.value]),
+    [['account', account]]
+  );
+  assert.equal(seen.bedrock.fields[0].value, 'us-west-2');
+  assert.ok(
+    seen.bedrock.fields[0].options.some(
+      (option) =>
+        option.value === 'eu-central-1' && option.label === 'Europe (Frankfurt), eu-central-1'
+    )
   );
   assert.equal(seen.reply, 'From api.cloudflare.com.');
   const sent = seen.upstream.filter((entry) => new URL(entry.url).host === 'api.cloudflare.com');
