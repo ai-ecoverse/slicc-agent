@@ -1,6 +1,6 @@
 import { type Context, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { CredentialStore, Provider } from '@earendil-works/pi-ai';
+import type { CredentialStore, ModelsStore, Provider } from '@earendil-works/pi-ai';
 import { createModels, type MutableModels } from '@earendil-works/pi-ai/models';
 import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
 import {
@@ -96,11 +96,24 @@ export function withDefaultRegions(credentials: CredentialStore): CredentialStor
   };
 }
 
+export function catalogStore(store: PlainStore): ModelsStore {
+  return {
+    read: async (providerId) =>
+      ((await store.get(providerId)) as Awaited<ReturnType<ModelsStore['read']>>) ?? undefined,
+    write: (providerId, entry) => store.set(providerId, entry),
+    delete: (providerId) => store.set(providerId, undefined),
+  };
+}
+
 export function createSliccModels(
   credentials: CredentialStore,
-  providers = sliccProviders()
+  providers = sliccProviders(),
+  catalog?: ModelsStore
 ): MutableModels {
-  const models = createModels({ credentials: withDefaultRegions(credentials) });
+  const models = createModels({
+    credentials: withDefaultRegions(credentials),
+    ...(catalog ? { modelsStore: catalog } : {}),
+  });
   for (const provider of providers) models.setProvider(abortableBedrock(provider));
   return models;
 }

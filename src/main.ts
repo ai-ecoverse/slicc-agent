@@ -70,6 +70,7 @@ import { listenVault, Vault, WAITING_MS } from './secrets/vault.ts';
 import { type Choosable, unfreeze, unfreezeCreated } from './selection.ts';
 import {
   BEDROCK,
+  catalogStore,
   createAgentSettings,
   createSliccModels,
   providerFields,
@@ -128,6 +129,7 @@ export function usersOf(
 
 export const STORE_DIR = '/.slicc';
 export const ACCOUNTS_FILE = `${STORE_DIR}/accounts.json`;
+export const MODELS_FILE = `${STORE_DIR}/models.json`;
 
 async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions) {
   const wiped = await wipeLegacy();
@@ -261,7 +263,12 @@ async function modelsOf(
   const providers = options.providers ?? sliccProviders(version);
   const fields = await providerFields(store, providers);
   const credentials = vaultCredentials(records, fields.env, fields.ready);
-  const models = createSliccModels(credentials, providers);
+  const models = createSliccModels(
+    credentials,
+    providers,
+    catalogStore(fileStore(home, MODELS_FILE))
+  );
+  await models.refresh({ allowNetwork: false }).catch(() => undefined);
   const bases = () => modelBases(providers, models, fields.env);
   const own = () => bases().filter(({ provider }) => !VAULT_KNOWN.has(provider));
   scope.fetch = vaultFetch(
