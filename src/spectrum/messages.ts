@@ -373,11 +373,13 @@ export function origins(entries: readonly EntryRecord[]): Map<number, From> {
   return out;
 }
 
+type NotifyLick = LickMessage & { summary?: string; report?: string };
+
 function lickMessage(
   id: string,
   entry: EntryRecord,
   decisions: ReadonlyMap<string, LickDecision>
-): LickMessage | undefined {
+): NotifyLick | undefined {
   const lick = entryLick(entry);
   if (!lick) return undefined;
   const state = lick.actions?.length ? (decisions.get(lick.id) ?? 'pending') : undefined;
@@ -392,6 +394,8 @@ function lickMessage(
     ...(lick.count > 1 ? { count: lick.count } : {}),
     ...(state ? { state } : {}),
     ...(lick.severity ? { severity: lick.severity } : {}),
+    ...(lick.summary ? { summary: lick.summary } : {}),
+    ...(lick.report ? { report: lick.report } : {}),
   };
 }
 

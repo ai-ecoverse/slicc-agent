@@ -211,3 +211,75 @@ test('with per-user kernel clients, a scoop report is written as the cone, so th
   );
   assert.deepEqual([seen.own.status, seen.own.stdout], [0, 'ok\n'], seen.own.stderr);
 });
+
+test("a scoop's notify card reads as its one-line result, or says it failed, and keeps the raw line and report for the agent", async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const steps = [
+    { answer: 'Found **two** bugs in `secret list`.\n\nDetails follow.' },
+    { answer: 'Noted.' },
+    { error: 'boom' },
+    { answer: 'Noted again.' },
+  ]
+    .map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`)
+    .join('&');
+  await page.evaluate(async (steps) => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    window.owner = await startAgent({
+      worker: () => new Worker(`/dist-test/main-worker.js?${steps}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    window.agent = createAgentModel(await window.owner.connect(), {
+      storage: localStorage,
+    }).agent;
+    await window.agent.ready();
+    window.sh = (command) => kernel.run(['bash', '-c', command]);
+    window.cards = () =>
+      window.agent
+        .messages()
+        .filter((message) => message.role === 'lick' && message.channel === 'scoop-notify')
+        .map(({ title, text, body, summary, report, severity }) => ({
+          title,
+          text,
+          body,
+          summary,
+          report,
+          severity,
+        }));
+  }, steps);
+  await page.within(
+    60000,
+    async () => (await window.sh('test -x /usr/local/bin/agent')).status === 0
+  );
+  const first = await page.evaluate(() =>
+    window.sh('SLICC_AGENT=cone:cone subagent spawn --name auditor --prompt "Audit it"')
+  );
+  assert.equal(first.status, 0, first.stderr);
+  const [done] = await page.within(60000, () =>
+    window.cards().length === 1 && !window.agent.busy(window.agent.active())
+      ? window.cards()
+      : undefined
+  );
+  assert.equal(done.title, 'auditor (scoop)');
+  assert.equal(done.summary, 'Found two bugs in secret list.');
+  assert.match(done.report, /\/reports\/.+\.md$/);
+  assert.equal(done.text, '[scoop auditor (scoop) completed]');
+  assert.ok(done.body.startsWith(`Output: ${done.report} (3 lines)`), done.body);
+  assert.match(done.body, /Found \*\*two\*\* bugs in `secret list`\./);
+  const second = await page.evaluate(() =>
+    window.sh('SLICC_AGENT=cone:cone subagent spawn --name breaker --prompt "Break it"')
+  );
+  assert.equal(second.status, 0, second.stderr);
+  const cards = await page.within(60000, () =>
+    window.cards().length === 2 ? window.cards() : undefined
+  );
+  const failed = cards.find((card) => card.title === 'breaker (scoop)');
+  assert.equal(failed.summary, 'Scoop breaker failed');
+  assert.equal(failed.report, undefined);
+  assert.equal(failed.text, '[scoop breaker (scoop) failed]');
+  assert.equal(failed.severity, 'warn');
+  assert.match(failed.body, /^Reason: /);
+  await page.evaluate(() => window.owner.release());
+});

@@ -20,6 +20,7 @@ import { type Layout, LEGACY } from '../layout.ts';
 import type { LickEvent } from '../licks/licks.ts';
 import { FROM_KIND } from './from.ts';
 import { type Feed, type ScoopsHost, ScoopWorkDoc } from './service.ts';
+import { cardOf } from './summary.ts';
 
 export const PREVIEW = 1000;
 
@@ -66,6 +67,7 @@ export function reportLick(
     text: `[scoop ${record.name} (${record.role ?? 'scoop'}) ${status}]`,
     body: [where, reason, preview].filter(Boolean).join('\n\n'),
     target: (route.target ?? `cone:${record.cone}`) as LickEvent['target'],
+    ...cardOf(record.name, report),
     ...(report.failed && report.failed !== 'aborted' ? { severity: 'warn' as const } : {}),
   };
 }

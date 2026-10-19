@@ -24,6 +24,13 @@ export type LickAction = 'confirm' | 'dismiss';
 
 export type LickSeverity = 'warn' | 'error';
 
+export const SUMMARY = 120;
+
+export function clip(value: string, size = SUMMARY): string {
+  const line = value.replace(/\s+/g, ' ').trim();
+  return line.length > size ? `${line.slice(0, size).trimEnd()}…` : line;
+}
+
 export type LickTarget = 'cone' | `cone:${string}` | `scoop:${string}`;
 
 export type Lick = {
@@ -37,6 +44,8 @@ export type Lick = {
   at: number;
   actions?: LickAction[];
   severity?: LickSeverity;
+  summary?: string;
+  report?: string;
 };
 
 const ENTITIES: Record<string, string> = {
@@ -72,6 +81,12 @@ function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function card(attributes: Map<string, string>): { summary?: string; report?: string } {
+  const summary = attributes.get('summary');
+  const report = attributes.get('report');
+  return { ...(summary ? { summary } : {}), ...(report ? { report } : {}) };
+}
+
 export function formatLick(lick: Lick): string {
   const attributes: [string, string][] = [
     ['id', lick.id],
@@ -83,6 +98,8 @@ export function formatLick(lick: Lick): string {
   ];
   if (lick.actions?.length) attributes.push(['actions', lick.actions.join(' ')]);
   if (lick.severity) attributes.push(['severity', lick.severity]);
+  if (lick.summary) attributes.push(['summary', oneLine(lick.summary)]);
+  if (lick.report) attributes.push(['report', lick.report]);
   const head = attributes.map(([name, value]) => `${name}="${escapeAttribute(value)}"`).join(' ');
   const lines = [escapeText(oneLine(lick.text))];
   if (lick.body) lines.push(escapeText(lick.body));
@@ -126,5 +143,6 @@ export function parseLick(text: string): Lick | undefined {
     at: Number.isNaN(at) ? 0 : at,
     ...(actions.length ? { actions } : {}),
     ...severityOf(attributes.get('severity')),
+    ...card(attributes),
   };
 }
