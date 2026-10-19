@@ -20,13 +20,13 @@ const helpers = () => {
     await writable.write(bytes);
     await writable.close();
   };
-  window.start = async () => {
+  window.start = async (query = '') => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     window.kernel = await bootKernel();
     const answers = Array.from({ length: 6 }, (_, n) => `answer=Answer ${n + 1}.`).join('&');
     const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
+      worker: () => new Worker(`/dist-test/main-worker.js?${answers}${query}`, { type: 'module' }),
       kernel: {
         connect: (options) =>
           window.kernel.connect(options?.user ? { user: options.user } : undefined),
@@ -107,11 +107,11 @@ const helpers = () => {
       .sort((a, b) => a.id.localeCompare(b.id));
 };
 
-async function booted(t) {
+async function booted(t, query = '') {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(() => window.start());
+  await page.evaluate((query) => window.start(query), query);
   return page;
 }
 
@@ -130,7 +130,7 @@ test('freezer import --preview checks a SLICC 6 profile export and says what is 
   assert.equal(ran.status, 0, ran.stderr);
   assert.equal(
     ran.stdout,
-    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. SLICC 7 has no accounts for anthropic, openai. Not imported: 1 mount.\n'
+    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. SLICC 7 has no accounts for Anthropic and OpenAI. Not imported: 1 mount.\n'
   );
   const usage = await page.evaluate(() => window.imported('/tmp/profile.zip', '--bogus'));
   assert.equal(usage.status, 2);
@@ -338,7 +338,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
     Buffer.from(await readFile(FIXTURE)).toString('base64')
   );
   assert.deepEqual(preview, {
-    text: 'SLICC 6 profile from www.sliccy.ai, exported 12 Jul 2026. SLICC 7 has no accounts for anthropic, openai.',
+    text: 'SLICC 6 profile from www.sliccy.ai, exported 12 Jul 2026. SLICC 7 has no accounts for Anthropic and OpenAI.',
     done: false,
     rows: 0,
   });
@@ -346,7 +346,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
   assert.equal(ran.status, 0, ran.stdout + ran.stderr);
   assert.match(
     ran.stdout,
-    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nSLICC 7 has no accounts for anthropic, openai\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
+    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nSLICC 7 has no accounts for Anthropic and OpenAI\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
   );
   await page.within(30000, () => window.rows().length === 3);
   const seen = await page.evaluate(async () => {
@@ -433,7 +433,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
     '| /home/cone-2/workspace/.env | 31 B | environment file, often holds keys |',
     '| /home/cone-3/workspace/certs/dev.pem | 59 B | PEM file, may be a private key |',
     "Delete or move these if you don't need them here.",
-    "- anthropic: seven doesn't know this provider",
+    '- Anthropic: SLICC 7 has no such provider',
     'These never move: the GitHub token.',
     '- Mount these folders again: /mnt/photos.',
     '- Add these MCP servers again: docs (https://mcp.example.com/sse).',
@@ -474,7 +474,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
 });
 
 test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge, and a zip too big to send as data refused', async (t) => {
-  const page = await booted(t);
+  const page = await booted(t, '&anthropic&openai');
   const zip = Buffer.from(await readFile(FIXTURE)).toString('base64');
   const seen = await page.evaluate(async (zip) => {
     const blob = new Blob([Uint8Array.from(atob(zip), (char) => char.charCodeAt(0))]);
@@ -489,6 +489,14 @@ test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge
       .sort();
     const again = await window.agent.importProfile(blob, { preview: true });
     const badges = window.agent.frozen().filter((row) => row.v6).length;
+    const models = [
+      ...new Set(
+        window.agent
+          .frozen()
+          .filter((row) => row.v6)
+          .map((row) => row.model)
+      ),
+    ];
     const uploads = (await window.sh('ls -A /var/lib/slicc/agent/imports')).stdout;
     const refused = await window.agent
       .importProfile(new Blob(['not a zip']), { preview: true })
@@ -499,6 +507,7 @@ test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge
     return {
       preview: preview.preview,
       done,
+      models,
       listedAtOnce,
       already: again.preview.already,
       phases,
@@ -511,6 +520,12 @@ test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge
   assert.equal(seen.preview.origin, 'https://www.sliccy.ai');
   assert.equal(seen.preview.createdAt, Date.parse('2026-07-12T10:00:00.000Z'));
   assert.equal(seen.preview.exportId, undefined);
+  assert.deepEqual(seen.preview.providers, ['anthropic', 'openai']);
+  assert.equal(seen.preview.text, 'SLICC 6 profile from www.sliccy.ai, exported 12 Jul 2026.');
+  assert.equal(
+    seen.done.text,
+    'From www.sliccy.ai. Sign in to Anthropic and OpenAI again before you thaw them.'
+  );
   assert.deepEqual(seen.preview.flagged, [
     'files/cones/cone/.env',
     'files/cones/research/certs/dev.pem',
@@ -526,6 +541,7 @@ test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge
     seen.phases.join()
   );
   assert.equal(seen.badges, 3);
+  assert.deepEqual(seen.models, ['Claude Sonnet 4.5 (latest)']);
   assert.equal(seen.uploads, '');
   assert.equal(seen.refused, 'This is not a zip file.');
   assert.equal(seen.progress, 'failed');

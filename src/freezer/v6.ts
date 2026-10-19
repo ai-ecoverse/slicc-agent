@@ -100,7 +100,8 @@ export interface ImportDeps {
   env: ExecutionEnv;
   layout: Layout;
   memoryHome: string;
-  providers?: readonly string[];
+  providers?: readonly Account[];
+  catalog?: { getModel(provider: string, id: string): { name: string } | undefined };
   users?: Pick<KernelUsers, 'add' | 'remove'>;
   envOf?: (cone: string) => Promise<ExecutionEnv | undefined>;
   opfs?: () => Promise<FileSystemDirectoryHandle>;
@@ -287,13 +288,44 @@ const UNITS = [
   [1024, 'KB'],
 ] as const;
 
-export function accountsSplit(providers: readonly string[], known?: readonly string[]) {
+export type Account = { readonly id: string; readonly name?: string | undefined };
+
+const NAMES: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  'github-copilot': 'GitHub Copilot',
+  google: 'Google',
+  azure: 'Azure',
+  'azure-openai': 'Azure OpenAI',
+  'azure-ai-foundry': 'Azure AI Foundry',
+  'amazon-bedrock': 'Amazon Bedrock',
+  adobe: 'Adobe',
+  openrouter: 'OpenRouter',
+  mistral: 'Mistral',
+  groq: 'Groq',
+  xai: 'xAI',
+  deepseek: 'DeepSeek',
+  'local-llm': 'Local LLM',
+};
+
+export function listed(names: readonly string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names.join('');
+}
+
+export function accountsSplit(providers: readonly string[], known?: readonly Account[]) {
   const accounts = accountsOf(providers);
-  const missing = known ? accounts.filter((name) => !known.includes(name)) : [];
-  const again = accounts.filter((name) => !missing.includes(name));
-  const lacking = missing.length ? `SLICC 7 has no accounts for ${missing.join(', ')}.` : '';
-  const settings = again.length ? `Re-enter in Settings: ${again.join(', ')}.` : '';
-  return { again, lacking, settings };
+  const ids = new Map((known ?? []).map((account) => [account.id, account.name]));
+  const again = known ? accounts.filter((id) => ids.has(id)) : accounts;
+  const missing = accounts.filter((id) => !again.includes(id));
+  const nameOf = (id: string) => ids.get(id) || NAMES[id] || id;
+  const lacking = missing.length
+    ? `SLICC 7 has no accounts for ${listed(missing.map(nameOf))}.`
+    : '';
+  const settings = again.length ? `Re-enter in Settings: ${listed(again.map(nameOf))}.` : '';
+  const signIn = again.length
+    ? `Sign in to ${listed(again.map(nameOf))} again before you thaw them.`
+    : '';
+  return { again, missing, nameOf, lacking, settings, signIn };
 }
 
 const said = (...parts: string[]) => parts.filter(Boolean).join(' ');
@@ -311,7 +343,7 @@ const hostOf = (origin: string) => (URL.canParse(origin) ? new URL(origin).host 
 export async function previewOf(
   opened: Opened,
   state: Readonly<AgentsState>,
-  known?: readonly string[]
+  known?: readonly Account[]
 ): Promise<ImportPreview> {
   const { manifest } = opened;
   const licks = await licksIn(opened);
@@ -674,9 +706,10 @@ async function conversationIn(
   return record.id as number;
 }
 
-function modelOf(conversation: V6Conversation | undefined): string {
+function modelOf(deps: ImportDeps, conversation: V6Conversation | undefined): string {
   const model = conversation?.messages.findLast((message) => message.model)?.model;
-  return model ? `${model.provider}/${model.id}` : '';
+  if (!model) return '';
+  return deps.catalog?.getModel(model.provider, model.id)?.name ?? `${model.provider}/${model.id}`;
 }
 
 async function commit(
@@ -726,7 +759,7 @@ async function commit(
         name: unit.name,
         conversation: await conversationIn(tx, unit.main, unit, model),
         title: unit.title,
-        model: modelOf(unit.main),
+        model: modelOf(deps, unit.main),
         messages: (unit.main?.messages ?? []).filter((message) => message.role !== 'tool-result')
           .length,
         frozenAt: unit.frozenAt,
@@ -811,7 +844,7 @@ async function importOpened(
       preview: null,
       cones: made,
       report,
-      text: `Imported ${plural(made.length, 'frozen cone')} from ${hostOf(origin)}.`,
+      text: said(`From ${hostOf(origin)}.`, split.signIn),
       line: `Imported ${plural(made.length, 'frozen cone')} from ${origin}${made.length ? `: ${made.join(', ')}` : ''}.\n${settings ? `${settings}\n` : ''}The report is ${report}.\n`,
       error: null,
     };

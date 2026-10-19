@@ -403,7 +403,7 @@ function freezerOf(
     titles: ReturnType<typeof setupTitles>;
     people: AgentUsers | undefined;
     users: UserClients | undefined;
-    ready: { providers: readonly Provider[] };
+    ready: { providers: readonly Provider[]; models: ReturnType<typeof createSliccModels> };
   }
 ) {
   const { home, memory, titles, people, users, ready } = parts;
@@ -418,7 +418,8 @@ function freezerOf(
     imports: {
       env: home,
       memoryHome: people ? ROOT_HOME : HOME,
-      providers: ready.providers.map((provider) => provider.id),
+      catalog: ready.models,
+      providers: ready.providers,
       ...(users ? { users: users.users } : {}),
       ...(people ? { envOf: (cone: string) => people.envOfAgent(`cone:${cone}`) } : {}),
     },

@@ -8,7 +8,7 @@ import { GLOBAL_DIR } from '../skills/index.ts';
 import { validateName } from '../skills/skills.ts';
 import type { ImportDeps } from './v6.ts';
 import {
-  accountsOf,
+  accountsSplit,
   type Opened,
   type Parsed,
   textOf,
@@ -410,7 +410,6 @@ function nextSteps(run: Run, mounts: readonly string[]): string[] {
 export async function reportOf(run: Run, made: readonly string[]): Promise<string> {
   const { manifest } = run.opened;
   const { notes, date, parsed } = run;
-  const known = new Set(run.deps.providers ?? []);
   const recorded = parsed.units.filter((unit) => unit.record);
   const imported = [
     ...recorded.map(
@@ -436,11 +435,11 @@ export async function reportOf(run: Run, made: readonly string[]): Promise<strin
   const flagged = manifest.flagged.map(
     (item) => `| ${notes.placed.get(item.path) ?? item.path} | ${item.size} B | ${WHY[item.rule]} |`
   );
-  const providers = accountsOf(manifest.providers).map((name) =>
-    known.size && !known.has(name)
-      ? `${name}: seven doesn't know this provider`
-      : `${name}: re-enter in Settings`
-  );
+  const split = accountsSplit(manifest.providers, run.deps.providers);
+  const providers = [
+    ...split.again.map((id) => `${split.nameOf(id)}: re-enter in Settings`),
+    ...split.missing.map((id) => `${split.nameOf(id)}: SLICC 7 has no such provider`),
+  ];
   const never = (manifest.secrets ?? []).map((name) => NEVER[name] ?? name);
   const part = manifest.part ? `, part ${manifest.part.index} of ${manifest.part.of}` : '';
   const text = [
