@@ -581,13 +581,13 @@ function asked(
 }
 
 function secrets(id: string, entry: EntryRecord): SystemMessage {
-  const data = (entry.data ?? {}) as { names?: SecretName[] };
+  const data = (entry.data ?? {}) as { names?: SecretName[]; error?: string | null };
   return {
     id,
     role: 'system',
     kind: 'notice',
-    title: 'Secrets listed',
-    text: listedLine(data.names ?? []),
+    title: data.error ? 'Secrets unavailable' : 'Secrets listed',
+    text: listedLine({ names: data.names ?? [], error: data.error ?? null }),
     createdAt: entry.model?.[0]?.timestamp ?? 0,
   };
 }

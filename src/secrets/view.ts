@@ -1,4 +1,4 @@
-import type { SecretName } from './names.ts';
+import type { SecretListing } from './names.ts';
 import type { VaultState } from './vault.ts';
 
 export const SECRETS_KIND = 'slicc.secrets';
@@ -14,6 +14,13 @@ export function vaultHold(state: VaultState | undefined): VaultHold | null {
   return state.port === 'ready' ? null : { reason: 'waiting', held: state.held };
 }
 
-export function listedLine(names: readonly SecretName[]): string {
-  return `The user listed secrets: ${names.length ? names.map((name) => name.name).join(', ') : 'none'}.`;
+export function unavailableLine(reason: string): string {
+  return `Secrets are unavailable: ${reason.replace(/\.+$/, '')}.`;
+}
+
+export function listedLine(
+  listing: Pick<SecretListing, 'names'> & { error?: string | null }
+): string {
+  if (listing.error) return unavailableLine(listing.error);
+  return `The user listed secrets: ${listing.names.length ? listing.names.map((name) => name.name).join(', ') : 'none'}.`;
 }

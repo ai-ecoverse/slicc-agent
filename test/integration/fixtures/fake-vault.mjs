@@ -342,3 +342,53 @@ export function fakeVault(values, version = 1, options = {}) {
     port: channel.port1,
   });
 }
+
+export function fakeSealed(secrets, log = []) {
+  const tickets = new Map();
+  const hex = () =>
+    Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+      byte.toString(16).padStart(2, '0')
+    ).join('');
+  const find = (name) => secrets.find((item) => item.name === name);
+  const ops = {
+    list: () => ({
+      secrets: secrets.map(({ value: _value, ...shown }) => ({ state: 'active', ...shown })),
+    }),
+    placeholder: (req) => {
+      const found = find(req.name);
+      if (!found) throw new Refused('ENOENT', `no record ${req.name}`);
+      return { placeholder: found.placeholder, state: 'active' };
+    },
+    materialize: (req) => {
+      const names = req.shellGrants
+        ? secrets.filter((item) => item.exec === 'shell').map((item) => item.name)
+        : req.names;
+      const real = Object.fromEntries(names.map((name) => [name, Boolean(find(name)?.exec)]));
+      const ticket = hex();
+      tickets.set(
+        ticket,
+        names.filter((name) => real[name])
+      );
+      return { ticket, expiresAt: Date.now() + 30000, real };
+    },
+    materializeConsume: (req) => {
+      const names = tickets.get(req.ticket) ?? [];
+      tickets.delete(req.ticket);
+      return {
+        values: Object.fromEntries(names.map((name) => [name, find(name).value])),
+        placeholders: Object.fromEntries(names.map((name) => [name, find(name).placeholder])),
+      };
+    },
+  };
+  const hook = async (req) => {
+    log.push(req);
+    try {
+      const op = ops[req.op];
+      if (!op) throw new Refused('ENOTSUP', `this vault has no sealed op ${req.op}`);
+      return { v: 1, ...op(req) };
+    } catch (error) {
+      return { v: 1, error: { code: error.code ?? 'EIO', message: error.message } };
+    }
+  };
+  return Object.assign(hook, { log });
+}

@@ -24,7 +24,7 @@ import type { MemoryRuntime } from './memory/index.ts';
 import type { Monitor } from './monitor/index.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
 import { SECRETS_COMMAND, secretsEntry } from './secrets/extension.ts';
-import type { SecretName } from './secrets/names.ts';
+import type { SecretListing } from './secrets/names.ts';
 import { scrubItems, scrubText } from './secrets/scrub.ts';
 import { copyAgent, storedAgent } from './selection.ts';
 import type {
@@ -383,7 +383,7 @@ export function createAgentControl(
   freezer?: FreezerControl,
   changes?: Pick<ChangesRuntime, 'open' | 'accept' | 'revert'>,
   monitor?: Pick<Monitor, 'open' | 'close'>,
-  secrets?: () => readonly SecretName[],
+  secrets?: () => SecretListing,
   uploads?: Uploads,
   labels?: Pick<LabelsRuntime, 'label'>,
   guests?: Pick<Guests, 'open' | 'revoke' | 'forgetAlways'>
