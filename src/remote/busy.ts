@@ -55,6 +55,7 @@ export function snapshotBusy(snapshot: SnapshotEvent): boolean {
 
 export class BusyTracker {
   readonly #conversation: number;
+  #home: number;
   readonly #running = new Set<number>();
   readonly #waiting = new Set<number>();
   #agents: Readonly<AgentsState> | undefined;
@@ -64,17 +65,27 @@ export class BusyTracker {
 
   constructor(conversation: number) {
     this.#conversation = conversation;
+    this.#home = conversation;
   }
 
   seed(agents: unknown, work: unknown, outbox: unknown): void {
     this.#agents = agents as AgentsState | undefined;
     this.#work = work as Work | undefined;
     this.#outbox = outbox as Outbox | undefined;
-    this.#cone = this.#agents ? coneOf(this.#agents, this.#conversation) : undefined;
+    const state = this.#agents;
+    if (!state) return;
+    const own = Object.values(state.scoops).find(
+      (record) => record.conversation === this.#conversation
+    );
+    this.#cone = coneOf(state, this.#conversation) ?? own?.cone;
+    this.#home = own
+      ? (state.cones[own.cone]?.conversation ?? this.#conversation)
+      : this.#conversation;
   }
 
   conversations(): number[] {
-    return [this.#conversation, ...this.#scoops().map(([, record]) => record.conversation)];
+    const scoops = this.#scoops().map(([, record]) => record.conversation);
+    return [...new Set([this.#home, this.#conversation, ...scoops])];
   }
 
   conversation(id: number, live: unknown, inbox: unknown): void {
@@ -140,13 +151,13 @@ export class BusyTracker {
 
   value(): BusyState {
     const why: string[] = [];
-    if (this.#busy(this.#conversation)) why.push('cone');
+    if (this.#busy(this.#home)) why.push('cone');
     const scoops = this.#scoops();
     const feeds = Object.values(this.#work?.feeds ?? {});
     for (const [id, record] of scoops)
       if (this.#busy(record.conversation) || feeds.some((feed) => feed.scoop === id))
         why.push(`scoop:${record.name}`);
-    const ours = new Set([this.#conversation, ...scoops.map(([, record]) => record.conversation)]);
+    const ours = new Set([this.#home, ...scoops.map(([, record]) => record.conversation)]);
     if (this.#pending(ours)) why.push('pending-lick');
     return { busy: why.length > 0, why };
   }
@@ -217,6 +228,7 @@ export class BusyGate {
       return events;
     this.#sent = true;
     const now = this.#tracker.value();
+    this.changed();
     return [busyLine(now.busy ? now : { busy: true, why: ['cone'] }), ...events];
   }
 

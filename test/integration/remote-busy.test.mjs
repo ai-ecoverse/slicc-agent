@@ -72,7 +72,7 @@ test('a prompt whose run ends while its scoop works stays busy until the notify 
   const query = new URLSearchParams([
     step({ tool: { name: 'bash', args: { command: spawn() } } }),
     step({ answer: 'Spawned.' }),
-    step({ answer: 'Noted.' }),
+    step({ gate: 'notify', answer: 'Noted.' }),
     ['scoop-step', JSON.stringify({ gate: 'scoop', answer: 'Scoop done.' })],
   ]).toString();
   await page.evaluate(async (query) => {
@@ -103,18 +103,36 @@ test('a prompt whose run ends while its scoop works stays busy until the notify 
   });
   await page.evaluate(async () => {
     window.second = await window.follow();
+    window.scoop = await window.follow(
+      remoteControl(window.connection, { agent: () => 'scoop:helper' })
+    );
     window.during = [...window.first.seen];
     window.worker.postMessage({ gate: 'scoop' });
   });
   await page.within(
     60000,
-    () => window.settled(window.first.seen) && window.settled(window.second.seen)
+    () =>
+      window.first.seen.filter((event) => event.t === 'run' && event.state === 'start').length === 2
+  );
+  const notifying = await page.evaluate(async () => {
+    await window.pause(500);
+    const flips = window.flips(window.scoop.seen);
+    window.worker.postMessage({ gate: 'notify' });
+    return flips;
+  });
+  await page.within(
+    60000,
+    () =>
+      window.settled(window.first.seen) &&
+      window.settled(window.second.seen) &&
+      window.settled(window.scoop.seen)
   );
   const seen = await page.evaluate(async () => {
     await window.pause(1000);
     await window.owner.release();
     return {
-      opened: [window.first.opened.busy, window.second.opened.busy],
+      opened: [window.first.opened.busy, window.second.opened.busy, window.scoop.opened.busy],
+      scoop: window.flips(window.scoop.seen),
       plain: { busy: 'busy' in window.plain.opened, flips: window.flips(window.plain.seen) },
       old: { busy: 'busy' in window.old.opened },
       prompt: window.prompt.at(-1),
@@ -123,7 +141,9 @@ test('a prompt whose run ends while its scoop works stays busy until the notify 
       second: window.second.seen,
     };
   });
-  assert.deepEqual(seen.opened, [false, true]);
+  assert.deepEqual(seen.opened, [false, true, true]);
+  assert.deepEqual(notifying, []);
+  assert.deepEqual(seen.scoop, [false]);
   assert.deepEqual(seen.plain, { busy: false, flips: [] });
   assert.deepEqual(seen.old, { busy: false });
   assert.deepEqual(seen.prompt, { t: 'end', reason: 'stop' });

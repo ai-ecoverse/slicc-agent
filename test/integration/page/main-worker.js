@@ -91,8 +91,9 @@ const scoopSteps = params.getAll('scoop-step').map((spec) => {
 });
 const steps = [
   ...params.getAll('step').map((spec) => {
-    const { tool, answer, think, error, hold } = JSON.parse(spec);
+    const { tool, answer, think, error, hold, gate: name } = JSON.parse(spec);
     if (hold) return HOLD;
+    if (name) return { gate: name, message: fauxAssistantMessage(answer) };
     if (error) return fauxAssistantMessage([], { stopReason: 'error', errorMessage: error });
     if (think) return fauxAssistantMessage([fauxThinking(think), fauxText(answer)]);
     return tool
@@ -115,7 +116,10 @@ const steps = [
   ),
   ...params.getAll('answer').map((answer) => fauxAssistantMessage(answer)),
 ];
-const queued = steps.map((step) => (step === HOLD ? held : recorded(step)));
+const queued = steps.map((step) => {
+  if (step === HOLD) return held;
+  return step.gate ? gated(step.gate, step.message) : recorded(step);
+});
 let titles = 0;
 const titling = (context) =>
   context.messages.length === 1 &&
