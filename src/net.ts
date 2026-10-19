@@ -72,6 +72,16 @@ function stream(body: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
   });
 }
 
+const TELEMETRY = 'x-stainless-';
+
+function untracked(request: Request): Request {
+  const telemetry = [...request.headers.keys()].filter((name) => name.startsWith(TELEMETRY));
+  if (!telemetry.length) return request;
+  const headers = new Headers(request.headers);
+  for (const name of telemetry) headers.delete(name);
+  return new Request(request, { headers });
+}
+
 export function transportFetch(
   transport: Transport,
   origin: string,
@@ -79,7 +89,7 @@ export function transportFetch(
   loopback?: Loopback
 ): typeof fetch {
   return async (input, init) => {
-    const request = new Request(input, init);
+    const request = untracked(new Request(input, init));
     const port = kernelPort(request.url);
     if (loopback && port) return loopback(request, { port, signal: request.signal });
     if (

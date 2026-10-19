@@ -293,7 +293,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     env: 'BASETEN_API_KEY',
     description: 'Open models hosted by Baseten.',
     keyUrl: 'https://app.baseten.co/settings/api_keys',
-    cors: false,
+    cors: true,
   },
   {
     id: 'moonshotai',
@@ -301,7 +301,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     env: 'MOONSHOT_API_KEY',
     description: 'Kimi models from Moonshot AI.',
     keyUrl: 'https://platform.moonshot.ai/console/api-keys',
-    cors: false,
+    cors: true,
   },
   {
     id: 'moonshotai-cn',
@@ -309,7 +309,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     env: 'MOONSHOT_API_KEY',
     description: 'Kimi models from Moonshot AI’s China platform.',
     keyUrl: 'https://platform.moonshot.cn/console/api-keys',
-    cors: false,
+    cors: true,
   },
   {
     id: 'xai',

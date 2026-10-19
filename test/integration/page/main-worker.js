@@ -247,7 +247,11 @@ const completions = (request) => {
   const url = new URL(request.url);
   const authorization =
     request.headers.find(([name]) => name.toLowerCase() === 'authorization')?.[1] ?? null;
-  upstream.push({ url: request.url, authorization });
+  upstream.push({
+    url: request.url,
+    authorization,
+    names: request.headers.map(([name]) => name.toLowerCase()),
+  });
   const chunk = (delta, finish) =>
     `data: ${JSON.stringify({ id: 'up', object: 'chat.completion.chunk', created: 1, model: 'm', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
   const text = `${chunk({ role: 'assistant', content: `From ${url.host}.` }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;

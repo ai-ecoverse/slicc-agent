@@ -266,3 +266,41 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
     assert.equal(entry.authorization, 'Bearer cf-token-key-0001');
   }
 });
+
+test('a provider that refuses the SDK’s telemetry headers is offered as direct, and its requests go out without them', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await page.evaluate(async (query) => {
+    const { owner, settings, agent, put, log } = await window.openRegistry(query);
+    await window.until(() => settings.providers().length > 0);
+    const option = settings.providers().find((entry) => entry.id === 'moonshotai');
+    await put({
+      kind: 'model',
+      name: option.vaultName,
+      provider: option.id,
+      placeholder: 'fnox_proxy_moonshot',
+      value: 'sk-moonshot-key-0001',
+    });
+    await settings.connect(option.id);
+    await window.until(
+      () => settings.accounts().find((entry) => entry.id === option.id)?.status === 'connected'
+    );
+    const reply = await window.reply(agent, 'moonshotai/kimi-k2.6', 'Hello Moonshot.');
+    const { upstream } = await log();
+    await owner.release();
+    return { option, reply, upstream };
+  }, QUERY);
+  assert.equal(seen.option.needs, undefined);
+  assert.equal(seen.reply, 'From api.moonshot.ai.');
+  const sent = seen.upstream.filter((entry) => new URL(entry.url).host === 'api.moonshot.ai');
+  assert.ok(sent.length > 0);
+  for (const entry of sent) {
+    assert.equal(entry.authorization, 'Bearer sk-moonshot-key-0001');
+    assert.ok(entry.names.includes('content-type'));
+    assert.deepEqual(
+      entry.names.filter((name) => name.startsWith('x-stainless-')),
+      []
+    );
+  }
+});
