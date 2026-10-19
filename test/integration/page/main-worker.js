@@ -421,6 +421,15 @@ self.addEventListener('message', ({ data }) => {
       (error) => data.reply.postMessage({ error: error.message })
     );
 });
+const version = params.get('version');
+if (version) {
+  const fetched = self.fetch.bind(self);
+  self.fetch = (input, init) =>
+    new URL(input instanceof Request ? input.url : input, self.location.href).pathname ===
+    '/package.json'
+      ? Promise.resolve(Response.json({ version }))
+      : fetched(input, init);
+}
 const running = runAgentWorker(self, {
   ...(attach ? { attach } : {}),
   ...(params.has('redirect')

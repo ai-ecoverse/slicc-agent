@@ -468,6 +468,7 @@ async function start(
   const sources = licks.attach(agent, {
     env: home,
     home: HOME,
+    models,
     activity,
     ...(people ? { dirs: () => people.lickDirs(), cronUser: people.cronUser.bind(people) } : {}),
   });
@@ -530,6 +531,7 @@ async function start(
   const freezer = freezerOf(agent, { home, memory, titles, people, users, ready });
   licks.licks.guard(freezer.frozenTarget);
   const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped });
+  settings.state.subscribe(() => void licks.licks.flush(BACKGROUND_CONTEXT).catch(() => undefined));
   const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(
     {

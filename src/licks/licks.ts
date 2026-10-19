@@ -103,6 +103,7 @@ export function frozenNotice(event: LickEvent, blocked: Blocked): LickEvent {
 export interface LicksHost {
   harness: Harness;
   resolve(target: LickTarget, channel: LickChannel, context: Context): Promise<Conversation>;
+  runnable?(conversation: Conversation, context: Context): Promise<boolean>;
 }
 
 export const MAX_ITEMS = 50;
@@ -231,12 +232,13 @@ export function createLicks(host: Promise<LicksHost>): Licks {
   }
 
   async function flushKey(key: string, context: Context): Promise<void> {
-    const { harness, resolve } = await host;
+    const { harness, resolve, runnable } = await host;
     const queue = await settled(key, context);
     if (!queue?.pending) return;
     const lick = render(queue.pending);
     const target = key.split('|')[0] as LickTarget;
     const conversation = await resolve(target, queue.pending.lick.channel, context);
+    if (runnable && !(await runnable(conversation, context))) return;
     const submission = await conversation.submit(
       {
         type: 'input',
