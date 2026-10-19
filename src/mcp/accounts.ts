@@ -16,6 +16,7 @@ export interface McpAccounts {
   signIn(id: string): Promise<McpSignIn>;
   connect(id: string, secret: string | null): Promise<void>;
   disconnect(id: string): Promise<void>;
+  serverUrl(id: string): Promise<string | null>;
   onChange(listener: () => void): () => void;
 }
 
@@ -31,6 +32,15 @@ type Kind = 'token' | 'oauth';
 
 function kindOf(connection: McpServerConnection): Kind {
   return secretNames(connection.entry.config).length ? 'token' : 'oauth';
+}
+
+export function serverUrl(raw: string): string {
+  const url = new URL(raw);
+  url.username = '';
+  url.password = '';
+  url.search = '';
+  url.hash = '';
+  return url.href;
 }
 
 function row(
@@ -120,6 +130,10 @@ export function mcpAccounts(
       if (kind === 'oauth') await sources.oauth(connection.entry).forget();
       await reread();
       restart(connection);
+    },
+    async serverUrl(id) {
+      const { connection } = find(id);
+      return serverUrl(connection.entry.config.url);
     },
     onChange(listener) {
       listeners.add(listener);

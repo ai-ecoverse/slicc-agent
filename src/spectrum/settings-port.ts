@@ -56,6 +56,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   readonly #signing = new Map<string, AbortController>();
   #local: Local;
   #offered = '';
+  readonly #urls = new Map<string, string>();
 
   constructor(
     settings: AgentSettings,
@@ -74,7 +75,9 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     const { model: _model, thinking: _thinking, ...local } = { ...defaults, ...saved };
     this.#local = local;
     this.#offered = JSON.stringify(this.providers());
+    this.#locate();
     settings.state.subscribe(() => {
+      this.#locate();
       this.emit('accounts', this.accounts());
       this.emit('settings', this.get());
       const offered = JSON.stringify(this.providers());
@@ -83,6 +86,24 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
       this.emit('providers', this.providers());
     });
     agent.on('agents', () => this.emit('settings', this.get()));
+  }
+
+  #locate(): void {
+    const servers = this.#state()
+      .accounts.filter(({ group }) => group === 'mcp')
+      .map(({ id }) => id);
+    for (const id of this.#urls.keys()) if (!servers.includes(id)) this.#urls.delete(id);
+    for (const id of servers) {
+      void this.#settings
+        .serverUrl?.(id, BACKGROUND_CONTEXT)
+        .then((url) => {
+          if ((url ?? undefined) === this.#urls.get(id)) return;
+          if (url) this.#urls.set(id, url);
+          else this.#urls.delete(id);
+          this.emit('accounts', this.accounts());
+        })
+        .catch(() => undefined);
+    }
   }
 
   #state(): SettingsState {
@@ -151,9 +172,11 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
 
   accounts(): readonly Account[] {
     return this.#state().accounts.map(({ needs, ...account }) => {
+      const url = this.#urls.get(account.id);
+      const located = url ? { ...account, url } : account;
       const shown = this.#signing.has(account.id)
-        ? { ...account, status: 'signing-in' as const }
-        : account;
+        ? { ...located, status: 'signing-in' as const }
+        : located;
       return needs ? { ...shown, needs } : shown;
     });
   }

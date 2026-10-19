@@ -549,6 +549,7 @@ export interface AgentSettings {
   ): Promise<void>;
   disconnect(providerId: string, context: Context): Promise<void>;
   remove(providerId: string, context: Context): Promise<void>;
+  serverUrl(providerId: string, context: Context): Promise<string | null>;
   signIn(providerId: string, context: Context): Promise<SignIn | McpSignIn | null>;
   dismissMoved(context: Context): Promise<void>;
 }
@@ -557,6 +558,7 @@ export const SETTINGS_METHODS = keys<Omit<AgentSettings, 'state'>>({
   connect: true,
   disconnect: true,
   remove: true,
+  serverUrl: true,
   signIn: true,
   dismissMoved: true,
 });

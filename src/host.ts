@@ -104,6 +104,7 @@ const noSettings: AgentSettings = {
   },
   disconnect: async () => {},
   remove: async () => {},
+  serverUrl: async () => null,
   signIn: async () => null,
   dismissMoved: async () => {},
 };
