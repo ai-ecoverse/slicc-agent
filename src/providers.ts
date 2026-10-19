@@ -47,6 +47,7 @@ export interface FieldInput {
   placeholder?: string;
   help?: string;
   customBase?: true;
+  vaultSetting?: string;
   options?: readonly FieldOption[];
   value?: string;
 }
@@ -140,6 +141,7 @@ const ACCOUNT_FIELD: FieldSpec = {
   required: true,
   placeholder: '0123456789abcdef0123456789abcdef',
   help: 'The 32-character ID on your Cloudflare dashboard’s account overview.',
+  vaultSetting: 'CLOUDFLARE_ACCOUNT_ID',
   env: checked(
     ACCOUNT,
     'CLOUDFLARE_ACCOUNT_ID',
@@ -163,6 +165,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
         placeholder: 'my-resource or https://my-resource.openai.azure.com',
         help: 'Your resource’s name, or its endpoint address from Keys and Endpoint.',
         customBase: true,
+        vaultSetting: 'AZURE_OPENAI_RESOURCE_NAME',
         env: azureEndpoint,
       },
       {
@@ -201,6 +204,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
         required: true,
         placeholder: 'my-gateway',
         help: 'The name of your gateway under AI › AI Gateway.',
+        vaultSetting: 'CLOUDFLARE_GATEWAY_ID',
         env: checked(
           GATEWAY,
           'CLOUDFLARE_GATEWAY_ID',

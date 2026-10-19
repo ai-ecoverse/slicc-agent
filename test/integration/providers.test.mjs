@@ -172,6 +172,8 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
       await window.until(() => settings.providers().length > 0);
       const option = settings.providers().find((entry) => entry.id === 'cloudflare-workers-ai');
       const bedrock = settings.providers().find((entry) => entry.id === 'amazon-bedrock');
+      const gateway = settings.providers().find((entry) => entry.id === 'cloudflare-ai-gateway');
+      const azure = settings.providers().find((entry) => entry.id === 'azure');
       await put({
         kind: 'model',
         name: option.vaultName,
@@ -221,6 +223,8 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
       const result = {
         option,
         bedrock,
+        gateway,
+        azure,
         refused,
         empty,
         pending,
@@ -253,8 +257,30 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
   assert.equal(seen.kept, 'disconnected');
   assert.equal(seen.cleaned, true);
   assert.deepEqual(
-    seen.added.fields.map((field) => [field.name, field.value]),
-    [['account', account]]
+    seen.added.fields.map((field) => [field.name, field.value, field.vaultSetting]),
+    [['account', account, 'CLOUDFLARE_ACCOUNT_ID']]
+  );
+  assert.deepEqual(
+    seen.option.fields.map((field) => field.vaultSetting),
+    ['CLOUDFLARE_ACCOUNT_ID']
+  );
+  assert.deepEqual(
+    seen.gateway.fields.map((field) => [field.name, field.vaultSetting]),
+    [
+      ['account', 'CLOUDFLARE_ACCOUNT_ID'],
+      ['gateway', 'CLOUDFLARE_GATEWAY_ID'],
+    ]
+  );
+  assert.deepEqual(
+    seen.azure.fields.map((field) => [
+      field.name,
+      field.vaultSetting ?? null,
+      field.customBase ?? null,
+    ]),
+    [
+      ['endpoint', 'AZURE_OPENAI_RESOURCE_NAME', true],
+      ['deployments', null, null],
+    ]
   );
   assert.equal(seen.bedrock.fields[0].value, 'us-west-2');
   assert.ok(
