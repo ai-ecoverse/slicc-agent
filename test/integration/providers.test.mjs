@@ -186,6 +186,11 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
         () => null,
         (error) => error.message
       );
+      await window.until(() => settings.accounts().some((entry) => entry.id === option.id));
+      const pending = {
+        status: settings.accounts().find((entry) => entry.id === option.id)?.status,
+        models: settings.models().filter((entry) => entry.id.startsWith(`${option.id}/`)).length,
+      };
       await settings.connect(option.id, undefined, { account });
       await window.until(
         () => settings.accounts().find((entry) => entry.id === option.id)?.status === 'connected'
@@ -197,7 +202,7 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
         'Hello Cloudflare.'
       );
       const { upstream } = await log();
-      const result = { option, bedrock, refused, empty, added, reply, upstream };
+      const result = { option, bedrock, refused, empty, pending, added, reply, upstream };
       await owner.release();
       return result;
     },
@@ -217,6 +222,7 @@ test('a fields provider is added with its non-secret fields, refuses a bad one i
   );
   assert.equal(seen.refused, 'A Cloudflare account ID is 32 characters of 0–9 and a–f.');
   assert.equal(seen.empty, 'Account ID can’t be empty.');
+  assert.deepEqual(seen.pending, { status: 'disconnected', models: 0 });
   assert.deepEqual(
     seen.added.fields.map((field) => field.name),
     ['account']

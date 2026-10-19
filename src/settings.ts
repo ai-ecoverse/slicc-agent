@@ -150,9 +150,13 @@ function listed(
     fields.get(providerId) !== undefined;
 }
 
-function accounts(records: Pick<VaultRecords, 'model'>, providers: Provider[]): AccountState[] {
+function accounts(
+  records: Pick<VaultRecords, 'model'>,
+  providers: Provider[],
+  ready: (providerId: string) => boolean
+): AccountState[] {
   return providers.map((provider) => {
-    const record = records.model(provider.id);
+    const record = ready(provider.id) ? records.model(provider.id) : undefined;
     const fields = ACCOUNT_FIELDS[provider.id];
     const listing = LISTINGS.get(provider.id);
     return {
@@ -202,6 +206,7 @@ export interface ProviderFields {
   get(providerId: string): Readonly<Record<string, string>> | undefined;
   env(providerId: string): Readonly<Record<string, string>> | undefined;
   set(providerId: string, fields: Record<string, string> | undefined): Promise<void>;
+  ready(providerId: string): boolean;
   added(): readonly string[] | undefined;
   add(providerId: string): Promise<void>;
   forget(providerId: string): Promise<void>;
@@ -227,6 +232,12 @@ export async function providerFields(
     await store.set(ADDED, next);
   };
   return {
+    ready: (providerId) =>
+      specs(providerId).every((spec) => {
+        const value = known.get(providerId)?.[spec.name];
+        if (value === undefined) return !spec.required;
+        return typeof spec.env(value.trim()) !== 'string';
+      }),
     added: () => added,
     async add(providerId) {
       const now = added ?? ADDED_FIRST;
@@ -246,7 +257,7 @@ export async function providerFields(
         {},
         ...specs(providerId).flatMap((spec) => {
           const value = fields[spec.name];
-          const env = value === undefined ? '' : spec.env(value);
+          const env = value === undefined ? '' : spec.env(value.trim());
           return typeof env === 'string' ? [] : [env];
         })
       );
@@ -302,14 +313,16 @@ export async function createAgentSettings(
   const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint, identity }));
   const snapshot = async (): Promise<SettingsState> => {
     const stored = new Set(
-      providers.filter((provider) => records.model(provider.id)).map((provider) => provider.id)
+      providers
+        .filter((provider) => records.model(provider.id) && fields.ready(provider.id))
+        .map((provider) => provider.id)
     );
     const show = listed(records, fields);
     const shown = providers.filter((provider) => show(provider.id));
     return {
       models: choices(models, providers, stored),
       labels: labels(models, shown, stored),
-      accounts: [...accounts(records, shown), ...((await mcp?.accounts()) ?? [])],
+      accounts: [...accounts(records, shown, fields.ready), ...((await mcp?.accounts()) ?? [])],
       providers: offered(providers),
       budget: await budget(records, usage),
       ...(moved?.state.value?.length

@@ -8,12 +8,13 @@ export type FieldsOf = (providerId: string) => Readonly<Record<string, string>> 
 
 export function vaultCredentials(
   records: Pick<VaultRecords, 'model' | 'state'>,
-  env: FieldsOf = () => undefined
+  env: FieldsOf = () => undefined,
+  ready: (providerId: string) => boolean = () => true
 ): CredentialStore {
   return {
     async read(providerId) {
       const record = records.model(providerId);
-      if (!record) return undefined;
+      if (!record || !ready(providerId)) return undefined;
       const extra = env(providerId);
       return {
         type: 'api_key',
@@ -24,7 +25,8 @@ export function vaultCredentials(
     async list() {
       const providers = records.state.value
         .filter((record) => record.kind === 'model' && record.provider !== undefined)
-        .map((record) => record.provider as string);
+        .map((record) => record.provider as string)
+        .filter(ready);
       return [...new Set(providers)].map(
         (providerId): CredentialInfo => ({ providerId, type: 'api_key' })
       );

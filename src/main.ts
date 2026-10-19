@@ -259,7 +259,7 @@ async function modelsOf(
   const loaded = records.refresh(BACKGROUND_CONTEXT).catch(() => undefined);
   const providers = options.providers ?? sliccProviders(version);
   const fields = await providerFields(store, providers);
-  const credentials = vaultCredentials(records, fields.env);
+  const credentials = vaultCredentials(records, fields.env, fields.ready);
   const models = createSliccModels(credentials, providers);
   const bases = () => modelBases(providers, models, fields.env);
   const own = () => bases().filter(({ provider }) => !VAULT_KNOWN.has(provider));

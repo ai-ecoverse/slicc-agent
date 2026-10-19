@@ -83,7 +83,7 @@ export function azureBase(env: Readonly<Record<string, string>>): string | undef
   return name ? `https://${name}.openai.azure.com/openai/v1` : undefined;
 }
 
-const REGION = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/;
+const REGION = /^[a-z]{2,}(-[a-z]+)+-\d{1,2}$/;
 const ACCOUNT = /^[0-9a-f]{32}$/i;
 const GATEWAY = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -395,7 +395,8 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     id: 'opencode',
     make: opencodeProvider,
     env: 'OPENCODE_API_KEY',
-    description: 'Models curated for coding agents by OpenCode Zen.',
+    description:
+      'Models curated for coding agents by OpenCode Zen. Needs seven’s vault 1.12.2 or later.',
     keyUrl: 'https://opencode.ai/auth',
     cors: false,
   },
@@ -403,7 +404,8 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     id: 'opencode-go',
     make: opencodeGoProvider,
     env: 'OPENCODE_API_KEY',
-    description: 'Open models on the OpenCode Go subscription.',
+    description:
+      'Open models on the OpenCode Go subscription. Needs seven’s vault 1.12.2 or later.',
     keyUrl: 'https://opencode.ai/auth',
     cors: false,
   },
