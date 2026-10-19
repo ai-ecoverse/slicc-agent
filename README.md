@@ -158,6 +158,8 @@ The first provider is AWS Bedrock with a Bedrock API key as the bearer token; th
 
 ### In slicc-spectrum
 
+`@ai-ecoverse/slicc-spectrum` is an optional peer dependency, `^1.94.1`. 1.94.0 is the first release with the provider picker (`providers()`, `remove`, `vaultName`, `customBase`, a field's `options` and `value`), and 1.94.1 shows a field with `options` as an `sp-picker` on its `value`, so Settings opens Bedrock's region picker on the region the account stored. `test/integration/settings-ui.test.mjs` checks that in a real `<slicc-settings>`.
+
 `@ai-ecoverse/slicc-agent/spectrum` turns an `AgentConnection` into slicc-spectrum's `AgentPort`, so `<slicc-app>` shows the real agent:
 
 ```js
