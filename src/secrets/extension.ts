@@ -8,19 +8,19 @@ import {
   type ToolExecutionResult,
   ToolTask,
 } from '@earendil-works/pi-durable';
-import type { Names, SecretName } from './names.ts';
+import type { Names, SecretListing, SecretName } from './names.ts';
 import type { Scrub } from './scrub.ts';
 import type { Vault } from './vault.ts';
-import { listedLine, SECRETS_KIND } from './view.ts';
+import { exposedLine, listedLine, SECRETS_KIND, unavailableLine } from './view.ts';
 
-export { listedLine, SECRETS_KIND };
+export { exposedLine, listedLine, SECRETS_KIND, unavailableLine };
 
 export const SECRETS = 'slicc-secrets';
 export const SECRETS_COMMAND = '/secrets';
 export const SHELL_GRANTS = ['fnox', 'exec', '--shell-grants', '--'] as const;
 
 export const MODEL_LINE =
-  "Credentials are env vars (`$NAME`) holding placeholders; `secret list` shows them and where each works. The vault fills in the real value only in the listed header, for the listed domain, method and path, over HTTPS (curl, git, fetch). Adding a rule means editing `/etc/fnox/config.toml` with sudo, which the user approves. `fnox exec` gives real values only for secrets the user enabled for exec, and the secrets listed as 'in every bash' already hold real values in your commands. Everything is logged, and stored values are replaced by their placeholder in everything you see; edit around placeholders, since files show them too. Never ask the user to paste a credential into the chat.";
+  "Credentials are env vars (`$NAME`) holding placeholders, listed below with where each works (`fnox list` shows the fnox config). The vault fills in the real value only in the listed header, for the listed domain, method and path, over HTTPS (curl, git, fetch). Adding a rule means editing `/etc/fnox/config.toml` with sudo, which the user approves. `fnox exec` gives real values only for secrets the user enabled for exec, and the secrets listed as 'in every bash' already hold real values in your commands. Everything is logged, and stored values are replaced by their placeholder in everything you see; edit around placeholders, since files show them too. Never ask the user to paste a credential into the chat.";
 
 type Leaf = { get(): string; set(text: string): void };
 
@@ -92,39 +92,62 @@ export async function scrubResult(
   };
 }
 
-function where(name: SecretName): string {
+function where(name: SecretName, granted: boolean): string {
   const rules = name.rules.map((rule) =>
     [
       rule.domain,
       rule.header ? `header ${rule.header}` : '',
       rule.methods?.length ? rule.methods.join(' ') : '',
       rule.paths?.length ? rule.paths.join(' ') : '',
+      rule.proposed ? 'proposed in the fnox config, not yet accepted by the vault' : '',
     ]
       .filter(Boolean)
       .join(', ')
   );
-  const shell = name.exec === 'shell' ? ['in every bash'] : [];
-  const parts = [...rules, ...shell];
+  const shell = name.exec === 'shell' && granted ? ['in every bash'] : [];
+  const sealed = name.placeholder === null ? ['not sealed'] : [];
+  const config = name.fnox ? [] : ['not in the fnox config'];
+  const parts = [...rules, ...shell, ...sealed, ...config];
   return parts.length ? `: ${parts.join('; ')}` : '';
 }
 
-export function renderSecrets(names: readonly SecretName[]): string | undefined {
-  if (!names.length) return undefined;
-  const lines = names.map((name) => `- ${name.name} = ${name.placeholder}${where(name)}`);
-  return [MODEL_LINE, '', ...lines].join('\n');
+export const NO_SECRETS =
+  'No secrets are configured: the fnox config has no keys and the vault no sealed secrets.';
+
+export function renderSecrets(listing: SecretListing): string {
+  if (listing.error !== null) return unavailableLine(listing.error);
+  if (!listing.names.length) return NO_SECRETS;
+  const granted = !listing.exposed.length;
+  const lines = listing.names.map(
+    (name) => `- ${name.name} = ${name.placeholder ?? `$${name.name}`}${where(name, granted)}`
+  );
+  const off = granted ? [] : ['', exposedLine(listing.exposed)];
+  return [MODEL_LINE, '', ...lines, ...off].join('\n');
 }
 
-export function secretsEntry(names: readonly SecretName[]) {
+export function secretsEntry(listing: SecretListing) {
   return {
     kind: SECRETS_KIND,
-    data: { names: structuredClone(names) as unknown as JsonValue },
-    model: [{ role: 'user' as const, content: listedLine(names), timestamp: Date.now() }],
+    data: {
+      names: structuredClone(listing.names) as unknown as JsonValue,
+      error: listing.error,
+      exposed: [...listing.exposed],
+    },
+    model: [{ role: 'user' as const, content: listedLine(listing), timestamp: Date.now() }],
   };
+}
+
+export function granting(listing: SecretListing): boolean {
+  return (
+    listing.error === null &&
+    !listing.exposed.length &&
+    listing.names.some((name) => name.exec === 'shell')
+  );
 }
 
 export function shellGrants(names: Pick<Names, 'state'>) {
   return (argv: readonly string[]): readonly string[] =>
-    names.state.value.some((name) => name.exec === 'shell') ? [...SHELL_GRANTS, ...argv] : argv;
+    granting(names.state.value) ? [...SHELL_GRANTS, ...argv] : argv;
 }
 
 export function secretsExtension(deps: {

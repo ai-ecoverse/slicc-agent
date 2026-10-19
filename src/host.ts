@@ -36,7 +36,7 @@ import { createMonitor, type MonitorOptions } from './monitor/index.ts';
 import { viewRemote } from './readonly.ts';
 import { type AgentRemote, createRemote } from './remote/host.ts';
 import { createPages, ownedPages, type Pages } from './remote/pages.ts';
-import type { SecretName } from './secrets/names.ts';
+import type { SecretListing } from './secrets/names.ts';
 import type { VaultState } from './secrets/vault.ts';
 import {
   AgentControl,
@@ -139,7 +139,7 @@ async function follow(
 
 export interface HostSecrets {
   vault: ReplicatedState<VaultState>;
-  list(): readonly SecretName[];
+  list(): SecretListing;
   close?(): void;
 }
 

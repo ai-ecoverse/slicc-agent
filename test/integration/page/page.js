@@ -3,6 +3,7 @@ import { startAgent } from '../../../src/index.ts';
 import { bridgePort, connectAgent, connectGuest, linkEndpoint } from '../../../src/page.ts';
 import { remoteControl } from '../../../src/remote/client.ts';
 import { createAgentModel } from '../../../src/spectrum/index.ts';
+import { fakeSealed } from '../fixtures/fake-vault.mjs';
 
 globalThis.startAgent = startAgent;
 globalThis.createAgentModel = createAgentModel;
@@ -12,3 +13,4 @@ globalThis.connectAgent = connectAgent;
 globalThis.connectGuest = connectGuest;
 globalThis.bridgePort = bridgePort;
 globalThis.linkEndpoint = linkEndpoint;
+globalThis.fakeSealed = fakeSealed;
