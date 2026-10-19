@@ -46,7 +46,7 @@ import { type McpAccounts, setupMcp } from './mcp/index.ts';
 import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
-import { pageOnly, type Transport, transportFetch } from './net.ts';
+import { pageOnly, type Reach, type Transport, transportFetch, transportReach } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { AZURE, azureBase, VAULT_KNOWN } from './providers.ts';
 import { createPages } from './remote/pages.ts';
@@ -328,6 +328,7 @@ async function prepare(
     transport,
     facts,
     ...made,
+    reach: transportReach(kernel.client),
     registry: baseRegistry(facts, scope.location.origin),
   };
 }
@@ -343,15 +344,16 @@ function modelsOfAgent(
 }
 
 async function settingsOf(
-  made: Awaited<ReturnType<typeof modelsOf>>,
+  made: Awaited<ReturnType<typeof modelsOf>> & { reach: Reach },
   mcp: McpAccounts,
   moved: { agent: Agent; vault: Vault; wiped: Wiped }
 ) {
-  const { models, records, fields, providers, own, endpoints } = made;
+  const { models, records, fields, providers, own, endpoints, reach } = made;
   const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
   const settings = await createAgentSettings(models, { records, fields }, providers, {
     mcp,
     moved: keys,
+    reach,
   });
   settings.state.subscribe(() => void endpoints.models(own()).catch(() => undefined));
   return settings;

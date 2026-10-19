@@ -32,6 +32,7 @@ const helpers = () => {
     return {
       owner,
       ...model,
+      route: (traits) => post({ traits }, 'routed'),
       put: (record) => post({ seal: record }, 'sealed'),
       unput: (name) => post({ unseal: name }, 'sealed'),
       log: () => post({}, 'upstream'),
@@ -310,4 +311,73 @@ test('a provider that refuses the SDK’s telemetry headers is offered as direct
       []
     );
   }
+});
+
+test('a cors-free provider is shown but blocked without a CORS-free route, unblocks when one appears and blocks again, keeping its key', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await page.evaluate(async (query) => {
+    const { owner, settings, agent, put, route } = await window.openRegistry(query);
+    await window.until(() => settings.providers().length > 0);
+    const option = () => settings.providers().find((entry) => entry.id === 'nvidia');
+    const row = () => settings.accounts().find((entry) => entry.id === 'nvidia');
+    const models = () => settings.models().filter((entry) => entry.id.startsWith('nvidia/')).length;
+    const offered = option();
+    await put({
+      kind: 'model',
+      name: offered.vaultName,
+      provider: 'nvidia',
+      placeholder: 'fnox_proxy_nvidia',
+      value: 'nvapi-key-0001',
+    });
+    await settings.connect('nvidia');
+    await window.until(() => row()?.status === 'connected');
+    const before = {
+      blocked: row().blocked,
+      status: row().status,
+      models: models(),
+      groq: settings.providers().find((entry) => entry.id === 'groq').blocked ?? null,
+    };
+    await route({ crossOrigin: 'any' });
+    await window.until(() => row() && !row().blocked && models() > 0);
+    const opened = {
+      blocked: row().blocked ?? null,
+      option: option().blocked ?? null,
+      models: models(),
+    };
+    const reply = await window.reply(
+      agent,
+      'nvidia/nvidia/nemotron-3-ultra-550b-a55b',
+      'Hello NVIDIA.'
+    );
+    await route({ crossOrigin: 'cors' });
+    await window.until(() => row()?.blocked === 'cors-free-transport');
+    const closed = {
+      blocked: row().blocked,
+      status: row().status,
+      models: models(),
+      option: option().blocked,
+    };
+    await owner.release();
+    return { offered, before, opened, reply, closed };
+  }, 'registry&vault&route=cors');
+  assert.equal(seen.offered.blocked, 'cors-free-transport');
+  assert.equal(seen.offered.needs, 'cors-free-transport');
+  assert.deepEqual(seen.before, {
+    blocked: 'cors-free-transport',
+    status: 'connected',
+    models: 0,
+    groq: null,
+  });
+  assert.equal(seen.opened.blocked, null);
+  assert.equal(seen.opened.option, null);
+  assert.ok(seen.opened.models > 0);
+  assert.equal(seen.reply, 'From integrate.api.nvidia.com.');
+  assert.deepEqual(seen.closed, {
+    blocked: 'cors-free-transport',
+    status: 'connected',
+    models: 0,
+    option: 'cors-free-transport',
+  });
 });

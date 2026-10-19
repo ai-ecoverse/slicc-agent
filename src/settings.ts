@@ -15,6 +15,7 @@ import {
 import { abortableBedrock } from './bedrock.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
+import type { Reach } from './net.ts';
 import { BEDROCK, preferredModel } from './preferred.ts';
 import {
   ADDED_FIRST,
@@ -22,6 +23,7 @@ import {
   type FieldSpec,
   KEY_PROVIDERS,
   LISTINGS,
+  type Listing,
 } from './providers.ts';
 import type { KeysMoved } from './secrets/legacy.ts';
 import type { VaultRecords } from './secrets/records.ts';
@@ -173,7 +175,8 @@ function filled(
 function accounts(
   records: Pick<VaultRecords, 'model'>,
   providers: Provider[],
-  given: Pick<ProviderFields, 'ready' | 'get'>
+  given: Pick<ProviderFields, 'ready' | 'get'>,
+  blocked: (providerId: string) => boolean
 ): AccountState[] {
   return providers.map((provider) => {
     const record = given.ready(provider.id) ? records.model(provider.id) : undefined;
@@ -186,21 +189,28 @@ function accounts(
       status: !record ? 'disconnected' : record.state === 'expired' ? 'expired' : 'connected',
       auth: signIn.has(provider.id) ? 'oauth' : 'api-key',
       needs: listing?.corsFree ? 'cors-free-transport' : null,
+      ...(blocked(provider.id) ? { blocked: 'cors-free-transport' as const } : {}),
       group: 'providers',
       store: 'vault',
       ...(fields ? { fields: filled(fields, given.get(provider.id)) } : {}),
-      ...(listing
-        ? {
-            description: listing.description,
-            vaultName: listing.vaultName,
-            ...(listing.keyUrl ? { keyUrl: listing.keyUrl } : {}),
-          }
-        : {}),
+      ...about(listing),
     };
   });
 }
 
-function offered(providers: Provider[]): ProviderOption[] {
+function about(listing: Listing | undefined) {
+  if (!listing) return {};
+  return {
+    description: listing.description,
+    vaultName: listing.vaultName,
+    ...(listing.keyUrl ? { keyUrl: listing.keyUrl } : {}),
+  };
+}
+
+function offered(
+  providers: Provider[],
+  blocked: (providerId: string) => boolean
+): ProviderOption[] {
   return providers
     .flatMap((provider): ProviderOption[] => {
       const listing = LISTINGS.get(provider.id);
@@ -216,6 +226,7 @@ function offered(providers: Provider[]): ProviderOption[] {
           ...(fields ? { fields: filled(fields, undefined) } : {}),
           ...(listing.keyUrl ? { keyUrl: listing.keyUrl } : {}),
           ...(listing.corsFree ? { needs: 'cors-free-transport' as const } : {}),
+          ...(blocked(provider.id) ? { blocked: 'cors-free-transport' as const } : {}),
         },
       ];
     })
@@ -318,13 +329,24 @@ export interface SettingsSources {
   fields: ProviderFields;
 }
 
+function blockedBy(reach: Reach | undefined): (providerId: string) => boolean {
+  return (providerId) => Boolean(LISTINGS.get(providerId)?.corsFree) && reach?.free() === false;
+}
+
 export async function createAgentSettings(
   models: MutableModels,
   sources: SettingsSources,
   providers = sliccProviders(),
-  options: { usage?: UsageReader; every?: number; mcp?: McpAccounts; moved?: KeysMoved } = {}
+  options: {
+    usage?: UsageReader;
+    every?: number;
+    mcp?: McpAccounts;
+    moved?: KeysMoved;
+    reach?: Reach;
+  } = {}
 ): Promise<AgentSettings> {
-  const { mcp, moved } = options;
+  const { mcp, moved, reach } = options;
+  const blocked = blockedBy(reach);
   const { records, fields } = sources;
   const routed = (providerId: string) => (providerId.startsWith(MCP_ACCOUNT) ? mcp : undefined);
   const adobe = providers.find((provider) => provider.id === ADOBE);
@@ -339,11 +361,12 @@ export async function createAgentSettings(
     );
     const show = listed(records, fields);
     const shown = providers.filter((provider) => show(provider.id));
+    const open = (list: Provider[]) => list.filter((provider) => !blocked(provider.id));
     return {
-      models: choices(models, providers, stored),
-      labels: labels(models, shown, stored),
-      accounts: [...accounts(records, shown, fields), ...((await mcp?.accounts()) ?? [])],
-      providers: offered(providers),
+      models: choices(models, open(providers), stored),
+      labels: labels(models, open(shown), stored),
+      accounts: [...accounts(records, shown, fields, blocked), ...((await mcp?.accounts()) ?? [])],
+      providers: offered(providers, blocked),
       budget: await budget(records, usage),
       ...(moved?.state.value?.length
         ? { moved: moved.state.value.map((name) => ({ ...name })) }
@@ -375,6 +398,7 @@ export async function createAgentSettings(
     (timer as { unref?: () => void }).unref?.();
   }
   mcp?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
+  reach?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
   moved?.state.subscribe((_value, context) => void refresh(context).catch(() => undefined));
   const held = () => signedIn.filter((id) => records.model(id)).join(' ');
   let seen = held();
