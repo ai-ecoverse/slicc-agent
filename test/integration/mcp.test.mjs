@@ -296,3 +296,89 @@ test('Cancel during an MCP sign-in closes its window, drops its state and reject
     docs.close();
   }
 });
+
+test('a retry right after a cancelled MCP sign-in keeps its own state, even when the cancelled discovery finishes last', async (t) => {
+  const held = [];
+  let holding = false;
+  const hold = (url) => {
+    if (!holding || !url.pathname.startsWith('/.well-known/oauth-protected-resource')) return;
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    held.push(release);
+    return gate;
+  };
+  const docs = await serve(true, { oauth: { hold } });
+  try {
+    const page = await chrome.page(t);
+    await page.init(helpers);
+    await page.init(() => {
+      window.opens = [];
+      window.open = (url) => {
+        const popup = {
+          closed: false,
+          location: { href: url },
+          close() {
+            popup.closed = true;
+          },
+        };
+        window.opens.push(popup);
+        return popup;
+      };
+    });
+    await page.goto('/');
+    await page.evaluate(
+      (url) =>
+        window.write(
+          '/home/.pi/agent/mcp.json',
+          JSON.stringify({ mcpServers: { docs: { url, exposure: 'direct' } } })
+        ),
+      docs.url
+    );
+    await page.evaluate(() => window.start('answer=Noted.'));
+    await page.within(60000, () =>
+      window.model.settings
+        .accounts()
+        .some((account) => account.id === 'mcp:docs' && account.auth === 'oauth')
+    );
+    holding = true;
+    await page.evaluate(() => {
+      window.first = window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.name
+      );
+    });
+    for (let n = 0; n < 500 && !held.length; n++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(held.length, 1);
+    const cancelled = await page.evaluate(async () => {
+      window.model.settings.cancel('mcp:docs');
+      const result = await window.first;
+      window.retry = window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.message
+      );
+      return result;
+    });
+    assert.equal(cancelled, 'AbortError');
+    for (let n = 0; n < 15 && held.length < 2; n++) await new Promise((r) => setTimeout(r, 20));
+    const stale = held.shift();
+    holding = false;
+    for (const release of held.splice(0)) release();
+    const authorizing = () =>
+      page.evaluate(() => window.opens.at(-1).location.href.includes('/authorize'));
+    for (let n = 0; n < 50 && !(await authorizing()); n++)
+      await new Promise((r) => setTimeout(r, 20));
+    stale();
+    await page.within(30000, () => window.opens.at(-1).location.href.includes('/authorize'));
+    await new Promise((r) => setTimeout(r, 500));
+    const retried = await page.evaluate(async () => {
+      const state = new URL(window.opens.at(-1).location.href).searchParams.get('state');
+      new BroadcastChannel('slicc-mcp-oauth').postMessage({ code: 'code-x', state });
+      return window.retry;
+    });
+    assert.match(retried, /MCP sign-in needs seven's vault: update seven/);
+  } finally {
+    docs.close();
+  }
+});
