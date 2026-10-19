@@ -280,31 +280,44 @@ const history = (path) => {
   }
 };
 
-if (isMain(import.meta.url)) {
-  const { sliccProviders } = await import('../src/settings.ts');
-  const { LISTINGS } = await import('../src/providers.ts');
-  const rows = await reach(sliccProviders(), LISTINGS);
-  const unknown = streaks(rows, history(process.env.REACH_HISTORY));
+export async function run({
+  providers,
+  listings,
+  fetcher,
+  history: past,
+  report,
+  log = console.log,
+}) {
+  const rows = await reach(providers, listings, fetcher);
+  const unknown = streaks(rows, history(past));
   for (const row of rows)
-    console.log(
+    log(
       `reach: ${row.id} ${shown(row)}${unknown[row.id] ? ` (${unknown[row.id]} runs in a row)` : ''}`
     );
   const off = disagreeing(rows, unknown);
   const wildcard = rows
     .filter((row) => row.wildcard && row.verdict === 'direct')
     .map((row) => row.id);
-  if (process.env.REACH_HISTORY)
-    writeFileSync(process.env.REACH_HISTORY, JSON.stringify({ unknown }));
-  if (process.env.REACH_REPORT)
-    writeFileSync(
-      process.env.REACH_REPORT,
-      JSON.stringify({ rows, disagreeing: off, unknown, wildcard }, null, 2)
-    );
+  if (past) writeFileSync(past, JSON.stringify({ unknown }));
+  if (report)
+    writeFileSync(report, JSON.stringify({ rows, disagreeing: off, unknown, wildcard }, null, 2));
   const told = (row) =>
     row.verdict === 'unknown'
       ? `${row.id} gave no answer ${unknown[row.id]} runs in a row`
       : `${row.id} is ${row.verdict}, listed ${row.listed}`;
-  console.log(
+  log(
     `reach: PASS ${rows.length} providers checked, ${off.length} disagree with the listings${off.length ? `: ${off.map(told).join('; ')}` : ''}; ${wildcard.length} rely on Authorization under a bare Access-Control-Allow-Headers: *${wildcard.length ? ` (${wildcard.join(', ')})` : ''}`
   );
+  return { rows, disagreeing: off, unknown, wildcard };
+}
+
+if (isMain(import.meta.url)) {
+  const { sliccProviders } = await import('../src/settings.ts');
+  const { LISTINGS } = await import('../src/providers.ts');
+  await run({
+    providers: sliccProviders(),
+    listings: LISTINGS,
+    history: process.env.REACH_HISTORY,
+    report: process.env.REACH_REPORT,
+  });
 }
