@@ -110,12 +110,42 @@ export function controlPlane(
   };
 
   async function answer(id: string, result: Answer, context: Context) {
-    await env.writeFile(`${responses}/${id}.out`, result.out, context);
-    if (result.err !== undefined)
-      await env.writeFile(`${responses}/${id}.err`, result.err, context);
+    const codePath = `${responses}/${id}.code`;
     const staged = `${responses}/.tmp-${id}.code`;
-    await env.writeFile(staged, String(result.code), context);
-    await env.renameFile(staged, `${responses}/${id}.code`, context);
+    const publish = async (code: number) => {
+      const body = String(code);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const stage = attempt === 0 ? staged : `${responses}/.tmp-${id}-${attempt}.code`;
+        const written = await env.writeFile(stage, body, context);
+        if (!written.ok) continue;
+        let renamed = await env.renameFile(stage, codePath, context);
+        if (!renamed.ok) renamed = await env.renameFile(stage, codePath, context);
+        if (renamed.ok) return true;
+        await env.remove(stage, { force: true }, context);
+      }
+      return (await env.writeFile(codePath, body, context)).ok;
+    };
+    let code = result.code;
+    const out = await env.writeFile(`${responses}/${id}.out`, result.out, context);
+    if (!out.ok) {
+      code = 1;
+      await env.writeFile(
+        `${responses}/${id}.err`,
+        `agent: ${out.error.code}: ${out.error.message}\n`,
+        context
+      );
+    } else if (result.err !== undefined) {
+      const err = await env.writeFile(`${responses}/${id}.err`, result.err, context);
+      if (!err.ok) {
+        code = 1;
+        await env.writeFile(
+          `${responses}/${id}.err`,
+          `agent: ${err.error.code}: ${err.error.message}\n`,
+          context
+        );
+      }
+    }
+    if (!(await publish(code))) throw new Error(`couldn't place ${codePath}`);
     await env.remove(`${requests}/${id}`, { force: true }, context);
     await env.remove(`${responses}/${id}.ack`, { force: true }, context);
     await options.mirror?.(context).catch(() => undefined);

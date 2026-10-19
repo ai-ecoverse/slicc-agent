@@ -53,7 +53,15 @@ done
 
 count=0
 seen=0
-while [ ! -s "$dir/out/$id.code" ]; do
+code=""
+while true; do
+  if [ -s "$dir/out/$id.code" ]; then
+    read -r code < "$dir/out/$id.code" || true
+    case "$code" in
+      ''|*[!0-9]*) ;;
+      *) break ;;
+    esac
+  fi
   sleep 0.1
   count=$((count + 1))
   if [ $seen = 0 ] && [ -f "$dir/out/$id.ack" ]; then seen=1; fi
@@ -71,7 +79,6 @@ while [ ! -s "$dir/out/$id.code" ]; do
     after=""
   fi
 done
-read -r code < "$dir/out/$id.code"
 if [ -f "$dir/out/$id.err" ]; then
   cat "$dir/out/$id.out"
   cat "$dir/out/$id.err" >&2
