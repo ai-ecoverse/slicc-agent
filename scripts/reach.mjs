@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { isMain } from './main.mjs';
 
@@ -72,6 +72,27 @@ export function allows(answer, method, names) {
     return false;
   const headers = list(answer.headers['access-control-allow-headers']);
   return headers.includes('*') || names.every((name) => headers.includes(name));
+}
+
+export function wildcardAuth(answer, names) {
+  const headers = list(answer?.headers['access-control-allow-headers']);
+  return (
+    names.includes('authorization') && headers.includes('*') && !headers.includes('authorization')
+  );
+}
+
+export const STREAK = 3;
+
+export function streaks(rows, previous = {}) {
+  return Object.fromEntries(
+    rows
+      .filter((row) => row.verdict === 'unknown')
+      .map((row) => [row.id, (previous[row.id] ?? 0) + 1])
+  );
+}
+
+export function shown(row) {
+  return row.wildcard && row.verdict === 'direct' ? 'direct (wildcard auth)' : row.verdict;
 }
 
 export function judge(results) {
@@ -223,17 +244,21 @@ export async function reach(providers, listings, fetcher) {
         ...request,
         answer: passed ? reply : answer,
         allowed: passed && readable(reply),
+        wildcard: passed && wildcardAuth(answer, request.names),
       });
     }
     const verdict = judge(results);
     const listed = listings.get(provider.id)?.corsFree ? 'cors-free' : 'direct';
-    rows.push({ id: provider.id, verdict, listed, results });
+    const wildcard = results.some((result) => result.wildcard);
+    rows.push({ id: provider.id, verdict, listed, wildcard, results });
   }
   return rows;
 }
 
-export const disagreeing = (rows) =>
-  rows.filter((row) => row.verdict !== 'unknown' && row.verdict !== row.listed);
+export const disagreeing = (rows, unknown = {}) =>
+  rows.filter((row) =>
+    row.verdict === 'unknown' ? (unknown[row.id] ?? 0) >= STREAK : row.verdict !== row.listed
+  );
 
 export function unique(requests) {
   const seen = new Set();
@@ -245,15 +270,54 @@ export function unique(requests) {
   });
 }
 
+const history = (path) => {
+  if (!path || !existsSync(path)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    return parsed && typeof parsed.unknown === 'object' ? parsed.unknown : {};
+  } catch {
+    return {};
+  }
+};
+
+export async function run({
+  providers,
+  listings,
+  fetcher,
+  history: past,
+  report,
+  log = console.log,
+}) {
+  const rows = await reach(providers, listings, fetcher);
+  const unknown = streaks(rows, history(past));
+  for (const row of rows)
+    log(
+      `reach: ${row.id} ${shown(row)}${unknown[row.id] ? ` (${unknown[row.id]} runs in a row)` : ''}`
+    );
+  const off = disagreeing(rows, unknown);
+  const wildcard = rows
+    .filter((row) => row.wildcard && row.verdict === 'direct')
+    .map((row) => row.id);
+  if (past) writeFileSync(past, JSON.stringify({ unknown }));
+  if (report)
+    writeFileSync(report, JSON.stringify({ rows, disagreeing: off, unknown, wildcard }, null, 2));
+  const told = (row) =>
+    row.verdict === 'unknown'
+      ? `${row.id} gave no answer ${unknown[row.id]} runs in a row`
+      : `${row.id} is ${row.verdict}, listed ${row.listed}`;
+  log(
+    `reach: PASS ${rows.length} providers checked, ${off.length} disagree with the listings${off.length ? `: ${off.map(told).join('; ')}` : ''}; ${wildcard.length} rely on Authorization under a bare Access-Control-Allow-Headers: *${wildcard.length ? ` (${wildcard.join(', ')})` : ''}`
+  );
+  return { rows, disagreeing: off, unknown, wildcard };
+}
+
 if (isMain(import.meta.url)) {
   const { sliccProviders } = await import('../src/settings.ts');
   const { LISTINGS } = await import('../src/providers.ts');
-  const rows = await reach(sliccProviders(), LISTINGS);
-  for (const row of rows) console.log(`reach: ${row.id} ${row.verdict}`);
-  const off = disagreeing(rows);
-  if (process.env.REACH_REPORT)
-    writeFileSync(process.env.REACH_REPORT, JSON.stringify({ rows, disagreeing: off }, null, 2));
-  console.log(
-    `reach: PASS ${rows.length} providers checked, ${off.length} disagree with the listings${off.length ? `: ${off.map((row) => `${row.id} is ${row.verdict}, listed ${row.listed}`).join('; ')}` : ''}`
-  );
+  await run({
+    providers: sliccProviders(),
+    listings: LISTINGS,
+    history: process.env.REACH_HISTORY,
+    report: process.env.REACH_REPORT,
+  });
 }

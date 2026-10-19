@@ -30,10 +30,24 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
+      - name: restore the unknown streaks
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/reach-history.json
+          key: reach-history-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: reach-history-
+
       - name: preflight every provider
         env:
           REACH_REPORT: ${{ runner.temp }}/reach.json
+          REACH_HISTORY: ${{ runner.temp }}/reach-history.json
         run: npm run --silent reach
+
+      - name: keep the unknown streaks
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/reach-history.json
+          key: reach-history-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: open or update the issue
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
@@ -42,7 +56,14 @@ jobs:
         with:
           script: |
             const { readFileSync } = await import('node:fs');
-            const { rows, disagreeing } = JSON.parse(readFileSync(process.env.REACH_REPORT, 'utf8'));
+            const { rows, disagreeing, unknown, wildcard } = JSON.parse(readFileSync(process.env.REACH_REPORT, 'utf8'));
+            const risky = wildcard.length
+              ? ['', `These answer browsers only because Chrome lets \`Authorization\` through under a bare \`Access-Control-Allow-Headers: *\`, which the Fetch spec doesn't: ${wildcard.map((id) => `\`${id}\``).join(', ')}. Not a failure; they break first if Chrome enforces the spec.`]
+              : [];
+            await core.summary
+              .addRaw(`${rows.length} providers checked, ${disagreeing.length} disagree with the listings.\n`)
+              .addRaw(risky.join('\n'))
+              .write();
             const title = 'Provider reachability disagrees with the listings';
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const { data: open } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', per_page: 100 });
@@ -53,13 +74,14 @@ jobs:
               await github.rest.issues.update({ ...context.repo, issue_number: found.number, state: 'closed', state_reason: 'completed' });
               return;
             }
-            const table = disagreeing.map((row) => `| \`${row.id}\` | ${row.verdict} | ${row.listed} |`);
+            const table = disagreeing.map((row) => `| \`${row.id}\` | ${row.verdict === 'unknown' ? `no answer, ${unknown[row.id]} runs in a row` : row.verdict} | ${row.listed} |`);
             const body = [
-              `The nightly reach run ${run} found providers whose verdict from \`https://seven.sliccy.ai\` isn't their listing's \`needs\` (\`corsFree\` in \`src/providers.ts\`).`,
+              `The nightly reach run ${run} found providers whose verdict from \`https://seven.sliccy.ai\` isn't their listing's \`needs\` (\`corsFree\` in \`src/providers.ts\`), or that gave no answer three runs in a row.`,
               '',
               '| provider | answers browsers | listed |',
               '| --- | --- | --- |',
               ...table,
+              ...risky,
             ].join('\n');
             if (found) await github.rest.issues.update({ ...context.repo, issue_number: found.number, body });
             else await github.rest.issues.create({ ...context.repo, title, body });
