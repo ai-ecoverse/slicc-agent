@@ -14,6 +14,7 @@ import {
   type Diagnostic,
   expandSkillCommand,
   formatSkillsForPrompt,
+  labelPackages,
   loadSkills,
   type Skill,
   type SkillRoot,
@@ -153,6 +154,8 @@ export function commandsOf(
       name: `skill:${skill.name}`,
       description: skill.description,
       kind: 'skill' as const,
+      ...(skill.source ? { source: skill.source } : {}),
+      ...(skill.package ? { package: skill.package } : {}),
     })),
     SECRETS_ACTION,
   ];
@@ -209,7 +212,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           const files = await options.people?.envOf(at);
           if (!files) continue;
           const found = await loadSkills(files, [...userRoots([at]), ...roots], using);
-          homesLoaded.set(at, found.skills);
+          homesLoaded.set(at, await labelPackages(files, found.skills, using));
           loaded.diagnostics.push(...found.diagnostics);
         }
         own = homesLoaded;
@@ -228,7 +231,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
           [`${dir}/prompts`, PROMPTS_DIR, ...packaged(packages, 'prompts')],
           using
         );
-        current = loaded.skills;
+        current = await labelPackages(env, loaded.skills, using);
         templates = prompts.templates;
         commands.replace(using, commandsOf(current, templates));
         for (const problem of [

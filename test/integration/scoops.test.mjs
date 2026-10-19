@@ -115,6 +115,51 @@ test('a pnpm-linked package in /opt/user/node_modules adds its skills, and one t
   assert.ok(!seen.includes('skill:twin-skill'));
 });
 
+test("a skill bios links from /usr/share/skills into root's global pnpm reads as its package, a plain one as global, and an unlinked one there isn't loaded", async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await page.evaluate(async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const terminal = await attachKernel(await kernel.connect());
+    const write = async (path, text) => {
+      await terminal.fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+      await terminal.fs.writeFile(path, text);
+    };
+    const skill = (name) => `---\nname: ${name}\ndescription: The ${name} skill.\n---\nBody.\n`;
+    const pkg = '/usr/local/share/pnpm/5/.pnpm/foo-pkg@1.2.0/node_modules/foo-pkg';
+    await write(
+      `${pkg}/package.json`,
+      JSON.stringify({ name: 'foo-pkg', version: '1.2.0', pi: { skills: ['dist/skills'] } })
+    );
+    await write(`${pkg}/dist/skills/foo/SKILL.md`, skill('foo'));
+    await write(`${pkg}/dist/skills/unlinked/SKILL.md`, skill('unlinked'));
+    await write('/usr/share/skills/plain/SKILL.md', skill('plain'));
+    await terminal.fs.symlink(`${pkg}/dist/skills/foo`, '/usr/share/skills/foo');
+    const owner = await startAgent({
+      worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    let commands = [];
+    for (let i = 0; i < 600; i++) {
+      commands = connection.commands.value;
+      if (commands.some((command) => command.name === 'skill:foo')) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await owner.release();
+    return commands.filter((command) => command.kind === 'skill');
+  });
+  const by = Object.fromEntries(seen.map((command) => [command.name, command]));
+  assert.equal(by['skill:foo'].source, 'package');
+  assert.deepEqual(by['skill:foo'].package, { name: 'foo-pkg', version: '1.2.0' });
+  assert.equal(by['skill:plain'].source, 'global');
+  assert.equal(by['skill:plain'].package, undefined);
+  assert.equal(by['skill:unlinked'], undefined);
+});
+
 test('with per-user kernel clients, a scoop report is written as the cone, so the cone keeps its ~/.slicc and can add its own files there', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
