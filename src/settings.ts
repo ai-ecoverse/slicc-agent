@@ -407,6 +407,9 @@ export async function createAgentSettings(
       await reread(context);
       await refresh(context);
     },
+    async serverUrl(providerId) {
+      return (await routed(providerId)?.serverUrl(providerId)) ?? null;
+    },
     async remove(providerId, context) {
       const server = routed(providerId);
       if (server) await server.disconnect(providerId);

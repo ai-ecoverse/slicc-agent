@@ -115,6 +115,7 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     connect: refuse,
     disconnect: refuse,
     remove: refuse,
+    serverUrl: refuse,
     signIn: refuse,
     dismissMoved: refuse,
   };

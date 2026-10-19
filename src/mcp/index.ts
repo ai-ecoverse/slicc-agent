@@ -34,6 +34,7 @@ const idle: McpRuntime = {
     throw new Error(`${id} is not an MCP server that takes a token`);
   },
   disconnect: async () => undefined,
+  serverUrl: async () => null,
   onChange: () => () => undefined,
   status: () => [],
   reload: async () => undefined,

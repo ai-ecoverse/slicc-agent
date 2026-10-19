@@ -401,8 +401,9 @@ test('an MCP account carries its server URL without the query or fragment, for t
     )
   );
   await page.evaluate(() => window.start('relay=mcp.test&vault'));
-  await page.within(60000, () =>
-    window.model.settings.accounts().some((account) => account.id === 'mcp:docs')
+  await page.within(
+    60000,
+    () => window.model.settings.accounts().find((account) => account.id === 'mcp:docs')?.url
   );
   const account = await page.evaluate(() =>
     window.model.settings.accounts().find((entry) => entry.id === 'mcp:docs')

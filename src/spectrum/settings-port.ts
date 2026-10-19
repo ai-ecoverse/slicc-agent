@@ -56,6 +56,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   readonly #signing = new Map<string, AbortController>();
   #local: Local;
   #offered = '';
+  readonly #urls = new Map<string, string>();
 
   constructor(
     settings: AgentSettings,
@@ -74,7 +75,9 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     const { model: _model, thinking: _thinking, ...local } = { ...defaults, ...saved };
     this.#local = local;
     this.#offered = JSON.stringify(this.providers());
+    this.#locate();
     settings.state.subscribe(() => {
+      this.#locate();
       this.emit('accounts', this.accounts());
       this.emit('settings', this.get());
       const offered = JSON.stringify(this.providers());
@@ -83,6 +86,20 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
       this.emit('providers', this.providers());
     });
     agent.on('agents', () => this.emit('settings', this.get()));
+  }
+
+  #locate(): void {
+    for (const { id, group } of this.#state().accounts) {
+      if (group !== 'mcp') continue;
+      void this.#settings
+        .serverUrl?.(id, BACKGROUND_CONTEXT)
+        .then((url) => {
+          if (!url || this.#urls.get(id) === url) return;
+          this.#urls.set(id, url);
+          this.emit('accounts', this.accounts());
+        })
+        .catch(() => undefined);
+    }
   }
 
   #state(): SettingsState {
@@ -151,9 +168,11 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
 
   accounts(): readonly Account[] {
     return this.#state().accounts.map(({ needs, ...account }) => {
+      const url = this.#urls.get(account.id);
+      const located = url ? { ...account, url } : account;
       const shown = this.#signing.has(account.id)
-        ? { ...account, status: 'signing-in' as const }
-        : account;
+        ? { ...located, status: 'signing-in' as const }
+        : located;
       return needs ? { ...shown, needs } : shown;
     });
   }

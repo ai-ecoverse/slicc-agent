@@ -16,6 +16,7 @@ export interface McpAccounts {
   signIn(id: string): Promise<McpSignIn>;
   connect(id: string, secret: string | null): Promise<void>;
   disconnect(id: string): Promise<void>;
+  serverUrl(id: string): Promise<string | null>;
   onChange(listener: () => void): () => void;
 }
 
@@ -63,7 +64,6 @@ function row(
     needs: null,
     group: 'mcp',
     store: 'vault',
-    url: serverUrl(connection.entry.config.url),
     ...(kind === 'token' ? { secret: 'token' as const } : {}),
   };
 }
@@ -130,6 +130,10 @@ export function mcpAccounts(
       if (kind === 'oauth') await sources.oauth(connection.entry).forget();
       await reread();
       restart(connection);
+    },
+    async serverUrl(id) {
+      const { connection } = find(id);
+      return serverUrl(connection.entry.config.url);
     },
     onChange(listener) {
       listeners.add(listener);
