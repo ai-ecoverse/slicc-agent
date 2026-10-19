@@ -47,6 +47,7 @@ import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
 import { pageOnly, type Transport, transportFetch } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
+import { VAULT_KNOWN } from './providers.ts';
 import { createPages } from './remote/pages.ts';
 import { identity } from './scoops/identity.ts';
 import { type Assets, packageAssets, type ScoopsRuntime, setupScoops } from './scoops/index.ts';
@@ -259,6 +260,7 @@ async function modelsOf(
   const credentials = vaultCredentials(records, fields.env);
   const models = createSliccModels(credentials, providers);
   const bases = () => modelBases(providers, models);
+  const own = () => bases().filter(({ provider }) => !VAULT_KNOWN.has(provider));
   scope.fetch = vaultFetch(
     vault,
     transport,
@@ -266,12 +268,12 @@ async function modelsOf(
     records.rejecting
   );
   const endpoints = vaultEndpoints(vault);
-  void endpoints.models(bases()).catch(() => undefined);
+  void endpoints.models(own()).catch(() => undefined);
   const defaultModel = async () => {
     await Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, WAITING_MS))]);
     return resolveDefaultModel(credentials, providers, models);
   };
-  return { store, records, providers, fields, models, bases, endpoints, defaultModel };
+  return { store, records, providers, fields, models, bases, own, endpoints, defaultModel };
 }
 
 function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>, origin: string) {
@@ -342,13 +344,13 @@ async function settingsOf(
   mcp: McpAccounts,
   moved: { agent: Agent; vault: Vault; wiped: Wiped }
 ) {
-  const { models, records, fields, providers, bases, endpoints } = made;
+  const { models, records, fields, providers, own, endpoints } = made;
   const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
   const settings = await createAgentSettings(models, { records, fields }, providers, {
     mcp,
     moved: keys,
   });
-  settings.state.subscribe(() => void endpoints.models(bases()).catch(() => undefined));
+  settings.state.subscribe(() => void endpoints.models(own()).catch(() => undefined));
   return settings;
 }
 

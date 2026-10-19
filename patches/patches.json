@@ -19,7 +19,7 @@
       "file": "dist/api/google-generative-ai.lazy.js",
       "includes": "import(\"./google-generative-ai.js\")"
     },
-    "reason": "pi-ai imports @google/genai (and its tree: google-auth-library, gaxios, gcp-metadata, protobufjs, web-streams-polyfill, node-fetch, ...) only in its google-* APIs, which load through lazy dynamic imports. Seven offers only the Bedrock and Adobe providers, whose APIs (bedrock-converse-stream, anthropic-messages, openai-completions) never reach them, so slicc-bios removes @google/genai from /opt/agent with a pnpm override ('@google/genai': '-' in src/packages/agent/pnpm-workspace.yaml).",
+    "reason": "pi-ai imports @google/genai (and its tree: google-auth-library, gaxios, gcp-metadata, protobufjs, web-streams-polyfill, node-fetch, ...) only in its google-* APIs, which load through lazy dynamic imports. Seven offers no Google provider (google and google-vertex wait for this override to go), so slicc-bios removes @google/genai from /opt/agent with a pnpm override ('@google/genai': '-' in src/packages/agent/pnpm-workspace.yaml). The only other google-generative-ai models seven offers are OpenCode Zen's and OpenCode Go's Gemini models, which fail to load until then; every other provider's API never reaches it.",
     "removeWhen": "seven adds a Google provider (drop the bios override first), or pi-ai stops depending on @google/genai.",
     "verify": "npm test"
   },

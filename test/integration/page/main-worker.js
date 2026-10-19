@@ -13,7 +13,12 @@ import {
 } from '@earendil-works/pi-ai/providers/faux';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { MemoryStorage } from '@earendil-works/pi-durable';
-import { adobeProvider, openOpfsSqliteStorage, runAgentWorker } from '../../../src/index.ts';
+import {
+  adobeProvider,
+  openOpfsSqliteStorage,
+  runAgentWorker,
+  sliccProviders,
+} from '../../../src/index.ts';
 import { fakeVault } from '../fixtures/fake-vault.mjs';
 import { createMcpServer } from '../fixtures/mcp-server.mjs';
 import { seeded } from '../fixtures/seeds.mjs';
@@ -37,8 +42,19 @@ self.addEventListener('message', ({ data }) => {
   data?.served?.postMessage(served);
   data?.upstream?.postMessage({
     upstream,
-    vault: self.fakeVault?.log.map(({ op, provider, server }) => ({ op, provider, server })) ?? [],
+    vault:
+      self.fakeVault?.log.map(({ op, provider, server, model }) => ({
+        op,
+        provider,
+        server,
+        ...(model ? { model } : {}),
+      })) ?? [],
   });
+  if (data?.unseal && self.fakeVault) {
+    self.fakeVault.remove(data.unseal);
+    self.fakeVault.publish({ needed: true, version: self.fakeVault.version });
+    data.sealed?.postMessage(true);
+  }
   if (data?.seal && self.fakeVault) {
     self.fakeVault.remove(data.seal.name);
     self.fakeVault.add(data.seal);
@@ -226,9 +242,28 @@ function gateway(request) {
     })(),
   };
 }
+const registry = params.has('registry') ? sliccProviders() : [];
+const completions = (request) => {
+  const url = new URL(request.url);
+  const authorization =
+    request.headers.find(([name]) => name.toLowerCase() === 'authorization')?.[1] ?? null;
+  upstream.push({ url: request.url, authorization });
+  const chunk = (delta, finish) =>
+    `data: ${JSON.stringify({ id: 'up', object: 'chat.completion.chunk', created: 1, model: 'm', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+  const text = `${chunk({ role: 'assistant', content: `From ${url.host}.` }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+  return {
+    status: 200,
+    headers: [['content-type', 'text/event-stream']],
+    body: (async function* () {
+      yield new TextEncoder().encode(text);
+    })(),
+  };
+};
 const relay = {
   traits: { crossOrigin: 'any' },
   async fetch(request) {
+    if (registry.length && new URL(request.url).pathname.endsWith('/chat/completions'))
+      return completions(request);
     if (new URL(request.url).host === GATEWAY_HOST && params.has('gateway'))
       return gateway(request);
     if (new URL(request.url).host === MODEL_HOST && params.has('e2e')) return model(request);
@@ -256,7 +291,7 @@ const relay = {
   },
 };
 const attach =
-  relayed || params.has('gateway')
+  relayed || params.has('gateway') || registry.length
     ? async (port) => Object.assign(await attachKernel(port), { transport: relay })
     : undefined;
 const e2e = params.has('e2e')
@@ -396,6 +431,7 @@ const running = runAgentWorker(self, {
     ...e2e,
     ...accounts,
     ...(params.has('bedrock') ? [amazonBedrockProvider()] : []),
+    ...registry,
   ],
   storage: params.has('persist')
     ? () => openOpfsSqliteStorage({ directory: params.get('persist') })
@@ -407,9 +443,14 @@ const running = runAgentWorker(self, {
 });
 if (params.has('vault')) {
   const records = params.getAll('record').map((record) => JSON.parse(record));
-  const models = params.has('bedrock')
-    ? [{ provider: 'amazon-bedrock', url: 'https://bedrock-runtime.us-west-2.amazonaws.com' }]
-    : [];
+  const models = [
+    ...(params.has('bedrock')
+      ? [{ provider: 'amazon-bedrock', url: 'https://bedrock-runtime.us-west-2.amazonaws.com' }]
+      : []),
+    ...registry.flatMap((provider) =>
+      provider.getModels().map((model) => ({ provider: provider.id, url: model.baseUrl }))
+    ),
+  ];
   const fake = fakeVault(params.has('scrub') ? seeded(vectors).values : [], 1, {
     records,
     models,
