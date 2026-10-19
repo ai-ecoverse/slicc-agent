@@ -35,6 +35,15 @@ export type Login = (
 ) => Promise<string | Sealed>;
 
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
+export const UNFINISHED = "The sign-in didn't finish. Try again.";
+
+export function readable(error: unknown): Error {
+  if (error instanceof DOMException && error.name === 'AbortError') return error;
+  const text = (error instanceof Error ? error.message : String(error ?? '')).trim();
+  if (!text) return new Error(UNFINISHED);
+  const lead = /^[a-z]+\b(?![-.@/])/.test(text) ? text[0].toUpperCase() + text.slice(1) : text;
+  return new Error(/[.!?]$/.test(lead) ? lead : `${lead}.`);
+}
 
 export class SettingsAdapter extends Emitter<SettingsEvents> implements SettingsPort {
   readonly #settings: AgentSettings;
@@ -143,7 +152,7 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
       await this.#settings.connect(id, answer, given, BACKGROUND_CONTEXT);
       return;
     }
-    if (answer?.sealed !== true) throw new Error(`${id}'s sign-in didn't finish`);
+    if (answer?.sealed !== true) throw new Error(UNFINISHED);
     await this.#settings.connect(id, null, given, BACKGROUND_CONTEXT);
   }
 
@@ -161,7 +170,10 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
         {
           signal: controller.signal,
         }
-      );
+      ).catch((error: unknown) => {
+        controller.signal.throwIfAborted();
+        throw readable(error);
+      });
       controller.signal.throwIfAborted();
       return key;
     } finally {

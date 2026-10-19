@@ -240,12 +240,14 @@ export function errorPart(error: string, provider?: string): MessagePart {
     };
   }
   const name = providerName(provider);
+  const account = provider ? { account: provider } : {};
   if (unconnected.test(error))
     return {
       type: 'error',
       message: `${name} isn't connected.`,
       detail: CONNECT_IT,
       action: 'settings',
+      ...account,
     };
   if (action === 'settings' && provider === 'adobe') {
     return adobeAuth.test(error)
@@ -254,19 +256,23 @@ export function errorPart(error: string, provider?: string): MessagePart {
           message: 'Your Adobe session has expired.',
           detail: error,
           action: 'login',
+          ...account,
         }
       : { type: 'error', ...proxyRefusal(error), action: 'retry' };
   }
-  const lead =
-    action === 'settings'
-      ? missing.test(error)
-        ? `${name} needs an API key.`
-        : `${name} rejected the API key.`
-      : action === 'change-model'
-        ? "This model isn't available with the current account."
-        : null;
-  return lead
-    ? { type: 'error', message: lead, detail: error, action }
+  if (action === 'settings') {
+    const lead = missing.test(error)
+      ? `${name} needs an API key.`
+      : `${name} rejected the API key.`;
+    return { type: 'error', message: lead, detail: error, action, ...account };
+  }
+  return action === 'change-model'
+    ? {
+        type: 'error',
+        message: "This model isn't available with the current account.",
+        detail: error,
+        action,
+      }
     : { type: 'error', message: error, action };
 }
 

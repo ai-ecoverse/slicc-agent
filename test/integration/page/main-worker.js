@@ -233,6 +233,17 @@ const relay = {
     if (new URL(request.url).host.startsWith('bedrock-runtime.') && params.has('hold-model')) {
       return holdModel(request);
     }
+    if (new URL(request.url).host.startsWith('bedrock-runtime.') && params.has('bedrock-refuse')) {
+      upstream.push({ url: request.url, refused: true });
+      return {
+        ...json({ message: 'The security token included in the request is invalid.' }),
+        status: 403,
+        headers: [
+          ['content-type', 'application/json'],
+          ['x-amzn-errortype', 'UnrecognizedClientException'],
+        ],
+      };
+    }
     if (new URL(request.url).host !== relayed) throw new TypeError('relay: unknown host');
     const response = await fake.fetch(request.url, {
       method: request.method,
