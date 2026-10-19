@@ -21,6 +21,17 @@ const ENV = {
   CLOUDFLARE_GATEWAY_ID: 'seven-reach',
 };
 
+const CLASSIFY = {
+  state: { lick: 'reach' },
+  questions: {
+    triage: {
+      type: 'choice',
+      instructions: 'Reach?',
+      criteria: { act: 'act on it', ignore: 'ignore it' },
+    },
+  },
+};
+
 const ADOBE_CONFIG = {
   clientId: 'reach',
   scopes: 'openid',
@@ -63,8 +74,9 @@ export function allows(answer, method, names) {
 }
 
 export function judge(results) {
+  if (!results.length) return 'unprobed';
   if (results.some((result) => result.answer && !result.allowed)) return 'cors-free';
-  if (results.length && results.every((result) => result.allowed)) return 'direct';
+  if (results.every((result) => result.allowed)) return 'direct';
   return 'unknown';
 }
 
@@ -145,9 +157,25 @@ export async function captured(providers) {
     await models
       .refresh({ providers: providers.map((provider) => provider.id) })
       .catch(() => undefined);
+    const discovered = [...sent];
     const requests = new Map();
+    const { adobeUsage } = await import('../src/adobe.ts');
     for (const provider of providers) {
-      const own = [];
+      const own = discovered
+        .filter((entry) => provider.baseUrl && entry.url.startsWith(provider.baseUrl))
+        .map((entry) => ({ url: entry.url, method: entry.method, names: needed(entry.headers) }));
+      sent.length = 0;
+      if (provider.id === 'adobe')
+        await adobeUsage('reach-0000', { endpoint: provider.baseUrl, identity: provider.headers });
+      const classifiers = new Map(
+        (provider.getAllModels?.() ?? [])
+          .filter((model) => model.type === 'classifier')
+          .map((model) => [model.api, model])
+      );
+      for (const model of classifiers.values())
+        await models.classify(model, CLASSIFY).catch(() => undefined);
+      for (const entry of sent)
+        own.push({ url: entry.url, method: entry.method, names: needed(entry.headers) });
       if (provider.id === 'amazon-bedrock') {
         own.push({
           url: 'https://bedrock-runtime.us-west-2.amazonaws.com/model/reach/converse-stream',
@@ -169,7 +197,7 @@ export async function captured(providers) {
             own.push({ url: request.url, method: request.method, names: needed(request.headers) });
         }
       }
-      requests.set(provider.id, own);
+      requests.set(provider.id, unique(own));
     }
     return requests;
   } finally {
@@ -201,6 +229,16 @@ export async function reach(providers, listings, fetcher) {
 
 export const disagreeing = (rows) =>
   rows.filter((row) => row.verdict !== 'unknown' && row.verdict !== row.listed);
+
+export function unique(requests) {
+  const seen = new Set();
+  return requests.filter((request) => {
+    const key = `${request.method} ${request.url.split('?')[0]} ${request.names.join(',')}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 if (isMain(import.meta.url)) {
   const { sliccProviders } = await import('../src/settings.ts');
