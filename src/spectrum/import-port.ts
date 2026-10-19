@@ -1,21 +1,21 @@
+import type {
+  ProfileImportPreview,
+  ProfileImportProgress,
+  ProfileImportResult,
+} from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentConnection } from '../client.ts';
-import type { ImportPreview, ImportProgress } from '../freezer/v6.ts';
+import type { ImportPreview } from '../freezer/v6.ts';
 import { IMPORTS_DIR } from '../layout.ts';
 import { opfsDirectory } from '../opfs-pool.ts';
 
 export const DATA_MAX = 16 * 1024 * 1024;
 
-export type ShownPreview = Omit<ImportPreview, 'exportId' | 'createdAt'> & { createdAt: number };
+export type ShownPreview = ProfileImportPreview;
 
-export interface ShownImport {
-  preview: ShownPreview | null;
-  cones: string[];
-  report: string | null;
-  text: string;
-}
+export type ShownImport = ProfileImportResult;
 
-export const IDLE_IMPORT: ImportProgress = { phase: 'idle', done: 0, total: 0, text: '' };
+export const IDLE_IMPORT: ProfileImportProgress = { phase: 'idle', done: 0, total: 0, text: '' };
 
 type Upload = { upload: string | null; data: string | null; done(): Promise<void> };
 

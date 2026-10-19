@@ -130,7 +130,7 @@ test('freezer import --preview checks a SLICC 6 profile export and says what is 
   assert.equal(ran.status, 0, ran.stderr);
   assert.equal(
     ran.stdout,
-    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: anthropic, openai. Not imported: 1 mount.\n'
+    'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: nothing. Seven has no accounts for anthropic, openai. Not imported: 1 mount.\n'
   );
   const usage = await page.evaluate(() => window.imported('/tmp/profile.zip', '--bogus'));
   assert.equal(usage.status, 2);
@@ -338,7 +338,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
     Buffer.from(await readFile(FIXTURE)).toString('base64')
   );
   assert.deepEqual(preview, {
-    text: 'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: anthropic, openai. Not imported: 1 mount.',
+    text: 'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. Re-enter in Settings: nothing. Seven has no accounts for anthropic, openai. Not imported: 1 mount.',
     done: false,
     rows: 0,
   });
@@ -346,7 +346,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
   assert.equal(ran.status, 0, ran.stdout + ran.stderr);
   assert.match(
     ran.stdout,
-    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nRe-enter in Settings: anthropic, openai\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
+    /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nRe-enter in Settings: nothing\. Seven has no accounts for anthropic, openai\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
   );
   await page.within(30000, () => window.rows().length === 3);
   const seen = await page.evaluate(async () => {

@@ -284,9 +284,17 @@ const UNITS = [
   [1e3, 'KB'],
 ] as const;
 
+function settled(providers: readonly string[], known?: readonly string[]): string {
+  const missing = known ? providers.filter((name) => !known.includes(name)) : [];
+  const again = providers.filter((name) => !missing.includes(name));
+  const lacking = missing.length ? ` Seven has no accounts for ${missing.join(', ')}.` : '';
+  return `Re-enter in Settings: ${again.join(', ') || 'nothing'}.${lacking}`;
+}
+
 export async function previewOf(
   opened: Opened,
-  state: Readonly<AgentsState>
+  state: Readonly<AgentsState>,
+  known?: readonly string[]
 ): Promise<ImportPreview> {
   const { manifest } = opened;
   const licks = await licksIn(opened);
@@ -329,7 +337,7 @@ export async function previewOf(
     providers: accountsOf(manifest.providers),
     mounts,
     already: state.imports?.[opened.key]?.at ?? null,
-    text: `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}. Re-enter in Settings: ${accountsOf(manifest.providers).join(', ') || 'nothing'}. Not imported: ${plural(mounts.length, 'mount')}.`,
+    text: `SLICC 6 profile from ${host}, exported ${day(manifest.createdAt)}: ${parts.join(', ')}. ${settled(accountsOf(manifest.providers), known)} Not imported: ${plural(mounts.length, 'mount')}.`,
   };
 }
 
@@ -776,7 +784,7 @@ async function importOpened(
       preview: null,
       cones: made,
       report,
-      text: `Imported ${plural(made.length, 'frozen cone')} from ${opened.manifest.producer.origin}${made.length ? `: ${made.join(', ')}` : ''}.\nRe-enter in Settings: ${providers.join(', ') || 'nothing'}.\nThe report is ${report}.\n`,
+      text: `Imported ${plural(made.length, 'frozen cone')} from ${opened.manifest.producer.origin}${made.length ? `: ${made.join(', ')}` : ''}.\n${settled(providers, deps.providers)}\nThe report is ${report}.\n`,
       error: null,
     };
   } finally {
@@ -840,7 +848,7 @@ export function createImporter(deps: ImportDeps): Importer {
           phase,
           done,
           total,
-          text: phase === 'checking' ? `Checking ${done}/${total}` : `Importing ${done}/${total}`,
+          text: `${phase === 'checking' ? 'Checking' : 'Importing'} ${done} of ${total}`,
         });
       let upload: { path: string } | undefined;
       try {
@@ -848,7 +856,7 @@ export function createImporter(deps: ImportDeps): Importer {
         const opened = await openProfile(
           await sourceOf(deps, upload ?? (source as ReadSource), context)
         );
-        const preview = await previewOf(opened, deps.agents.state());
+        const preview = await previewOf(opened, deps.agents.state(), deps.providers);
         if (options.preview) {
           const writer = new Writer(deps.env, context, controller.signal);
           await parse(opened, await verify(opened, writer, null, show));

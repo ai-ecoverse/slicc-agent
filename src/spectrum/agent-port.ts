@@ -6,6 +6,7 @@ import type {
   FrozenCone,
   Message,
   Outgoing,
+  ProfileImportProgress,
   SlashCommand,
   SystemMessage,
   Thinking,
@@ -15,7 +16,6 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
 import { contextRatio, contextTokens } from '../context.ts';
-import type { ImportProgress } from '../freezer/v6.ts';
 import { shrink } from '../images/fit.ts';
 import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
@@ -66,10 +66,7 @@ export function slashCommand({ kind, ...command }: Command): SlashCommand {
 
 export type AgentHold = VaultHold;
 
-export type AgentAdapterEvents = AgentEvents & {
-  hold: AgentHold | null;
-  importing: ImportProgress;
-};
+export type AgentAdapterEvents = AgentEvents & { hold: AgentHold | null };
 
 function sameHold(a: AgentHold | null, b: AgentHold | null): boolean {
   return a === b || (a !== null && b !== null && a.reason === b.reason && a.held === b.held);
@@ -671,7 +668,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     void this.#connection.control.importCancel(BACKGROUND_CONTEXT).catch(warn);
   }
 
-  importing(): ImportProgress {
+  importing(): ProfileImportProgress {
     return this.#connection.importing?.value ?? IDLE_IMPORT;
   }
 
