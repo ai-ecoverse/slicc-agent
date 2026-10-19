@@ -482,12 +482,28 @@ export interface AccountState {
   secret?: 'api-key' | 'token';
   store?: 'vault';
   fields?: AccountField[];
+  description?: string;
+  keyUrl?: string;
+  vaultName?: string;
 }
 
 export interface AccountField {
   name: string;
   label: string;
   required?: boolean;
+  placeholder?: string;
+  help?: string;
+}
+
+export interface ProviderOption {
+  id: string;
+  name: string;
+  description?: string;
+  auth: 'api-key' | 'oauth' | 'fields' | 'local';
+  fields?: AccountField[];
+  keyUrl?: string;
+  needs?: 'cors-free-transport';
+  vaultName?: string;
 }
 
 export interface BudgetState {
@@ -511,6 +527,7 @@ export interface McpSignIn {
 export interface SettingsState {
   models: ModelChoice[];
   accounts: AccountState[];
+  providers?: ProviderOption[];
   budget?: BudgetState | null;
   moved?: { kind: 'model' | 'mcp'; label: string }[];
   labels?: Record<string, string>;
@@ -525,6 +542,7 @@ export interface AgentSettings {
     context: Context
   ): Promise<void>;
   disconnect(providerId: string, context: Context): Promise<void>;
+  remove(providerId: string, context: Context): Promise<void>;
   signIn(providerId: string, context: Context): Promise<SignIn | McpSignIn | null>;
   dismissMoved(context: Context): Promise<void>;
 }
@@ -532,6 +550,7 @@ export interface AgentSettings {
 export const SETTINGS_METHODS = keys<Omit<AgentSettings, 'state'>>({
   connect: true,
   disconnect: true,
+  remove: true,
   signIn: true,
   dismissMoved: true,
 });

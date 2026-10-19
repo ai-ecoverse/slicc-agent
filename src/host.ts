@@ -103,6 +103,7 @@ const noSettings: AgentSettings = {
     throw new Error('this agent has no accounts');
   },
   disconnect: async () => {},
+  remove: async () => {},
   signIn: async () => null,
   dismissMoved: async () => {},
 };

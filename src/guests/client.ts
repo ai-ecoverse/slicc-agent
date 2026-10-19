@@ -114,6 +114,7 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     state: replicatedState({ models: [], accounts: [] }),
     connect: refuse,
     disconnect: refuse,
+    remove: refuse,
     signIn: refuse,
     dismissMoved: refuse,
   };

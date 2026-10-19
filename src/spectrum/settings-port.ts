@@ -7,7 +7,7 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { preferredModel } from '../preferred.ts';
-import type { AgentSettings, SettingsState, SignIn } from '../services.ts';
+import type { AgentSettings, ProviderOption, SettingsState, SignIn } from '../services.ts';
 import type { AgentAdapter } from './agent-port.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
@@ -45,7 +45,9 @@ export function readable(error: unknown): Error {
   return new Error(/[.!?]$/.test(lead) ? lead : `${lead}.`);
 }
 
-export class SettingsAdapter extends Emitter<SettingsEvents> implements SettingsPort {
+type Events = SettingsEvents & { providers: readonly ProviderOption[] };
+
+export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   readonly #settings: AgentSettings;
   readonly #agent: AgentAdapter;
   readonly #storage: Pick<Storage, 'getItem' | 'setItem'> | null;
@@ -53,6 +55,7 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   readonly #mcpLogin: Login;
   readonly #signing = new Map<string, AbortController>();
   #local: Local;
+  #offered = '';
 
   constructor(
     settings: AgentSettings,
@@ -70,9 +73,14 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
     const saved = JSON.parse(storage?.getItem(SETTINGS_KEY) ?? '{}') as Partial<Local>;
     const { model: _model, thinking: _thinking, ...local } = { ...defaults, ...saved };
     this.#local = local;
+    this.#offered = JSON.stringify(this.providers());
     settings.state.subscribe(() => {
       this.emit('accounts', this.accounts());
       this.emit('settings', this.get());
+      const offered = JSON.stringify(this.providers());
+      if (offered === this.#offered) return;
+      this.#offered = offered;
+      this.emit('providers', this.providers());
     });
     agent.on('agents', () => this.emit('settings', this.get()));
   }
@@ -122,6 +130,25 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
     });
   }
 
+  #offer(id: string) {
+    const option = this.providers().find((candidate) => candidate.id === id);
+    if (!option) return undefined;
+    return {
+      auth: option.auth === 'oauth' ? ('oauth' as const) : ('api-key' as const),
+      store: 'vault' as const,
+      group: 'providers' as const,
+    };
+  }
+
+  providers(): readonly ProviderOption[] {
+    return this.#state().providers ?? [];
+  }
+
+  async remove(id: string): Promise<void> {
+    this.cancel(id);
+    await this.#settings.remove(id, BACKGROUND_CONTEXT);
+  }
+
   accounts(): readonly Account[] {
     return this.#state().accounts.map(({ needs, ...account }) => {
       const shown = this.#signing.has(account.id)
@@ -132,7 +159,8 @@ export class SettingsAdapter extends Emitter<SettingsEvents> implements Settings
   }
 
   async connect(id: string, secret?: string, fields?: Record<string, string>): Promise<void> {
-    const account = this.#state().accounts.find((candidate) => candidate.id === id);
+    const account =
+      this.#state().accounts.find((candidate) => candidate.id === id) ?? this.#offer(id);
     const mcp = account?.group === 'mcp';
     const login = account?.auth !== 'oauth' ? null : mcp ? this.#mcpLogin : this.#login;
     const given = fields ? { ...fields } : null;

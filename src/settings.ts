@@ -16,6 +16,7 @@ import { abortableBedrock } from './bedrock.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import { BEDROCK, preferredModel } from './preferred.ts';
+import { ADDED_FIRST, KEY_PROVIDERS, LISTINGS } from './providers.ts';
 import type { KeysMoved } from './secrets/legacy.ts';
 import type { VaultRecords } from './secrets/records.ts';
 import type { PlainStore } from './secrets/store.ts';
@@ -24,6 +25,7 @@ import type {
   AccountState,
   AgentSettings,
   ModelChoice,
+  ProviderOption,
   SettingsState,
 } from './services.ts';
 
@@ -56,12 +58,15 @@ export async function resolveDefaultModel(
   return DEFAULT_MODEL;
 }
 
-const corsFree = new Set([BEDROCK, ADOBE]);
 const signIn = new Set([ADOBE]);
 const BUDGET_EVERY = 5 * 60 * 1000;
 
 export function sliccProviders(version?: string): Provider[] {
-  return [amazonBedrockProvider() as Provider, adobeProvider({ version })];
+  return [
+    amazonBedrockProvider() as Provider,
+    adobeProvider({ version }),
+    ...KEY_PROVIDERS.map((entry) => entry.make()),
+  ];
 }
 
 export function withDefaultRegions(credentials: CredentialStore): CredentialStore {
@@ -130,28 +135,76 @@ function choices(
     );
 }
 
+function listed(
+  records: Pick<VaultRecords, 'model'>,
+  fields: Pick<ProviderFields, 'get' | 'added'>
+): (providerId: string) => boolean {
+  const added = new Set(fields.added() ?? ADDED_FIRST);
+  return (providerId) =>
+    !LISTINGS.has(providerId) ||
+    added.has(providerId) ||
+    records.model(providerId) !== undefined ||
+    fields.get(providerId) !== undefined;
+}
+
 function accounts(records: Pick<VaultRecords, 'model'>, providers: Provider[]): AccountState[] {
   return providers.map((provider) => {
     const record = records.model(provider.id);
     const fields = ACCOUNT_FIELDS[provider.id];
+    const listing = LISTINGS.get(provider.id);
     return {
       id: provider.id,
       provider: provider.name ?? provider.id,
       identity: record ? (signIn.has(provider.id) ? 'Adobe ID' : 'API key') : '',
       status: !record ? 'disconnected' : record.state === 'expired' ? 'expired' : 'connected',
       auth: signIn.has(provider.id) ? 'oauth' : 'api-key',
-      needs: corsFree.has(provider.id) ? 'cors-free-transport' : null,
+      needs: listing?.corsFree ? 'cors-free-transport' : null,
+      group: 'providers',
       store: 'vault',
       ...(fields ? { fields: fields.map((field) => ({ ...field })) } : {}),
+      ...(listing
+        ? {
+            description: listing.description,
+            vaultName: listing.vaultName,
+            ...(listing.keyUrl ? { keyUrl: listing.keyUrl } : {}),
+          }
+        : {}),
     };
   });
+}
+
+function offered(providers: Provider[]): ProviderOption[] {
+  return providers
+    .flatMap((provider): ProviderOption[] => {
+      const listing = LISTINGS.get(provider.id);
+      if (!listing) return [];
+      const fields = ACCOUNT_FIELDS[provider.id];
+      return [
+        {
+          id: provider.id,
+          name: provider.name,
+          description: listing.description,
+          auth: listing.auth,
+          vaultName: listing.vaultName,
+          ...(fields ? { fields: fields.map((field) => ({ ...field })) } : {}),
+          ...(listing.keyUrl ? { keyUrl: listing.keyUrl } : {}),
+          ...(listing.corsFree ? { needs: 'cors-free-transport' as const } : {}),
+        },
+      ];
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export interface ProviderFields {
   get(providerId: string): Readonly<Record<string, string>> | undefined;
   env(providerId: string): Readonly<Record<string, string>> | undefined;
   set(providerId: string, fields: Record<string, string> | undefined): Promise<void>;
+  added(): readonly string[] | undefined;
+  add(providerId: string): Promise<void>;
+  forget(providerId: string): Promise<void>;
 }
+
+const ADDED = 'providers';
 
 export async function providerFields(
   store: PlainStore,
@@ -162,7 +215,26 @@ export async function providerFields(
     const saved = (await store.get(`model:${provider.id}`)) as Record<string, string> | undefined;
     if (saved && typeof saved === 'object') known.set(provider.id, saved);
   }
+  const saved = await store.get(ADDED);
+  let added = Array.isArray(saved)
+    ? saved.filter((id): id is string => typeof id === 'string')
+    : undefined;
+  const keep = async (next: string[]) => {
+    added = next;
+    await store.set(ADDED, next);
+  };
   return {
+    added: () => added,
+    async add(providerId) {
+      const now = added ?? ADDED_FIRST;
+      if (added && now.includes(providerId)) return;
+      await keep([...new Set([...now, providerId])]);
+    },
+    async forget(providerId) {
+      await keep((added ?? ADDED_FIRST).filter((id) => id !== providerId));
+      known.delete(providerId);
+      await store.set(`model:${providerId}`, undefined);
+    },
     get: (providerId) => known.get(providerId),
     env(providerId) {
       const fields = known.get(providerId);
@@ -218,10 +290,13 @@ export async function createAgentSettings(
     const stored = new Set(
       providers.filter((provider) => records.model(provider.id)).map((provider) => provider.id)
     );
+    const show = listed(records, fields);
+    const shown = providers.filter((provider) => show(provider.id));
     return {
       models: choices(models, providers, stored),
-      labels: labels(models, providers, stored),
-      accounts: [...accounts(records, providers), ...((await mcp?.accounts()) ?? [])],
+      labels: labels(models, shown, stored),
+      accounts: [...accounts(records, shown), ...((await mcp?.accounts()) ?? [])],
+      providers: offered(providers),
       budget: await budget(records, usage),
       ...(moved?.state.value?.length
         ? { moved: moved.state.value.map((name) => ({ ...name })) }
@@ -275,6 +350,7 @@ export async function createAgentSettings(
       }
       if (secret !== null)
         throw new Error(signIn.has(providerId) ? SIGN_IN_NEEDS_VAULT : KEY_NEEDS_VAULT);
+      if (LISTINGS.has(providerId)) await fields.add(providerId);
       if (given !== null) await fields.set(providerId, given);
       records.reconnected(providerId);
       await reread(context);
@@ -299,7 +375,15 @@ export async function createAgentSettings(
     async disconnect(providerId, context) {
       const server = routed(providerId);
       if (server) await server.disconnect(providerId);
+      else if (LISTINGS.has(providerId)) await fields.add(providerId);
       else await fields.set(providerId, undefined);
+      await reread(context);
+      await refresh(context);
+    },
+    async remove(providerId, context) {
+      const server = routed(providerId);
+      if (server) await server.disconnect(providerId);
+      else await fields.forget(providerId);
       await reread(context);
       await refresh(context);
     },
