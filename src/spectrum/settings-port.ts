@@ -89,13 +89,17 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   }
 
   #locate(): void {
-    for (const { id, group } of this.#state().accounts) {
-      if (group !== 'mcp') continue;
+    const servers = this.#state()
+      .accounts.filter(({ group }) => group === 'mcp')
+      .map(({ id }) => id);
+    for (const id of this.#urls.keys()) if (!servers.includes(id)) this.#urls.delete(id);
+    for (const id of servers) {
       void this.#settings
         .serverUrl?.(id, BACKGROUND_CONTEXT)
         .then((url) => {
-          if (!url || this.#urls.get(id) === url) return;
-          this.#urls.set(id, url);
+          if ((url ?? undefined) === this.#urls.get(id)) return;
+          if (url) this.#urls.set(id, url);
+          else this.#urls.delete(id);
           this.emit('accounts', this.accounts());
         })
         .catch(() => undefined);
