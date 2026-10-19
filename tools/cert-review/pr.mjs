@@ -28,6 +28,7 @@ const { positionals, values } = parseArgs({
     evidence: { type: 'string', default: '' },
     shipped: { type: 'string', default: '' },
     author: { type: 'string', default: '' },
+    draft: { type: 'string', default: '' },
   },
 });
 const { repo, context } = values;
@@ -85,26 +86,19 @@ async function status(sha, state, description) {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, 'posted=true\n');
 }
 
-const AUTO_AUTHORS = new Set(['renovate[bot]']);
-
 const GUARD_FAIL = (label) => `reviewer change: needs coordinator review (${label} on this head)`;
 const GUARD_INCOMPLETE = 'the certification self-guard did not finish: re-run the failed jobs';
 
 async function plan() {
   const { action, label, approval } = values;
-  const starts =
-    action === 'labeled' ? ['merge-ok', approval] : action === 'unlabeled' ? [approval] : [];
-  if (
-    action === 'ready_for_review' ||
-    ((action === 'labeled' || action === 'unlabeled') && !starts.includes(label))
-  ) {
+  if ((action === 'labeled' || action === 'unlabeled') && label !== approval) {
     summary(`#${values.pr}: ${action} ${label} doesn't start or change a review`);
     return output({ go: 'false', behaviour: '', self: 'false' });
   }
   const files = await all(`repos/${repo}/pulls/${values.pr}/files`);
   const packs = values.shipped ? JSON.parse(readFileSync(values.shipped, 'utf8')) : [];
   const behaviour = behaviourFiles(files, shippedPaths(packs));
-  const labelled = values.labels.split(',').includes('merge-ok') || AUTO_AUTHORS.has(values.author);
+  const draft = values.draft !== 'false';
   const self = reviewsItself(files);
   if (values.guard !== 'PASS') {
     const fail = values.guard === 'FAIL';
@@ -131,13 +125,13 @@ async function plan() {
     summary(`#${values.pr} changes no shipped behaviour: not reviewed, cert-review success`);
     return output({ go: 'false', behaviour: '', self: 'false' });
   }
-  if (!labelled) {
+  if (draft) {
     await status(
       values.head,
       'failure',
-      `waits for merge-ok to be reviewed (changes ${behaviour.slice(0, 4).join(', ')})`
+      `draft: not reviewed, mark it ready for review (changes ${behaviour.slice(0, 4).join(', ')})`
     );
-    summary(`#${values.pr} changes shipped behaviour and has no merge-ok yet: not reviewed`);
+    summary(`#${values.pr} changes shipped behaviour and is a draft: not reviewed`);
     return output({ go: 'false', behaviour: behaviour.join(','), self: String(self) });
   }
   await status(values.head, 'pending', `reviewing #${values.pr} at ${values.head.slice(0, 12)}`);
