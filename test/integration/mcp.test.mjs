@@ -205,3 +205,94 @@ test('an OAuth MCP server signs in through a popup and the callback page, and wi
     docs.close();
   }
 });
+
+test('Cancel during an MCP sign-in closes its window, drops its state and rejects with an AbortError at once, even while discovery is still waiting', async (t) => {
+  let gate;
+  const docs = await serve(true, { oauth: { hold: () => gate } });
+  try {
+    const page = await chrome.page(t);
+    await page.init(helpers);
+    await page.init(() => {
+      window.opens = [];
+      window.open = (url) => {
+        const popup = {
+          closed: false,
+          location: { href: url },
+          close() {
+            popup.closed = true;
+          },
+        };
+        window.opens.push(popup);
+        return popup;
+      };
+    });
+    await page.goto('/');
+    await page.evaluate(
+      (url) =>
+        window.write(
+          '/home/.pi/agent/mcp.json',
+          JSON.stringify({ mcpServers: { docs: { url, exposure: 'direct' } } })
+        ),
+      docs.url
+    );
+    await page.evaluate(() => window.start('answer=Noted.', true));
+    await page.within(60000, () =>
+      window.model.settings
+        .accounts()
+        .some((account) => account.id === 'mcp:docs' && account.auth === 'oauth')
+    );
+    let release;
+    gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const sign = () =>
+      page.evaluate(() => {
+        const before = window.opens.length;
+        window.signing = window.model.settings.connect('mcp:docs').then(
+          () => 'ok',
+          (error) => error.name
+        );
+        return window.opens.length - before;
+      });
+    const cancel = () =>
+      page.evaluate(async () => {
+        const status = () =>
+          window.model.settings.accounts().find((account) => account.id === 'mcp:docs').status;
+        for (let n = 0; n < 500 && status() !== 'signing-in'; n++)
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        window.model.settings.cancel('mcp:docs');
+        let result;
+        window.signing.then((value) => {
+          result = value;
+        });
+        for (let n = 0; n < 50 && result === undefined; n++)
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        return {
+          result,
+          closed: window.opens.at(-1).closed,
+          href: window.opens.at(-1).location.href,
+          states: Object.keys(localStorage).filter((key) => key.startsWith('slicc-mcp-oauth:')),
+          status: status(),
+        };
+      });
+    assert.equal(await sign(), 1);
+    assert.deepEqual(await cancel(), {
+      result: 'AbortError',
+      closed: true,
+      href: 'about:blank',
+      states: [],
+      status: 'disconnected',
+    });
+    release();
+    gate = undefined;
+    assert.equal(await sign(), 1);
+    await page.within(30000, () => window.opens.at(-1).location.href.includes('/authorize'));
+    const waiting = await cancel();
+    assert.equal(waiting.result, 'AbortError');
+    assert.equal(waiting.closed, true);
+    assert.deepEqual(waiting.states, []);
+    assert.equal(docs.fake.state.oauth.issued, 0);
+  } finally {
+    docs.close();
+  }
+});

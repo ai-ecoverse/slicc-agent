@@ -76,6 +76,7 @@ const helpers = () => {
             }, 20);
             signal.addEventListener('abort', () => {
               clearInterval(timer);
+              window.aborts = (window.aborts ?? 0) + 1;
               reject(signal.reason);
             });
             window.finishLogin = async (record) => {
@@ -294,5 +295,44 @@ test("a rejected API key's error names its account", async (t) => {
   assert.equal(part.action, 'settings');
   assert.equal(part.account, 'amazon-bedrock');
   assert.equal(part.message, 'Bedrock rejected the API key.');
+  await page.evaluate(() => window.loginTest.owner.release());
+});
+
+test('Cancel during Signing in aborts the login, the account is expired again, and a new Log in opens a window at once', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await page.evaluate((query) => window.boot(query), adobeQuery);
+  await page.evaluate(() => window.adobeTurn());
+  const seen = await page.evaluate(async () => {
+    const { card, model } = window.loginTest;
+    const status = () => model.settings.accounts().find((account) => account.id === 'adobe').status;
+    card().querySelector('[data-action=login]').click();
+    await window.until(() => card().querySelector('[data-action=cancel-login]'));
+    await window.until(() => typeof window.finishLogin === 'function');
+    card().querySelector('[data-action=cancel-login]').click();
+    await window.until(() => card().dataset.login === 'idle' && status() === 'expired');
+    const cancelled = {
+      aborts: window.aborts,
+      status: status(),
+      login: card().dataset.login,
+      error: Boolean(card().querySelector('[data-error=login]')),
+    };
+    const before = window.opens.length;
+    card().querySelector('[data-action=login]').click();
+    cancelled.reopened = window.opens.length - before;
+    await window.until(() => status() === 'signing-in');
+    cancelled.again = status();
+    model.settings.cancel('adobe');
+    return cancelled;
+  });
+  assert.deepEqual(seen, {
+    aborts: 1,
+    status: 'expired',
+    login: 'idle',
+    error: false,
+    reopened: 1,
+    again: 'signing-in',
+  });
   await page.evaluate(() => window.loginTest.owner.release());
 });

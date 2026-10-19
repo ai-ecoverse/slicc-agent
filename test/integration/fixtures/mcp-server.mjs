@@ -111,6 +111,7 @@ function createAuthorizer(state, settings, cors) {
     async answer(request) {
       const url = new URL(request.url);
       const origin = settings.issuer ?? url.origin;
+      if (url.pathname.startsWith('/.well-known/')) await settings.hold?.();
       if (url.pathname.startsWith('/.well-known/oauth-protected-resource'))
         return json({
           resource: `${url.origin}/mcp`,

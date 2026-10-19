@@ -64,6 +64,15 @@ function answered(channel: Channel, state: string, signal: AbortSignal, timeoutM
   });
 }
 
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason);
+    signal.addEventListener('abort', stop, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop));
+  });
+}
+
 export function mcpLogin(host: McpLoginHost = browser) {
   return async (
     providerId: string,
@@ -74,8 +83,7 @@ export function mcpLogin(host: McpLoginHost = browser) {
     const channel = host.channel();
     let state: string | undefined;
     try {
-      const started = (await signIn()) as McpSignIn | null;
-      options.signal.throwIfAborted();
+      const started = (await untilAborted(signIn(), options.signal)) as McpSignIn | null;
       if (!started?.url) throw new Error('This MCP server has no sign-in.');
       if (!safeAuthorizationUrl(started.url))
         throw new Error("The authorization server gave a sign-in address that isn't https.");
