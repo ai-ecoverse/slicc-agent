@@ -159,3 +159,110 @@ test('an API-key provider is offered, added with its key in the vault, answers a
   assert.ok(seen.after.includes('nvidia'));
   assert.equal(seen.stillOffered, true);
 });
+
+test('a fields provider is added with its non-secret fields, refuses a bad one in connect, and sends its key to the URL they make', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const account = '0123456789abcdef0123456789abcdef';
+  const seen = await page.evaluate(
+    async ({ query, account }) => {
+      const { owner, settings, agent, put, unput, log } = await window.openRegistry(query);
+      await window.until(() => settings.providers().length > 0);
+      const option = settings.providers().find((entry) => entry.id === 'cloudflare-workers-ai');
+      const bedrock = settings.providers().find((entry) => entry.id === 'amazon-bedrock');
+      await put({
+        kind: 'model',
+        name: option.vaultName,
+        provider: option.id,
+        placeholder: 'fnox_proxy_cf',
+        value: 'cf-token-key-0001',
+      });
+      const refused = await settings.connect(option.id, undefined, { account: 'nope' }).then(
+        () => null,
+        (error) => error.message
+      );
+      const empty = await settings.connect(option.id, undefined, {}).then(
+        () => null,
+        (error) => error.message
+      );
+      await window.until(() => settings.accounts().some((entry) => entry.id === option.id));
+      const pending = {
+        status: settings.accounts().find((entry) => entry.id === option.id)?.status,
+        models: settings.models().filter((entry) => entry.id.startsWith(`${option.id}/`)).length,
+      };
+      const row = () => settings.accounts().find((entry) => entry.id === option.id);
+      settings.disconnect(option.id);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const kept = row()?.status;
+      await unput(option.vaultName);
+      await settings.remove(option.id);
+      await window.until(() => !row());
+      const cleaned = row() === undefined;
+      await put({
+        kind: 'model',
+        name: option.vaultName,
+        provider: option.id,
+        placeholder: 'fnox_proxy_cf',
+        value: 'cf-token-key-0001',
+      });
+      await settings.connect(option.id, undefined, { account });
+      await window.until(
+        () => settings.accounts().find((entry) => entry.id === option.id)?.status === 'connected'
+      );
+      const added = settings.accounts().find((entry) => entry.id === option.id);
+      const reply = await window.reply(
+        agent,
+        'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6',
+        'Hello Cloudflare.'
+      );
+      const { upstream } = await log();
+      const result = {
+        option,
+        bedrock,
+        refused,
+        empty,
+        pending,
+        kept,
+        cleaned,
+        added,
+        reply,
+        upstream,
+      };
+      await owner.release();
+      return result;
+    },
+    { query: QUERY, account }
+  );
+  assert.equal(seen.option.auth, 'fields');
+  assert.equal(seen.option.needs, 'cors-free-transport');
+  assert.equal(seen.option.vaultName, 'CLOUDFLARE_WORKERS_AI_API_KEY');
+  assert.deepEqual(
+    seen.option.fields.map((field) => [field.name, field.required]),
+    [['account', true]]
+  );
+  assert.equal(seen.bedrock.auth, 'fields');
+  assert.deepEqual(
+    seen.bedrock.fields.map((field) => field.name),
+    ['region']
+  );
+  assert.equal(seen.refused, 'A Cloudflare account ID is 32 characters of 0–9 and a–f.');
+  assert.equal(seen.empty, 'Account ID can’t be empty.');
+  assert.deepEqual(seen.pending, { status: 'disconnected', models: 0 });
+  assert.equal(seen.kept, 'disconnected');
+  assert.equal(seen.cleaned, true);
+  assert.deepEqual(
+    seen.added.fields.map((field) => field.name),
+    ['account']
+  );
+  assert.equal(seen.reply, 'From api.cloudflare.com.');
+  const sent = seen.upstream.filter((entry) => new URL(entry.url).host === 'api.cloudflare.com');
+  assert.ok(sent.length > 0);
+  for (const entry of sent) {
+    assert.equal(
+      new URL(entry.url).pathname,
+      `/client/v4/accounts/${account}/ai/v1/chat/completions`
+    );
+    assert.equal(entry.authorization, 'Bearer cf-token-key-0001');
+  }
+});
