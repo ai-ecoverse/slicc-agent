@@ -7,6 +7,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { scrubTexts } from '../secrets/scrub.ts';
 import {
+  clip,
   formatLick,
   type Lick,
   type LickAction,
@@ -32,6 +33,15 @@ export interface LickEvent {
   eventId?: string;
   at?: number;
   triage?: string;
+  summary?: string;
+  report?: string;
+}
+
+function card(event: LickEvent): Pick<Lick, 'summary' | 'report'> {
+  return {
+    ...(event.summary ? { summary: event.summary } : {}),
+    ...(event.report ? { report: event.report } : {}),
+  };
 }
 
 type Pending = {
@@ -134,7 +144,7 @@ export function strongest(
 function merge(pending: Pending, event: LickEvent, now: number): Pending {
   const items = [...pending.items];
   for (const item of event.items ?? []) if (!items.includes(item)) items.push(item);
-  const { severity: _, ...lick } = pending.lick;
+  const { severity: _, summary: __, report: ___, ...lick } = pending.lick;
   const severity = strongest(pending.lick.severity, event.severity);
   return {
     lick: {
@@ -144,6 +154,7 @@ function merge(pending: Pending, event: LickEvent, now: number): Pending {
       count: pending.lick.count + (event.count ?? 1),
       at: event.at ?? now,
       ...(severity ? { severity } : {}),
+      ...card(event),
     },
     items,
     body: event.body ?? pending.body,
@@ -162,6 +173,7 @@ function fresh(event: LickEvent, now: number, listed: LickAction[] | undefined):
       at: now,
       ...(listed ? { actions: listed } : {}),
       ...(event.severity ? { severity: event.severity } : {}),
+      ...card(event),
     },
     items: [...new Set(event.items ?? [])],
     body: event.body ?? null,
@@ -174,7 +186,7 @@ function keyOf(event: LickEvent): string {
 }
 
 export async function scrubbedLick(event: LickEvent): Promise<LickEvent> {
-  const fields = (['title', 'text', 'body', 'triage'] as const).filter(
+  const fields = (['title', 'text', 'body', 'triage', 'summary', 'report'] as const).filter(
     (key) => event[key] !== undefined
   );
   const items = event.items ?? [];
@@ -184,6 +196,7 @@ export async function scrubbedLick(event: LickEvent): Promise<LickEvent> {
     out[key] = scrubbed[at] as string;
   });
   if (event.items) out.items = scrubbed.slice(fields.length);
+  if (out.summary !== undefined) out.summary = clip(out.summary);
   return out;
 }
 
