@@ -531,12 +531,12 @@ export async function settled(
     const from = opened.sources.get(file.path);
     const path = at.get(file.path);
     if (!from || !path || path === from) continue;
-    writer.check();
     const read = await writer.env.readBinaryFile(path, writer.context);
     const kept =
       read.ok &&
       read.value.length === file.size &&
       (await sha256(read.value)) === file.sha256.toLowerCase();
+    writer.check();
     if (!kept)
       throw new ImportError(
         `${from} changed while it moved, so a SLICC 6 tab may still be writing; close every SLICC 6 tab and import again`
