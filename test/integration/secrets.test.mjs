@@ -338,13 +338,18 @@ test('secrets: a model call goes out prepared by the vault, with the key filled 
   assert.ok(!seen.messages.includes(key));
 });
 
-test('secrets: a guest tool call asks with its arguments scrubbed, a secret shown as its placeholder', async (t) => {
+test('secrets: a guest tool call asks with its arguments scrubbed, a secret shown as its placeholder, and once approved runs with the real value', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
   const steps = [
-    { tool: { name: 'bash', args: { command: `echo ${alpha}`, timeout: 5 } } },
-    { answer: 'Denied.' },
+    {
+      tool: {
+        name: 'bash',
+        args: { command: `printf '%s' ${alpha} > /home/guest-ran.txt`, timeout: 5 },
+      },
+    },
+    { answer: 'Ran.' },
   ];
   const seen = await page.evaluate(
     async ({ origin, steps }) => {
@@ -378,7 +383,16 @@ test('secrets: a guest tool call asks with its arguments scrubbed, a secret show
         summary: first?.summary,
         items: JSON.stringify(connection.approvals.value),
       };
-      if (first) await model.approvals.decide(first.id, 'deny');
+      if (first) await model.approvals.decide(first.id, 'once');
+      const ran = () =>
+        connection.transcript.value.entries.some(
+          (entry) =>
+            entry.kind === 'pi.assistant' &&
+            entry.model?.[0]?.content?.some((block) => block.text === 'Ran.')
+        );
+      for (let n = 0; n < 300 && !ran(); n++)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      result.written = await window.read('/home/guest-ran.txt').catch(() => null);
       await guest.close();
       await owner.release();
       return result;
@@ -390,6 +404,8 @@ test('secrets: a guest tool call asks with its arguments scrubbed, a secret show
     { what: 'the approval records', text: seen.items }
   );
   const placeholder = seeds.values[0].placeholder;
-  assert.equal(seen.args, `{\n  "command": "echo ${placeholder}",\n  "timeout": 5\n}`);
-  assert.equal(seen.summary, `{"command":"echo ${placeholder}","timeout":5}`);
+  const shown = `printf '%s' ${placeholder} > /home/guest-ran.txt`;
+  assert.equal(seen.args, JSON.stringify({ command: shown, timeout: 5 }, null, 2));
+  assert.equal(seen.summary, JSON.stringify({ command: shown, timeout: 5 }));
+  assert.equal(seen.written, alpha);
 });
