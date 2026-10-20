@@ -13,6 +13,8 @@ import {
   type Budget,
 } from './adobe.ts';
 import { abortableBedrock } from './bedrock.ts';
+import { codexProvider } from './codex.ts';
+import { type DeviceFlows, deviceFlows } from './device.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import type { Reach } from './net.ts';
@@ -25,9 +27,11 @@ import {
   LISTINGS,
   type Listing,
 } from './providers.ts';
+import { absent } from './secrets/fetch.ts';
 import type { KeysMoved } from './secrets/legacy.ts';
 import type { VaultRecords } from './secrets/records.ts';
 import type { PlainStore } from './secrets/store.ts';
+import type { Vault } from './secrets/vault.ts';
 import type {
   AccountField,
   AccountState,
@@ -36,6 +40,7 @@ import type {
   ProviderOption,
   SettingsState,
 } from './services.ts';
+import { DEVICE_NEEDS_VAULT, DEVICE_SIGN_INS } from './sign-ins.ts';
 
 export { BEDROCK, PREFERRED_MODELS, preferredModel } from './preferred.ts';
 
@@ -70,6 +75,8 @@ export async function resolveDefaultModel(
 }
 
 const signIn = new Set([ADOBE]);
+const oauth = (providerId: string) => signIn.has(providerId) || DEVICE_SIGN_INS.has(providerId);
+const SIGN_IN_CORS_FREE = new Set(['xai']);
 const BUDGET_EVERY = 5 * 60 * 1000;
 
 export function sliccProviders(version?: string): Provider[] {
@@ -77,6 +84,7 @@ export function sliccProviders(version?: string): Provider[] {
     amazonBedrockProvider() as Provider,
     adobeProvider({ version }),
     ...KEY_PROVIDERS.map((entry) => entry.make()),
+    codexProvider(),
   ];
 }
 
@@ -198,9 +206,9 @@ function accounts(
     return {
       id: provider.id,
       provider: provider.name ?? provider.id,
-      identity: record ? (signIn.has(provider.id) ? 'Adobe ID' : 'API key') : '',
+      identity: record ? identityOf(provider.id, record) : '',
       status: !record ? 'disconnected' : record.state === 'expired' ? 'expired' : 'connected',
-      auth: signIn.has(provider.id) ? 'oauth' : 'api-key',
+      auth: oauth(provider.id) ? 'oauth' : 'api-key',
       needs: listing?.corsFree ? 'cors-free-transport' : null,
       ...(blocked(provider.id) ? { blocked: 'cors-free-transport' as const } : {}),
       group: 'providers',
@@ -209,6 +217,13 @@ function accounts(
       ...about(listing),
     };
   });
+}
+
+function identityOf(providerId: string, record: { expiresAt?: number }): string {
+  if (signIn.has(providerId)) return 'Adobe ID';
+  return DEVICE_SIGN_INS.has(providerId) && record.expiresAt !== undefined
+    ? 'Signed in'
+    : 'API key';
 }
 
 function about(listing: Listing | undefined) {
@@ -356,10 +371,27 @@ export async function createAgentSettings(
     mcp?: McpAccounts;
     moved?: KeysMoved;
     reach?: Reach;
+    vault?: Pick<Vault, 'connected' | 'needed' | 'grantProvider'>;
+    flows?: DeviceFlows;
   } = {}
 ): Promise<AgentSettings> {
-  const { mcp, moved, reach } = options;
+  const { mcp, moved, reach, vault } = options;
   const blocked = blockedBy(reach);
+  const flows =
+    options.flows ??
+    deviceFlows((grant) => (vault as Pick<Vault, 'grantProvider'>).grantProvider(grant));
+  const device = (providerId: string, context: Context) => {
+    const provider = providers.find((candidate) => candidate.id === providerId);
+    const name = LISTINGS.get(providerId)?.vaultName;
+    if (!provider || !name) return Promise.resolve(null);
+    if (!vault || absent(vault)) return Promise.reject(new Error(DEVICE_NEEDS_VAULT));
+    if (blocked(providerId) || (SIGN_IN_CORS_FREE.has(providerId) && reach?.free() === false))
+      return Promise.reject(new Error(`${provider.name} sign-in needs the cors-free transport.`));
+    return fields
+      .add(providerId)
+      .then(() => refresh(context))
+      .then(() => flows.start(provider, name, context));
+  };
   const { records, fields } = sources;
   const routed = (providerId: string) => (providerId.startsWith(MCP_ACCOUNT) ? mcp : undefined);
   const adobe = providers.find((provider) => provider.id === ADOBE);
@@ -434,6 +466,7 @@ export async function createAgentSettings(
       }
       if (secret !== null)
         throw new Error(signIn.has(providerId) ? SIGN_IN_NEEDS_VAULT : KEY_NEEDS_VAULT);
+      if (flows.has(providerId)) await flows.finish(providerId, context);
       if (given !== null) await fields.set(providerId, given);
       if (LISTINGS.has(providerId)) await fields.add(providerId);
       records.reconnected(providerId);
@@ -441,9 +474,10 @@ export async function createAgentSettings(
       if (signIn.has(providerId)) await discover([providerId]);
       await refresh(context);
     },
-    async signIn(providerId) {
+    async signIn(providerId, context) {
       const server = routed(providerId);
       if (server) return server.signIn(providerId);
+      if (DEVICE_SIGN_INS.has(providerId)) return device(providerId, context);
       if (providerId !== ADOBE) return null;
       const { clientId, scopes, imsEnvironment } = await adobeConfig(
         endpoint,
@@ -457,6 +491,7 @@ export async function createAgentSettings(
       await refresh(context);
     },
     async disconnect(providerId, context) {
+      flows.stop(providerId);
       const server = routed(providerId);
       if (server) await server.disconnect(providerId);
       else if (LISTINGS.has(providerId)) await fields.add(providerId);
@@ -468,6 +503,7 @@ export async function createAgentSettings(
       return (await routed(providerId)?.serverUrl(providerId)) ?? null;
     },
     async remove(providerId, context) {
+      flows.stop(providerId);
       const server = routed(providerId);
       if (server) await server.disconnect(providerId);
       else await fields.forget(providerId);

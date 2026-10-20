@@ -64,7 +64,7 @@ function answered(channel: Channel, state: string, signal: AbortSignal, timeoutM
   });
 }
 
-function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+export function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
   return new Promise<T>((resolve, reject) => {
     const stop = () => reject(signal.reason);

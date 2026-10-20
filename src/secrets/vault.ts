@@ -163,6 +163,16 @@ export class Vault implements Scrub {
     return { response: shown, records, ...(expiresAt === undefined ? {} : { expiresAt }) };
   }
 
+  async grantProvider(grant: {
+    provider: string;
+    name: string;
+    response: Uint8Array;
+    settings?: Record<string, string>;
+  }): Promise<Omit<Granted, 'response'>> {
+    const { records, expiresAt } = (await this.#call('grant', { ...grant })) as Granted;
+    return { records, ...(expiresAt === undefined ? {} : { expiresAt }) };
+  }
+
   async refresh(target: RefreshTarget, name?: string): Promise<string> {
     const fields = { ...target, ...(name === undefined ? {} : { name }) };
     return ((await this.#call('refresh', fields)) as { state: string }).state;

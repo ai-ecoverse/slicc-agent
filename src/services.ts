@@ -18,6 +18,7 @@ import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
 import { contract } from './serving.ts';
+import type { DeviceSignIn } from './sign-ins.ts';
 import type { SkillPackage, SkillSource } from './skills/skills.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 
@@ -553,7 +554,7 @@ export interface AgentSettings {
   disconnect(providerId: string, context: Context): Promise<void>;
   remove(providerId: string, context: Context): Promise<void>;
   serverUrl(providerId: string, context: Context): Promise<string | null>;
-  signIn(providerId: string, context: Context): Promise<SignIn | McpSignIn | null>;
+  signIn(providerId: string, context: Context): Promise<SignIn | McpSignIn | DeviceSignIn | null>;
   dismissMoved(context: Context): Promise<void>;
 }
 

@@ -20,6 +20,7 @@ const ENV = {
   AZURE_OPENAI_RESOURCE_NAME: 'example',
   CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
   CLOUDFLARE_GATEWAY_ID: 'seven-reach',
+  CHATGPT_ACCOUNT_ID: 'seven-reach',
 };
 
 const CLASSIFY = {
