@@ -288,45 +288,41 @@ async function infoOf(deps: ImportDeps, path: string, context: Context) {
   return info.value;
 }
 
-async function walk(deps: ImportDeps, dir: string, rel: string, context: Context) {
-  const found = new Map<string, number>();
+async function walk(
+  deps: ImportDeps,
+  dir: string,
+  context: Context,
+  rel = '',
+  found = new Map<string, number>()
+) {
   const listed = await deps.env.listDir(rel ? `${dir}/${rel}` : dir, context);
   if (!listed.ok) throw new ImportError(`can't read ${dir}: ${listed.error.message}`);
   for (const item of listed.value) {
     const name = rel ? `${rel}/${item.name}` : item.name;
-    if (item.kind === 'directory')
-      for (const [inner, size] of await walk(deps, dir, name, context)) found.set(inner, size);
+    if (item.kind === 'directory') await walk(deps, dir, context, name, found);
     else if (item.kind === 'file') found.set(name, item.size);
     else throw new ImportError(`${name} is a symlink`);
+    if (found.size > LIMITS.entries)
+      throw new ImportError(`${dir} has over ${LIMITS.entries} entries`);
   }
   return found;
 }
 
-export async function openDirectory(
+async function sourcesOf(
   deps: ImportDeps,
   dir: string,
+  manifest: Manifest,
+  found: Map<string, number>,
   context: Context
-): Promise<Opened> {
-  const id = DIRECTORY.exec(dir)?.[1];
-  if (!id) throw new ImportError(`${dir} isn't a SLICC 6 upgrade in ${DIRECTORY_ROOT}`);
-  await infoOf(deps, dir, context);
-  const found = await walk(deps, dir, '', context);
-  const head = found.get('manifest.json');
-  if (head === undefined) throw new ImportError(`${dir} has no manifest.json`);
-  if (head > LIMITS.transcript) throw new ImportError('manifest.json is over 64 MiB');
-  const read = async (path: string, name: string) => {
-    const got = await deps.env.readBinaryFile(path, context);
-    if (!got.ok) throw new ImportError(`can't read ${name}: ${got.error.message}`);
-    return got.value;
-  };
-  const manifest = checkManifest(
-    json(await read(`${dir}/manifest.json`, 'manifest.json'), 'manifest.json'),
-    2
-  );
-  if (manifest.exportId !== id)
-    throw new ImportError(`${dir} holds the export ${manifest.exportId}`);
+) {
+  if (manifest.files.length > LIMITS.entries)
+    throw new ImportError(`the manifest lists over ${LIMITS.entries} files`);
+  if (manifest.files.reduce((sum, file) => sum + file.size, 0) > LIMITS.total)
+    throw new ImportError('the files add up to over 4 GiB');
   const sources = new Map<string, string>();
   for (const file of manifest.files) {
+    if (!safe(file.path))
+      throw new ImportError(`refused the entry name ${JSON.stringify(file.path)}`);
     whereOf(manifest, file.path);
     const cap = /^(transcripts|frozen)\//.test(file.path) ? LIMITS.transcript : LIMITS.file;
     if (file.size > cap) throw new ImportError(`${file.path} is over ${cap / MiB} MiB`);
@@ -346,6 +342,33 @@ export async function openDirectory(
       );
     sources.set(file.path, file.source);
   }
+  return sources;
+}
+
+export async function openDirectory(
+  deps: ImportDeps,
+  dir: string,
+  context: Context
+): Promise<Opened> {
+  const id = DIRECTORY.exec(dir)?.[1];
+  if (!id) throw new ImportError(`${dir} isn't a SLICC 6 upgrade in ${DIRECTORY_ROOT}`);
+  await infoOf(deps, dir, context);
+  const found = await walk(deps, dir, context);
+  const head = found.get('manifest.json');
+  if (head === undefined) throw new ImportError(`${dir} has no manifest.json`);
+  if (head > LIMITS.transcript) throw new ImportError('manifest.json is over 64 MiB');
+  const read = async (path: string, name: string) => {
+    const got = await deps.env.readBinaryFile(path, context);
+    if (!got.ok) throw new ImportError(`can't read ${name}: ${got.error.message}`);
+    return got.value;
+  };
+  const manifest = checkManifest(
+    json(await read(`${dir}/manifest.json`, 'manifest.json'), 'manifest.json'),
+    2
+  );
+  if (manifest.exportId !== id)
+    throw new ImportError(`${dir} holds the export ${manifest.exportId}`);
+  const sources = await sourcesOf(deps, dir, manifest, found, context);
   const listed = new Set(manifest.files.map((file) => file.path));
   for (const name of found.keys())
     if (name !== 'manifest.json' && !listed.has(name))
@@ -929,6 +952,7 @@ async function importOpened(
     };
     let made: string[];
     try {
+      if (dir) await writer.remember([...opened.sources.values()]);
       await place(run);
       made = await commit(deps, opened, parsed.units, now, context);
     } catch (error) {

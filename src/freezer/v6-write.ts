@@ -19,8 +19,18 @@ function done<T>(result: Result<T, { message: string }>, what: string): T {
   return result.value;
 }
 
+const CHUNK = 200;
+
+function chunks<T>(items: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let at = 0; at < items.length; at += CHUNK) out.push(items.slice(at, at + CHUNK));
+  return out;
+}
+
 export class Writer {
   readonly #undo: (() => Promise<unknown>)[] = [];
+  readonly #modes = new Map<string, string>();
+  readonly #moved: string[] = [];
   readonly env: ExecutionEnv;
   readonly context: Context;
   readonly signal: AbortSignal;
@@ -84,8 +94,38 @@ export class Writer {
     return true;
   }
 
+  async remember(paths: readonly string[]): Promise<void> {
+    for (const part of chunks(paths)) {
+      const out = await this.out(`stat -c '%u:%g %a %n' -- ${part.map(quote).join(' ')}`);
+      for (const line of out.split('\n').filter(Boolean)) {
+        const [owner = '', mode = '', ...name] = line.split(' ');
+        this.#modes.set(name.join(' '), `${owner} ${mode}`);
+      }
+    }
+  }
+
+  async #restore(): Promise<void> {
+    const groups = new Map<string, string[]>();
+    for (const path of this.#moved) {
+      const mode = this.#modes.get(path);
+      if (mode) groups.set(mode, [...(groups.get(mode) ?? []), path]);
+    }
+    for (const [both, paths] of groups) {
+      const [owner, mode] = both.split(' ') as [string, string];
+      for (const part of chunks(paths)) {
+        const list = part.map(quote).join(' ');
+        await this.env.exec(
+          `chown ${quote(owner)} -- ${list} && chmod ${quote(mode)} -- ${list}`,
+          undefined,
+          BACKGROUND_CONTEXT
+        );
+      }
+    }
+  }
+
   async move(from: string, to: string, fresh: boolean): Promise<void> {
     this.check();
+    if (!this.#moved.length) this.later(() => this.#restore());
     await this.direct(to);
     if (!fresh && !(await this.tree(dirname(to)))) {
       const old = await this.env.readBinaryFile(to, this.context);
@@ -97,7 +137,27 @@ export class Writer {
     }
     done(await this.env.createDir(dirname(to), { recursive: true }, this.context), dirname(to));
     done(await this.env.renameFile(from, to, this.context), to);
+    this.#moved.push(from);
     this.later(() => this.env.renameFile(to, from, BACKGROUND_CONTEXT));
+  }
+
+  async out(command: string): Promise<string> {
+    let out = '';
+    let err = '';
+    const ran = await this.env.exec(
+      command,
+      {
+        onOutput: (text, _context, info) => {
+          if (info.stream === 'stderr') err += text;
+          else out += text;
+        },
+      },
+      this.context
+    );
+    if (!ran.ok) throw new ImportError(`${command.split(' ')[0]}: ${ran.error.message}`);
+    if (ran.value.exitCode !== 0)
+      throw new ImportError(`${command.split(' ')[0]}: ${err.trim() || 'it failed'}`);
+    return out;
   }
 
   async sh(command: string): Promise<void> {

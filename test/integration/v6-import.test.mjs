@@ -920,6 +920,16 @@ test('a failed in-place import moves every file back to /slicc-fs and keeps the 
   const page = await booted(t);
   const form = directory();
   await lay(page, form);
+  const stat = (sources) =>
+    page.evaluate(
+      async (list) => (await window.sh(`stat -c '%U:%G %a %n' ${list.join(' ')}`)).stdout,
+      sources
+    );
+  await page.evaluate(
+    (list) => window.sh(`chown nobody:nogroup ${list.join(' ')} && chmod 640 ${list.join(' ')}`),
+    moved(form)
+  );
+  const before = await stat(moved(form));
   const failed = await page.evaluate(async (dir) => {
     await window.sh(
       'mkdir -p /tmp/elsewhere /root && rm -rf /root/v6 && ln -s /tmp/elsewhere /root/v6'
@@ -942,6 +952,7 @@ test('a failed in-place import moves every file back to /slicc-fs and keeps the 
     };
   }, moved(form));
   assert.deepEqual(after.missing, []);
+  assert.equal(await stat(moved(form)), before);
   assert.equal(after.readme, files()['files/cones/cone/README.md']);
   assert.equal(after.homes, '');
   assert.equal(after.skills, '');
@@ -1021,6 +1032,25 @@ const formRefusals = [
       form.manifest.part = { index: 1, of: 2 };
     },
     /never split into parts/,
+  ],
+  [
+    'a name that climbs out of its cone',
+    (form) => {
+      form.manifest.files.push({
+        path: 'files/cones/cone/../.pi/agent/settings.json',
+        size: 3,
+        sha256: 'a'.repeat(64),
+        source: '/slicc-fs/x.json',
+      });
+    },
+    /refused the entry name "files\/cones\/cone\/\.\.\/\.pi\/agent\/settings\.json"/,
+  ],
+  [
+    'files that add up to over 4 GiB',
+    (form) => {
+      form.manifest.files = form.manifest.files.map((file) => ({ ...file, size: 256 * 1024 ** 2 }));
+    },
+    /the files add up to over 4 GiB/,
   ],
   [
     'another export id',

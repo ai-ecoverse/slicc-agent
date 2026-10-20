@@ -552,6 +552,7 @@ On `www.sliccy.ai`, seven shares six's origin, so six's files are already in sev
 
 - **The checks** are the zip's, applied to a directory:
   - `<dir>` must be `/slicc-v6-upgrade/<uuid>`, and its manifest's `exportId` must be that uuid;
+  - every manifest path must be a safe entry name, as zip entry names must (no `..`, empty or absolute parts), and the zip's caps apply: at most 60,000 entries, walked or listed, and 4 GiB in all;
   - the directory itself and every `source` may not lead through a symlink;
   - every written file must be listed, at its size, and nothing else may be there;
   - each `source` must be a file under `/slicc-fs/` (never `.metadata.json`), only on `files/`, `skills/` and `sprinkles/` entries, at its size, named once, and not also written;
@@ -560,7 +561,7 @@ On `www.sliccy.ai`, seven shares six's origin, so six's files are already in sev
   A version 2 manifest has no `part` and no `archive-limit` skips. A zip refuses `source`, and a version 2 manifest in a zip is refused with a pointer to `--in-place`.
 - **Nothing is staged:** written entries are read from `<dir>`, and the free-room check counts only them, once.
 - **Moving:** each `source` file placed as root (a new cone's files, `/root/v6/home-user`, global skills, sprinkles) is moved with the kernel's rename, so OPFS moves the file instead of copying it. A file for a cone that exists already is written through that cone's own user, as for a zip, and stays in `/slicc-fs`. Ownership and modes are then set as for a zip. Progress reads "Moving n of m".
-- **All or nothing:** when the import fails or is cancelled, every moved file goes back to its `source` path, along with the zip path's undo, and `<dir>` stays for the next try.
+- **All or nothing:** before moving, the import records each `source` file's owner and mode. When the import fails or is cancelled, every moved file goes back to its `source` path with that owner and mode, along with the zip path's undo, and `<dir>` stays for the next try.
 - **On success** `<dir>` is deleted. What six left in `/slicc-fs` (caches, mounts, bundled files, `skipped[]`) is bios's to remove.
 
 ### Changes
