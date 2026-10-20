@@ -11,7 +11,7 @@ import type { Layout } from '../layout.ts';
 import { opfsFile } from '../opfs-pool.ts';
 import { TITLE_TURNS } from '../titles/extension.ts';
 import { IMPORTS_DIR } from './paths.ts';
-import { Journal, sweep, type Undoing, unsettled } from './v6-journal.ts';
+import { Journal, sweep, type Undoing } from './v6-journal.ts';
 import { type Notes, place, reportOf } from './v6-place.ts';
 import {
   checkLicks,
@@ -944,10 +944,6 @@ async function importOpened(
   const room = await (deps.room ?? storageRoom)();
   if (room !== undefined && room < (dir ? 1 : 2) * total)
     throw new ImportError('there is not enough free storage for this import');
-  if (await unsettled(deps.env, own))
-    throw new ImportError(
-      `an earlier import of this profile couldn't be rolled back completely; its journal is in ${own}`
-    );
   let keep = false;
   try {
     await writer.sh(
@@ -991,8 +987,10 @@ async function importOpened(
       keep = !(await writer.rollback());
       throw error;
     }
-    if (dir) await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT);
-    await journal.close().catch(() => undefined);
+    keep =
+      dir !== null &&
+      !(await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT)).ok;
+    if (!keep) await journal.close().catch(() => undefined);
     const report = await reportOf(run, made).catch((error: Error) => `nowhere (${error.message})`);
     const split = accountsSplit(opened.manifest.providers, deps.providers);
     const { origin } = opened.manifest.producer;
@@ -1050,7 +1048,8 @@ export const IDLE: ImportProgress = { phase: 'idle', done: 0, total: 0, text: ''
 
 export function createImporter(deps: ImportDeps): Importer {
   const progress = replicatedState<ImportProgress>(IDLE);
-  let swept = sweep(undoing(deps)).catch(() => undefined);
+  let sweeping = sweep(undoing(deps)).catch(() => [IMPORTS_DIR]);
+  const swept = sweeping.then(() => undefined);
   let running: AbortController | undefined;
   const result = (fields: Partial<ImportResult>): ImportResult => ({
     done: false,
@@ -1070,8 +1069,8 @@ export function createImporter(deps: ImportDeps): Importer {
       if (running) return result({ error: 'an import is already running' });
       const controller = new AbortController();
       running = controller;
-      swept = swept.then(() => sweep(undoing(deps))).catch(() => undefined);
-      await swept;
+      sweeping = sweeping.then(() => sweep(undoing(deps))).catch(() => [IMPORTS_DIR]);
+      const kept = await sweeping;
       const moving = 'inPlace' in source;
       const writing = moving ? 'Moving' : 'Importing';
       const show: Show = (phase, done, total) =>
@@ -1101,6 +1100,10 @@ export function createImporter(deps: ImportDeps): Importer {
             text: `Already imported on ${day(preview.already)}.`,
             line: `Already imported on ${day(preview.already)}; freezer import --again makes fresh copies.\n`,
           });
+        if (kept.length)
+          throw new ImportError(
+            `an earlier import couldn't be rolled back completely; its journal is in ${kept.join(', ')}`
+          );
         const done = await importOpened(
           deps,
           opened,

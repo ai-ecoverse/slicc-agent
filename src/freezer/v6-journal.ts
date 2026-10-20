@@ -63,9 +63,9 @@ async function jsonIn(env: ExecutionEnv, path: string): Promise<unknown> {
   }
 }
 
-async function stepsIn(env: ExecutionEnv, dir: string): Promise<Step[]> {
+async function stepsIn(env: ExecutionEnv, dir: string): Promise<Step[] | undefined> {
   const listed = await env.listDir(`${dir}/${STEPS}`, BACKGROUND_CONTEXT);
-  if (!listed.ok) return [];
+  if (!listed.ok) return undefined;
   const numbers = listed.value
     .map((item) => /^(\d+)\.json$/.exec(item.name)?.[1])
     .filter((name): name is string => name !== undefined)
@@ -106,10 +106,11 @@ async function undoStep(deps: Undoing, step: Step, owners: Map<string, string[]>
     return old !== null && done(await env.writeFile(step.file, old, BACKGROUND_CONTEXT));
   }
   if ('moved' in step) {
-    if ((await exists(env, step.moved)) || !(await exists(env, step.to))) return true;
-    const back = await env.renameFile(step.to, step.moved, BACKGROUND_CONTEXT);
-    if (back.ok && step.mode) owners.set(step.mode, [...(owners.get(step.mode) ?? []), step.moved]);
-    return back.ok;
+    const there = await exists(env, step.moved);
+    if (!there && !(await exists(env, step.to))) return true;
+    const back = there || done(await env.renameFile(step.to, step.moved, BACKGROUND_CONTEXT));
+    if (back && step.mode) owners.set(step.mode, [...(owners.get(step.mode) ?? []), step.moved]);
+    return back;
   }
   if (step.backup === null)
     return done(await env.exec(`crontab -u ${quote(step.cron)} -r`, undefined, BACKGROUND_CONTEXT));
@@ -169,25 +170,26 @@ export async function undo(deps: Undoing, header: Header, steps: readonly Step[]
 async function settle(deps: Undoing, dir: string) {
   const header = headerOf(await jsonIn(deps.env, `${dir}/${HEADER}`));
   if (!header) return true;
-  if (deps.state().imports?.[header.key]?.at !== header.at)
-    return undo(deps, header, await stepsIn(deps.env, dir));
+  if (deps.state().imports?.[header.key]?.at !== header.at) {
+    const steps = await stepsIn(deps.env, dir);
+    return steps !== undefined && undo(deps, header, steps);
+  }
   if (!header.source) return true;
   return gone(deps.env, header.source);
 }
 
-export async function sweep(deps: Undoing): Promise<void> {
+export async function sweep(deps: Undoing): Promise<string[]> {
   const listed = await deps.env.listDir(IMPORTS_DIR, BACKGROUND_CONTEXT);
-  if (!listed.ok) return;
+  if (!listed.ok) return [];
+  const kept: string[] = [];
   for (const item of listed.value) {
     if (item.kind !== 'directory') continue;
     const dir = `${IMPORTS_DIR}/${item.name}`;
     if (await settle(deps, dir))
       await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT);
+    else kept.push(dir);
   }
-}
-
-export async function unsettled(env: ExecutionEnv, dir: string): Promise<boolean> {
-  return headerOf(await jsonIn(env, `${dir}/${HEADER}`)) !== undefined;
+  return kept;
 }
 
 export class Journal {
