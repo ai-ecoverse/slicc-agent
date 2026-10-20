@@ -6,7 +6,8 @@ const chrome = await launch();
 after(() => chrome.close());
 
 const helpers = () => {
-  window.until = (check, what = 'the sign-in state') => when(window.sources, check, what);
+  window.until = (check, what = 'the sign-in state') =>
+    when([...window.sources, every(100)], check, what);
   window.pageLogs = [];
   for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
     const original = console[level].bind(console);
@@ -508,39 +509,44 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
 
 test('Settings shows an xAI sign-in’s code and its page link while the account is signing in', async (t) => {
   const page = await opened(t);
-  const seen = await page.evaluate(async (query) => {
-    await import('/node_modules/@ai-ecoverse/slicc-spectrum/dist/slicc-ui.js');
-    const it = await window.openSignIns(query);
-    const find = (root, selector) => {
-      const found = root.querySelector(selector);
-      if (found) return found;
-      for (const node of root.querySelectorAll('*'))
-        if (node.shadowRoot) {
-          const inner = find(node.shadowRoot, selector);
-          if (inner) return inner;
-        }
-      return null;
-    };
-    const settings = document.createElement('slicc-settings');
-    settings.model = it;
-    document.body.append(settings);
-    const started = it.signIn('xai');
-    const account = await it.shown('xai');
-    const details = () => find(settings.shadowRoot, '[data-sign-in]');
-    await window.until(details);
-    const block = details();
-    const result = {
-      status: account.status,
-      code: block?.querySelector('[data-id="sign-in-code"]')?.textContent.trim() ?? null,
-      links: [...(block?.querySelectorAll('a[data-action="open-sign-in"]') ?? [])].map(
-        (link) => link.href
-      ),
-    };
-    await it.device('approve');
-    result.failure = await started.done;
-    await it.owner.release();
-    return result;
-  }, QUERY);
+  const seen = await staged(
+    page,
+    'the xAI sign-in in Settings',
+    async (query) => {
+      await import('/node_modules/@ai-ecoverse/slicc-spectrum/dist/slicc-ui.js');
+      const it = await window.openSignIns(query);
+      const find = (root, selector) => {
+        const found = root.querySelector(selector);
+        if (found) return found;
+        for (const node of root.querySelectorAll('*'))
+          if (node.shadowRoot) {
+            const inner = find(node.shadowRoot, selector);
+            if (inner) return inner;
+          }
+        return null;
+      };
+      const settings = document.createElement('slicc-settings');
+      settings.model = it;
+      document.body.append(settings);
+      const started = it.signIn('xai');
+      const account = await it.shown('xai');
+      const details = () => find(settings.shadowRoot, '[data-sign-in]');
+      await window.until(details, 'the sign-in details');
+      const block = details();
+      const result = {
+        status: account.status,
+        code: block?.querySelector('[data-id="sign-in-code"]')?.textContent.trim() ?? null,
+        links: [...(block?.querySelectorAll('a[data-action="open-sign-in"]') ?? [])].map(
+          (link) => link.href
+        ),
+      };
+      await it.device('approve');
+      result.failure = await started.done;
+      await it.owner.release();
+      return result;
+    },
+    QUERY
+  );
   assert.equal(seen.status, 'signing-in');
   assert.equal(seen.code, 'CODE-0001');
   assert.deepEqual(seen.links, ['https://accounts.x.ai/device?user_code=CODE-0001']);
