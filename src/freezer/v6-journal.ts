@@ -92,13 +92,16 @@ async function bytesOf(env: ExecutionEnv, path: string | null): Promise<Uint8Arr
 
 const done = (result: { ok: boolean }) => result.ok;
 
+async function gone(env: ExecutionEnv, path: string, recursive = true): Promise<boolean> {
+  const removed = await env.remove(path, { recursive, force: true }, BACKGROUND_CONTEXT);
+  return removed.ok || !(await exists(env, path));
+}
+
 async function undoStep(deps: Undoing, step: Step, owners: Map<string, string[]>) {
   const { env } = deps;
-  if ('made' in step)
-    return done(await env.remove(step.made, { recursive: true, force: true }, BACKGROUND_CONTEXT));
+  if ('made' in step) return gone(env, step.made);
   if ('file' in step) {
-    if (step.backup === null)
-      return done(await env.remove(step.file, { force: true }, BACKGROUND_CONTEXT));
+    if (step.backup === null) return gone(env, step.file, false);
     const old = await bytesOf(env, step.backup);
     return old !== null && done(await env.writeFile(step.file, old, BACKGROUND_CONTEXT));
   }
@@ -147,11 +150,9 @@ function named(state: Readonly<AgentsState>, cone: string): boolean {
 const fails = () => false;
 
 async function removeCone(deps: Undoing, cone: string) {
-  const gone = (await deps.users?.remove(cone).then(() => true, fails)) ?? true;
-  const home = await deps.env
-    .remove(homeOf(cone), { recursive: true, force: true }, BACKGROUND_CONTEXT)
-    .then(done, fails);
-  return gone && home;
+  const user = (await deps.users?.remove(cone).then(() => true, fails)) ?? true;
+  const home = await gone(deps.env, homeOf(cone)).catch(fails);
+  return user && home;
 }
 
 export async function undo(deps: Undoing, header: Header, steps: readonly Step[]) {
@@ -171,9 +172,7 @@ async function settle(deps: Undoing, dir: string) {
   if (deps.state().imports?.[header.key]?.at !== header.at)
     return undo(deps, header, await stepsIn(deps.env, dir));
   if (!header.source) return true;
-  return done(
-    await deps.env.remove(header.source, { recursive: true, force: true }, BACKGROUND_CONTEXT)
-  );
+  return gone(deps.env, header.source);
 }
 
 export async function sweep(deps: Undoing): Promise<void> {
