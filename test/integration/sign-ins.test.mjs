@@ -160,7 +160,12 @@ test('a Kimi sign-in opens its window in the click, shows the code, grants the t
       offered: { auth: offered.auth, keyUrl: Boolean(offered.keyUrl) },
       opened: started.opened,
       blank,
-      shown: { status: shown.status, auth: shown.auth, signIn: shown.signIn },
+      shown: {
+        status: shown.status,
+        auth: shown.auth,
+        secret: shown.secret,
+        signIn: shown.signIn,
+      },
       navigated,
       failure,
       closed: started.popup.closed,
@@ -189,6 +194,7 @@ test('a Kimi sign-in opens its window in the click, shows the code, grants the t
   assert.deepEqual(seen.shown, {
     status: 'signing-in',
     auth: 'oauth',
+    secret: 'api-key',
     signIn: { url: 'https://www.kimi.com/device?user_code=CODE-0001', code: 'CODE-0001' },
   });
   assert.equal(seen.navigated, 'https://www.kimi.com/device?user_code=CODE-0001');
@@ -437,6 +443,7 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
     const sealed = (await it.records()).find((entry) => entry.name === offered.vaultName);
     const result = {
       offered: { name: offered.name, auth: offered.auth, keyUrl: offered.keyUrl ?? null },
+      secret: shown.secret ?? null,
       shown: shown.signIn,
       failure,
       reply,
@@ -449,6 +456,7 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
     return result;
   }, QUERY);
   assert.deepEqual(seen.offered, { name: 'ChatGPT', auth: 'oauth', keyUrl: null });
+  assert.equal(seen.secret, null);
   assert.deepEqual(seen.shown, { url: 'https://auth.openai.com/codex/device', code: 'CODE-0001' });
   assert.equal(seen.failure, null);
   assert.equal(seen.reply, 'From chatgpt.com.');

@@ -209,6 +209,9 @@ function accounts(
       identity: record ? identityOf(provider.id, record) : '',
       status: !record ? 'disconnected' : record.state === 'expired' ? 'expired' : 'connected',
       auth: oauth(provider.id) ? 'oauth' : 'api-key',
+      ...(DEVICE_SIGN_INS.has(provider.id) && listing?.keyUrl
+        ? { secret: 'api-key' as const }
+        : {}),
       needs: listing?.corsFree ? 'cors-free-transport' : null,
       ...(blocked(provider.id) ? { blocked: 'cors-free-transport' as const } : {}),
       group: 'providers',
