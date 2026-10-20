@@ -185,6 +185,11 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
         () => connection.transcript.value.entries.some((entry) => entry.kind === 'pi.compaction'),
         'the compaction entry'
       );
+      await when(
+        [connection.vault],
+        () => connection.vault.value?.held === 0,
+        'the vault to hold nothing'
+      );
       stage('the requests');
       const memory = await window.read('/home/.pi/agent/memory/cone/MEMORY.md');
       const result = {
