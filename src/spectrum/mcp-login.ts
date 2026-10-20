@@ -1,4 +1,5 @@
 import type { McpSignIn, SignIn } from '../services.ts';
+import { askHold, markerUrl, refusal, unlessRefused } from './held.ts';
 
 export const MCP_CHANNEL = 'slicc-mcp-oauth';
 export const MCP_NAME_KEY = 'slicc-mcp-oauth:';
@@ -14,16 +15,20 @@ export interface Channel {
   close(): void;
 }
 
-export interface McpLoginHost {
-  open(): Popup | null;
+export interface SignInWindow {
+  open(url: string): Popup | null;
+  hold(marker: string, signal: AbortSignal): Promise<boolean>;
+}
+
+export interface McpLoginHost extends SignInWindow {
   channel(): Channel;
   remember?(state: string, name: string | null): void;
   timeoutMs?: number;
 }
 
 const browser: McpLoginHost = {
-  open: () =>
-    globalThis.open?.('about:blank', 'slicc-mcp-oauth', 'popup,width=520,height=720') ?? null,
+  open: (url) => globalThis.open?.(url, 'slicc-mcp-oauth', 'popup,width=520,height=720') ?? null,
+  hold: (marker, signal) => askHold(marker, signal),
   channel: () => new BroadcastChannel(MCP_CHANNEL) as unknown as Channel,
   remember: (state, name) => {
     const key = `${MCP_NAME_KEY}${state}`;
@@ -79,16 +84,22 @@ export function mcpLogin(host: McpLoginHost = browser) {
     signIn: () => Promise<SignIn | McpSignIn | null>,
     options: { signal: AbortSignal }
   ): Promise<string> => {
-    const popup = host.open();
+    const marker = crypto.randomUUID();
+    const popup = host.open(markerUrl(marker));
+    const refused = refusal(popup ? host.hold(marker, options.signal) : Promise.resolve(true));
     const channel = host.channel();
     let state: string | undefined;
     try {
-      const started = (await untilAborted(signIn(), options.signal)) as McpSignIn | null;
+      const started = (await untilAborted(
+        unlessRefused(signIn(), refused),
+        options.signal
+      )) as McpSignIn | null;
       if (!started?.url) throw new Error('This MCP server has no sign-in.');
       if (!safeAuthorizationUrl(started.url))
         throw new Error("The authorization server gave a sign-in address that isn't https.");
       if (!popup)
         throw new Error('The browser blocked the sign-in window. Allow pop-ups for SLICC.');
+      await untilAborted(refused, options.signal);
       state = started.state;
       host.remember?.(state, providerId.replace(/^mcp:/, ''));
       popup.location.href = started.url;

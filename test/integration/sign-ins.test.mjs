@@ -28,6 +28,15 @@ const helpers = () => {
       original(...args);
     };
   }
+  window.holds = [];
+  window.holding = 'held';
+  const owner = new BroadcastChannel('slicc-held');
+  window.answerHold = (marker, type) => owner.postMessage({ type, marker });
+  owner.onmessage = ({ data }) => {
+    window.holds.push({ ...data, href: window.opens.at(-1)?.popup.location.href });
+    if (['held', 'none', 'unheld'].includes(window.holding))
+      window.answerHold(data.marker, window.holding);
+  };
   window.opens = [];
   window.open = (url, name) => {
     const popup = {
@@ -199,7 +208,7 @@ test('a Kimi sign-in opens its window in the click, shows the code, grants the t
   assert.equal(seen.listed, false);
   assert.deepEqual(seen.offered, { auth: 'oauth', keyUrl: true });
   assert.equal(seen.opened, 1);
-  assert.equal(seen.blank, 'about:blank');
+  assert.match(seen.blank, /^about:blank#slicc-sign-in-[0-9a-f-]{36}$/);
   assert.deepEqual(seen.shown, {
     status: 'signing-in',
     auth: 'oauth',
@@ -217,6 +226,122 @@ test('a Kimi sign-in opens its window in the click, shows the code, grants the t
     { kind: 'grant', name: 'KIMI_API_KEY_GRANT' },
   ]);
   assert.deepEqual(seen.leaks, []);
+});
+
+for (const answer of ['held', 'none']) {
+  test(`a device sign-in opens its window on the held marker and sends it to the device page only once the owner answers ${answer}`, async (t) => {
+    const page = await opened(t);
+    const seen = await page.evaluate(
+      async ({ query, answer }) => {
+        const it = await window.openSignIns(query);
+        window.holding = 'later';
+        const started = it.signIn('kimi-coding');
+        const marked = started.popup.location.href;
+        await window.until(() => window.holds.length === 1);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const waiting = {
+          href: started.popup.location.href,
+          status: it.account('kimi-coding').status,
+          signIn: it.account('kimi-coding').signIn ?? null,
+        };
+        const [asked] = window.holds;
+        window.answerHold('another', answer);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const other = started.popup.location.href;
+        window.answerHold(asked.marker, answer);
+        await window.until(() => started.popup.location.href.startsWith('https:'));
+        const navigated = started.popup.location.href;
+        const shown = (await it.shown('kimi-coding')).signIn;
+        await it.device('approve');
+        const failure = await started.done;
+        const result = { marked, asked, waiting, other, navigated, shown, failure };
+        await it.owner.release();
+        return result;
+      },
+      { query: QUERY, answer }
+    );
+    assert.match(seen.marked, /^about:blank#slicc-sign-in-[0-9a-f-]{36}$/);
+    assert.deepEqual(seen.asked, {
+      type: 'hold',
+      marker: seen.marked.slice('about:blank#slicc-sign-in-'.length),
+      href: seen.marked,
+    });
+    assert.deepEqual(seen.waiting, { href: seen.marked, status: 'signing-in', signIn: null });
+    assert.equal(seen.other, seen.marked);
+    assert.equal(seen.navigated, 'https://www.kimi.com/device?user_code=CODE-0001');
+    assert.deepEqual(seen.shown, {
+      url: 'https://www.kimi.com/device?user_code=CODE-0001',
+      code: 'CODE-0001',
+    });
+    assert.equal(seen.failure, null);
+  });
+}
+
+for (const holding of ['unheld', 'silent']) {
+  test(`a device sign-in whose window the owner doesn't hold (${holding}) never sends the window anywhere, never shows the code and fails closed`, async (t) => {
+    const page = await opened(t);
+    const seen = await page.evaluate(
+      async ({ query, holding }) => {
+        const it = await window.openSignIns(query);
+        window.holding = holding;
+        const started = it.signIn('kimi-coding');
+        const marked = started.popup.location.href;
+        let shown = false;
+        const watch = setInterval(() => {
+          if (it.account('kimi-coding')?.signIn) shown = true;
+        }, 10);
+        const failure = await started.done;
+        clearInterval(watch);
+        const result = {
+          marked,
+          failure,
+          shown,
+          closed: started.popup.closed,
+          href: started.popup.location.href,
+          signingIn: it.account('kimi-coding')?.status === 'signing-in',
+          leaks: await it.leaks(),
+        };
+        await it.owner.release();
+        return result;
+      },
+      { query: QUERY, holding }
+    );
+    assert.match(seen.marked, /^about:blank#slicc-sign-in-[0-9a-f-]{36}$/);
+    assert.deepEqual(seen.failure, {
+      name: 'Error',
+      message: "SLICC couldn't protect the sign-in window. Try again.",
+    });
+    assert.equal(seen.shown, false);
+    assert.equal(seen.closed, true);
+    assert.equal(seen.href, seen.marked);
+    assert.equal(seen.signingIn, false);
+    assert.deepEqual(seen.leaks, []);
+  });
+}
+
+test('a device sign-in whose window the owner refuses fails at once, even while the device code is still on its way', async (t) => {
+  const page = await opened(t);
+  const seen = await page.evaluate(async (query) => {
+    const it = await window.openSignIns(query);
+    await it.device('stall');
+    window.holding = 'unheld';
+    const started = it.signIn('kimi-coding');
+    const failure = await started.done;
+    const result = {
+      failure,
+      closed: started.popup.closed,
+      signingIn: it.account('kimi-coding')?.status === 'signing-in',
+      issued: (await it.polls()).issued,
+    };
+    await it.owner.release();
+    return result;
+  }, QUERY);
+  assert.deepEqual(seen, {
+    failure: { name: 'Error', message: "SLICC couldn't protect the sign-in window. Try again." },
+    closed: true,
+    signingIn: false,
+    issued: 0,
+  });
 });
 
 test('Cancel ends a waiting sign-in at once, stops its polling, and a new sign-in starts clean', async (t) => {
