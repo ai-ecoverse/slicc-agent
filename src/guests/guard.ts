@@ -14,7 +14,7 @@ import {
 } from '@earendil-works/pi-durable';
 import type { Approval, Approvals } from '../approvals/index.ts';
 import { REASONS, scoopTier } from '../approvals/record.ts';
-import { scrubTexts } from '../secrets/scrub.ts';
+import { scrubText, scrubTexts } from '../secrets/scrub.ts';
 import { type GuestPolicy, gateKind, gateRefusal } from './policy.ts';
 import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from './seats.ts';
 
@@ -81,6 +81,34 @@ export async function scrubbedArguments(
   const found: string[] = [];
   leaves(args, found);
   return replaced(args, await scrubTexts(found)) as Record<string, unknown>;
+}
+
+export async function argumentsHash(args: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(args));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function shownArguments(text: string): Promise<string> {
+  try {
+    return canonical(await scrubbedArguments(JSON.parse(text)));
+  } catch {
+    return scrubText(text);
+  }
+}
+
+export async function sealedRules(rules: readonly AlwaysTool[]): Promise<AlwaysTool[] | null> {
+  if (rules.every((rule) => rule.argumentsHash)) return null;
+  return Promise.all(
+    rules.map(async (rule) =>
+      rule.argumentsHash
+        ? rule
+        : {
+            ...rule,
+            argumentsHash: await argumentsHash(rule.arguments),
+            arguments: await shownArguments(rule.arguments),
+          }
+    )
+  );
 }
 
 export function summaryOf(args: Record<string, unknown>): string {
@@ -151,13 +179,13 @@ function settledEarly(
   policy: GuestPolicy,
   at: number,
   tool: string,
-  args: string
+  hash: string
 ): string | null {
   if (!policy.allowedToolGates.includes(gateKind(tier)))
     return gateRefusal("a guest's tool calls", policy.allowedToolGates);
   if (!liveSeat(seat, at)) return GATE_REASONS.ended;
   if (tier === 'off') return '';
-  const kept = seat.alwaysTools?.some((rule) => rule.tool === tool && rule.arguments === args);
+  const kept = seat.alwaysTools?.some((rule) => rule.tool === tool && rule.argumentsHash === hash);
   return policy.always.tools && kept ? '' : null;
 }
 
@@ -188,7 +216,7 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
       const record = (await tx.doc(GuestsDoc)).seats[seat];
       if (!record || record.revoked !== null) return;
       const kept = (record.alwaysTools ?? []).filter(
-        (entry) => entry.tool !== rule.tool || entry.arguments !== rule.arguments
+        (entry) => entry.tool !== rule.tool || entry.argumentsHash !== rule.argumentsHash
       );
       record.alwaysTools = [...kept, rule];
     }, BACKGROUND_CONTEXT);
@@ -203,9 +231,9 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
     const host = await awaitWithContext(bound, context);
     const policy = host.policy();
     const now = host.now ?? Date.now;
-    const args = canonical(call.arguments);
+    const hash = await argumentsHash(canonical(call.arguments));
     const always = policy.always.tools;
-    const early = settledEarly(seat, taint.tier, policy, now(), call.name, args);
+    const early = settledEarly(seat, taint.tier, policy, now(), call.name, hash);
     if (early !== null) return early || undefined;
     const id = await api.memo<string>(
       `${GUEST_TOOL_MEMO}:${seat.id}:${taint.tier}`,
@@ -245,7 +273,8 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
       await remember(seat.id, {
         approval: item.id,
         tool: call.name,
-        arguments: args,
+        argumentsHash: hash,
+        arguments: canonical(shown),
         by: item.decidedBy,
         at: item.decidedAt ?? now(),
       });

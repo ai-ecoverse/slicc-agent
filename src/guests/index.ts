@@ -13,7 +13,7 @@ import {
   type GuestInput,
   guestContent,
 } from './attribution.ts';
-import { GUEST_REQUEST } from './guard.ts';
+import { GUEST_REQUEST, sealedRules } from './guard.ts';
 import { DEFAULT_GUEST_POLICY, type GuestPolicy } from './policy.ts';
 import {
   endReview,
@@ -274,8 +274,23 @@ function shownSeats(
       gates: { ...record.gates },
       connected: (links.get(record.id) ?? 0) > 0,
       pending: pendingOf(record.id),
-      alwaysTools: copy(record.alwaysTools ?? []),
+      alwaysTools: (record.alwaysTools ?? []).map(({ argumentsHash: _hash, ...rule }) => rule),
     }));
+}
+
+function openedSeats(
+  harness: GuestsOptions['harness'],
+  using: Context
+): Promise<Record<string, SeatRecord>> {
+  return harness.commit(async (tx) => {
+    await tx.doc(GuestReviewsDoc);
+    const seats = (await tx.doc(GuestsDoc)).seats;
+    for (const record of Object.values(seats)) {
+      const rules = await sealedRules(record.alwaysTools ?? []);
+      if (rules) record.alwaysTools = rules;
+    }
+    return copy(seats);
+  }, using);
 }
 
 export async function createGuests(options: GuestsOptions): Promise<Guests> {
@@ -283,10 +298,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
   const now = options.now ?? Date.now;
   const context = options.context ?? BACKGROUND_CONTEXT;
   const guestPolicy = () => options.policy?.current().guests ?? DEFAULT_GUEST_POLICY;
-  const records: Record<string, SeatRecord> = await harness.commit(async (tx) => {
-    await tx.doc(GuestReviewsDoc);
-    return copy((await tx.doc(GuestsDoc)).seats);
-  }, context);
+  const records = await openedSeats(harness, context);
   const seatsDoc = (await harness.documentState(GuestsDoc, context)) as DocumentState<GuestsState>;
   const reviews = (await harness.documentState(
     GuestReviewsDoc,

@@ -29,10 +29,13 @@ export type SeatSubmission = { id: string; approval: string | null; tools: Guest
 export type AlwaysTool = {
   approval: string;
   tool: string;
+  argumentsHash: string;
   arguments: string;
   by: DecidedBy | null;
   at: number;
 };
+
+export type ShownAlwaysTool = Omit<AlwaysTool, 'argumentsHash'>;
 
 export type SeatRecord = GuestDraft & {
   createdAt: number;
@@ -53,7 +56,7 @@ export interface GuestSeat {
   gates: GuestGates;
   connected: boolean;
   pending: number;
-  alwaysTools: AlwaysTool[];
+  alwaysTools: ShownAlwaysTool[];
 }
 
 export type GuestsState = { seats: Record<string, SeatRecord> };

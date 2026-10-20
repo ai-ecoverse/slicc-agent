@@ -409,3 +409,94 @@ test('secrets: a guest tool call asks with its arguments scrubbed, a secret show
   assert.equal(seen.summary, JSON.stringify({ command: shown, timeout: 5 }));
   assert.equal(seen.written, alpha);
 });
+
+test('secrets: an Always rule keeps no secret from its call, on the seat or in the guests state, which shows no hash either, and the same call still matches it', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const command = `printf '%s' ${alpha} >> /home/always.txt`;
+  const steps = [
+    { tool: { name: 'bash', args: { command } } },
+    { answer: 'One.' },
+    { tool: { name: 'bash', args: { command } } },
+    { answer: 'Two.' },
+  ];
+  const seen = await page.evaluate(
+    async ({ origin, steps }) => {
+      const { owner, connection } = await window.withVault(origin, steps);
+      const ctx = BACKGROUND_CONTEXT;
+      const hub = {
+        mint: async () => ({ id: 'seat-1', url: 'https://hub.test/join/seat-1' }),
+        revoke: async () => {},
+      };
+      const model = createAgentModel(connection, { guests: hub });
+      await model.agent.ready();
+      await connection.control.approvalPolicySet({ guests: { always: { tools: true } } }, ctx);
+      const minted = await model.guests.mint('cone', {
+        label: 'Anna',
+        expiresAt: null,
+        gates: { messages: 'off', tools: 'user' },
+      });
+      const guest = await connectGuest(
+        await owner.port({ guest: { id: minted.seat.id, label: 'Anna' } })
+      );
+      const until = async (check) => {
+        for (let n = 0; n < 300 && !check(); n++)
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        return check();
+      };
+      const said = (text) =>
+        connection.transcript.value.entries.some(
+          (entry) =>
+            entry.kind === 'pi.assistant' &&
+            entry.model?.[0]?.content?.some((block) => block.text === text)
+        );
+      const asked = () =>
+        model.approvals.list().filter((approval) => approval.kind === 'guest-tool');
+      const send = (text) =>
+        guest.control.send({ text, whenBusy: 'followUp', requestId: null }, ctx);
+      await send('First.');
+      const [first] = await until(() => asked().length && asked());
+      const decided = await connection.control.decide(first.id, 'always', null, ctx);
+      await until(() => said('One.'));
+      const rules = () =>
+        connection.guests.value.find((entry) => entry.id === minted.seat.id)?.alwaysTools ?? [];
+      await until(() => rules().length);
+      let shown = 0;
+      await send('Second.');
+      await until(() => {
+        shown = Math.max(shown, asked().length);
+        return said('Two.');
+      });
+      const result = {
+        decided: decided.state,
+        rules: rules(),
+        guests: JSON.stringify(connection.guests.value),
+        docs: JSON.stringify(connection.transcript.value.docs),
+        shown,
+        written: await window.read('/home/always.txt').catch(() => null),
+      };
+      await guest.close();
+      await owner.release();
+      return result;
+    },
+    { origin: vaultOrigin, steps }
+  );
+  captured.push(
+    { what: 'the guests state', text: seen.guests },
+    { what: 'live slots and documents', text: seen.docs }
+  );
+  const placeholder = seeds.values[0].placeholder;
+  assert.equal(seen.decided, 'approved');
+  assert.equal(seen.rules.length, 1);
+  const [rule] = seen.rules;
+  assert.deepEqual(Object.keys(rule).sort(), ['approval', 'arguments', 'at', 'by', 'tool']);
+  assert.equal(rule.tool, 'bash');
+  assert.equal(
+    rule.arguments,
+    JSON.stringify({ command: `printf '%s' ${placeholder} >> /home/always.txt` })
+  );
+  assert.ok(!seen.guests.includes('argumentsHash'));
+  assert.equal(seen.shown, 0);
+  assert.equal(seen.written, `${alpha}${alpha}`);
+});
