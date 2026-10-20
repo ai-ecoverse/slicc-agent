@@ -70,6 +70,8 @@ test('an API-key provider is offered, added with its key in the vault, answers a
     const before = settings.accounts().map((account) => account.id);
     const groq = offered.find((option) => option.id === 'groq');
     const nvidia = offered.find((option) => option.id === 'nvidia');
+    const zai = offered.find((option) => option.id === 'zai');
+    const zaiCodingCn = offered.find((option) => option.id === 'zai-coding-cn');
     const ids = () => settings.accounts().map((account) => account.id);
     await put({
       kind: 'model',
@@ -114,6 +116,8 @@ test('an API-key provider is offered, added with its key in the vault, answers a
       before,
       groq,
       nvidia,
+      zai,
+      zaiCodingCn,
       added,
       nvidiaAccount,
       groqReply,
@@ -136,6 +140,8 @@ test('an API-key provider is offered, added with its key in the vault, answers a
   assert.equal(seen.groq.keyUrl, 'https://console.groq.com/keys');
   assert.equal(seen.groq.needs, undefined);
   assert.equal(seen.nvidia.needs, 'cors-free-transport');
+  assert.equal(seen.zai.needs, 'cors-free-transport');
+  assert.equal(seen.zaiCodingCn.needs, undefined);
   assert.equal(seen.added.store, 'vault');
   assert.equal(seen.added.vaultName, 'GROQ_API_KEY');
   assert.equal(seen.nvidiaAccount.needs, 'cors-free-transport');
