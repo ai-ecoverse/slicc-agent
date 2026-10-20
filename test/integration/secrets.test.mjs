@@ -410,7 +410,7 @@ test('secrets: a guest tool call asks with its arguments scrubbed, a secret show
   assert.equal(seen.written, alpha);
 });
 
-test('secrets: an Always rule keeps no secret from its call, on the seat or in the guests state, and the same call still matches it', async (t) => {
+test('secrets: an Always rule keeps no secret from its call, on the seat or in the guests state, which shows no hash either, and the same call still matches it', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
@@ -470,11 +470,7 @@ test('secrets: an Always rule keeps no secret from its call, on the seat or in t
       });
       const result = {
         decided: decided.state,
-        rules: rules().map(({ tool, arguments: args, argumentsHash }) => ({
-          tool,
-          args,
-          hashed: /^[0-9a-f]{64}$/.test(argumentsHash),
-        })),
+        rules: rules(),
         guests: JSON.stringify(connection.guests.value),
         docs: JSON.stringify(connection.transcript.value.docs),
         shown,
@@ -492,13 +488,15 @@ test('secrets: an Always rule keeps no secret from its call, on the seat or in t
   );
   const placeholder = seeds.values[0].placeholder;
   assert.equal(seen.decided, 'approved');
-  assert.deepEqual(seen.rules, [
-    {
-      tool: 'bash',
-      args: JSON.stringify({ command: `printf '%s' ${placeholder} >> /home/always.txt` }),
-      hashed: true,
-    },
-  ]);
+  assert.equal(seen.rules.length, 1);
+  const [rule] = seen.rules;
+  assert.deepEqual(Object.keys(rule).sort(), ['approval', 'arguments', 'at', 'by', 'tool']);
+  assert.equal(rule.tool, 'bash');
+  assert.equal(
+    rule.arguments,
+    JSON.stringify({ command: `printf '%s' ${placeholder} >> /home/always.txt` })
+  );
+  assert.ok(!seen.guests.includes('argumentsHash'));
   assert.equal(seen.shown, 0);
   assert.equal(seen.written, `${alpha}${alpha}`);
 });

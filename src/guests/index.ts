@@ -274,7 +274,7 @@ function shownSeats(
       gates: { ...record.gates },
       connected: (links.get(record.id) ?? 0) > 0,
       pending: pendingOf(record.id),
-      alwaysTools: copy(record.alwaysTools ?? []),
+      alwaysTools: (record.alwaysTools ?? []).map(({ argumentsHash: _hash, ...rule }) => rule),
     }));
 }
 

@@ -35,6 +35,8 @@ export type AlwaysTool = {
   at: number;
 };
 
+export type ShownAlwaysTool = Omit<AlwaysTool, 'argumentsHash'>;
+
 export type SeatRecord = GuestDraft & {
   createdAt: number;
   epoch: number;
@@ -54,7 +56,7 @@ export interface GuestSeat {
   gates: GuestGates;
   connected: boolean;
   pending: number;
-  alwaysTools: AlwaysTool[];
+  alwaysTools: ShownAlwaysTool[];
 }
 
 export type GuestsState = { seats: Record<string, SeatRecord> };
