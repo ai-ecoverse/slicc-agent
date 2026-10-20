@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -133,22 +133,18 @@ const gitFiles = [
 test('changes with the real wasm-git: a local repo with a modified, an added and a deleted file, accept and revert', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const poll = async (check, limit = 240) => {
-    for (let n = 0; n < limit; n++) {
-      if (await page.evaluate(check)) return true;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-    return false;
-  };
   const version = JSON.parse(await readFile(`${WASM_GIT}package.json`, 'utf8')).version;
   const pinned = JSON.parse(await readFile('package.json', 'utf8')).devDependencies[
     '@ai-ecoverse/wasm-git'
   ];
   assert.equal(version, pinned);
-  await page.evaluate(
+  await staged(
+    page,
+    'the wasm-git agent',
     async (dir, files) => {
-      const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
+      stage('the kernel with wasm-git');
+      const { bootKernel } = await import('/kernel.js');
       const kernel = await bootKernel({ [dir]: files });
       const { attachKernel } = await import(
         '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
@@ -173,6 +169,7 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
         ['tool', JSON.stringify({ name: 'bash', args: { command: setup } })],
         ['answer', 'Done.'],
       ]);
+      stage('the agent');
       const owner = await startAgent({
         worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
         kernel: { connect: () => kernel.connect() },
@@ -188,17 +185,17 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
         model.changes
           .changes()
           .map(({ path, status, before, after }) => ({ path, status, before, after }));
-      globalThis.git = { owner, model, text, listed, answer: null };
+      const until = (check, what) =>
+        when([...agentSources(connection, model), connection.changes], check, what);
+      globalThis.git = { owner, model, text, listed, until, answer: null };
       listed();
-      connection.prompt('Install git and make a repo.').then((answer) => {
-        globalThis.git.answer = answer;
-      });
+      globalThis.progress = activity(connection);
+      stage('the answer and three changes');
+      globalThis.git.answer = await connection.prompt('Install git and make a repo.');
+      await until(() => listed().length === 3, 'three changes');
     },
     WASM_GIT,
     gitFiles
-  );
-  const ready = await poll(
-    () => globalThis.git.answer !== null && globalThis.git.listed().length === 3
   );
   const found = await page.evaluate(async () => ({
     listed: globalThis.git.listed(),
@@ -206,7 +203,6 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
     version: await globalThis.git.text('/tmp/version.txt'),
     install: await globalThis.git.text('/tmp/install.log'),
   }));
-  assert.ok(ready, JSON.stringify(found));
   assert.match(found.version ?? '', /^git version 2\.55/, found.install ?? '');
   assert.equal(found.answer, 'Done.');
   assert.deepEqual(found.listed, [
@@ -214,14 +210,14 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
     { path: '/home/proj/gone.txt', status: 'deleted', before: 'bye\n', after: null },
     { path: '/home/proj/new.txt', status: 'added', before: null, after: 'hi\n' },
   ]);
-  await page.evaluate(async () => {
-    const { model } = globalThis.git;
+  await staged(page, 'the revert and the accept', async () => {
+    const { model, until, listed } = globalThis.git;
     await model.changes.revert('/home/proj/a.txt');
     await model.changes.revert('/home/proj/gone.txt');
     model.changes.accept('/home/proj/new.txt');
+    await until(() => listed().length === 0, 'no changes left');
   });
-  await poll(() => globalThis.git.listed().length === 0, 60);
-  const after = await page.evaluate(async () => {
+  const after = await staged(page, 'the files after', async () => {
     const { text, listed, model, owner } = globalThis.git;
     const out = {
       a: await text('/home/proj/a.txt'),

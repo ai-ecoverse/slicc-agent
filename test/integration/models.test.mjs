@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -23,48 +23,52 @@ test("an agent's bash lists models and switches its own model in the production 
     `step=${encodeURIComponent(JSON.stringify({ tool: { name: 'bash', args: { command: script } } }))}`,
     `step=${encodeURIComponent(JSON.stringify({ answer: 'Switched.' }))}`,
   ].join('&');
-  const seen = await page.evaluate(async (q) => {
-    const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
-    const kernel = await bootKernel();
-    const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${q}`, { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    const { agent, settings } = createAgentModel(await owner.connect(), { storage: localStorage });
-    await agent.ready();
-    const until = async (check, tries = 500) => {
-      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-      return check();
-    };
-    await until(() => settings.accounts().length > 0);
-    await settings.connect('faux');
-    await until(() => settings.accounts()[0]?.status === 'connected');
-    await agent.send(agent.active(), 'Switch to faux-2.');
-    const tools = () =>
-      agent
-        .messages()
-        .flatMap((message) => message.parts ?? [])
-        .filter((part) => part.type === 'tool')
-        .map((part) => part.tool);
-    await until(
-      () => tools().some((tool) => tool.status === 'done' || tool.status === 'error'),
-      1000
-    );
-    await until(
-      () => agent.list().find((row) => row.id === agent.active())?.model === 'faux/faux-2'
-    );
-    const row = agent.list().find((entry) => entry.id === agent.active());
-    const output = tools()[0]?.output;
-    const status = tools()[0]?.status;
-    await owner.release();
-    return {
-      output: typeof output === 'string' ? output : JSON.stringify(output),
-      status,
-      model: row?.model,
-      thinking: row?.thinking,
-    };
-  }, query);
+  const seen = await staged(
+    page,
+    'an agent’s bash lists models',
+    async (q) => {
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/main-worker.js?${q}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const { agent, settings } = createAgentModel(await owner.connect(), {
+        storage: localStorage,
+      });
+      await agent.ready();
+      const until = (check, what = 'the state') => when([changed, every(100)], check, what);
+      await until(() => settings.accounts().length > 0);
+      await settings.connect('faux');
+      await until(() => settings.accounts()[0]?.status === 'connected');
+      await agent.send(agent.active(), 'Switch to faux-2.');
+      const tools = () =>
+        agent
+          .messages()
+          .flatMap((message) => message.parts ?? [])
+          .filter((part) => part.type === 'tool')
+          .map((part) => part.tool);
+      await until(
+        () => tools().some((tool) => tool.status === 'done' || tool.status === 'error'),
+        1000
+      );
+      await until(
+        () => agent.list().find((row) => row.id === agent.active())?.model === 'faux/faux-2'
+      );
+      const row = agent.list().find((entry) => entry.id === agent.active());
+      const output = tools()[0]?.output;
+      const status = tools()[0]?.status;
+      await owner.release();
+      return {
+        output: typeof output === 'string' ? output : JSON.stringify(output),
+        status,
+        model: row?.model,
+        thinking: row?.thinking,
+      };
+    },
+    query
+  );
   assert.equal(seen.status, 'done');
   assert.match(seen.output, /now using faux\/faux-2 \(.*\), thinking high/);
   assert.match(seen.output, / {2}faux\/faux-1\t/);

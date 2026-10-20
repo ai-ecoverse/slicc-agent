@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -26,7 +26,9 @@ const helpers = () => {
 async function boot(page, { query = '', crash = null, judge = false, files = {} } = {}) {
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(
+  await staged(
+    page,
+    'the guest-review agent',
     async ({ query, crash, judge, files }) => {
       for (const [path, text] of Object.entries(files)) await window.write(path, text);
       await import('/dist-test/page.js');
@@ -42,7 +44,7 @@ async function boot(page, { query = '', crash = null, judge = false, files = {} 
         crashed = resolve;
       });
       const base = judge ? '/dist-test/main-worker.js?judge&' : '/dist-test/agent-worker.js?';
-      const owner = await startAgent({
+      const owner = await startTracked({
         worker: () => {
           lives += 1;
           const extra = crash && lives === 1 ? `&crash=${crash}` : '';
@@ -94,19 +96,12 @@ async function boot(page, { query = '', crash = null, judge = false, files = {} 
         pump(rtc.owner, bridgePort(port, sink(rtc.owner)));
         const endpoint = linkEndpoint(sink(rtc.guest));
         pump(rtc.guest, endpoint);
-        const connection = await connectGuest(endpoint);
+        const connection = track(await connectGuest(endpoint));
         const model = createAgentModel(connection);
         await model.agent.ready();
         return { connection, model };
       };
-      const until = async (check, what) => {
-        for (let i = 0; i < 600; i++) {
-          const value = await check();
-          if (value) return value;
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        throw new Error(`timed out waiting for ${what}`);
-      };
+      const until = (check, what) => when([changed, every(100)], check, what);
       const heard = (models, check) =>
         Promise.all(
           models.map(
@@ -191,7 +186,7 @@ async function boot(page, { query = '', crash = null, judge = false, files = {} 
 test('three tabs of one seat share one queue: the owner is asked one message at a time, in order, and each is delivered once', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { query: 'answer=One.&answer=Two.&answer=Three.' });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'three tabs of one seat', async () => {
     const { join, until, heard, said, asked, queue, listed, open } = globalThis.r;
     const { model, seat } = await open();
     const tabs = [await join(seat), await join(seat), await join(seat)];
@@ -234,7 +229,7 @@ test('three tabs of one seat share one queue: the owner is asked one message at 
 test('a seat queues at most eight messages behind the one in review, and the next one is unanswered, never sent', async (t) => {
   const page = await chrome.page(t);
   await boot(page);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a seat queues at most', async () => {
     const { join, until, asked, queue, listed, open } = globalThis.r;
     const { model, seat } = await open();
     const guest = await join(seat);
@@ -275,7 +270,7 @@ test('a review survives a reload: the message in review is still asked once, and
   await boot(page, {
     query: `directory=/.slicc/review-${Date.now()}&answer=First.&answer=Second.`,
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a review survives a reload', async () => {
     const { owner, join, until, said, asked, queue, listed, open } = globalThis.r;
     const first = await open();
     const guest = await join(first.seat);
@@ -317,7 +312,7 @@ for (const crash of ['before', 'after'])
       query: `directory=/.slicc/crash-${crash}-${Date.now()}&answer=Delivered.&answer=Again.`,
       crash,
     });
-    const seen = await page.evaluate(async () => {
+    const seen = await staged(page, `a review across a crash ${crash}`, async () => {
       const { owner, join, until, pause, said, listed, open, crashing, record } = globalThis.r;
       const first = await open();
       const guest = await join(first.seat);
@@ -347,7 +342,7 @@ for (const crash of ['before', 'after'])
 test('a review nobody answers expires as unanswered, and the next message in the queue is asked then', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { query: 'ttl=1500&answer=Got the second.' });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a review nobody answers expires', async () => {
     const { join, until, said, notices, listed, open } = globalThis.r;
     const { model, seat } = await open();
     const guest = await join(seat);
@@ -356,6 +351,7 @@ test('a review nobody answers expires as unanswered, and the next message in the
     await until(() => listed(model).length === 1, 'the first to be asked');
     const out = { first: listed(model) };
     await until(() => listed(model)[0] === 'But this one', 'the second after the expiry');
+    await until(() => notices(guest).length === 1, "the guest's notice");
     out.notices = notices(guest);
     await model.approvals.decide(model.approvals.list()[0].id, 'once');
     await until(() => said(model).includes('agent: Got the second.'), 'the second answer');
@@ -379,7 +375,7 @@ test('the guest is told each outcome: approved, declined, or that nobody approve
     features: [{ name: 'prefers-color-scheme', value: 'light' }],
   });
   await boot(page, { query: 'ttl=2500&answer=Sure.' });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the guest is told each', async () => {
     const { join, until, said, asked, notices, listed, open } = globalThis.r;
     const { model, seat } = await open();
     const guest = await join(seat);
@@ -418,7 +414,7 @@ test('the guest is told each outcome: approved, declined, or that nobody approve
   assert.deepEqual(seen.guestSees, ['guest(Anna): Please add a test', 'agent: Sure.']);
   assert.deepEqual(seen.ownerSees, seen.guestSees);
   if (env.REVIEW_GUEST_SHOT || env.REVIEW_OWNER_SHOT) {
-    await page.evaluate(async () => {
+    await staged(page, 'the guest is told each', async () => {
       const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
       await import(`${spectrum}/slicc-ui.js`);
       const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
@@ -437,11 +433,16 @@ test('the guest is told each outcome: approved, declined, or that nobody approve
       [env.REVIEW_OWNER_SHOT, 'owner'],
     ]) {
       if (!shot) continue;
-      await page.evaluate(async (who) => {
-        const { model, guest } = globalThis.shown;
-        await globalThis.mount(who === 'guest' ? guest.model : model);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }, who);
+      await staged(
+        page,
+        'the guest is told each',
+        async (who) => {
+          const { model, guest } = globalThis.shown;
+          await globalThis.mount(who === 'guest' ? guest.model : model);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        },
+        who
+      );
       await page.screenshot(shot);
     }
   }
@@ -456,7 +457,7 @@ test('with the judge as the gate, one message is judged at a time: a low-risk on
       '/home/.pi/agent/settings.json': JSON.stringify({ approvals: { judgeModel: 'judge/j-1' } }),
     },
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'with the judge as the', async () => {
     const { join, until, pause, said, notices, listed, open, judged, table } = globalThis.r;
     const { local, model, seat } = await open({ messages: 'agent', tools: 'user' });
     await local.prompt('Only fix small things in the docs today.');
@@ -507,7 +508,7 @@ test('with the judge as the gate, one message is judged at a time: a low-risk on
 test('an Always answer on a guest message lets that seat send without asking again, while another seat still waits', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { query: 'native&answer=First.&answer=Second.' });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'an Always answer on a', async () => {
     const { join, until, said, asked, listed, open } = globalThis.r;
     const { local, model, seat } = await open();
     const set = await local.control.approvalPolicySet(

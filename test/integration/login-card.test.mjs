@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -22,10 +22,7 @@ const adobeRecord = (more = {}) => ({
 });
 
 const helpers = () => {
-  window.until = async (check, tries = 500) => {
-    for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-    return check();
-  };
+  window.until = (check, what = 'the state') => when([changed, every(100)], check, what);
   window.find = (root, selector) => {
     const found = [...root.querySelectorAll(selector)];
     for (const node of root.querySelectorAll('*'))
@@ -52,7 +49,7 @@ const helpers = () => {
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
     let worker;
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => (worker = new Worker(`/dist-test/${entry}.js?${query}`, { type: 'module' })),
       kernel: { connect: () => kernel.connect() },
     });
@@ -152,7 +149,7 @@ test('the expired-session card names the Adobe account, and its Log in opens the
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate((query) => window.boot(query), adobeQuery);
+  await staged(page, 'the agent', (query) => window.boot(query), adobeQuery);
   const part = await page.evaluate(() => window.adobeTurn());
   assert.equal(part.action, 'login');
   assert.equal(part.account, 'adobe');
@@ -168,7 +165,7 @@ test('the expired-session card names the Adobe account, and its Log in opens the
     return { opened: window.opens.length - before, name: window.opens.at(-1)?.name };
   });
   assert.deepEqual(clicked, { opened: 1, name: 'slicc-sign-in' });
-  const signing = await page.evaluate(async () => {
+  const signing = await staged(page, 'the expired-session card names the', async () => {
     const { card, model } = window.loginTest;
     await window.until(() => card().dataset.login === 'signing-in');
     await window.until(() => typeof window.finishLogin === 'function');
@@ -184,7 +181,9 @@ test('the expired-session card names the Adobe account, and its Log in opens the
     status: 'signing-in',
   });
   await shoot(page, 'signing-in');
-  const signedIn = await page.evaluate(
+  const signedIn = await staged(
+    page,
+    'the expired-session card names the',
     async (record) => {
       const { card, model } = window.loginTest;
       await window.finishLogin(record);
@@ -212,7 +211,7 @@ test('a sign-in whose window is closed rejects with a sentence, shown on the car
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate((query) => window.boot(query), adobeQuery);
+  await staged(page, 'the agent', (query) => window.boot(query), adobeQuery);
   await page.evaluate(() => window.adobeTurn());
   const box = await page.evaluate(() => {
     const button = window.loginTest.card().querySelector('[data-action=login]');
@@ -222,7 +221,7 @@ test('a sign-in whose window is closed rejects with a sentence, shown on the car
   });
   for (const type of ['mousePressed', 'mouseReleased'])
     await page.send('Input.dispatchMouseEvent', { type, ...box, button: 'left', clickCount: 1 });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a sign-in whose window is', async () => {
     const { card } = window.loginTest;
     await window.until(() => window.opens.length === 1);
     const { gesture, popup } = window.opens[0];
@@ -271,8 +270,8 @@ test("a rejected API key's error names its account", async (t) => {
     'vault',
     `record=${encodeURIComponent(JSON.stringify(record))}`,
   ].join('&');
-  await page.evaluate((query) => window.boot(query, 'bedrock-agent-worker'), query);
-  const part = await page.evaluate(async () => {
+  await staged(page, 'the agent', (query) => window.boot(query, 'bedrock-agent-worker'), query);
+  const part = await staged(page, 'a rejected API key’s error', async () => {
     const { model, errorPart } = window.loginTest;
     const { agent, settings } = model;
     await window.until(() =>
@@ -299,9 +298,9 @@ test('Cancel during Signing in aborts the login, the account is expired again, a
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate((query) => window.boot(query), adobeQuery);
+  await staged(page, 'the agent', (query) => window.boot(query), adobeQuery);
   await page.evaluate(() => window.adobeTurn());
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'Cancel during Signing in aborts', async () => {
     const { card, model } = window.loginTest;
     const status = () => model.settings.accounts().find((account) => account.id === 'adobe').status;
     card().querySelector('[data-action=login]').click();

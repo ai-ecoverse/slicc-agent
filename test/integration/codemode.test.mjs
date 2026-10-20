@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,7 +8,7 @@ after(() => chrome.close());
 test('codemode runs QuickJS in a nested worker of the production agent worker and calls its tools', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'codemode runs QuickJS in a', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
@@ -23,7 +23,7 @@ test('codemode runs QuickJS in a nested worker of the production agent worker an
       ['code', code],
       ['answer', 'Done.'],
     ]);
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
@@ -47,7 +47,7 @@ test('codemode runs QuickJS in a nested worker of the production agent worker an
 test("a script's tool calls run as pi tool calls: each shows live to followers, and a long bash output comes back as its tail with the spill file", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a script’s tool calls run', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
@@ -61,7 +61,7 @@ test("a script's tool calls run as pi tool calls: each shows live to followers, 
       ['code', code],
       ['answer', 'Done.'],
     ]);
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });

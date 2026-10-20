@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
 
 async function boot(page, { worker = 'agent-worker.js', query = '', files = {} } = {}) {
   await page.goto('/');
-  await page.evaluate(
+  await staged(
+    page,
+    'the sudo agent',
     async (worker, query, files) => {
       for (const [path, text] of Object.entries(files)) {
         const parts = path.split('/').filter(Boolean);
@@ -18,8 +20,9 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         await writable.write(text);
         await writable.close();
       }
-      const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
       const asked = [];
       const held = {};
       const kernel = await bootKernel(
@@ -34,8 +37,9 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         }
       );
       await kernel.users.add({ name: 'cone', groups: ['sudo'] });
+      stage('the agent');
       let running;
-      const owner = await startAgent({
+      const owner = await startTracked({
         worker: () => {
           running = new Worker(`/dist-test/${worker}${query}`, { type: 'module' });
           return running;
@@ -89,16 +93,9 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         pump(ours, bridgePort(port, sink(ours)));
         const endpoint = linkEndpoint(sink(other));
         pump(other, endpoint);
-        return connectAgent(endpoint);
+        return track(await connectAgent(endpoint));
       };
-      const until = async (check, what) => {
-        for (let i = 0; i < 400; i++) {
-          const value = await check();
-          if (value) return value;
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        throw new Error(`timed out waiting for ${what}`);
-      };
+      const until = (check, what) => when([changed, every(100)], check, what);
       const sudoItems = (connection) =>
         connection.approvals.value.filter((item) => item.kind === 'sudo');
       const newest = (connection) => sudoItems(connection).at(-1);
@@ -153,7 +150,7 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
 test("a cone's sudo waits in the agent's approvals, and every owner device answers it with the owner's powers, Always included, even without Control", async (t) => {
   const page = await chrome.page(t);
   await boot(page);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, "a cone's sudo on every device", async () => {
     const { owner, asked, follow, until, newest, pending, sudo, tags } = globalThis.t;
     const local = await owner.connect();
     const phone = await follow('phone-1');
@@ -227,7 +224,7 @@ test("a cone's sudo waits in the agent's approvals, and every owner device answe
 test('the requester comes from the process tag, a person saying no denies sudo, and a user still has one request at a time', async (t) => {
   const page = await chrome.page(t);
   await boot(page);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the requester from the tag', async () => {
     const { owner, newest, pending, sudo, tags } = globalThis.t;
     const local = await owner.connect();
     const model = createAgentModel(local);
@@ -267,7 +264,7 @@ test('the requester comes from the process tag, a person saying no denies sudo, 
 test('a sudo whose requester gives up is withdrawn, and a reload of the agent withdraws the open one and denies it', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { query: `?directory=/sudo-${Date.now()}` });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a withdrawn sudo', async () => {
     const { owner, until, newest, pending, sudo, tags, client } = globalThis.t;
     let local = await owner.connect();
     const model = createAgentModel(local);
@@ -308,7 +305,7 @@ test('a sudo whose requester gives up is withdrawn, and a reload of the agent wi
 test('without a running agent, owner.approve refuses with EAGAIN before anything is recorded, so bios can ask in its own dialog', async (t) => {
   const page = await chrome.page(t);
   await boot(page);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'owner.approve without an agent', async () => {
     const { owner, sudo, tags } = globalThis.t;
     await owner.release();
     const refused = await owner
@@ -333,7 +330,7 @@ test('without a running agent, owner.approve refuses with EAGAIN before anything
 test("a scoop's sudo tells its cone with a lick that has no actions", async (t) => {
   const page = await chrome.page(t);
   await boot(page, { worker: 'main-worker.js', query: '?answer=Noted.&answer=Noted.' });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, "a scoop's sudo lick", async () => {
     const { owner, until, newest, pending, sudo } = globalThis.t;
     const local = await owner.connect();
     const model = createAgentModel(local);
@@ -373,7 +370,7 @@ test("with the judge on, sudo waits for a person by default, even when asked for
       '/home/.pi/agent/settings.json': JSON.stringify({ approvals: { judgeModel: 'judge/j-1' } }),
     },
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'sudo with the judge on', async () => {
     const { owner, ask, judged, setTable, until, newest, pending, sudo, tags } = globalThis.t;
     const local = await owner.connect();
     const model = createAgentModel(local);
@@ -484,7 +481,7 @@ test("with the judge on, sudo waits for a person by default, even when asked for
 test('a sudo the kernel lets expire is recorded as timed out, not withdrawn', async (t) => {
   const page = await chrome.page(t);
   await boot(page);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'an expired sudo', async () => {
     const { owner, until, newest } = globalThis.t;
     const local = await owner.connect();
     const expiresAt = Date.now() + 1500;
@@ -519,7 +516,7 @@ test('a sudo the kernel lets expire is recorded as timed out, not withdrawn', as
 test('a sudo asked right after a restart reaches the new worker, while the one waiting on the old worker is denied', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { query: `?directory=/sudo-restart-${Date.now()}` });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a sudo after a restart', async () => {
     const { owner, until, newest } = globalThis.t;
     const request = (id) => ({
       id,

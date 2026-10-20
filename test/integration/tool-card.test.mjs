@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -23,51 +23,56 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
     { tool: { name: 'bash', args: { command: long } } },
     { answer: 'Done.' },
   ];
-  await page.evaluate(async (steps) => {
-    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
-    await import(`${spectrum}/slicc-ui.js`);
-    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
-    const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
-    const kernel = await bootKernel();
-    const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
-    const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    const refuse = async () => ({
-      stdout: '',
-      stderr: 'panel: files cannot open on the left of chat in this layout\n',
-      code: 5,
-    });
-    const model = createAgentModel(await owner.connect(), {
-      storage: localStorage,
-      page: { tab: 'A', run: refuse },
-    });
-    const app = document.createElement('slicc-app');
-    app.style.cssText = 'display:block;width:100vw;height:100vh';
-    document.body.style.margin = '0';
-    document.body.append(app);
-    app.model = { ...createDummyModel({ storage: localStorage }), ...model };
-    await customElements.whenDefined('slicc-app');
-    await model.agent.ready();
-    await model.agent.send('cone', 'Open the files panel, then print a long dummy listing.');
-    const find = (root, selector) => {
-      const found = [...root.querySelectorAll(selector)];
-      for (const node of root.querySelectorAll('*'))
-        if (node.shadowRoot) found.push(...find(node.shadowRoot, selector));
-      return found;
-    };
-    const text = (root) =>
-      [...root.childNodes]
-        .map((node) =>
-          node.nodeType === Node.TEXT_NODE
-            ? node.textContent
-            : `${node.shadowRoot ? text(node.shadowRoot) : ''}${text(node)}`
-        )
-        .join('');
-    globalThis.cardTest = { model, find, text, owner };
-  }, steps);
+  await staged(
+    page,
+    'a failed bash card shows',
+    async (steps) => {
+      const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+      await import(`${spectrum}/slicc-ui.js`);
+      const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const refuse = async () => ({
+        stdout: '',
+        stderr: 'panel: files cannot open on the left of chat in this layout\n',
+        code: 5,
+      });
+      const model = createAgentModel(await owner.connect(), {
+        storage: localStorage,
+        page: { tab: 'A', run: refuse },
+      });
+      const app = document.createElement('slicc-app');
+      app.style.cssText = 'display:block;width:100vw;height:100vh';
+      document.body.style.margin = '0';
+      document.body.append(app);
+      app.model = { ...createDummyModel({ storage: localStorage }), ...model };
+      await customElements.whenDefined('slicc-app');
+      await model.agent.ready();
+      await model.agent.send('cone', 'Open the files panel, then print a long dummy listing.');
+      const find = (root, selector) => {
+        const found = [...root.querySelectorAll(selector)];
+        for (const node of root.querySelectorAll('*'))
+          if (node.shadowRoot) found.push(...find(node.shadowRoot, selector));
+        return found;
+      };
+      const text = (root) =>
+        [...root.childNodes]
+          .map((node) =>
+            node.nodeType === Node.TEXT_NODE
+              ? node.textContent
+              : `${node.shadowRoot ? text(node.shadowRoot) : ''}${text(node)}`
+          )
+          .join('');
+      globalThis.cardTest = { model, find, text, owner };
+    },
+    steps
+  );
   const seen = await page.until(() => {
     const { model, find, text } = globalThis.cardTest;
     const tools = model.agent
@@ -103,7 +108,7 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
     /^Warning: Output truncated: [\d,]+ lines and [\d,]+ bytes dropped from the start$/
   );
   assert.equal(seen.notes[2].text, `Note: ${listing.notes[1].text}`);
-  const model = await page.evaluate(async () => {
+  const model = await staged(page, 'a failed bash card shows', async () => {
     const entries = await globalThis.cardTest.owner
       .connect()
       .then((c) => c.transcript.value.entries);

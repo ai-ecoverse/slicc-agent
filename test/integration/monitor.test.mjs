@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,10 +8,12 @@ after(() => chrome.close());
 test('the live monitor through the production worker: it runs only while the panel listens, shows the agent background process, and a view-only connection sees program names only', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
-    const { bootKernel } = await import('/kernel.js');
+  const seen = await staged(page, 'the live monitor', async () => {
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     const kernel = await bootKernel();
+    stage('the agent');
     const params = new URLSearchParams([
       [
         'tool',
@@ -31,24 +33,19 @@ test('the live monitor through the production worker: it runs only while the pan
     });
     const connection = await owner.connect();
     const viewer = await owner.connect({ readOnly: true });
+    stage('the answer');
     await connection.prompt('Start a sleeper.');
     const idle = connection.monitor.value;
     const model = createAgentModel(connection);
-    const wait = async (check) => {
-      for (let tries = 0; tries < 300; tries++) {
-        const value = check();
-        if (value) return value;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      return null;
-    };
+    const wait = (check, what, sources = [heard(model.monitor, 'snapshot')]) =>
+      when([connection.monitor, viewer.monitor, ...sources], check, what);
     const snapshots = [];
     const off = model.monitor.on('snapshot', (snapshot) => snapshots.push(snapshot));
     const shown = await wait(() => {
       const snapshot = model.monitor.snapshot();
       const processes = snapshot.sections.find((section) => section.id === 'processes');
       return processes?.rows.some((row) => row.name.includes('--token=[redacted]')) && snapshot;
-    });
+    }, 'the sleeper in the snapshot');
     const full = connection.monitor.value;
     const timed = full.processes.some((row) => typeof row.utime === 'number');
     const measured = timed
@@ -56,18 +53,21 @@ test('the live monitor through the production worker: it runs only while the pan
           const feed = connection.monitor.value;
           const spin = feed.processes?.find((row) => row.command.includes('while :'));
           return spin && typeof spin.cpu === 'number' && spin.cpu > 0 && feed;
-        })
+        }, 'the spinner cpu')
       : null;
     const trended = await wait(() => {
       const vitals = model.monitor.snapshot().vitals;
       return vitals.find((vital) => vital.id === 'processes')?.series && vitals;
-    });
+    }, 'the process trend');
     const viewed = await wait(
-      () => viewer.monitor.value?.processes?.length && viewer.monitor.value
+      () => viewer.monitor.value?.processes?.length && viewer.monitor.value,
+      'the viewer feed'
     );
     off();
     const closed = await wait(
-      () => connection.monitor.value.open === false && connection.monitor.value
+      () => connection.monitor.value.open === false && connection.monitor.value,
+      'the closed monitor',
+      []
     );
     await owner.release();
     return {
@@ -143,23 +143,33 @@ test('the budget card says when the weekly budget resets in calendar days, with 
     `resets=${encodeURIComponent(resets)}`,
     `record=${encodeURIComponent(JSON.stringify(record))}`,
   ].join('&');
-  const vital = await page.evaluate(async (query) => {
-    const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
-    const kernel = await bootKernel();
-    const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    const model = createAgentModel(await owner.connect());
-    await model.agent.ready();
-    const card = () => model.monitor.snapshot().vitals.find((entry) => entry.id === 'budget');
-    for (let tries = 0; tries < 500 && !card(); tries++)
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    const found = card() ?? null;
-    await owner.release();
-    return found;
-  }, query);
+  const vital = await staged(
+    page,
+    'the budget card',
+    async (query) => {
+      await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
+      const kernel = await bootKernel();
+      stage('the agent');
+      const owner = await startAgent({
+        worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const connection = await owner.connect();
+      const model = createAgentModel(connection);
+      await model.agent.ready();
+      const card = () => model.monitor.snapshot().vitals.find((entry) => entry.id === 'budget');
+      const found = await when(
+        [...agentSources(connection, model), connection.monitor],
+        card,
+        'the budget card'
+      );
+      await owner.release();
+      return found;
+    },
+    query
+  );
   assert.equal(vital?.value, '40%');
   assert.equal(vital.unit, 'resets in 2 days');
   assert.equal(vital.hint, `resets ${resets.slice(0, 16).replace('T', ' ')} UTC`);

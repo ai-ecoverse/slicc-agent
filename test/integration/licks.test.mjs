@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -16,33 +16,49 @@ const helpers = () => {
     await writable.close();
   };
   window.licks = () => window.agent.messages().filter((message) => message.role === 'lick');
+  window.agentWait = (check, what) =>
+    when(
+      [
+        ...agentSources(window.connection),
+        heard(window.agent, 'messages', 'agents', 'active', 'hold'),
+      ],
+      check,
+      what
+    );
+  window.controlDir = () =>
+    when(
+      [files(window.kernel, ['/var/lib/slicc/agent/requests'])],
+      async () =>
+        (await window.kernel.run(['bash', '-c', 'test -d /var/lib/slicc/agent/requests/in']))
+          .status === 0,
+      'the control directory'
+    );
 };
 
 test('licks reach the cone through the production worker: a webhook, a file watch and a bad config file', async (t) => {
   const page = await chrome.page(t);
   const count = (n) =>
-    page
-      .within(60000, (want) => window.licks().length === want, n)
-      .catch(async (error) => {
-        const state = await page.evaluate(() => ({
-          licks: window.licks().map(({ channel, title, text }) => ({ channel, title, text })),
-          messages: window.agent
-            .messages()
-            .map(({ role, status, text }) => ({ role, status, text })),
-          busy: window.agent.busy(window.agent.active()),
-          entries: (window.connection.transcript.value?.entries ?? []).map(
-            ({ id, kind, model }) => [
-              id,
-              kind,
-              JSON.stringify(model?.[0]?.content ?? '').slice(0, 160),
-            ]
-          ),
-        }));
-        throw new Error(`${error.message}\n${JSON.stringify(state)}`);
-      });
+    staged(
+      page,
+      `${n} licks`,
+      (want) => window.agentWait(() => window.licks().length === want, `${want} licks`),
+      n
+    ).catch(async (error) => {
+      const state = await page.evaluate(() => ({
+        licks: window.licks().map(({ channel, title, text }) => ({ channel, title, text })),
+        messages: window.agent.messages().map(({ role, status, text }) => ({ role, status, text })),
+        busy: window.agent.busy(window.agent.active()),
+        entries: (window.connection.transcript.value?.entries ?? []).map(({ id, kind, model }) => [
+          id,
+          kind,
+          JSON.stringify(model?.[0]?.content ?? '').slice(0, 160),
+        ]),
+      }));
+      throw new Error(`${error.message}\n${JSON.stringify(state)}`);
+    });
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(async () => {
+  await staged(page, 'the licks agent', async () => {
     await window.write('/home/.slicc/webhooks/build.json', '{"message":"The build finished"}');
     await window.write(
       '/home/.slicc/watches/notes.json',
@@ -54,9 +70,11 @@ test('licks reach the cone through the production worker: a webhook, a file watc
       '/home/.slicc/watches/docs.json',
       '{"path":"~/docs","glob":"*.md","debounce":200}'
     );
-    const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     const kernel = await bootKernel();
+    stage('the agent');
     window.kernel = kernel;
     const answers = Array.from({ length: 6 }, () => 'answer=Noted.').join('&');
     const owner = await startAgent({
@@ -87,7 +105,9 @@ test('licks reach the cone through the production worker: a webhook, a file watc
     await client.fs.writeFile('/home/docs/guide.md', '# guide');
   });
   await count(4);
-  await page.within(60000, () => !window.agent.busy(window.agent.active()));
+  await staged(page, 'the last lick turn', () =>
+    window.agentWait(() => !window.agent.busy(window.agent.active()), 'the last lick turn')
+  );
   const seen = await page.evaluate(() => ({
     licks: window.licks(),
     replies: window.agent.messages().filter((message) => message.role === 'assistant').length,
@@ -113,15 +133,17 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(async () => {
+  await staged(page, 'the webhook agent', async () => {
     await window.write('/home/.slicc/webhooks/gh.json', '{"message":"GitHub event"}');
     await window.write(
       '/home/.slicc/webhooks/quiet.json',
       '{"message":"Quiet event","triage":"only releases"}'
     );
-    const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     window.kernel = await bootKernel();
+    stage('the agent');
     const answers = Array.from({ length: 6 }, () => 'answer=Noted.').join('&');
     const owner = await startAgent({
       worker: () =>
@@ -137,12 +159,7 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
       return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
     };
   });
-  await page.within(
-    60000,
-    async () =>
-      (await window.kernel.run(['bash', '-c', 'test -d /var/lib/slicc/agent/requests/in']))
-        .status === 0
-  );
+  await staged(page, 'the control directory', () => window.controlDir());
   const ntfy = JSON.stringify({
     id: 'Xk2',
     time: 1,
@@ -154,13 +171,18 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
     verified: false,
     attachment: { name: 'payload.json', size: 70000, url: 'https://gateway.test/file/Xk2' },
   });
-  const first = await page.evaluate(
-    (raw) => window.send(['cone', '--lick=webhook', '--source', 'gh', raw]),
+  const first = await staged(
+    page,
+    'the first ntfy lick',
+    async (raw) => {
+      const sent = await window.send(['cone', '--lick=webhook', '--source', 'gh', raw]);
+      await window.agentWait(() => window.licks().length === 1, 'the first lick');
+      await window.agentWait(() => !window.agent.busy(window.agent.active()), 'the first turn');
+      return sent;
+    },
     ntfy
   );
   assert.deepEqual(first, { status: 0, stdout: '', stderr: '' });
-  await page.within(60000, () => window.licks().length === 1);
-  await page.within(60000, () => !window.agent.busy(window.agent.active()));
   const again = await page.evaluate(
     (raw) => window.send(['cone', '--lick=webhook', '--source', 'gh', raw]),
     ntfy
@@ -172,18 +194,23 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
     timestamp: '2026-10-17T11:00:00Z',
     data: { hook: 'gh', action: 'opened' },
   });
-  const stdin = await page.evaluate(
-    (raw) => window.send(['cone', '--lick=webhook', '--source', 'gh', '-'], raw),
+  const stdin = await staged(
+    page,
+    'the MCP event lick',
+    async (raw) => {
+      const sent = await window.send(['cone', '--lick=webhook', '--source', 'gh', '-'], raw);
+      await window.agentWait(() => window.licks().length === 2, 'the second lick');
+      await window.agentWait(() => !window.agent.busy(window.agent.active()), 'the second turn');
+      return sent;
+    },
     occurrence
   );
   assert.equal(stdin.status, 0, stdin.stderr);
-  await page.within(60000, () => window.licks().length === 2);
-  await page.within(60000, () => !window.agent.busy(window.agent.active()));
   const quiet = await page.evaluate(() =>
     window.send(['cone', '--lick=webhook', '--source', 'quiet', 'a push to a branch'])
   );
   assert.equal(quiet.status, 0, quiet.stderr);
-  const refused = await page.evaluate(async () => ({
+  const refused = await staged(page, 'the refused sends', async () => ({
     unknown: await window.send(['cone', '--lick=webhook', '--source', 'nope', '{}']),
     fswatch: await window.send(['cone', '--lick=fswatch', 'changed']),
     cron: await window.send(['cone', '--lick=cron', 'fake fire']),
@@ -204,12 +231,14 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
     stdout: '',
     stderr: 'agent: --lick=cron only works inside a cron job, which sets SLICC_CRON_JOB\n',
   });
-  const triage = await page.within(60000, () => {
-    const found = (window.connection.transcript.value?.entries ?? []).filter(
-      (entry) => entry.kind === 'slicc.lick-triage'
-    );
-    return found.length === 1 && found[0].data;
-  });
+  const triage = await staged(page, 'the triage', () =>
+    window.agentWait(() => {
+      const found = (window.connection.transcript.value?.entries ?? []).filter(
+        (entry) => entry.kind === 'slicc.lick-triage'
+      );
+      return found.length === 1 && found[0].data;
+    }, 'the triage')
+  );
   assert.equal(triage.source, 'quiet');
   assert.equal(triage.decision, 'ignore');
   assert.equal(triage.triage, 'only releases');
@@ -242,15 +271,17 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(async () => {
+  await staged(page, 'the webhook agent', async () => {
     await window.write('/home/.slicc/webhooks/gh.json', '{"message":"GitHub event"}');
     await window.write(
       '/home/.slicc/webhooks/quiet.json',
       '{"message":"Quiet event","triage":"only releases"}'
     );
-    const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     window.kernel = await bootKernel();
+    stage('the agent');
     const answers = Array.from({ length: 10 }, () => 'answer=Noted.').join('&');
     const owner = await startAgent({
       worker: () => {
@@ -278,12 +309,7 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
       return answer;
     };
   });
-  await page.within(
-    60000,
-    async () =>
-      (await window.kernel.run(['bash', '-c', 'test -d /var/lib/slicc/agent/requests/in']))
-        .status === 0
-  );
+  await staged(page, 'the control directory', () => window.controlDir());
   const gw = 'https://ntfy.sliccy.ai/file';
   const release = '{"action":"released","tag":"v1.2.0"}';
   const sends = [
@@ -298,18 +324,25 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
   ];
   for (const [source, id, attachment] of sends) {
     const raw = JSON.stringify({ id, topic: 'github', message: 'You received a file', attachment });
-    const sent = await page.evaluate(({ source, raw }) => window.send(source, raw), {
-      source,
-      raw,
-    });
+    const sent = await staged(
+      page,
+      `the ${id} send`,
+      ({ source, raw }) => window.send(source, raw),
+      {
+        source,
+        raw,
+      }
+    );
     assert.deepEqual(sent, { status: 0, stderr: '' });
   }
-  await page.within(60000, () => window.licks().length === 7);
-  const triage = await page.within(60000, () => {
-    const found = (window.connection.transcript.value?.entries ?? []).filter(
-      (entry) => entry.kind === 'slicc.lick-triage'
-    );
-    return found.length === 1 && found[0].data;
+  const triage = await staged(page, 'seven licks and the triage', async () => {
+    await window.agentWait(() => window.licks().length === 7, 'seven licks');
+    return window.agentWait(() => {
+      const found = (window.connection.transcript.value?.entries ?? []).filter(
+        (entry) => entry.kind === 'slicc.lick-triage'
+      );
+      return found.length === 1 && found[0].data;
+    }, 'the triage');
   });
   assert.equal(triage.source, 'quiet');
   assert.equal(triage.decision, 'ignore');
@@ -359,41 +392,50 @@ test('after a page reload, the session-reload lick lists the background jobs tha
     step({ answer: 'Checked.' }),
   ];
   const open = (query) =>
-    page.evaluate(async (query) => {
-      const { bootKernel } = await import('/kernel.js');
-      await import('/dist-test/page.js');
-      window.kernel = await bootKernel();
-      const booted = Date.now();
-      const owner = await startAgent({
-        worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
-        kernel: { connect: () => window.kernel.connect() },
-      });
-      window.connection = await owner.connect();
-      window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
-      await window.agent.ready();
-      const { attachKernel } = await import(
-        '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
-      );
-      const client = await attachKernel(await window.kernel.connect());
-      window.running = async (line) =>
-        (await client.ps()).filter((row) => row.state !== 'Z' && row.argv.join(' ') === line)
-          .length;
-      return booted;
-    }, query);
+    staged(
+      page,
+      'the reload agent',
+      async (query) => {
+        await import('/dist-test/page.js');
+        stage('the kernel');
+        const { bootKernel } = await import('/kernel.js');
+        window.kernel = await bootKernel();
+        stage('the agent');
+        const booted = Date.now();
+        const owner = await startAgent({
+          worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+          kernel: { connect: () => window.kernel.connect() },
+        });
+        window.connection = await owner.connect();
+        window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
+        await window.agent.ready();
+        const { attachKernel } = await import(
+          '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
+        );
+        const client = await attachKernel(await window.kernel.connect());
+        window.running = async (line) =>
+          (await client.ps()).filter((row) => row.state !== 'Z' && row.argv.join(' ') === line)
+            .length;
+        return booted;
+      },
+      query
+    );
   await page.init(helpers);
   await page.goto('/');
   const booted = await open(`persist=${persist}&${steps.join('&')}`);
-  const reply = await page.evaluate(() =>
+  const reply = await staged(page, 'the servers', () =>
     window.connection.prompt('Write the note, start the servers, then mark it done.')
   );
   assert.equal(reply, 'Started.');
   await page.evaluate(() => window.kernel.run(['touch', '/tmp/reload-go']));
-  await page.within(
-    30000,
-    async (line) => (await window.running(line)) === 0,
+  await staged(
+    page,
+    'the wrapper to end',
+    (line) =>
+      when([every(100)], async () => (await window.running(line)) === 0, 'the wrapper to end'),
     'sh -c sleep 700 & while [ ! -e /tmp/reload-go ]; do sleep 0.1; done'
   );
-  const checked = await page.evaluate(() => window.connection.prompt('Check on them.'));
+  const checked = await staged(page, 'the check', () => window.connection.prompt('Check on them.'));
   assert.equal(checked, 'Checked.');
   const before = await page.evaluate(async () => ({
     sleeping: [await window.running('sleep 600'), await window.running('sleep 700')],
@@ -403,8 +445,11 @@ test('after a page reload, the session-reload lick lists the background jobs tha
   await page.within(5000, (at) => Date.now() >= Math.floor(at / 1000) * 1000 + 1000, booted);
   await page.reload();
   await open(`persist=${persist}&answer=Noted.&answer=Noted.`);
-  const lick = await page.within(60000, () =>
-    window.licks().find((found) => found.channel === 'session-reload')
+  const lick = await staged(page, 'the session-reload lick', () =>
+    window.agentWait(
+      () => window.licks().find((found) => found.channel === 'session-reload'),
+      'the session-reload lick'
+    )
   );
   assert.equal(lick.title, 'The kernel restarted');
   assert.equal(

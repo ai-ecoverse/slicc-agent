@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -80,7 +80,7 @@ for (const route of ['page', 'relay']) {
     const page = await chrome.page(t);
     await page.init(helpers);
     await page.goto('/');
-    const listening = await page.evaluate((r, files) => window.boot(r, files), route, {
+    const listening = await staged(page, 'the agent', (r, files) => window.boot(r, files), route, {
       '/node_modules/mcp-loop/package.json': manifest,
       '/node_modules/mcp-loop/server.mjs': program,
       '/home/.pi/agent/mcp.json': JSON.stringify({
@@ -95,7 +95,7 @@ for (const route of ['page', 'relay']) {
       `tool=${encodeURIComponent(JSON.stringify({ name: 'mcp__loop__echo', args: { text: 'kernel' } }))}`,
       'answer=Done.',
     ].join('&');
-    await page.evaluate((q) => window.start(q), query);
+    await staged(page, 'the agent', (q) => window.start(q), query);
     await new Promise((resolve) => setTimeout(resolve, 2000));
     await page.evaluate(() => window.agent.send(window.agent.active(), 'Echo through the loop.'));
     await page.within(60000, () =>
@@ -160,7 +160,7 @@ test('a bridge token sealed in the vault reaches a kernel-loopback MCP server, f
     `tool=${encodeURIComponent(JSON.stringify({ name: 'mcp__loop__echo', args: { text: 'sealed' } }))}`,
     'answer=Done.',
   ].join('&');
-  await page.evaluate((q) => window.start(q), query);
+  await staged(page, 'the agent', (q) => window.start(q), query);
   await new Promise((resolve) => setTimeout(resolve, 2000));
   await page.evaluate(() =>
     window.agent.send(window.agent.active(), 'Echo through the sealed loop.')
@@ -186,14 +186,14 @@ test("an MCP entry on the CDP facade's 9222.kernel.localhost is refused before a
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate((files) => window.boot('page', files), {
+  await staged(page, 'the agent', (files) => window.boot('page', files), {
     '/node_modules/mcp-loop/package.json': manifest,
     '/node_modules/mcp-loop/server.mjs': program,
     '/home/.pi/agent/mcp.json': JSON.stringify({
       mcpServers: { facade: { url: 'http://9222.kernel.localhost/mcp' } },
     }),
   });
-  await page.evaluate(() => window.start('answer=Noted.&answer=Noted.'));
+  await staged(page, 'the agent', () => window.start('answer=Noted.&answer=Noted.'));
   await page.within(60000, () =>
     window.agent
       .messages()

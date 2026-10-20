@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -24,16 +24,13 @@ const helpers = () => {
     await writable.write(text);
     await writable.close();
   };
-  window.until = async (check, tries = 500) => {
-    for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-    return check();
-  };
+  window.until = (check, what = 'the state') => when([changed, every(100)], check, what);
   window.openAdobe = async (query) => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
     let worker;
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => (worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' })),
       kernel: { connect: () => kernel.connect() },
     });
@@ -85,7 +82,9 @@ for (const [what, record] of [
     await page.init(helpers);
     await page.goto('/');
     const fresh = adobeRecord({ value: 'e2e-ims-token-0002', expiresAt: Date.now() + 86_400_000 });
-    const seen = await page.evaluate(
+    const seen = await staged(
+      page,
+      'what Adobe record shows the',
       async ({ query, fresh }) => {
         const { owner, settings, adobe, signIns } = await window.openAdobe(query);
         await window.until(() => adobe()?.store === 'vault' && adobe()?.status !== 'disconnected');
@@ -110,13 +109,15 @@ test('an Adobe record that expires while the page is open turns the account expi
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'an Adobe record that expires',
     async ({ query, record }) => {
       const { owner, adobe, seal } = await window.openAdobe(query);
       const expiresAt = Date.now() + 3000;
       await seal({ ...record, expiresAt });
       const connected = await window.until(() => adobe()?.status === 'connected');
-      await window.until(() => adobe()?.status === 'expired', 1000);
+      await window.until(() => adobe()?.status === 'expired', 'the expired Adobe account');
       const result = { connected, early: Date.now() < expiresAt, after: adobe()?.status };
       await owner.release();
       return result;
@@ -133,7 +134,9 @@ test('a 401 on an Adobe turn shows Log in, the account offers Sign in even after
   const expiresAt = Date.now() + 86_400_000;
   const revoked = adobeRecord({ expiresAt });
   const fresh = adobeRecord({ value: 'e2e-ims-token-0002', expiresAt });
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'a 401 on an Adobe',
     async ({ query, fresh }) => {
       const { owner, agent, settings, adobe, seal } = await window.openAdobe(query);
       await window.until(() => settings.models().some((model) => model.id === 'adobe/e2e-1'));
@@ -200,7 +203,9 @@ test('an MCP token that expires while the page is open turns its account expired
     placeholder: 'fnox_proxy_docs',
     value: 'e2e-docs-token-0001',
   };
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'an MCP token that expires',
     async ({ query, record }) => {
       await window.write(
         '/home/.pi/agent/mcp.json',
@@ -218,7 +223,7 @@ test('an MCP token that expires while the page is open turns its account expired
       await window.until(() => docs());
       const expiresAt = Date.now() + 3000;
       await seal({ ...record, expiresAt });
-      await window.until(() => docs()?.status === 'expired', 1000);
+      await window.until(() => docs()?.status === 'expired', 'the expired MCP account');
       const result = { early: Date.now() < expiresAt, after: docs()?.status, auth: docs()?.auth };
       await owner.release();
       return result;
@@ -233,7 +238,9 @@ test('Adobe signs in and answers a turn against a vault that has Adobe built in,
   await page.init(helpers);
   await page.goto('/');
   const fresh = adobeRecord({ expiresAt: Date.now() + 86_400_000 });
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'Adobe signs in and answers',
     async ({ query, fresh }) => {
       const { owner, agent, settings, adobe, log } = await window.openAdobe(query);
       await window.until(() => adobe());

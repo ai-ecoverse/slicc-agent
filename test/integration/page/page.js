@@ -83,11 +83,14 @@ globalThis.agentSources = (connection, model) =>
     connection.views,
     connection.agents,
     connection.transcript,
+    connection.deliveries,
     connection.settings?.state,
     connection.approvals,
     connection.guests,
     connection.frozen,
     connection.importing,
+    connection.proposals,
+    connection.commands,
     model && heard(model.agent, 'messages', 'agents', 'active', 'hold', 'frozen', 'importing'),
     model && heard(model.settings, 'accounts', 'providers', 'settings'),
     model?.approvals && heard(model.approvals, 'approvals'),
@@ -95,4 +98,34 @@ globalThis.agentSources = (connection, model) =>
 globalThis.every = (ms) => (look) => {
   const id = setInterval(look, ms);
   return () => clearInterval(id);
+};
+const changes = new Set();
+globalThis.changed = (look) => {
+  changes.add(look);
+  return () => changes.delete(look);
+};
+const notify = async () => {
+  for (const look of [...changes]) look();
+};
+const tracked = [];
+globalThis.track = (connection, model) => {
+  tracked.push(connection);
+  globalThis.progress ??= () =>
+    tracked.map((each) => {
+      const value = each.transcript?.value;
+      return [value?.entries?.length ?? 0, JSON.stringify(value?.docs ?? {}).length];
+    });
+  for (const source of agentSources(connection, model))
+    typeof source === 'function' ? source(notify) : source.subscribe(notify);
+  return connection;
+};
+globalThis.startTracked = async (options) => {
+  const owner = await startAgent(options);
+  const connect = owner.connect.bind(owner);
+  owner.connect = async (...args) => track(await connect(...args));
+  return owner;
+};
+globalThis.activity = (connection) => () => {
+  const value = connection.transcript.value;
+  return [value?.entries.length ?? 0, JSON.stringify(value?.docs ?? {}).length];
 };

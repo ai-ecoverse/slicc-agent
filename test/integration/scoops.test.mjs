@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,14 +8,14 @@ after(() => chrome.close());
 test('a terminal runs agent through the production worker: a sync call, an async scoop and a wait', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a terminal runs agent through', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
     const answers = ['From the sync scoop.', 'From the async scoop.']
       .map((answer) => `answer=${encodeURIComponent(answer)}`)
       .join('&');
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
@@ -36,10 +36,11 @@ test('a terminal runs agent through the production worker: a sync call, an async
       });
       return { code: await process.exited, out };
     };
-    for (let i = 0; i < 600; i++) {
-      if (await terminal.fs.exists('/usr/local/bin/agent')) break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    await when(
+      [files(kernel, ['/usr/local/bin'])],
+      () => terminal.fs.exists('/usr/local/bin/agent'),
+      'the agent command'
+    );
     const sync = await run('agent --name probe --prompt "Say hello"');
     const archived = await terminal.fs.readFile('/tmp/agent-sessions/probe.md');
     const spawned = await run('subagent spawn --name helper --prompt "Work on it"');
@@ -76,7 +77,7 @@ test('a terminal runs agent through the production worker: a sync call, an async
 test('a pnpm-linked package in /opt/user/node_modules adds its skills, and one that duplicates a system package is ignored', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a pnpm-linked package in optusernode_modules', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
@@ -96,17 +97,19 @@ test('a pnpm-linked package in /opt/user/node_modules adds its skills, and one t
     await write(`${store}/package.json`, manifest);
     await write(`${store}/skills/user-skill/SKILL.md`, skill('user-skill'));
     await terminal.fs.symlink(store, '/opt/user/node_modules/userpack');
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
     const connection = await owner.connect();
-    let commands = [];
-    for (let i = 0; i < 600; i++) {
-      commands = connection.commands.value.map((command) => command.name);
-      if (commands.includes('skill:user-skill')) break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    const commands = await when(
+      [connection.commands],
+      () => {
+        const names = connection.commands.value.map((command) => command.name);
+        return names.includes('skill:user-skill') && names;
+      },
+      'the user skill'
+    );
     await owner.release();
     return commands;
   });
@@ -118,7 +121,7 @@ test('a pnpm-linked package in /opt/user/node_modules adds its skills, and one t
 test("a skill bios links from /usr/share/skills into root's global pnpm reads as its package, a plain one as global, and an unlinked one there isn't loaded", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a skill bios links from', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
@@ -138,17 +141,19 @@ test("a skill bios links from /usr/share/skills into root's global pnpm reads as
     await write(`${pkg}/dist/skills/unlinked/SKILL.md`, skill('unlinked'));
     await write('/usr/share/skills/plain/SKILL.md', skill('plain'));
     await terminal.fs.symlink(`${pkg}/dist/skills/foo`, '/usr/share/skills/foo');
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
     const connection = await owner.connect();
-    let commands = [];
-    for (let i = 0; i < 600; i++) {
-      commands = connection.commands.value;
-      if (commands.some((command) => command.name === 'skill:foo')) break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    const commands = await when(
+      [connection.commands],
+      () => {
+        const listed = connection.commands.value;
+        return listed.some((command) => command.name === 'skill:foo') && listed;
+      },
+      'the package skill'
+    );
     await owner.release();
     return commands.filter((command) => command.kind === 'skill');
   });
@@ -163,11 +168,11 @@ test("a skill bios links from /usr/share/skills into root's global pnpm reads as
 test('with per-user kernel clients, a scoop report is written as the cone, so the cone keeps its ~/.slicc and can add its own files there', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  await page.evaluate(async () => {
+  await staged(page, 'with per-user kernel clients a', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
-    window.owner = await startAgent({
+    window.owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js?answer=Reported.', { type: 'module' }),
       kernel: {
         connect: (options) => kernel.connect(options?.user ? { user: options.user } : undefined),
@@ -192,19 +197,24 @@ test('with per-user kernel clients, a scoop report is written as the cone, so th
     handle
   );
   assert.match(reports, /\.md$/);
-  const seen = await page.evaluate(async (handle) => {
-    const owners = (
-      await window.sh(
-        `cd /home/cone/.slicc && stat -c "%U %n" . reports reports/${handle} reports/${handle}/*.md`
-      )
-    ).stdout;
-    const own = await window.sh(
-      'mkdir -p ~/.slicc/watches && echo "{}" > ~/.slicc/watches/mine.json && echo ok',
-      'cone'
-    );
-    await window.owner.release();
-    return { owners, own };
-  }, handle);
+  const seen = await staged(
+    page,
+    'with per-user kernel clients a',
+    async (handle) => {
+      const owners = (
+        await window.sh(
+          `cd /home/cone/.slicc && stat -c "%U %n" . reports reports/${handle} reports/${handle}/*.md`
+        )
+      ).stdout;
+      const own = await window.sh(
+        'mkdir -p ~/.slicc/watches && echo "{}" > ~/.slicc/watches/mine.json && echo ok',
+        'cone'
+      );
+      await window.owner.release();
+      return { owners, own };
+    },
+    handle
+  );
   assert.equal(
     seen.owners,
     `cone .\ncone reports\ncone reports/${handle}\ncone reports/${handle}/${reports}\n`
@@ -223,32 +233,37 @@ test("a scoop's notify card reads as its one-line result, or says it failed, and
   ]
     .map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`)
     .join('&');
-  await page.evaluate(async (steps) => {
-    const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
-    const kernel = await bootKernel();
-    window.owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${steps}`, { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    window.agent = createAgentModel(await window.owner.connect(), {
-      storage: localStorage,
-    }).agent;
-    await window.agent.ready();
-    window.sh = (command) => kernel.run(['bash', '-c', command]);
-    window.cards = () =>
-      window.agent
-        .messages()
-        .filter((message) => message.role === 'lick' && message.channel === 'scoop-notify')
-        .map(({ title, text, body, summary, report, severity }) => ({
-          title,
-          text,
-          body,
-          summary,
-          report,
-          severity,
-        }));
-  }, steps);
+  await staged(
+    page,
+    'a scoop’s notify card reads',
+    async (steps) => {
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      window.owner = await startTracked({
+        worker: () => new Worker(`/dist-test/main-worker.js?${steps}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      window.agent = createAgentModel(await window.owner.connect(), {
+        storage: localStorage,
+      }).agent;
+      await window.agent.ready();
+      window.sh = (command) => kernel.run(['bash', '-c', command]);
+      window.cards = () =>
+        window.agent
+          .messages()
+          .filter((message) => message.role === 'lick' && message.channel === 'scoop-notify')
+          .map(({ title, text, body, summary, report, severity }) => ({
+            title,
+            text,
+            body,
+            summary,
+            report,
+            severity,
+          }));
+    },
+    steps
+  );
   await page.within(
     60000,
     async () => (await window.sh('test -x /usr/local/bin/agent')).status === 0

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,11 +8,8 @@ after(() => chrome.close());
 test('Settings shows Bedrock’s region as a picker of its regions, on the region the account stored', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
-    const until = async (check, tries = 500) => {
-      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-      return check();
-    };
+  const seen = await staged(page, 'Settings shows Bedrock’s region as', async () => {
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     const find = (root, selector) => {
       const found = root.querySelector(selector);
       if (found) return found;
@@ -27,7 +24,7 @@ test('Settings shows Bedrock’s region as a picker of its regions, on the regio
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js?bedrock&vault', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
@@ -69,11 +66,8 @@ test('Settings shows Bedrock’s region as a picker of its regions, on the regio
 test('in Settings a blocked provider is shown in the picker but can’t be picked, and becomes pickable when a CORS-free route appears', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
-    const until = async (check, tries = 500) => {
-      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-      return check();
-    };
+  const seen = await staged(page, 'in Settings a blocked provider', async () => {
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     const find = (root, selector) => {
       const found = root.querySelector(selector);
       if (found) return found;
@@ -89,7 +83,7 @@ test('in Settings a blocked provider is shown in the picker but can’t be picke
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
     let worker;
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () =>
         (worker = new Worker('/dist-test/main-worker.js?registry&vault&route=cors', {
           type: 'module',
@@ -145,70 +139,74 @@ test('an MCP token account carries its server URL, and Settings says it moved on
     placeholder: 'fnox_proxy_docs',
     value: 'docs-token-0001',
   };
-  const seen = await page.evaluate(async (record) => {
-    const until = async (check, tries = 1000) => {
-      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-      return check();
-    };
-    const find = (root, selector) => {
-      const found = root.querySelector(selector);
-      if (found) return found;
-      for (const node of root.querySelectorAll('*'))
-        if (node.shadowRoot) {
-          const inner = find(node.shadowRoot, selector);
-          if (inner) return inner;
-        }
-      return null;
-    };
-    const write = async (path, text) => {
-      let dir = await navigator.storage.getDirectory();
-      const parts = path.split('/').filter(Boolean);
-      const name = parts.pop();
-      for (const part of parts) dir = await dir.getDirectoryHandle(part, { create: true });
-      const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
-      await writable.write(text);
-      await writable.close();
-    };
-    const config = (url) =>
-      JSON.stringify({
-        mcpServers: { docs: { url, headers: { Authorization: 'Bearer ${DOCS_TOKEN}' } } },
+  const seen = await staged(
+    page,
+    'an MCP token account carries',
+    async (record) => {
+      const until = (check, what = 'the state') => when([changed, every(100)], check, what);
+      const find = (root, selector) => {
+        const found = root.querySelector(selector);
+        if (found) return found;
+        for (const node of root.querySelectorAll('*'))
+          if (node.shadowRoot) {
+            const inner = find(node.shadowRoot, selector);
+            if (inner) return inner;
+          }
+        return null;
+      };
+      const write = async (path, text) => {
+        let dir = await navigator.storage.getDirectory();
+        const parts = path.split('/').filter(Boolean);
+        const name = parts.pop();
+        for (const part of parts) dir = await dir.getDirectoryHandle(part, { create: true });
+        const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
+        await writable.write(text);
+        await writable.close();
+      };
+      const config = (url) =>
+        JSON.stringify({
+          mcpServers: { docs: { url, headers: { Authorization: 'Bearer ${DOCS_TOKEN}' } } },
+        });
+      await write('/home/.pi/agent/mcp.json', config('https://mcp.test/mcp'));
+      const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+      await import(`${spectrum}/slicc-ui.js`);
+      const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      const query = `relay=mcp.test&vault&record=${encodeURIComponent(JSON.stringify(record))}`;
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
       });
-    await write('/home/.pi/agent/mcp.json', config('https://mcp.test/mcp'));
-    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
-    await import(`${spectrum}/slicc-ui.js`);
-    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
-    const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
-    const kernel = await bootKernel();
-    const query = `relay=mcp.test&vault&record=${encodeURIComponent(JSON.stringify(record))}`;
-    const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    const model = createAgentModel(await owner.connect(), { storage: localStorage });
-    await model.agent.ready();
-    model.vault = createDummyModel({ storage: localStorage, vault: 'empty' }).vault;
-    localStorage.setItem(
-      'slicc-spectrum.mcp-endpoints',
-      JSON.stringify({ docs: 'https://mcp.test/mcp' })
-    );
-    const docs = () => model.settings.accounts().find((account) => account.id === 'mcp:docs');
-    await until(() => docs()?.status === 'connected' && docs()?.url);
-    const settings = document.createElement('slicc-settings');
-    settings.model = model;
-    document.body.append(settings);
-    const row = () => find(settings.shadowRoot, '.account[data-id="mcp:docs"]');
-    await until(() => row());
-    const moved = () => find(settings.shadowRoot, '[data-notice="moved"]');
-    const before = { url: docs().url, moved: Boolean(moved()) };
-    await write('/home/.pi/agent/mcp.json', config('https://mcp.test/v2/mcp'));
-    await until(() => docs()?.url === 'https://mcp.test/v2/mcp' && docs()?.status === 'connected');
-    await until(() => moved());
-    const note = moved()?.textContent.replace(/\s+/g, ' ').trim();
-    const reconnect = Boolean(row()?.querySelector('[data-action="reconnect-mcp"]'));
-    await owner.release();
-    return { before, after: docs().url, note, reconnect };
-  }, record);
+      const model = createAgentModel(await owner.connect(), { storage: localStorage });
+      await model.agent.ready();
+      model.vault = createDummyModel({ storage: localStorage, vault: 'empty' }).vault;
+      localStorage.setItem(
+        'slicc-spectrum.mcp-endpoints',
+        JSON.stringify({ docs: 'https://mcp.test/mcp' })
+      );
+      const docs = () => model.settings.accounts().find((account) => account.id === 'mcp:docs');
+      await until(() => docs()?.status === 'connected' && docs()?.url);
+      const settings = document.createElement('slicc-settings');
+      settings.model = model;
+      document.body.append(settings);
+      const row = () => find(settings.shadowRoot, '.account[data-id="mcp:docs"]');
+      await until(() => row());
+      const moved = () => find(settings.shadowRoot, '[data-notice="moved"]');
+      const before = { url: docs().url, moved: Boolean(moved()) };
+      await write('/home/.pi/agent/mcp.json', config('https://mcp.test/v2/mcp'));
+      await until(
+        () => docs()?.url === 'https://mcp.test/v2/mcp' && docs()?.status === 'connected'
+      );
+      await until(() => moved());
+      const note = moved()?.textContent.replace(/\s+/g, ' ').trim();
+      const reconnect = Boolean(row()?.querySelector('[data-action="reconnect-mcp"]'));
+      await owner.release();
+      return { before, after: docs().url, note, reconnect };
+    },
+    record
+  );
   assert.deepEqual(seen.before, { url: 'https://mcp.test/mcp', moved: false });
   assert.equal(seen.after, 'https://mcp.test/v2/mcp');
   assert.equal(
@@ -221,11 +219,8 @@ test('an MCP token account carries its server URL, and Settings says it moved on
 test('adding a Cloudflare or Azure provider in Settings saves its tenant fields as the vault record’s settings', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
-    const until = async (check, tries = 500) => {
-      for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-      return check();
-    };
+  const seen = await staged(page, 'adding a Cloudflare or Azure', async () => {
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     const find = (root, selector) => {
       const found = root.querySelector(selector);
       if (found) return found;
@@ -242,7 +237,7 @@ test('adding a Cloudflare or Azure provider in Settings saves its tenant fields 
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js?registry&vault', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });

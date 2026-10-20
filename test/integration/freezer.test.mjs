@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,12 +8,12 @@ after(() => chrome.close());
 test('the freezer in the production worker: freeze a cone with its scoop, list it, thaw it and go on, delete another', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the freezer in the production', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
     const answers = Array.from({ length: 8 }, (_, n) => `answer=Answer ${n + 1}.`).join('&');
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
@@ -21,11 +21,7 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
     const model = createAgentModel(connection, { storage: localStorage });
     await model.agent.ready();
     const frozenRows = () => model.agent.frozen().filter((row) => row.id.startsWith('frozen-'));
-    const until = async (check) => {
-      for (let n = 0; n < 200 && !(await check()); n++)
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      return check();
-    };
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     await connection.prompt('Please fix the build');
     const coneTitle = () => model.agent.list().find((agent) => agent.id === 'cone')?.title;
     await until(() => /^Title \d$/.test(coneTitle() ?? ''));
