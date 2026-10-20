@@ -522,6 +522,28 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 
 type Show = (phase: ImportProgress['phase'], done: number, total: number) => void;
 
+export async function settled(
+  opened: Opened,
+  at: ReadonlyMap<string, string>,
+  writer: Writer
+): Promise<void> {
+  for (const file of opened.manifest.files) {
+    const from = opened.sources.get(file.path);
+    const path = at.get(file.path);
+    if (!from || !path || path === from) continue;
+    const read = await writer.env.readBinaryFile(path, writer.context);
+    const kept =
+      read.ok &&
+      read.value.length === file.size &&
+      (await sha256(read.value)) === file.sha256.toLowerCase();
+    writer.check();
+    if (!kept)
+      throw new ImportError(
+        `${from} changed while it moved, so a SLICC 6 tab may still be writing; close every SLICC 6 tab and import again`
+      );
+  }
+}
+
 async function verify(opened: Opened, writer: Writer, stage: string | null, show: Show) {
   const data = new Map<string, Uint8Array>();
   const { files } = opened.manifest;
@@ -954,6 +976,7 @@ async function importOpened(
     try {
       if (dir) await writer.remember([...opened.sources.values()]);
       await place(run);
+      await settled(opened, run.at, writer);
       made = await commit(deps, opened, parsed.units, now, context);
     } catch (error) {
       await writer.rollback();

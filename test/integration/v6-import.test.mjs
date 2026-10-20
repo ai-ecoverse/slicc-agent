@@ -1226,3 +1226,193 @@ test('freezer import --in-place checks the directory form before anything moves'
     /\/tmp isn't a SLICC 6 upgrade in \/slicc-v6-upgrade/
   );
 });
+
+const sixRefusals = [
+  [
+    'a source on the sidecar',
+    (form) => {
+      const file = form.manifest.files.find((item) => item.path === 'files/home-user/todo.txt');
+      file.source = '/slicc-fs/.metadata.json';
+    },
+    /source must be a path under \/slicc-fs\//,
+  ],
+  [
+    'one source moved twice',
+    (form) => {
+      const file = form.manifest.files.find((item) => item.path === 'files/home-user/todo.txt');
+      file.source = '/slicc-fs/workspace/README.md';
+    },
+    /files moves \/slicc-fs\/workspace\/README\.md twice/,
+  ],
+  [
+    'an archive-limit skip',
+    (form) => {
+      form.manifest.skipped.push({ path: '/workspace/big.bin', reason: 'archive-limit' });
+    },
+    /a directory form has no archive-limit skips/,
+  ],
+];
+
+test("freezer import --in-place refuses what six's v2 exporter never writes", async (t) => {
+  const page = await booted(t);
+  for (const [what, edit, error] of sixRefusals) {
+    await page.evaluate(() => window.sh('rm -rf /slicc-fs /slicc-v6-upgrade'));
+    const form = directory();
+    edit(form);
+    form.written[`${DIRECTORY}/manifest.json`] = `${JSON.stringify(form.manifest, null, 2)}\n`;
+    await lay(page, form);
+    const ran = await staged(page, what, (dir) => window.imported(dir, '--in-place'), DIRECTORY);
+    assert.equal(ran.status, 1, `${what}: ${ran.stdout}`);
+    assert.match(ran.stderr + ran.stdout, error, what);
+    const left = await page.evaluate(
+      async () => (await window.sh('cat /slicc-fs/workspace/README.md')).stdout
+    );
+    assert.equal(left, files()['files/cones/cone/README.md'], what);
+  }
+});
+
+const STALE = '/slicc-v6-upgrade/11111111-2222-4333-8444-555555555555';
+
+test("freezer import --in-place takes six's v2 exporter's form next to an interrupted run and leaves six's other files alone", async (t) => {
+  const page = await booted(t);
+  const contents = {
+    ...files(),
+    'files/cones/cone/.npmrc': '//registry.npmjs.org/:_authToken=npm_not_a_real_token\n',
+    'files/home-user/.slicc/oauth/github.json': '{"state":"not-a-real-state"}\n',
+  };
+  const flagged = [
+    ['files/cones/cone/.env', 'env'],
+    ['files/cones/research/certs/dev.pem', 'pem'],
+    ['files/cones/cone/.npmrc', 'npmrc'],
+    ['files/home-user/.slicc/oauth/github.json', 'slicc-oauth'],
+  ].map(([path, rule]) => ({ path, rule, size: Buffer.byteLength(contents[path]) }));
+  const form = directory({
+    contents,
+    overrides: {
+      flagged,
+      secrets: [],
+      skipped: [
+        { path: '/mnt/photos', reason: 'mount' },
+        { path: '/workspace/node_modules', reason: 'cache' },
+        { path: '/workspace/disk.img', reason: 'too-large' },
+      ],
+    },
+  });
+  const stray = {
+    '/slicc-fs/.metadata.json': '{"/workspace/latest":{"mode":41471,"uid":1000,"gid":1000}}\n',
+    '/slicc-fs/workspace/latest': '/workspace/README.md',
+    '/slicc-fs/workspace/node_modules/left/index.js': 'module.exports = 1;\n',
+    '/slicc-fs/workspace/disk.img': 'not really big\n',
+    '/slicc-fs/mnt/photos/cat.jpg': 'not a cat\n',
+    [`${STALE}/files/cones/cone/notes.txt`]: 'half written\n',
+  };
+  await lay(page, form);
+  for (const [path, data] of Object.entries(stray)) await upload(page, path, Buffer.from(data));
+  const interrupted = await staged(
+    page,
+    'the interrupted run',
+    (dir) => window.imported(dir, '--in-place'),
+    STALE
+  );
+  assert.equal(interrupted.status, 1, interrupted.stdout);
+  assert.match(interrupted.stdout + interrupted.stderr, /has no manifest\.json/);
+  const ran = await staged(
+    page,
+    'the import',
+    async (dir) => {
+      const ran = await window.imported(dir, '--in-place');
+      if (ran.status === 0) await window.listed(3);
+      return ran;
+    },
+    DIRECTORY
+  );
+  assert.equal(ran.status, 0, ran.stdout + ran.stderr);
+  const seen = await staged(
+    page,
+    'what is left',
+    async (paths) => {
+      const out = async (command) => (await window.sh(command)).stdout;
+      const kept = {};
+      for (const path of paths) kept[path] = await out(`cat ${path}`);
+      return {
+        kept,
+        moved: [
+          await out('cat /home/cone-2/workspace/.npmrc'),
+          await out('cat /root/v6/home-user/.slicc/oauth/github.json'),
+        ],
+        upgrades: await out('ls /slicc-v6-upgrade'),
+        strays: await out(
+          'ls -a /home/cone-2/workspace /root/v6/home-user; ls /home/cone-2/workspace/node_modules /home/cone-2/mnt 2>&1 || true'
+        ),
+        report: await out('cat /root/v6-import-*.md'),
+      };
+    },
+    Object.keys(stray)
+  );
+  assert.deepEqual(seen.kept, stray);
+  assert.deepEqual(seen.moved, [
+    contents['files/cones/cone/.npmrc'],
+    contents['files/home-user/.slicc/oauth/github.json'],
+  ]);
+  assert.equal(seen.upgrades, `${STALE.split('/').at(-1)}\n`);
+  assert.doesNotMatch(seen.strays, /^(latest|disk\.img|index\.js|\.metadata\.json|cat\.jpg)$/m);
+  assert.match(seen.report, /- \/workspace\/disk\.img: too-large\n/);
+  assert.match(seen.report, /\| \/home\/cone-2\/workspace\/\.npmrc \| \d+ B \| npm config/);
+  assert.match(seen.report, /\| \/root\/v6\/home-user\/\.slicc\/oauth\/github\.json \| \d+ B \|/);
+  assert.match(seen.report, /- Re-enter your keys and logins in Settings\.\n/);
+  assert.doesNotMatch(seen.report, /These never move/);
+});
+
+test('a SLICC 6 tab that writes while the files move fails the in-place import, and every file goes back', async (t) => {
+  const page = await booted(t);
+  const form = directory();
+  await lay(page, form);
+  const failed = await staged(
+    page,
+    'the import with a writer',
+    async (dir) => {
+      const users = window.kernel.users;
+      const add = users.add;
+      let wrote = false;
+      users.add = async (...args) => {
+        if (!wrote) {
+          wrote = true;
+          await window.put('/slicc-fs/home/user/todo.txt', btoa('Water the plantz\n'));
+        }
+        return add.apply(users, args);
+      };
+      const ran = await window.imported(dir, '--in-place');
+      users.add = add;
+      return { ran, wrote };
+    },
+    DIRECTORY
+  );
+  assert.equal(failed.wrote, true);
+  assert.equal(failed.ran.status, 1, failed.ran.stdout);
+  assert.match(
+    failed.ran.stdout + failed.ran.stderr,
+    /\/slicc-fs\/home\/user\/todo\.txt changed while it moved/
+  );
+  const after = await staged(
+    page,
+    'the files moved back',
+    async (sources) => {
+      const missing = [];
+      for (const source of sources)
+        if ((await window.sh(`test -f ${source}`)).status !== 0) missing.push(source);
+      return {
+        missing,
+        todo: (await window.sh('cat /slicc-fs/home/user/todo.txt')).stdout,
+        homes: (await window.sh('ls -d /home/cone-* /root/v6 2>/dev/null')).stdout,
+        directory: (await window.sh(`test -f ${'/slicc-v6-upgrade'}/*/manifest.json`)).status,
+        rows: window.rows().length,
+      };
+    },
+    moved(form)
+  );
+  assert.deepEqual(after.missing, []);
+  assert.equal(after.todo, 'Water the plantz\n');
+  assert.equal(after.homes, '');
+  assert.equal(after.directory, 0);
+  assert.equal(after.rows, 0);
+});
