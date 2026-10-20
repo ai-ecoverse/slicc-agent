@@ -45,6 +45,7 @@ const helpers = () => {
         users: window.kernel.users,
       },
     });
+    window.owner = owner;
     window.connection = await owner.connect();
     window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
     await window.agent.ready();
@@ -812,6 +813,90 @@ test('cancelling a large import while it writes rolls it back and leaves nothing
   assert.equal(seen.cancelled, true, seen.phases.join());
   assert.equal(seen.refused, 'The import was cancelled.');
   assert.deepEqual(seen.after, seen.before);
+});
+
+test('a worker that dies while an import writes leaves no orphans and no lost files after the next boot, and the zip then imports once', async (t) => {
+  const page = await booted(t);
+  const size = 100 * 1024 ** 2;
+  const hash = createHash('sha256');
+  const block = Buffer.alloc(1024 ** 2);
+  for (let n = 0; n < size / block.length; n++) hash.update(block);
+  const sha256 = hash.digest('hex');
+  const big = [0, 1, 2].map((n) => ({ path: `files/home-user/big-${n}.bin`, size, sha256 }));
+  const contents = files();
+  const head = manifest(contents, { files: [...manifest(contents).files, ...big] });
+  const small = [
+    ['manifest.json', Buffer.from(JSON.stringify(head)).toString('base64')],
+    ...Object.entries(contents).map(([name, data]) => [name, Buffer.from(data).toString('base64')]),
+  ];
+  const id = '0b5e7a3c-1d2f-4a6b-8c9d-0e1f2a3b4c5d';
+  const zipPath = `/var/lib/slicc/agent/imports/upload-${id}.zip`;
+  await staged(page, 'the big zip', ([small, big, path]) => window.bigZip(path, small, big), [
+    small,
+    big,
+    zipPath,
+  ]);
+  const seen = await staged(
+    page,
+    'the killed import',
+    async ([id, zipPath]) => {
+      const out = async (command) => {
+        const ran = await window.sh(command);
+        return `${ran.status} ${ran.stdout}`;
+      };
+      const look = async () => ({
+        rows: window.rows().length,
+        homes: await out('ls -A /home'),
+        root: await out('ls -AR /root/v6; cat /root/v6/home-user/todo.txt /root/.gitconfig'),
+        skills: await out('ls -A /usr/share/skills'),
+        memory: await out('ls -AR /root/.pi/agent/memory; cat /root/.pi/agent/memory/MEMORY.md'),
+        crontab: await out('crontab -u cone-2 -l; crontab -u cone-3 -l; crontab -l'),
+        users: (await window.kernel.users.list()).map((user) => user.name).sort(),
+        imports: await out('ls -A /var/lib/slicc/agent/imports'),
+      });
+      await window.sh(
+        'mkdir -p /root/v6/home-user /root/.pi/agent/memory && echo mine > /root/v6/home-user/todo.txt && printf "# Memory\n\nmine\n" > /root/.pi/agent/memory/MEMORY.md && printf "[core]\n\teditor = vi\n" > /root/.gitconfig'
+      );
+      stage('the state before');
+      const before = await look();
+      stage('the import, until it replaces todo.txt');
+      let settled = false;
+      window.connection.control
+        .importProfile({ upload: id, data: null, again: false, preview: false }, BACKGROUND_CONTEXT)
+        .finally(() => {
+          settled = true;
+        })
+        .catch(() => undefined);
+      while (!settled && (await window.sh('cat /root/v6/home-user/todo.txt')).stdout === 'mine\n')
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      const replaced = (await window.sh('cat /root/v6/home-user/todo.txt')).stdout;
+      const during = (await window.kernel.users.list()).map((user) => user.name);
+      stage('the killed worker');
+      await window.owner.restart();
+      window.connection = await window.owner.connect();
+      await when(
+        [files(window.kernel, ['/var/lib/slicc/agent/requests']), every(500)],
+        async () => (await window.sh('freezer list')).status === 0,
+        'the freezer command after the restart'
+      );
+      stage('the state after the next boot');
+      const after = await look();
+      stage('the import again');
+      const again = await window.imported(zipPath);
+      if (again.status === 0) await window.listed(3);
+      const twice = await window.imported(zipPath);
+      return { settled, replaced, during, before, after, again, twice, rows: window.rows().length };
+    },
+    [id, zipPath]
+  );
+  assert.equal(seen.settled, false);
+  assert.equal(seen.replaced, 'Water the plants\n');
+  assert.ok(seen.during.includes('cone-2'), seen.during.join());
+  assert.deepEqual(seen.after, seen.before);
+  assert.equal(seen.again.status, 0, seen.again.stderr);
+  assert.match(seen.again.stdout, /^Imported 3 frozen cones/);
+  assert.match(seen.twice.stdout, /^Already imported on /);
+  assert.equal(seen.rows, 3);
 });
 
 test('freezer import never writes memory through a symlink, and leaves its target and everything else alone', async (t) => {
