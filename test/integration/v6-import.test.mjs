@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 import {
   DIRECTORY,
   directory,
@@ -29,10 +29,13 @@ const helpers = () => {
     await writable.write(bytes);
     await writable.close();
   };
+  window.progress = () => window.connection?.importing.value ?? null;
   window.start = async (query = '') => {
-    const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     window.kernel = await bootKernel();
+    stage('the agent');
     const answers = Array.from({ length: 6 }, (_, n) => `answer=Answer ${n + 1}.`).join('&');
     const owner = await startAgent({
       worker: () => new Worker(`/dist-test/main-worker.js?${answers}${query}`, { type: 'module' }),
@@ -45,11 +48,14 @@ const helpers = () => {
     window.connection = await owner.connect();
     window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
     await window.agent.ready();
-    for (let n = 0; n < 400; n++) {
-      if ((await window.sh('freezer list')).status === 0) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    await when(
+      [files(window.kernel, ['/var/lib/slicc/agent/requests']), every(500)],
+      async () => (await window.sh('freezer list')).status === 0,
+      'the freezer command'
+    );
   };
+  window.listed = (count) =>
+    when([window.connection.frozen], () => window.rows().length === count, `${count} rows`);
   window.bigZip = async (path, small, big) => {
     let dir = await navigator.storage.getDirectory();
     const parts = path.split('/').filter(Boolean);
@@ -120,7 +126,7 @@ async function booted(t, query = '') {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate((query) => window.start(query), query);
+  await staged(page, 'the v6 agent', (query) => window.start(query), query);
   return page;
 }
 
@@ -135,13 +141,17 @@ const today = () => new Date().toISOString().slice(0, 10);
 test('freezer import --preview checks a SLICC 6 profile export and says what is in it', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
-  const ran = await page.evaluate(() => window.imported('/tmp/profile.zip', '--preview'));
+  const ran = await staged(page, 'the preview', () =>
+    window.imported('/tmp/profile.zip', '--preview')
+  );
   assert.equal(ran.status, 0, ran.stderr);
   assert.equal(
     ran.stdout,
     'SLICC 6 profile from www.sliccy.ai, exported 2026-07-12: 2 cones, 1 scoop, 1 frozen session, 0.2 KB of files, 1 skill (for every agent), 2 crons (imported off), 1 webhook (new URLs needed), 2 credential-like files to review. SLICC 7 has no accounts for Anthropic and OpenAI. Not imported: 1 mount.\n'
   );
-  const usage = await page.evaluate(() => window.imported('/tmp/profile.zip', '--bogus'));
+  const usage = await staged(page, 'the usage', () =>
+    window.imported('/tmp/profile.zip', '--bogus')
+  );
   assert.equal(usage.status, 2);
 });
 
@@ -320,12 +330,12 @@ test('freezer import refuses a damaged or unsafe profile and changes nothing', a
   const page = await booted(t);
   for (const [what, make, error] of refusals) {
     await upload(page, '/tmp/bad.zip', make());
-    const ran = await page.evaluate(() => window.imported('/tmp/bad.zip', '--preview'));
+    const ran = await staged(page, what, () => window.imported('/tmp/bad.zip', '--preview'));
     assert.equal(ran.status, 1, `${what}: ${ran.stdout}`);
     assert.match(ran.stderr + ran.stdout, error, what);
   }
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
-  const plain = await page.evaluate(async () => ({
+  const plain = await staged(page, 'an import as the cone', async () => ({
     cone: await window.sh('freezer import /tmp/profile.zip', { user: 'cone' }),
     rows: window.rows().length,
     users: (await window.kernel.users.list())
@@ -341,7 +351,9 @@ test('freezer import refuses a damaged or unsafe profile and changes nothing', a
 test('freezer import turns a SLICC 6 profile into frozen cones, with files, memory, skills, crons off, webhooks off and a report; a thaw forks one', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
-  const preview = await page.evaluate(
+  const preview = await staged(
+    page,
+    'the control preview',
     async (data) => {
       const answer = await window.connection.control.importProfile(
         { upload: null, data, again: false, preview: true },
@@ -356,14 +368,15 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
     done: false,
     rows: 0,
   });
-  const ran = await page.evaluate(() => window.imported('/tmp/profile.zip'));
+  const ran = await staged(page, 'the import', () => window.imported('/tmp/profile.zip'));
   assert.equal(ran.status, 0, ran.stdout + ran.stderr);
   assert.match(
     ran.stdout,
     /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\.\nSLICC 7 has no accounts for Anthropic and OpenAI\.\nThe report is \/root\/v6-import-\d{4}-\d\d-\d\d\.md\.\n$/
   );
-  await page.within(30000, () => window.rows().length === 3);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the imported profile', async () => {
+    await window.listed(3);
+    stage('the imported files');
     const out = async (command) => (await window.sh(command)).stdout;
     return {
       rows: window.rows(),
@@ -454,9 +467,10 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
     '- These sprinkles call SLICC APIs other than slicc.lick and may need edits: dashboard (slicc.readFile).',
   ])
     assert.ok(seen.report.includes(part), `the report lacks ${part}:\n${seen.report}`);
-  const thawed = await page.evaluate(async () => {
+  const thawed = await staged(page, 'the thaw', async () => {
     const thaw = await window.connection.control.thaw('frozen-1', BACKGROUND_CONTEXT);
     await window.agent.select(thaw.id);
+    stage('the answer');
     const answer = await window.connection.prompt('Still there?');
     const messages = window.agent
       .messages(thaw.id)
@@ -475,7 +489,7 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
     thawed.messages.some((line) => line.startsWith('user: Please fix the deploy script')),
     thawed.messages.join('\n')
   );
-  const twice = await page.evaluate(async () => ({
+  const twice = await staged(page, 'the import again', async () => ({
     ran: await window.imported('/tmp/profile.zip'),
     rows: window.rows().length,
   }));
@@ -490,47 +504,52 @@ test('freezer import turns a SLICC 6 profile into frozen cones, with files, memo
 test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge, and a zip too big to send as data refused', async (t) => {
   const page = await booted(t, '&anthropic&openai');
   const zip = Buffer.from(await readFile(FIXTURE)).toString('base64');
-  const seen = await page.evaluate(async (zip) => {
-    const blob = new Blob([Uint8Array.from(atob(zip), (char) => char.charCodeAt(0))]);
-    const phases = [];
-    window.agent.on('importing', (value) => phases.push(value.phase));
-    const preview = await window.agent.importProfile(blob, { preview: true });
-    const done = await window.agent.importProfile(blob, { preview: false });
-    const listedAtOnce = window.agent
-      .frozen()
-      .filter((row) => row.v6 && done.cones.includes(row.id))
-      .map((row) => row.id)
-      .sort();
-    const again = await window.agent.importProfile(blob, { preview: true });
-    const badges = window.agent.frozen().filter((row) => row.v6).length;
-    const models = [
-      ...new Set(
-        window.agent
-          .frozen()
-          .filter((row) => row.v6)
-          .map((row) => row.model)
-      ),
-    ];
-    const uploads = (await window.sh('ls -A /var/lib/slicc/agent/imports')).stdout;
-    const refused = await window.agent
-      .importProfile(new Blob(['not a zip']), { preview: true })
-      .then(
-        () => 'resolved',
-        (error) => error.message
-      );
-    return {
-      preview: preview.preview,
-      done,
-      models,
-      listedAtOnce,
-      already: again.preview.already,
-      phases,
-      badges,
-      uploads,
-      refused,
-      progress: window.agent.importing().phase,
-    };
-  }, zip);
+  const seen = await staged(
+    page,
+    'the spectrum import',
+    async (zip) => {
+      const blob = new Blob([Uint8Array.from(atob(zip), (char) => char.charCodeAt(0))]);
+      const phases = [];
+      window.agent.on('importing', (value) => phases.push(value.phase));
+      const preview = await window.agent.importProfile(blob, { preview: true });
+      const done = await window.agent.importProfile(blob, { preview: false });
+      const listedAtOnce = window.agent
+        .frozen()
+        .filter((row) => row.v6 && done.cones.includes(row.id))
+        .map((row) => row.id)
+        .sort();
+      const again = await window.agent.importProfile(blob, { preview: true });
+      const badges = window.agent.frozen().filter((row) => row.v6).length;
+      const models = [
+        ...new Set(
+          window.agent
+            .frozen()
+            .filter((row) => row.v6)
+            .map((row) => row.model)
+        ),
+      ];
+      const uploads = (await window.sh('ls -A /var/lib/slicc/agent/imports')).stdout;
+      const refused = await window.agent
+        .importProfile(new Blob(['not a zip']), { preview: true })
+        .then(
+          () => 'resolved',
+          (error) => error.message
+        );
+      return {
+        preview: preview.preview,
+        done,
+        models,
+        listedAtOnce,
+        already: again.preview.already,
+        phases,
+        badges,
+        uploads,
+        refused,
+        progress: window.agent.importing().phase,
+      };
+    },
+    zip
+  );
   assert.equal(seen.preview.origin, 'https://www.sliccy.ai');
   assert.equal(seen.preview.createdAt, Date.parse('2026-07-12T10:00:00.000Z'));
   assert.equal(seen.preview.exportId, undefined);
@@ -559,7 +578,7 @@ test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge
   assert.equal(seen.uploads, '');
   assert.equal(seen.refused, 'This is not a zip file.');
   assert.equal(seen.progress, 'failed');
-  const remote = await page.evaluate(async () => {
+  const remote = await staged(page, 'a zip too big to send', async () => {
     const root = await navigator.storage.getDirectory();
     const agent = await (
       await (await root.getDirectoryHandle('var')).getDirectoryHandle('lib')
@@ -578,7 +597,7 @@ test('the spectrum adapter imports a picked zip: preview, progress, the v6 badge
 test('a failed freezer import leaves nothing behind, and the same zip imports once the problem is gone', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
-  const failed = await page.evaluate(async () => {
+  const failed = await staged(page, 'the failed import', async () => {
     const look = async () => {
       const out = async (command) => {
         const ran = await window.sh(command);
@@ -596,19 +615,24 @@ test('a failed freezer import leaves nothing behind, and the same zip imports on
       };
     };
     await window.sh('mkdir -p /var/lib/slicc/agent/imports && echo in-the-way > /root/v6');
+    stage('the state before');
     const before = await look();
+    stage('the import');
     const ran = await window.imported('/tmp/profile.zip');
+    stage('the state after');
     return { ran, before, after: await look() };
   });
   assert.equal(failed.ran.status, 1);
   assert.match(failed.ran.stderr, /^freezer: couldn't write \/root\/v6\/home-user\/todo\.txt/);
   assert.deepEqual(failed.after, failed.before);
-  const retried = await page.evaluate(async () => {
+  const retried = await staged(page, 'the retried import', async () => {
     await window.sh('rm /root/v6');
-    return window.imported('/tmp/profile.zip');
+    stage('the import');
+    const ran = await window.imported('/tmp/profile.zip');
+    if (ran.status === 0) await window.listed(3);
+    return ran;
   });
   assert.equal(retried.status, 0, retried.stdout);
-  await page.within(30000, () => window.rows().length === 3);
 });
 
 test('a newer export of the same profile adds only the conversations that grew, as "(updated)", and keeps seven-side edits', async (t) => {
@@ -629,14 +653,21 @@ test('a newer export of the same profile adds only the conversations that grew, 
       },
     })
   );
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a newer export', async () => {
     const out = async (command) => (await window.sh(command)).stdout;
+    stage('the first import');
     const first = await window.imported('/tmp/v1.zip');
+    stage('the thaw and the edit');
     await window.connection.control.thaw('frozen-1', BACKGROUND_CONTEXT);
     await window.sh('echo "my seven edit" >> /home/cone-2/workspace/README.md');
+    stage('the second import');
     const second = await window.imported('/tmp/v2.zip');
-    for (let n = 0; n < 200 && !window.rows().some((row) => row.title.endsWith('(updated)')); n++)
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    await when(
+      [window.connection.frozen],
+      () => window.rows().some((row) => row.title.endsWith('(updated)')),
+      'the updated row'
+    );
+    stage('the files and the second thaw');
     return {
       first: first.status,
       second: second.stdout,
@@ -647,21 +678,29 @@ test('a newer export of the same profile adds only the conversations that grew, 
       thawed: (await window.connection.control.thaw('frozen-4', BACKGROUND_CONTEXT)).id,
     };
   });
-  const after = await page.within(30000, () => {
-    const rows = window.connection.frozen.value.filter((row) => !row.live && row.kind === 'cone');
-    const entries = window.connection.transcript.value.entries;
-    const note = entries.findLast((entry) => entry.kind === 'slicc.thawed');
-    return (
-      !rows.some((row) => row.id === 'frozen-4') && {
-        rows: rows.map(({ id, title, v6 }) => `${id} ${title}${v6 ? ' v6' : ''}`).sort(),
-        active: window.connection.agents.value.active,
-        note: note?.model[0].content,
-        grown: entries.some((entry) =>
-          JSON.stringify(entry.model ?? '').includes('Added --dry-run.')
-        ),
-      }
-    );
-  });
+  const after = await staged(page, 'the thawed update', () =>
+    when(
+      agentSources(window.connection),
+      () => {
+        const rows = window.connection.frozen.value.filter(
+          (row) => !row.live && row.kind === 'cone'
+        );
+        const entries = window.connection.transcript.value.entries;
+        const note = entries.findLast((entry) => entry.kind === 'slicc.thawed');
+        return (
+          !rows.some((row) => row.id === 'frozen-4') && {
+            rows: rows.map(({ id, title, v6 }) => `${id} ${title}${v6 ? ' v6' : ''}`).sort(),
+            active: window.connection.agents.value.active,
+            note: note?.model[0].content,
+            grown: entries.some((entry) =>
+              JSON.stringify(entry.model ?? '').includes('Added --dry-run.')
+            ),
+          }
+        );
+      },
+      'the thawed update'
+    )
+  );
   assert.equal(seen.first, 0);
   assert.match(seen.second, /^Imported 1 frozen cone from https:\/\/www\.sliccy\.ai: frozen-4\./);
   assert.deepEqual(seen.rows, [
@@ -700,9 +739,13 @@ test('a profile of a few hundred MB imports, read from the zip by ranges', async
     ['manifest.json', Buffer.from(JSON.stringify(head)).toString('base64')],
     ...Object.entries(contents).map(([name, data]) => [name, Buffer.from(data).toString('base64')]),
   ];
-  await page.evaluate(([small, big]) => window.bigZip('/tmp/big.zip', small, big), [small, big]);
-  const seen = await page.evaluate(async () => {
+  await staged(page, 'the big zip', ([small, big]) => window.bigZip('/tmp/big.zip', small, big), [
+    small,
+    big,
+  ]);
+  const seen = await staged(page, 'the big import', async () => {
     const ran = await window.imported('/tmp/big.zip');
+    stage('the sizes');
     const sizes = await window.sh('stat -c "%s %n" /tmp/big.zip /root/v6/home-user/big-*.bin');
     return { ran, sizes: sizes.stdout, rows: window.rows().length };
   });
@@ -730,8 +773,11 @@ test('cancelling a large import while it writes rolls it back and leaves nothing
     ['manifest.json', Buffer.from(JSON.stringify(head)).toString('base64')],
     ...Object.entries(contents).map(([name, data]) => [name, Buffer.from(data).toString('base64')]),
   ];
-  await page.evaluate(([small, big]) => window.bigZip('/tmp/big.zip', small, big), [small, big]);
-  const seen = await page.evaluate(async () => {
+  await staged(page, 'the big zip', ([small, big]) => window.bigZip('/tmp/big.zip', small, big), [
+    small,
+    big,
+  ]);
+  const seen = await staged(page, 'the cancelled import', async () => {
     const look = async () => ({
       homes: (await window.sh('ls -A /home')).stdout,
       root: (await window.sh('ls -A /root')).stdout,
@@ -740,7 +786,9 @@ test('cancelling a large import while it writes rolls it back and leaves nothing
       users: (await window.kernel.users.list()).map((user) => user.name),
       rows: window.rows().length,
     });
+    stage('the state before');
     const before = await look();
+    stage('the cancelled import');
     const root = await navigator.storage.getDirectory();
     const file = await (
       await (await root.getDirectoryHandle('tmp')).getFileHandle('big.zip')
@@ -758,6 +806,7 @@ test('cancelling a large import while it writes rolls it back and leaves nothing
       () => 'resolved',
       (error) => error.message
     );
+    stage('the state after');
     return { before, after: await look(), refused, phases, cancelled };
   });
   assert.equal(seen.cancelled, true, seen.phases.join());
@@ -768,11 +817,13 @@ test('cancelling a large import while it writes rolls it back and leaves nothing
 test('freezer import never writes memory through a symlink, and leaves its target and everything else alone', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'an import into a memory symlink', async () => {
     await window.sh(
       'mkdir -p /root/.pi/agent/memory && echo keep > /etc/kept && ln -s /etc/kept /root/.pi/agent/memory/MEMORY.md'
     );
+    stage('the import');
     const ran = await window.imported('/tmp/profile.zip');
+    stage('the state after');
     return {
       ran,
       kept: (await window.sh('cat /etc/kept')).stdout,
@@ -803,9 +854,12 @@ test('a newer export with changed crons replaces the earlier commented-out jobs 
       overrides: { exportId: EXPORT_ID.replace(/^6f/, '5d') },
     })
   );
-  const table = await page.evaluate(async () => {
+  const table = await staged(page, 'two exports with crons', async () => {
+    stage('the first import');
     await window.imported('/tmp/v1.zip');
+    stage('the second import');
     await window.imported('/tmp/v2.zip');
+    stage('the crontab');
     return (await window.sh('crontab -u cone-2 -l')).stdout;
   });
   assert.equal(table.match(/# # name: v6-task-1/g).length, 1, table);
@@ -838,7 +892,9 @@ test("freezer import --in-place moves six's files out of /slicc-fs into seven, w
   const page = await booted(t);
   const form = directory();
   await lay(page, form);
-  const preview = await page.evaluate(
+  const preview = await staged(
+    page,
+    'the in-place preview',
     (dir) => window.imported(dir, '--in-place --preview'),
     DIRECTORY
   );
@@ -847,48 +903,64 @@ test("freezer import --in-place moves six's files out of /slicc-fs into seven, w
     preview.stdout,
     /^SLICC 6 profile from www\.sliccy\.ai, exported 2026-07-12: 2 cones,/
   );
-  const asked = await page.evaluate(async (dir) => {
-    const answer = await window.connection.control.importProfile(
-      { upload: null, data: null, inPlace: dir, again: false, preview: true },
-      BACKGROUND_CONTEXT
-    );
-    return { error: answer.error, done: answer.done, line: answer.line };
-  }, DIRECTORY);
+  const asked = await staged(
+    page,
+    'the in-place control preview',
+    async (dir) => {
+      const answer = await window.connection.control.importProfile(
+        { upload: null, data: null, inPlace: dir, again: false, preview: true },
+        BACKGROUND_CONTEXT
+      );
+      return { error: answer.error, done: answer.done, line: answer.line };
+    },
+    DIRECTORY
+  );
   assert.equal(asked.error, null);
   assert.equal(asked.done, false);
   assert.equal(asked.line, preview.stdout);
-  const progress = await page.evaluate(async (dir) => {
-    const seen = [];
-    const off = window.connection.importing.subscribe(() =>
-      seen.push(window.connection.importing.value.text)
-    );
-    const ran = await window.imported(dir, '--in-place');
-    off?.();
-    return { ran, seen };
-  }, DIRECTORY);
+  const progress = await staged(
+    page,
+    'the in-place import',
+    async (dir) => {
+      const seen = [];
+      const off = window.connection.importing.subscribe(() =>
+        seen.push(window.connection.importing.value.text)
+      );
+      const ran = await window.imported(dir, '--in-place');
+      off?.();
+      return { ran, seen };
+    },
+    DIRECTORY
+  );
   assert.equal(progress.ran.status, 0, progress.ran.stdout + progress.ran.stderr);
   assert.match(
     progress.ran.stdout,
     /^Imported 3 frozen cones from https:\/\/www\.sliccy\.ai: frozen-1, frozen-2, frozen-3\./
   );
-  await page.within(30000, () => window.rows().length === 3);
-  const seen = await page.evaluate(async (sources) => {
-    const out = async (command) => (await window.sh(command)).stdout;
-    const left = [];
-    for (const source of sources)
-      if ((await window.sh(`test -e ${source}`)).status === 0) left.push(source);
-    return {
-      left,
-      directory: (await window.sh('test -e /slicc-v6-upgrade/*')).status,
-      readme: await out('cat /home/cone-2/workspace/README.md'),
-      modes: await out(
-        'stat -c "%U %a %n" /home/cone-2/workspace/README.md /home/cone-2/workspace/.env /home/cone-2/scoops/helper/out.txt /home/cone-3/workspace/certs/dev.pem /usr/share/skills/deploy-notes /usr/share/skills/deploy-notes/SKILL.md /root/v6/home-user/todo.txt /home/cone-2/sprinkles/dashboard/dashboard.shtml'
-      ),
-      attachment: await out('ls /home/cone-2/v6-attachments'),
-      memory: await out('cat /root/.pi/agent/memory/cone-2/MEMORY.md'),
-      git: await out('cat /root/.gitconfig'),
-    };
-  }, moved(form));
+  const seen = await staged(
+    page,
+    'the moved files',
+    async (sources) => {
+      await window.listed(3);
+      stage('the moved files');
+      const out = async (command) => (await window.sh(command)).stdout;
+      const left = [];
+      for (const source of sources)
+        if ((await window.sh(`test -e ${source}`)).status === 0) left.push(source);
+      return {
+        left,
+        directory: (await window.sh('test -e /slicc-v6-upgrade/*')).status,
+        readme: await out('cat /home/cone-2/workspace/README.md'),
+        modes: await out(
+          'stat -c "%U %a %n" /home/cone-2/workspace/README.md /home/cone-2/workspace/.env /home/cone-2/scoops/helper/out.txt /home/cone-3/workspace/certs/dev.pem /usr/share/skills/deploy-notes /usr/share/skills/deploy-notes/SKILL.md /root/v6/home-user/todo.txt /home/cone-2/sprinkles/dashboard/dashboard.shtml'
+        ),
+        attachment: await out('ls /home/cone-2/v6-attachments'),
+        memory: await out('cat /root/.pi/agent/memory/cone-2/MEMORY.md'),
+        git: await out('cat /root/.gitconfig'),
+      };
+    },
+    moved(form)
+  );
   assert.deepEqual(seen.left, []);
   assert.equal(seen.directory, 1);
   assert.equal(seen.readme, files()['files/cones/cone/README.md']);
@@ -930,27 +1002,38 @@ test('a failed in-place import moves every file back to /slicc-fs and keeps the 
     moved(form)
   );
   const before = await stat(moved(form));
-  const failed = await page.evaluate(async (dir) => {
-    await window.sh(
-      'mkdir -p /tmp/elsewhere /root && rm -rf /root/v6 && ln -s /tmp/elsewhere /root/v6'
-    );
-    return window.imported(dir, '--in-place');
-  }, DIRECTORY);
+  const failed = await staged(
+    page,
+    'the failed in-place import',
+    async (dir) => {
+      await window.sh(
+        'mkdir -p /tmp/elsewhere /root && rm -rf /root/v6 && ln -s /tmp/elsewhere /root/v6'
+      );
+      stage('the import');
+      return window.imported(dir, '--in-place');
+    },
+    DIRECTORY
+  );
   assert.equal(failed.status, 1, failed.stdout);
   assert.match(failed.stdout + failed.stderr, /leads through a symlink/);
-  const after = await page.evaluate(async (sources) => {
-    const missing = [];
-    for (const source of sources)
-      if ((await window.sh(`test -f ${source}`)).status !== 0) missing.push(source);
-    return {
-      missing,
-      readme: (await window.sh('cat /slicc-fs/workspace/README.md')).stdout,
-      homes: (await window.sh('ls -d /home/cone-* 2>/dev/null')).stdout,
-      skills: (await window.sh('ls /usr/share/skills 2>/dev/null')).stdout,
-      directory: (await window.sh(`test -f ${'/slicc-v6-upgrade'}/*/manifest.json`)).status,
-      rows: window.rows().length,
-    };
-  }, moved(form));
+  const after = await staged(
+    page,
+    'the files moved back',
+    async (sources) => {
+      const missing = [];
+      for (const source of sources)
+        if ((await window.sh(`test -f ${source}`)).status !== 0) missing.push(source);
+      return {
+        missing,
+        readme: (await window.sh('cat /slicc-fs/workspace/README.md')).stdout,
+        homes: (await window.sh('ls -d /home/cone-* 2>/dev/null')).stdout,
+        skills: (await window.sh('ls /usr/share/skills 2>/dev/null')).stdout,
+        directory: (await window.sh(`test -f ${'/slicc-v6-upgrade'}/*/manifest.json`)).status,
+        rows: window.rows().length,
+      };
+    },
+    moved(form)
+  );
   assert.deepEqual(after.missing, []);
   assert.equal(await stat(moved(form)), before);
   assert.equal(after.readme, files()['files/cones/cone/README.md']);
@@ -958,12 +1041,19 @@ test('a failed in-place import moves every file back to /slicc-fs and keeps the 
   assert.equal(after.skills, '');
   assert.equal(after.directory, 0);
   assert.equal(after.rows, 0);
-  const again = await page.evaluate(async (dir) => {
-    await window.sh('rm /root/v6');
-    return window.imported(dir, '--in-place');
-  }, DIRECTORY);
+  const again = await staged(
+    page,
+    'the in-place import again',
+    async (dir) => {
+      await window.sh('rm /root/v6');
+      stage('the import');
+      const ran = await window.imported(dir, '--in-place');
+      if (ran.status === 0) await window.listed(3);
+      return ran;
+    },
+    DIRECTORY
+  );
   assert.equal(again.status, 0, again.stdout + again.stderr);
-  await page.within(30000, () => window.rows().length === 3);
 });
 
 const formRefusals = [
@@ -1069,7 +1159,7 @@ test('freezer import --in-place checks the directory form before anything moves'
     edit(form);
     form.written[`${DIRECTORY}/manifest.json`] = `${JSON.stringify(form.manifest, null, 2)}\n`;
     await lay(page, form);
-    const ran = await page.evaluate((dir) => window.imported(dir, '--in-place'), DIRECTORY);
+    const ran = await staged(page, what, (dir) => window.imported(dir, '--in-place'), DIRECTORY);
     assert.equal(ran.status, 1, `${what}: ${ran.stdout}`);
     assert.match(ran.stderr + ran.stdout, error, what);
     const homes = await page.evaluate(
@@ -1077,7 +1167,9 @@ test('freezer import --in-place checks the directory form before anything moves'
     );
     assert.equal(homes, '', what);
   }
-  const outside = await page.evaluate(() => window.imported('/tmp', '--in-place'));
+  const outside = await staged(page, 'an import outside the upgrade directory', () =>
+    window.imported('/tmp', '--in-place')
+  );
   assert.equal(outside.status, 1);
   assert.match(
     outside.stdout + outside.stderr,

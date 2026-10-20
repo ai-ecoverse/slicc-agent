@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -14,86 +14,112 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
     `step=${encodeURIComponent(JSON.stringify({ tool: { name: 'bash', args: { command: script } } }))}`,
     `step=${encodeURIComponent(JSON.stringify({ answer: 'Opened.' }))}`,
   ].join('&');
-  await page.evaluate(async () => {
+  await staged(page, 'spectrum', async () => {
     const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
     const { panelCommand } = await import(`${spectrum}/slicc-ui.js`);
     const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
     globalThis.spectrum = { panelCommand, createDummyModel };
   });
-  await page.evaluate(async (q) => {
-    const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
-    const kernel = await bootKernel();
-    const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${q}`, { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    const until = async (check) => {
-      for (let n = 0; n < 500 && !(await check()); n++)
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      return check();
-    };
-    const runs = { A: [], B: [], viewer: [] };
-    const hang = { started: false };
-    const runner = (name) => async (argv, caller) => {
-      runs[name].push({ argv, caller });
-      if (argv[0] === 'hang') {
+  await staged(
+    page,
+    'the panel tabs',
+    async (q) => {
+      await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
+      const kernel = await bootKernel();
+      stage('the agent');
+      const owner = await startAgent({
+        worker: () => new Worker(`/dist-test/main-worker.js?${q}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const runs = { A: [], B: [], viewer: [] };
+      const hang = { started: false };
+      const runner = (name) => async (argv, caller) => {
+        runs[name].push({ argv, caller });
+        if (argv[0] === 'hang') {
+          hang.started = true;
+          return new Promise(() => undefined);
+        }
+        return { stdout: `${name} ran ${argv.join(' ')}\n`, stderr: `${name} note\n`, code: 0 };
+      };
+      const { panelCommand, createDummyModel } = globalThis.spectrum;
+      const app = document.createElement('slicc-app');
+      app.style.cssText = 'display:block;width:1400px;height:900px';
+      document.body.append(app);
+      const real = async (argv, caller) => {
+        runs.A.push({ argv, caller });
+        if (argv[0] !== 'hang') return panelCommand(app, argv, caller);
         hang.started = true;
         return new Promise(() => undefined);
-      }
-      return { stdout: `${name} ran ${argv.join(' ')}\n`, stderr: `${name} note\n`, code: 0 };
-    };
-    const { panelCommand, createDummyModel } = globalThis.spectrum;
-    const app = document.createElement('slicc-app');
-    app.style.cssText = 'display:block;width:1400px;height:900px';
-    document.body.append(app);
-    const real = async (argv, caller) => {
-      runs.A.push({ argv, caller });
-      if (argv[0] !== 'hang') return panelCommand(app, argv, caller);
-      hang.started = true;
-      return new Promise(() => undefined);
-    };
-    const first = await owner.connect();
-    const a = createAgentModel(first, { storage: localStorage, page: { tab: 'A', run: real } });
-    app.model = { ...createDummyModel({ storage: localStorage }), ...a };
-    await customElements.whenDefined('slicc-app');
-    await until(() => app.panels);
-    const b = createAgentModel(await owner.connect(), { page: { tab: 'B', run: runner('B') } });
-    const viewer = createAgentModel(await owner.connect({ readOnly: true }), {
-      page: { tab: 'viewer', run: runner('viewer') },
-    });
-    await a.agent.ready();
-    await b.agent.ready();
-    await viewer.page.done;
-    const other = await first.control.createCone('other', BACKGROUND_CONTEXT);
-    await until(() => b.agent.list().some((row) => row.id === other.id));
-    b.agent.select(other.id);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    a.agent.select('cone');
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
-    const terminal = await attachKernel(await kernel.connect());
-    const run = async (command) => {
-      const decoder = new TextDecoder();
-      let out = '';
-      let err = '';
-      const process = await terminal.spawn(['bash', '-c', command], {
-        cwd: '/home',
-        onStdout: (bytes) => {
-          out += decoder.decode(bytes);
-        },
-        onStderr: (bytes) => {
-          err += decoder.decode(bytes);
-        },
+      };
+      const first = await owner.connect();
+      const a = createAgentModel(first, { storage: localStorage, page: { tab: 'A', run: real } });
+      app.model = { ...createDummyModel({ storage: localStorage }), ...a };
+      await customElements.whenDefined('slicc-app');
+      await when([every(50)], () => app.panels, 'the app panels');
+      stage('the other tabs');
+      const second = await owner.connect();
+      const b = createAgentModel(second, { page: { tab: 'B', run: runner('B') } });
+      const viewer = createAgentModel(await owner.connect({ readOnly: true }), {
+        page: { tab: 'viewer', run: runner('viewer') },
       });
-      return { code: await process.exited, out, err };
-    };
-    await until(() => terminal.fs.exists('/usr/local/bin/panel'));
-    globalThis.panelTest = { owner, first, a, b, app, run, other, hang, runs, until };
-  }, query);
-  const seen = await page.evaluate(async () => {
+      await a.agent.ready();
+      await b.agent.ready();
+      await viewer.page.done;
+      const other = await first.control.createCone('other', BACKGROUND_CONTEXT);
+      await when(
+        agentSources(second, b),
+        () => b.agent.list().some((row) => row.id === other.id),
+        'the other cone in tab B'
+      );
+      b.agent.select(other.id);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      a.agent.select('cone');
+      const { attachKernel } = await import(
+        '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
+      );
+      const terminal = await attachKernel(await kernel.connect());
+      const run = async (command, quiet = false) => {
+        if (!quiet) stage(command);
+        const decoder = new TextDecoder();
+        let out = '';
+        let err = '';
+        const process = await terminal.spawn(['bash', '-c', command], {
+          cwd: '/home',
+          onStdout: (bytes) => {
+            out += decoder.decode(bytes);
+          },
+          onStderr: (bytes) => {
+            err += decoder.decode(bytes);
+          },
+        });
+        return { code: await process.exited, out, err };
+      };
+      await when(
+        [files(kernel, ['/usr/local/bin'])],
+        () => terminal.fs.exists('/usr/local/bin/panel'),
+        'the panel command'
+      );
+      await when(
+        [every(50)],
+        async () => {
+          const { out } = await run('panel tabs --json', true);
+          const shown = out.startsWith('[') ? JSON.parse(out) : [];
+          const tab = (id) => shown.find((row) => row.tab === id)?.cone;
+          return tab('A') === 'cone' && tab('B') === other.id;
+        },
+        'both tabs reported'
+      );
+      globalThis.panelTest = { owner, first, a, b, app, run, other, hang, runs, kernel };
+    },
+    query
+  );
+  const seen = await staged(page, 'the panel commands', async () => {
     const { first, a, app, run, other } = globalThis.panelTest;
+    stage('the answer');
     const answer = await first.prompt('Open the files.');
+    stage('the scoop and its commands');
     const files = app.panels.find('files');
     const tools = a.agent
       .messages('cone')
@@ -124,11 +150,12 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
       fromTab,
     };
   });
-  const ended = await page.evaluate(async () => {
+  const ended = await staged(page, 'the hung panel command', async () => {
     const { panelTest } = globalThis;
-    const { owner, first, a, b, run, hang, runs, until } = panelTest;
+    const { owner, first, a, b, run, hang, runs } = panelTest;
     const pending = run('panel hang');
-    await until(() => hang.started);
+    await when([every(50)], () => hang.started, 'the hung command');
+    stage('the closed tabs');
     await first.close();
     await a.page.dispose();
     const hung = await pending;

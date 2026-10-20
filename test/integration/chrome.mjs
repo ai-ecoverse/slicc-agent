@@ -18,6 +18,17 @@ const options = {
 
 export const launch = (more = {}) => start({ ...options, ...more });
 
+export const staged = (page, label, fn, ...args) =>
+  page.run(
+    {
+      label,
+      everyMs: 200,
+      marker: () => [globalThis.waiting ?? null, globalThis.progress?.() ?? null],
+    },
+    fn,
+    ...args
+  );
+
 if (argv[1] === fileURLToPath(import.meta.url)) {
   const { url } = await serve({ ...options, port: Number(env.PORT ?? 8080) });
   console.log(`slicc-agent test page on ${url}`);
