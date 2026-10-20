@@ -28,6 +28,7 @@ import {
   locateWasm,
   sandboxFactory,
 } from './codemode/index.ts';
+import { codexFetch } from './codex.ts';
 import { attachFreezer } from './freezer/index.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
 import { type AgentHost, hostAgent } from './host.ts';
@@ -270,11 +271,13 @@ async function modelsOf(
   );
   await models.refresh({ allowNetwork: false }).catch(() => undefined);
   const bases = () => modelBases(providers, models, fields.env);
-  scope.fetch = vaultFetch(
-    vault,
-    transport,
-    modelRoute(bases, () => records.state.value),
-    records.rejecting
+  scope.fetch = codexFetch(
+    vaultFetch(
+      vault,
+      transport,
+      modelRoute(bases, () => records.state.value),
+      records.rejecting
+    )
   );
   const endpoints = vaultEndpoints(vault);
   const defaultModel = async () => {
@@ -359,6 +362,7 @@ async function settingsOf(
     mcp,
     moved: keys,
     reach,
+    vault: moved.vault,
   });
   settings.state.subscribe(() => void moved.licks.flush(BACKGROUND_CONTEXT).catch(() => undefined));
   return settings;

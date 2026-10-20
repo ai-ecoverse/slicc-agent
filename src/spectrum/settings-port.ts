@@ -5,13 +5,20 @@ import type {
   SettingsEvents,
   SettingsPort,
 } from '@ai-ecoverse/slicc-spectrum/ui';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { preferredModel } from '../preferred.ts';
 import type { AgentSettings, ProviderOption, SettingsState, SignIn } from '../services.ts';
+import {
+  type ConnectOptions,
+  DEVICE_SIGN_INS,
+  type DeviceSignIn,
+  httpsUrl,
+  SIGN_IN_UNFINISHED,
+} from '../sign-ins.ts';
 import type { AgentAdapter } from './agent-port.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
-import { mcpLogin } from './mcp-login.ts';
+import { mcpLogin, type Popup, untilAborted } from './mcp-login.ts';
 
 export const SETTINGS_KEY = 'slicc-agent.settings';
 
@@ -35,7 +42,12 @@ export type Login = (
 ) => Promise<string | Sealed>;
 
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
-export const UNFINISHED = "The sign-in didn't finish. Try again.";
+export const UNFINISHED = SIGN_IN_UNFINISHED;
+
+export type OpenPopup = () => Popup | null;
+
+const openPopup: OpenPopup = () =>
+  globalThis.open?.('about:blank', 'slicc-sign-in', 'popup,width=520,height=720') ?? null;
 
 export function readable(error: unknown): Error {
   if (error instanceof DOMException && error.name === 'AbortError') return error;
@@ -54,6 +66,8 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   readonly #login: Login | null;
   readonly #mcpLogin: Login;
   readonly #signing = new Map<string, AbortController>();
+  readonly #prompts = new Map<string, DeviceSignIn>();
+  readonly #open: OpenPopup;
   #local: Local;
   #offered = '';
   readonly #urls = new Map<string, string>();
@@ -63,10 +77,12 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     agent: AgentAdapter,
     storage: Pick<Storage, 'getItem' | 'setItem'> | null,
     login: Login | null = null,
-    mcp: Login = mcpLogin() as Login
+    mcp: Login = mcpLogin() as Login,
+    open: OpenPopup = openPopup
   ) {
     super();
     this.#mcpLogin = mcp;
+    this.#open = open;
     this.#settings = settings;
     this.#agent = agent;
     this.#storage = storage;
@@ -174,24 +190,38 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     return this.#state().accounts.map(({ needs, ...account }) => {
       const url = this.#urls.get(account.id);
       const located = url ? { ...account, url } : account;
+      const prompt = this.#prompts.get(account.id);
       const shown = this.#signing.has(account.id)
-        ? { ...located, status: 'signing-in' as const }
+        ? {
+            ...located,
+            status: 'signing-in' as const,
+            ...(prompt ? { signIn: { ...prompt } } : {}),
+          }
         : located;
       return needs ? { ...shown, needs } : shown;
     });
   }
 
-  async connect(id: string, secret?: string, fields?: Record<string, string>): Promise<void> {
+  async connect(
+    id: string,
+    secret?: string,
+    fields?: Record<string, string>,
+    options?: ConnectOptions
+  ): Promise<void> {
     const account =
       this.#state().accounts.find((candidate) => candidate.id === id) ?? this.#offer(id);
     const mcp = account?.group === 'mcp';
-    const login = account?.auth !== 'oauth' ? null : mcp ? this.#mcpLogin : this.#login;
     const given = fields ? { ...fields } : null;
+    const keyed = options?.method === 'key';
+    if (account?.auth === 'oauth' && DEVICE_SIGN_INS.has(id) && secret === undefined && !keyed)
+      return this.#device(id, given);
+    const login = account?.auth !== 'oauth' || keyed ? null : mcp ? this.#mcpLogin : this.#login;
+    if (keyed) this.cancel(id);
     if (secret !== undefined) {
       await this.#settings.connect(id, secret, given, BACKGROUND_CONTEXT);
       return;
     }
-    if (account?.auth === 'oauth' && !login) throw new Error(`${id} needs a sign-in`);
+    if (account?.auth === 'oauth' && !login && !keyed) throw new Error(`${id} needs a sign-in`);
     if (!login) {
       if (account?.store !== 'vault') throw new Error(`${id} needs an API key`);
       await this.#settings.connect(id, null, given, BACKGROUND_CONTEXT);
@@ -207,13 +237,52 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     await this.#settings.connect(id, null, given, BACKGROUND_CONTEXT);
   }
 
-  async #signIn(id: string, login: Login): Promise<string | Sealed> {
+  #begin(id: string): AbortController {
     const controller = new AbortController();
     this.#signing
       .get(id)
       ?.abort(new DOMException('A newer sign-in replaced this one.', 'AbortError'));
     this.#signing.set(id, controller);
+    this.#prompts.delete(id);
     this.emit('accounts', this.accounts());
+    return controller;
+  }
+
+  #end(id: string, controller: AbortController): void {
+    if (this.#signing.get(id) === controller) {
+      this.#signing.delete(id);
+      this.#prompts.delete(id);
+    }
+    this.emit('accounts', this.accounts());
+  }
+
+  async #device(id: string, given: Record<string, string> | null): Promise<void> {
+    const popup = this.#open();
+    const controller = this.#begin(id);
+    const { signal } = controller;
+    const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
+    try {
+      const started = (await untilAborted(
+        this.#settings.signIn(id, context),
+        signal
+      )) as DeviceSignIn | null;
+      if (!started || !httpsUrl(started.url)) throw new Error(UNFINISHED);
+      const code = typeof started.code === 'string' && started.code ? started.code : undefined;
+      this.#prompts.set(id, { url: started.url, ...(code ? { code } : {}) });
+      this.emit('accounts', this.accounts());
+      if (popup) popup.location.href = started.url;
+      await untilAborted(this.#settings.connect(id, null, given, context), signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      throw readable(error);
+    } finally {
+      popup?.close();
+      this.#end(id, controller);
+    }
+  }
+
+  async #signIn(id: string, login: Login): Promise<string | Sealed> {
+    const controller = this.#begin(id);
     try {
       const key = await login(
         id,
@@ -228,8 +297,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
       controller.signal.throwIfAborted();
       return key;
     } finally {
-      if (this.#signing.get(id) === controller) this.#signing.delete(id);
-      this.emit('accounts', this.accounts());
+      this.#end(id, controller);
     }
   }
 
@@ -237,6 +305,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     const controller = this.#signing.get(id);
     if (!controller) return;
     this.#signing.delete(id);
+    this.#prompts.delete(id);
     controller.abort(new DOMException('The sign-in was cancelled.', 'AbortError'));
     this.emit('accounts', this.accounts());
   }

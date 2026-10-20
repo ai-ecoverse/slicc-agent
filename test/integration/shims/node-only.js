@@ -9,3 +9,4 @@ export const createRequire = missing;
 export default missing;
 export const spawn = missing;
 export const createServer = missing;
+export const randomBytes = missing;

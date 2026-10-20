@@ -34,6 +34,7 @@ import { xiaomiTokenPlanCnProvider } from '@earendil-works/pi-ai/providers/xiaom
 import { xiaomiTokenPlanSgpProvider } from '@earendil-works/pi-ai/providers/xiaomi-token-plan-sgp';
 import { zaiProvider } from '@earendil-works/pi-ai/providers/zai';
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn';
+import { CODEX } from './sign-ins.ts';
 
 export interface FieldOption {
   value: string;
@@ -63,6 +64,7 @@ export interface KeyProvider {
   description: string;
   keyUrl: string;
   cors: boolean;
+  signIn?: true;
   fields?: readonly FieldSpec[];
 }
 
@@ -356,6 +358,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     description: 'Grok models from xAI.',
     keyUrl: 'https://console.x.ai',
     cors: true,
+    signIn: true,
   },
   {
     id: 'meta',
@@ -420,6 +423,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     description: 'Kimi models on the Kimi Code subscription.',
     keyUrl: 'https://www.kimi.com/code/console',
     cors: false,
+    signIn: true,
   },
   {
     id: 'ant-ling',
@@ -524,12 +528,21 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
     {
       description: entry.description,
       keyUrl: entry.keyUrl,
-      auth: entry.fields ? 'fields' : 'api-key',
+      auth: entry.signIn ? 'oauth' : entry.fields ? 'fields' : 'api-key',
       corsFree: !entry.cors,
       vaultName: named.get(entry.id) as string,
       ...(entry.fields ? { fields: entry.fields } : {}),
     },
   ]),
+  [
+    CODEX,
+    {
+      description: 'GPT models on your ChatGPT Plus or Pro plan, with your ChatGPT account.',
+      auth: 'oauth',
+      corsFree: true,
+      vaultName: 'OPENAI_CODEX_TOKEN',
+    },
+  ],
 ]);
 
 export const ADDED_FIRST: readonly string[] = ['amazon-bedrock', 'adobe'];

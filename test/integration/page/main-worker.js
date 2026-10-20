@@ -1,6 +1,7 @@
 import { attachKernel } from '@ai-ecoverse/slicc-kernel';
 import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' };
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
+import { registerBunOAuthFlows } from '@earendil-works/pi-ai/bun-oauth';
 import { createProvider } from '@earendil-works/pi-ai/models';
 import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
@@ -24,6 +25,157 @@ import { createMcpServer } from '../fixtures/mcp-server.mjs';
 import { seeded } from '../fixtures/seeds.mjs';
 
 const params = new URL(self.location.href).searchParams;
+registerBunOAuthFlows();
+const logged = [];
+const shown = (value) => {
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return `${value.message} ${value.stack ?? ''}`;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    logged.push(args.map(shown).join(' '));
+    original(...args);
+  };
+}
+const device = { mode: 'pending', issued: 0, polls: 0, revoked: new Set() };
+const ACCOUNT = 'acct-e2e-0001';
+const jwt = (claims, tail) => `e2e.${btoa(JSON.stringify(claims))}.${tail}`;
+const issue = (provider) => {
+  device.issued += 1;
+  const tail = `SECRET${device.issued}VALUE`;
+  return {
+    access_token:
+      provider === 'openai-codex'
+        ? jwt({ 'https://api.openai.com/auth': { chatgpt_account_id: ACCOUNT } }, tail)
+        : `${provider}-access-${tail}`,
+    refresh_token: `${provider}-refresh-${tail}`,
+    expires_in: 3600,
+    token_type: 'Bearer',
+  };
+};
+const AUTH_HOSTS = new Map([
+  ['auth.x.ai', 'xai'],
+  ['auth.kimi.com', 'kimi-coding'],
+  ['auth.openai.com', 'openai-codex'],
+]);
+const DEVICE_PATHS = new Set([
+  '/oauth2/device/code',
+  '/api/oauth/device_authorization',
+  '/api/accounts/deviceauth/usercode',
+]);
+const VERIFY = {
+  xai: 'https://accounts.x.ai/device',
+  'kimi-coding': 'https://www.kimi.com/device',
+};
+const reply = (status, body) => ({ ...json(body), status });
+function signIn(request) {
+  const url = new URL(request.url);
+  const provider = AUTH_HOSTS.get(url.host);
+  const form = new URLSearchParams(new TextDecoder().decode(request.body ?? new Uint8Array()));
+  upstream.push({ url: request.url, auth: provider });
+  if (DEVICE_PATHS.has(url.pathname)) {
+    if (provider === 'openai-codex')
+      return reply(200, { device_auth_id: 'da-e2e', user_code: 'CODE-0001', interval: '1' });
+    return reply(200, {
+      device_code: `dc-${provider}`,
+      user_code: 'CODE-0001',
+      verification_uri: VERIFY[provider],
+      verification_uri_complete: `${VERIFY[provider]}?user_code=CODE-0001`,
+      interval: 1,
+      expires_in: 600,
+    });
+  }
+  if (url.pathname === '/oauth/token' && provider === 'openai-codex')
+    return reply(200, issue(provider));
+  if (url.pathname === '/api/accounts/deviceauth/token') {
+    device.polls += 1;
+    if (device.mode === 'approve')
+      return reply(200, { authorization_code: 'ac-e2e', code_verifier: 'cv-e2e' });
+    return reply(403, { error: { code: 'deviceauth_authorization_pending' } });
+  }
+  if (form.get('grant_type') !== 'urn:ietf:params:oauth:grant-type:device_code')
+    return reply(400, { error: 'invalid_request' });
+  device.polls += 1;
+  if (device.mode === 'deny') return reply(400, { error: 'access_denied' });
+  if (device.mode === 'malformed') {
+    const { access_token } = issue(provider);
+    return reply(200, { access_token });
+  }
+  if (device.mode === 'approve') return reply(200, issue(provider));
+  return reply(400, { error: 'authorization_pending' });
+}
+function codexTurn(request) {
+  const header = (wanted) =>
+    request.headers.find(([name]) => name.toLowerCase() === wanted)?.[1] ?? null;
+  upstream.push({
+    url: request.url,
+    authorization: header('authorization'),
+    account: header('chatgpt-account-id'),
+  });
+  const event = (body) => `event: ${body.type}\ndata: ${JSON.stringify(body)}\n\n`;
+  const item = {
+    type: 'message',
+    id: 'msg_e2e',
+    role: 'assistant',
+    status: 'completed',
+    content: [{ type: 'output_text', text: 'From chatgpt.com.', annotations: [] }],
+  };
+  const text = [
+    event({ type: 'response.created', response: { id: 'resp_e2e', status: 'in_progress' } }),
+    event({
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { ...item, status: 'in_progress', content: [] },
+    }),
+    event({
+      type: 'response.content_part.added',
+      item_id: 'msg_e2e',
+      output_index: 0,
+      content_index: 0,
+      part: { type: 'output_text', text: '', annotations: [] },
+    }),
+    event({
+      type: 'response.output_text.delta',
+      item_id: 'msg_e2e',
+      output_index: 0,
+      content_index: 0,
+      delta: 'From chatgpt.com.',
+    }),
+    event({ type: 'response.output_item.done', output_index: 0, item }),
+    event({
+      type: 'response.completed',
+      response: {
+        id: 'resp_e2e',
+        status: 'completed',
+        output: [item],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    }),
+  ].join('');
+  return {
+    status: 200,
+    headers: [['content-type', 'text/event-stream']],
+    body: (async function* () {
+      yield new TextEncoder().encode(text);
+    })(),
+  };
+}
+self.addEventListener('message', ({ data }) => {
+  if (data?.device) device.mode = data.device;
+  if (data?.revoke) device.revoked.add(data.revoke);
+  if (data?.killGrant) self.fakeVault?.killGrant(data.killGrant);
+  data?.deviced?.postMessage({ polls: device.polls, issued: device.issued });
+  data?.logged?.postMessage([...logged]);
+  data?.vaultRecords?.postMessage(
+    (self.fakeVault?.records ?? []).map(({ value: _value, ...record }) => record)
+  );
+});
 const fauxModels = [
   ...params.getAll('model').map((id) => ({ id })),
   ...params.getAll('blind').map((id) => ({ id, input: ['text'] })),
@@ -275,6 +427,11 @@ const completions = (request) => {
     authorization,
     names: request.headers.map(([name]) => name.toLowerCase()),
   });
+  if (device.revoked.has(authorization?.replace(/^Bearer /, '')))
+    return {
+      ...json({ error: { message: 'Invalid token', type: 'authentication_error' } }),
+      status: 401,
+    };
   const chunk = (delta, finish) =>
     `data: ${JSON.stringify({ id: 'up', object: 'chat.completion.chunk', created: 1, model: 'm', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
   const text = `${chunk({ role: 'assistant', content: `From ${url.host}.` }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
@@ -289,6 +446,8 @@ const completions = (request) => {
 const relay = {
   traits: { crossOrigin: 'any' },
   async fetch(request) {
+    if (AUTH_HOSTS.has(new URL(request.url).host)) return signIn(request);
+    if (new URL(request.url).host === 'chatgpt.com') return codexTurn(request);
     if (registry.length && new URL(request.url).pathname.endsWith('/chat/completions'))
       return completions(request);
     if (new URL(request.url).host === GATEWAY_HOST && params.has('gateway'))

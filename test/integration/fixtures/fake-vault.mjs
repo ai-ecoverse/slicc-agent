@@ -12,7 +12,7 @@ class Refused extends Error {
   }
 }
 
-const strip = ({ value: _value, url: _url, refresh: _refresh, ...shown }) => shown;
+const strip = ({ value: _value, url: _url, refresh: _refresh, source: _source, ...shown }) => shown;
 const templated = (base, url) => {
   const source = base
     .replace(/\/+$/, '')
@@ -128,7 +128,66 @@ export function serveVault(port, values, version = 1, options = {}) {
       Boolean(entry) && loopback(url) && loopback(new URL(entry.url))
     );
   };
+  const SIGN_INS = ['xai', 'kimi-coding', 'openai-codex'];
+  const stashed = new Map();
+  const dead = new Set();
+  const signIn = (message) => {
+    if (message.server !== undefined || message.oauth !== undefined)
+      throw new Refused('EINVAL', 'a provider sign-in takes no server or oauth');
+    if (!SIGN_INS.includes(message.provider))
+      throw new Refused('ENOTSUP', `${message.provider} has no sign-in`);
+    const raw =
+      typeof message.response === 'string' ? message.response : decoder.decode(message.response);
+    const parsed = JSON.parse(raw);
+    if (parsed.token_type !== undefined && parsed.token_type.toLowerCase() !== 'bearer')
+      throw new Refused('EACCES', 'the IdP returned a token_type other than Bearer');
+    if (typeof parsed.access_token !== 'string')
+      throw new Refused('EINVAL', 'the response has no access_token');
+    const at = records.findIndex((item) => item.kind === 'model' && item.name === message.name);
+    const before = at >= 0 ? records[at] : undefined;
+    if (before && before.provider !== message.provider)
+      throw new Refused('EEXIST', `${message.name} is a key of another provider`);
+    if (before && before.source !== `oauth:${message.provider}`) stashed.set(message.name, before);
+    const base = message.provider.replace(/-/g, '_');
+    const expiresAt =
+      typeof parsed.expires_in === 'number' ? Date.now() + parsed.expires_in * 1000 : undefined;
+    const access = {
+      kind: 'model',
+      name: message.name,
+      provider: message.provider,
+      placeholder: before?.placeholder ?? `fnox_proxy_${base}_signin`,
+      value: parsed.access_token,
+      source: `oauth:${message.provider}`,
+      state: 'ready',
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(message.settings ? { settings: { ...message.settings } } : {}),
+      ...(parsed.refresh_token ? { refresh: true } : {}),
+    };
+    dead.delete(message.name);
+    if (at >= 0) records.splice(at, 1, access);
+    else records.push(access);
+    const sealed = [access];
+    if (parsed.refresh_token) {
+      const name = `${message.name}_GRANT`;
+      const old = records.findIndex((item) => item.kind === 'grant' && item.name === name);
+      const grant = {
+        kind: 'grant',
+        name,
+        placeholder: old >= 0 ? records[old].placeholder : `fnox_proxy_${base}_grant`,
+        value: parsed.refresh_token,
+      };
+      if (old >= 0) records.splice(old, 1, grant);
+      else records.push(grant);
+      sealed.push(grant);
+    }
+    rebuild();
+    return {
+      records: sealed.map(({ kind, name, placeholder }) => ({ kind, name, placeholder })),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    };
+  };
   const grant = (message) => {
+    if (message.provider !== undefined) return signIn(message);
     const known = registered.mcp.find(
       (entry) => entry.server === message.server && entry.tokenUrl === message.oauth?.tokenUrl
     );
@@ -198,6 +257,10 @@ export function serveVault(port, values, version = 1, options = {}) {
         `${message.server ?? message.provider} has no refreshable credential`
       );
     for (const record of found) {
+      if (dead.has(record.name)) {
+        record.state = 'expired';
+        throw new Refused('EACCES', 'refresh failed: invalid_grant');
+      }
       if (options.refreshed) {
         const grant = records.find(
           (item) => item.kind === 'grant' && item.name === `${record.name}_GRANT`
@@ -316,6 +379,10 @@ export function serveVault(port, values, version = 1, options = {}) {
     },
     fail(op, code, message = `${op} failed`) {
       failures.push({ op, code, message });
+    },
+    stashed,
+    killGrant(name) {
+      dead.add(name);
     },
     expire(name) {
       const record = records.find((item) => item.name === name);
