@@ -150,7 +150,7 @@ export class Writer {
     if (failed) throw new ImportError(`${command.split(' ')[0]}: ${failed}`);
   }
 
-  rollback(): Promise<void> {
+  rollback(): Promise<boolean> {
     return this.journal.rollback();
   }
 }

@@ -11,7 +11,7 @@ import type { Layout } from '../layout.ts';
 import { opfsFile } from '../opfs-pool.ts';
 import { TITLE_TURNS } from '../titles/extension.ts';
 import { IMPORTS_DIR } from './paths.ts';
-import { Journal, sweep, type Undoing } from './v6-journal.ts';
+import { Journal, sweep, type Undoing, unsettled } from './v6-journal.ts';
 import { type Notes, place, reportOf } from './v6-place.ts';
 import {
   checkLicks,
@@ -944,6 +944,11 @@ async function importOpened(
   const room = await (deps.room ?? storageRoom)();
   if (room !== undefined && room < (dir ? 1 : 2) * total)
     throw new ImportError('there is not enough free storage for this import');
+  if (await unsettled(deps.env, own))
+    throw new ImportError(
+      `an earlier import of this profile couldn't be rolled back completely; its journal is in ${own}`
+    );
+  let keep = false;
   try {
     await writer.sh(
       `mkdir -p ${IMPORTS_DIR} && chmod 700 ${IMPORTS_DIR} && rm -rf ${quote(own)} && mkdir -p ${quote(own)}`
@@ -952,7 +957,7 @@ async function importOpened(
     const parsed = await parse(opened, data);
     await assign(deps, opened, parsed.units, options.again, date, context);
     const cones = parsed.units.filter((unit) => unit.fresh).map((unit) => unit.cone);
-    await journal.open({ key: opened.key, at: now, cones }, context);
+    await journal.open({ key: opened.key, at: now, cones, source: dir }, context);
     const notes: Notes = {
       lines: [],
       skipped: [],
@@ -983,12 +988,12 @@ async function importOpened(
       await settled(opened, run.at, writer);
       made = await commit(deps, opened, parsed.units, now, context);
     } catch (error) {
-      await writer.rollback();
+      keep = !(await writer.rollback());
       throw error;
     }
+    if (dir) await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT);
     await journal.close().catch(() => undefined);
     const report = await reportOf(run, made).catch((error: Error) => `nowhere (${error.message})`);
-    if (dir) await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT);
     const split = accountsSplit(opened.manifest.providers, deps.providers);
     const { origin } = opened.manifest.producer;
     const settings = said(split.settings, split.lacking);
@@ -1002,7 +1007,7 @@ async function importOpened(
       error: null,
     };
   } finally {
-    await deps.env.remove(own, { recursive: true, force: true }, BACKGROUND_CONTEXT);
+    if (!keep) await deps.env.remove(own, { recursive: true, force: true }, BACKGROUND_CONTEXT);
   }
 }
 
