@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -17,10 +17,13 @@ const ANSWER = 'said:From the model.';
 
 async function boot(page, lives) {
   await page.goto('/');
-  await page.evaluate(
+  await staged(
+    page,
+    'the boot-licks agent',
     async ({ lives, record }) => {
-      const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
       const directory = `/.slicc/boot-licks-${Date.now()}`;
       const r = { kernel: await bootKernel(), life: 0 };
       const url = ({ version, calls = [], adobe = true }) =>
@@ -60,17 +63,11 @@ async function boot(page, lives) {
           }
           return [];
         });
-      r.until = async (check, what) => {
-        for (let i = 0; i < 1600; i++) {
-          const value = await check();
-          if (value) return value;
-          await r.pause(25);
-        }
-        throw new Error(`timed out waiting for ${what}: ${JSON.stringify(r.shape())}`);
-      };
+      r.until = (check, what) => when(agentSources(r.local, r.model), check, what);
       r.idle = () => !r.local.views.value?.cone?.docs?.['pi.live']?.run;
       r.listed = () => r.model.settings.models().some((model) => model.id === 'adobe/e2e-1');
       r.open = async () => {
+        stage('the connection');
         r.local = await r.owner.connect();
         r.model = createAgentModel(r.local, { storage: localStorage });
         await r.model.agent.ready();
@@ -85,19 +82,26 @@ async function boot(page, lives) {
           'the cone on the Adobe model'
         );
       };
-      r.prompt = (text) => r.local.prompt(text);
+      r.prompt = (text) => {
+        stage(`the answer to ${text}`);
+        return r.local.prompt(text);
+      };
       r.restart = async (kernel = false) => {
+        stage('the restart');
         await r.local.close();
         if (kernel) {
           r.kernel.terminate();
           await r.pause(1100);
+          stage('the kernel after a restart');
           r.kernel = await bootKernel();
         }
+        stage('the worker after a restart');
         await r.owner.restart();
         await r.open();
       };
       r.settle = async (what) => {
         await r.until(r.listed, 'the Adobe model');
+        stage('a quiet window');
         await r.pause(2500);
         await r.until(r.idle, what);
         return r.shape();
@@ -113,7 +117,7 @@ async function boot(page, lives) {
 test('an upgrade lick starts a turn on its own that the model answers', async (t) => {
   const page = await chrome.page(t);
   await boot(page, [{ version: '6.5.0' }, { version: '6.6.0' }]);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the upgrade lick', async () => {
     const { until, prompt, restart, shape, settle } = globalThis.r;
     await prompt('Hi.');
     await restart();
@@ -126,7 +130,7 @@ test('an upgrade lick starts a turn on its own that the model answers', async (t
 test('a session-reload lick starts a turn on its own that the model answers', async (t) => {
   const page = await chrome.page(t);
   await boot(page, [{ version: '6.6.0', calls: [bash('echo one')] }, { version: '6.6.0' }]);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the session-reload lick', async () => {
     const { until, prompt, restart, shape, settle } = globalThis.r;
     await prompt('Start it.');
     await restart(true);
@@ -143,7 +147,7 @@ test('two reloads in quick succession give one reload lick and one turn', async 
     { version: '6.6.0', adobe: false },
     { version: '6.6.0' },
   ]);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'two reloads', async () => {
     const { prompt, restart, settle } = globalThis.r;
     await prompt('Start it.');
     await restart(true);
@@ -160,7 +164,7 @@ test('a reload caused by the turn a reload lick started does not wake the agent 
     { version: '6.6.0', calls: [bash('echo two')] },
     { version: '6.6.0' },
   ]);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a reload from a reload turn', async () => {
     const { until, prompt, restart, shape, settle } = globalThis.r;
     await prompt('Start it.');
     await restart(true);
@@ -181,7 +185,7 @@ test('a reload caused by the turn a reload lick started does not wake the agent 
 test('a run a reload interrupts on a discovered model is resumed and answered', async (t) => {
   const page = await chrome.page(t);
   await boot(page, [{ version: '6.6.0', calls: [bash('sleep 30')] }, { version: '6.6.0' }]);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a resumed run', async () => {
     const { local, until, restart, shape, settle } = globalThis.r;
     const sent = await local.control.send(
       { text: 'Wait.', whenBusy: 'followUp', requestId: null },

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,7 +8,9 @@ after(() => chrome.close());
 test('a conversation stored with a copied extension list gets a built-in it lacked after a boot, also forked, in a new chat and frozen then thawed, while a deliberate removal and tool choice stay', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the copied extension list', async () => {
+    await import('/dist-test/page.js');
+    stage('the seeded store');
     const directory = `/.slicc/selection-${Date.now()}`;
     const seeded = await new Promise((resolve) => {
       const worker = new Worker(`/dist-test/legacy-worker.js?directory=${directory}`, {
@@ -20,8 +22,8 @@ test('a conversation stored with a copied extension list gets a built-in it lack
       };
     });
     if (seeded.error) throw new Error(seeded.error);
+    stage('the kernel');
     const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
     const kernel = await bootKernel();
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
     const client = await attachKernel(await kernel.connect());
@@ -60,6 +62,7 @@ test('a conversation stored with a copied extension list gets a built-in it lack
       ['persist', directory],
       ...steps.map((step) => ['step', JSON.stringify(step)]),
     ]);
+    stage('the agent');
     const owner = await startAgent({
       worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
@@ -77,16 +80,10 @@ test('a conversation stored with a copied extension list gets a built-in it lack
             .join('')
             .trim()
         );
-    const until = async (check, what) => {
-      for (let i = 0; i < 400; i++) {
-        const value = check();
-        if (value) return value;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      throw new Error(`timed out waiting for ${what}`);
-    };
+    const until = (check, what) => when([connection.views], check, what);
     const run = async (agentId, text) => {
       const before = results(agentId).length;
+      stage(`${text} in ${agentId}`);
       const sent = await connection.control.send(
         { text, whenBusy: 'followUp', requestId: null, agentId },
         ctx

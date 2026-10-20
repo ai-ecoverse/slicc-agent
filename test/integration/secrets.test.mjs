@@ -5,7 +5,7 @@ import { extname } from 'node:path';
 import { after, afterEach, test } from 'node:test';
 import { compile } from '@ai-ecoverse/slicc-scrub';
 import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' };
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 import { seeded } from './fixtures/seeds.mjs';
 
 const seeds = seeded(vectors);
@@ -92,9 +92,11 @@ const helpers = () => {
     });
     frame.contentWindow.postMessage({ role: 'agent' }, origin, [port2]);
     const pair = await ready;
-    const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     const kernel = await bootKernel();
+    stage('the agent');
     const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
     let worker;
     const owner = await startAgent({
@@ -136,16 +138,21 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
     },
     { answer: 'Done.' },
     { answer: 'Lick seen.' },
+    { answer: 'Read.' },
     { answer: 'Summary.' },
     { answer: 'Spare.' },
     { answer: 'Spare.' },
   ];
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'secrets reach the model scrubbed',
     async ({ origin, steps, seeded, alpha, beta }) => {
       await window.write('/home/seeded.txt', seeded);
       await window.write('/home/.slicc/webhooks/build.json', '{"message":"The build finished"}');
       const { owner, connection, requests } = await window.withVault(origin, steps);
+      stage('the answer');
       const answer = await connection.prompt(`Look at the seeded file; my key is ${alpha}.`);
+      stage('the memory and the lick');
       await connection.control.memorySave(
         {
           id: null,
@@ -162,24 +169,31 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
         { id: 'w1', headers: { 'x-event': 'done' }, body: JSON.stringify({ token: alpha }) },
         BACKGROUND_CONTEXT
       );
-      const until = async (check) => {
-        for (let n = 0; n < 300 && !check(); n++)
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        return check();
-      };
+      const until = (check, what) => when(agentSources(connection), check, what);
       await until(
         () =>
           connection.transcript.value.entries.filter((entry) => entry.kind === 'pi.assistant')
-            .length >= 5
+            .length >= 5,
+        'the lick turn'
       );
+      const before = JSON.stringify(connection.transcript.value.entries);
+      stage('a long message');
+      await connection.prompt(`Read this. ${'Long. '.repeat(16000)}`);
+      stage('the compaction');
       await connection.control.compact(null, BACKGROUND_CONTEXT);
-      await until(() =>
-        connection.transcript.value.entries.some((entry) => entry.kind === 'pi.compaction')
+      await until(
+        () => connection.transcript.value.entries.some((entry) => entry.kind === 'pi.compaction'),
+        'the compaction entry'
       );
+      stage('the requests');
       const memory = await window.read('/home/.pi/agent/memory/cone/MEMORY.md');
       const result = {
         answer,
+        compacted: connection.transcript.value.entries.some(
+          (entry) => entry.kind === 'pi.compaction'
+        ),
         vault: connection.vault.value,
+        before,
         entries: JSON.stringify(connection.transcript.value.entries),
         docs: JSON.stringify(connection.transcript.value.docs),
         memory,
@@ -192,11 +206,13 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
   );
   captured.push(
     ...seen.requests.map((text, at) => ({ what: `request ${at}`, text })),
+    { what: 'entries before the compaction', text: seen.before },
     { what: 'entries', text: seen.entries },
     { what: 'live slots and documents', text: seen.docs },
     { what: 'memory', text: seen.memory }
   );
   assert.equal(seen.answer, 'Done.');
+  assert.equal(seen.compacted, true);
   assert.deepEqual(seen.vault, { port: 'ready', needed: true, version: 1, locked: 'no', held: 0 });
   for (const shown of [
     'fnox_proxy_000000000000000000000001',
@@ -204,18 +220,21 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
     '[redacted:UNI_KEY]',
     '[redacted:GH_TOKEN]',
   ])
-    assert.ok(seen.entries.includes(shown), shown);
+    assert.ok(seen.before.includes(shown), shown);
   assert.ok(seen.memory.includes('remember fnox_proxy_000000000000000000000004'));
   assert.ok(seen.requests.length >= 5);
+  assert.ok(seen.requests.some((text) => text.includes('context summarization assistant')));
 });
 
 test('secrets: with no vault the agent is unchanged, and /secrets answers locally', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
-    const { bootKernel } = await import('/kernel.js');
+  const seen = await staged(page, 'secrets with no vault', async () => {
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     const kernel = await bootKernel();
+    stage('the agent');
     const params = new URLSearchParams([['answer', 'Plain.']]);
     let worker;
     const owner = await startAgent({
@@ -224,18 +243,18 @@ test('secrets: with no vault the agent is unchanged, and /secrets answers locall
       kernel: { connect: () => kernel.connect() },
     });
     const connection = await owner.connect();
+    stage('the answer');
     const answer = await connection.prompt('Say something.');
     await connection.control.send(
       { text: '/secrets', whenBusy: 'steer', requestId: null },
       BACKGROUND_CONTEXT
     );
-    for (
-      let n = 0;
-      n < 100 &&
-      !connection.transcript.value.entries.some((entry) => entry.kind === 'slicc.secrets');
-      n++
-    )
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    await when(
+      agentSources(connection),
+      () => connection.transcript.value.entries.some((entry) => entry.kind === 'slicc.secrets'),
+      'the /secrets entry'
+    );
+    stage('the requests');
     const listed = connection.transcript.value.entries.find(
       (entry) => entry.kind === 'slicc.secrets'
     );
@@ -280,39 +299,47 @@ test('secrets: a model call goes out prepared by the vault, with the key filled 
     'scrub',
     `record=${encodeURIComponent(JSON.stringify(record))}`,
   ].join('&');
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'a model call prepared by the vault',
     async ({ query, alpha }) => {
-      const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
       const kernel = await bootKernel();
+      stage('the agent');
       let worker;
       const owner = await startAgent({
         worker: () =>
           (worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' })),
         kernel: { connect: () => kernel.connect() },
       });
-      const { agent, settings } = createAgentModel(await owner.connect(), {
-        storage: localStorage,
-      });
+      const connection = await owner.connect();
+      const adapter = createAgentModel(connection, { storage: localStorage });
+      const { agent, settings } = adapter;
       await agent.ready();
-      const until = async (check, tries = 500) => {
-        for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-        return check();
-      };
-      await until(() => settings.models().some((model) => model.id === 'adobe/e2e-1'));
+      const until = (check, what) => when(agentSources(connection, adapter), check, what);
+      await until(
+        () => settings.models().some((model) => model.id === 'adobe/e2e-1'),
+        'the Adobe model'
+      );
       agent.setModel(agent.active(), 'adobe/e2e-1');
       await until(
-        () => agent.list().find((row) => row.id === agent.active())?.model === 'adobe/e2e-1'
+        () => agent.list().find((row) => row.id === agent.active())?.model === 'adobe/e2e-1',
+        'the cone on the Adobe model'
       );
       await agent.send(agent.active(), `My key is ${alpha}.`);
-      await until(() =>
-        agent
-          .messages()
-          .some(
-            (m) =>
-              m.role === 'assistant' && m.parts?.some((part) => part.text === 'From the model.')
-          )
+      await until(
+        () =>
+          agent
+            .messages()
+            .some(
+              (m) =>
+                m.role === 'assistant' && m.parts?.some((part) => part.text === 'From the model.')
+            ),
+        'the answer'
       );
+      stage('the upstream requests');
       const channel = new MessageChannel();
       const answer = new Promise((resolve) => {
         channel.port1.onmessage = ({ data }) => resolve(data);
@@ -351,9 +378,12 @@ test('secrets: a guest tool call asks with its arguments scrubbed, a secret show
     },
     { answer: 'Ran.' },
   ];
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'a guest tool call with a secret',
     async ({ origin, steps }) => {
       const { owner, connection } = await window.withVault(origin, steps);
+      stage('the guest');
       const hub = {
         mint: async () => ({ id: 'seat-1', url: 'https://hub.test/join/seat-1' }),
         revoke: async () => {},
@@ -374,24 +404,25 @@ test('secrets: a guest tool call asks with its arguments scrubbed, a secret show
       );
       const asked = () =>
         model.approvals.list().filter((approval) => approval.kind === 'guest-tool');
-      for (let n = 0; n < 300 && !asked().length; n++)
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      const [first] = asked();
+      const [first] = await when(
+        agentSources(connection, model),
+        () => asked().length && asked(),
+        'the guest tool call'
+      );
       const result = {
         approval: JSON.stringify(first ?? null),
         args: first?.args,
         summary: first?.summary,
         items: JSON.stringify(connection.approvals.value),
       };
-      if (first) await model.approvals.decide(first.id, 'once');
+      await model.approvals.decide(first.id, 'once');
       const ran = () =>
         connection.transcript.value.entries.some(
           (entry) =>
             entry.kind === 'pi.assistant' &&
             entry.model?.[0]?.content?.some((block) => block.text === 'Ran.')
         );
-      for (let n = 0; n < 300 && !ran(); n++)
-        await new Promise((resolve) => setTimeout(resolve, 50));
+      await when(agentSources(connection, model), ran, 'the approved run');
       result.written = await window.read('/home/guest-ran.txt').catch(() => null);
       await guest.close();
       await owner.release();
@@ -421,9 +452,12 @@ test('secrets: an Always rule keeps no secret from its call, on the seat or in t
     { tool: { name: 'bash', args: { command } } },
     { answer: 'Two.' },
   ];
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'an Always rule with a secret',
     async ({ origin, steps }) => {
       const { owner, connection } = await window.withVault(origin, steps);
+      stage('the guest');
       const ctx = BACKGROUND_CONTEXT;
       const hub = {
         mint: async () => ({ id: 'seat-1', url: 'https://hub.test/join/seat-1' }),
@@ -440,11 +474,7 @@ test('secrets: an Always rule keeps no secret from its call, on the seat or in t
       const guest = await connectGuest(
         await owner.port({ guest: { id: minted.seat.id, label: 'Anna' } })
       );
-      const until = async (check) => {
-        for (let n = 0; n < 300 && !check(); n++)
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        return check();
-      };
+      const until = (check, what) => when(agentSources(connection, model), check, what);
       const said = (text) =>
         connection.transcript.value.entries.some(
           (entry) =>
@@ -456,18 +486,18 @@ test('secrets: an Always rule keeps no secret from its call, on the seat or in t
       const send = (text) =>
         guest.control.send({ text, whenBusy: 'followUp', requestId: null }, ctx);
       await send('First.');
-      const [first] = await until(() => asked().length && asked());
+      const [first] = await until(() => asked().length && asked(), 'the first call');
       const decided = await connection.control.decide(first.id, 'always', null, ctx);
-      await until(() => said('One.'));
+      await until(() => said('One.'), 'the first answer');
       const rules = () =>
         connection.guests.value.find((entry) => entry.id === minted.seat.id)?.alwaysTools ?? [];
-      await until(() => rules().length);
+      await until(() => rules().length, 'the Always rule');
       let shown = 0;
       await send('Second.');
       await until(() => {
         shown = Math.max(shown, asked().length);
         return said('Two.');
-      });
+      }, 'the second answer');
       const result = {
         decided: decided.state,
         rules: rules(),
