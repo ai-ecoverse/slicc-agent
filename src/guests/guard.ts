@@ -14,6 +14,7 @@ import {
 } from '@earendil-works/pi-durable';
 import type { Approval, Approvals } from '../approvals/index.ts';
 import { REASONS, scoopTier } from '../approvals/record.ts';
+import { scrubTexts } from '../secrets/scrub.ts';
 import { type GuestPolicy, gateKind, gateRefusal } from './policy.ts';
 import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from './seats.ts';
 
@@ -56,6 +57,30 @@ export function canonical(value: unknown): string {
       .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`)
       .join(',')}}`;
   return JSON.stringify(value ?? null);
+}
+
+function leaves(value: unknown, found: string[]): void {
+  if (typeof value === 'string') found.push(value);
+  else if (value && typeof value === 'object')
+    for (const item of Object.values(value)) leaves(item, found);
+}
+
+function replaced(value: unknown, texts: string[]): unknown {
+  if (typeof value === 'string') return texts.shift();
+  if (Array.isArray(value)) return value.map((item) => replaced(item, texts));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, replaced(item, texts)])
+    );
+  return value;
+}
+
+export async function scrubbedArguments(
+  args: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const found: string[] = [];
+  leaves(args, found);
+  return replaced(args, await scrubTexts(found)) as Record<string, unknown>;
 }
 
 export function summaryOf(args: Record<string, unknown>): string {
@@ -188,6 +213,7 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
       context
     );
     const task = Number(api.taskId);
+    const shown = await scrubbedArguments(call.arguments);
     const asked = await host.approvals.request(
       {
         id,
@@ -196,7 +222,12 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
         agentId: seat.agentId,
         requester: { kind: 'guest', name: seat.label, seat: seat.id },
         tier: taint.tier,
-        detail: { tool: call.name, summary: summaryOf(call.arguments), arguments: args, task },
+        detail: {
+          tool: call.name,
+          summary: summaryOf(shown),
+          arguments: canonical(shown),
+          task,
+        },
       },
       BACKGROUND_CONTEXT
     );

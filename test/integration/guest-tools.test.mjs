@@ -235,6 +235,54 @@ test('a guest run waits for the owner: an approved bash runs, a denied one never
   assert.deepEqual(seen.states, ['approved:owner', 'rejected:owner']);
 });
 
+test('a guest tool call shows its arguments in full as pretty JSON, and arguments over 64 KiB as a prefix marked truncated', async (t) => {
+  const page = await chrome.page(t);
+  const script = [
+    'try {',
+    "  await tools.bash({ command: 'x'.repeat(70000) });",
+    '} catch (error) {',
+    "  text('denied');",
+    '}',
+  ].join('\n');
+  await boot(page, {
+    steps: [bash(''), answer('Empty.'), code(script), answer('Long.')],
+  });
+  const seen = await page.evaluate(async () => {
+    const { until, open, mint, join, send, said, decide } = globalThis.r;
+    await open();
+    const guest = await join(await mint('user'));
+    const shown = () =>
+      globalThis.r.model.approvals.list().filter((approval) => approval.kind === 'guest-tool');
+    const look = () => {
+      const [first] = shown();
+      return {
+        tool: first.tool,
+        summary: first.summary,
+        args: first.args,
+        ...(first.argsTruncated ? { argsTruncated: true } : {}),
+      };
+    };
+    await send(guest, 'Run nothing.');
+    await until(() => shown().length === 1, 'the empty call to be asked');
+    const empty = look();
+    await decide('deny');
+    await until(() => said().includes('Empty.'), 'the empty run');
+    await send(guest, 'Run a long one.');
+    await decide('once');
+    await until(() => shown()[0]?.tool === 'bash', 'the long call to be asked');
+    const long = look();
+    await decide('deny');
+    await until(() => said().includes('Long.'), 'the long run');
+    await guest.close();
+    return { empty, long };
+  });
+  assert.deepEqual(seen.empty, { tool: 'bash', summary: '', args: '{\n  "command": ""\n}' });
+  const whole = JSON.stringify({ command: 'x'.repeat(70_000) }, null, 2);
+  assert.equal(seen.long.args, whole.slice(0, 65_536));
+  assert.equal(seen.long.argsTruncated, true);
+  assert.equal(seen.long.summary.length, 2000);
+});
+
 test("a guest run's codemode script hits the same gate for each nested bash: one approved runs, one denied comes back blocked", async (t) => {
   const page = await chrome.page(t);
   const script = [

@@ -18,6 +18,26 @@ const ENDS: Record<string, ApprovalEnd> = {
   withdrawn: 'withdrawn',
 };
 
+export const ARGS_LENGTH = 65_536;
+
+function pretty(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function argsOf(text: string | undefined): { args?: string; argsTruncated?: true } {
+  if (text === undefined) return {};
+  const args = pretty(text);
+  if (args.length <= ARGS_LENGTH) return { args };
+  const end = /[\uD800-\uDBFF]/.test(args[ARGS_LENGTH - 1] as string)
+    ? ARGS_LENGTH - 1
+    : ARGS_LENGTH;
+  return { args: args.slice(0, end), argsTruncated: true };
+}
+
 function requesterOf(item: Item): ApprovalRequester {
   const { kind, name, agentId, where } = item.requester;
   return {
@@ -56,8 +76,16 @@ export function shown(item: Item, agentName: string | undefined): Approval {
       ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } }
       : {}),
   };
-  if (item.kind === 'guest-tool')
-    return { ...guest, kind: 'guest-tool', tool: item.detail.tool, summary: item.detail.summary };
+  if (item.kind === 'guest-tool') {
+    const tool = {
+      ...guest,
+      kind: 'guest-tool' as const,
+      tool: item.detail.tool,
+      summary: item.detail.summary,
+      ...argsOf(item.detail.arguments),
+    };
+    return tool;
+  }
   return {
     ...guest,
     kind: 'guest-message',
