@@ -12,6 +12,8 @@ export interface Jobs {
 
 export const JOBS_MS = 2000;
 
+export const PS_MS = 2000;
+
 type Ps = Pick<KernelClient, 'ps'>;
 
 type Row = Awaited<ReturnType<NonNullable<KernelClient['ps']>>>[number];
@@ -22,7 +24,37 @@ export function shortCommand(command: string): string {
   return lines.length > 1 && !first.endsWith('…') ? `${first} …` : first;
 }
 
-export function backgroundJobs(client: Ps, ms = JOBS_MS): Jobs {
+type Warn = (message: string) => void;
+
+const quiet: Warn = () => undefined;
+
+export function boundedPs(
+  owner: Ps,
+  warn: Warn,
+  bound = PS_MS
+): Promise<readonly Row[] | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      warn(`slicc-agent: the process table read took over ${bound} ms, so it was skipped`);
+      resolve(undefined);
+    }, bound);
+  });
+  const read = Promise.resolve()
+    .then(() => owner.ps?.())
+    .catch((error: unknown) => {
+      warn(`slicc-agent: the process table could not be read: ${String(error)}`);
+      return undefined;
+    });
+  return Promise.race([read, stalled]).finally(() => clearTimeout(timer));
+}
+
+export function backgroundJobs(
+  client: Ps,
+  ms = JOBS_MS,
+  warn: Warn = (message) => console.warn(message),
+  bound = PS_MS
+): Jobs {
   const jobs = new Map<number, Job & { client: Ps }>();
   const running = new Set<number>();
   const listeners = new Set<() => Promise<void>>();
@@ -66,13 +98,13 @@ export function backgroundJobs(client: Ps, ms = JOBS_MS): Jobs {
   async function prune(): Promise<void> {
     let gone = false;
     for (const each of new Set([...jobs.values()].map((job) => job.client))) {
-      const table = await each.ps?.().catch(() => undefined);
+      const table = await boundedPs(each, quiet, bound);
       if (table && sweep(each, table)) gone = true;
     }
     if (gone) await changed();
   }
   async function survivors(owner: Ps, command: string, process: KernelProcess): Promise<void> {
-    const table = await owner.ps?.().catch(() => undefined);
+    const table = await boundedPs(owner, warn, bound);
     if (!table) return;
     const found = orphans(table, process.pgid, process.pid);
     keep(found, process.pgid, shortCommand(command), owner);

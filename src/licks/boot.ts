@@ -5,7 +5,7 @@ import {
   type EntryRecord,
   type Harness,
 } from '@earendil-works/pi-durable';
-import type { Job, Jobs } from '../kernel/jobs.ts';
+import { type Job, type Jobs, shortCommand } from '../kernel/jobs.ts';
 import type { Deliver } from './fswatch.ts';
 import type { LickChannel } from './lick.ts';
 import { entryLick } from './state.ts';
@@ -37,12 +37,15 @@ export const LISTED = 5;
 
 interface Block {
   type?: string;
+  id?: string;
   name?: string;
   arguments?: { command?: unknown };
 }
 
-export function bashCommands(entries: readonly EntryRecord[], after: number): string[] {
-  const commands: string[] = [];
+type Call = { id: string | undefined; command: string; at: number };
+
+function bashCalls(entries: readonly EntryRecord[], after: number): Call[] {
+  const calls: Call[] = [];
   let reacting = false;
   for (const entry of entries) {
     if (entry.kind === 'pi.user') {
@@ -50,14 +53,44 @@ export function bashCommands(entries: readonly EntryRecord[], after: number): st
       reacting = lick !== undefined && BOOT_CHANNELS.has(lick.channel);
     }
     if (reacting || entry.kind !== 'pi.assistant' || Number(entry.id) <= after) continue;
-    const content = (entry.model?.[0] as { content?: unknown } | undefined)?.content;
-    for (const block of Array.isArray(content) ? (content as Block[]) : []) {
+    const message = entry.model?.[0] as { content?: unknown; timestamp?: unknown } | undefined;
+    const at = typeof message?.timestamp === 'number' ? message.timestamp : 0;
+    for (const block of Array.isArray(message?.content) ? (message.content as Block[]) : []) {
       const command = block.arguments?.command;
       if (block.type === 'toolCall' && block.name === 'bash' && typeof command === 'string')
-        commands.push(command);
+        calls.push({ id: block.id, command, at });
     }
   }
-  return commands;
+  return calls;
+}
+
+export function bashCommands(entries: readonly EntryRecord[], after: number): string[] {
+  return bashCalls(entries, after).map((call) => call.command);
+}
+
+function ended(entries: readonly EntryRecord[]): Set<string> {
+  const done = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== 'pi.tool-result') continue;
+    const id = (entry.model?.[0] as { toolCallId?: unknown } | undefined)?.toolCallId;
+    const codes = (
+      (entry.data as { diagnostics?: { code?: unknown }[] } | undefined)?.diagnostics ?? []
+    ).map((diagnostic) => diagnostic.code);
+    if (typeof id === 'string' && !codes.includes('interrupted')) done.add(id);
+  }
+  return done;
+}
+
+export function interruptedCommands(
+  entries: readonly EntryRecord[],
+  after: number,
+  boot: string
+): string[] {
+  const done = ended(entries);
+  const booted = (Number(boot) + 1) * 1000;
+  return bashCalls(entries, after)
+    .filter((call) => call.at < booted && !(call.id !== undefined && done.has(call.id)))
+    .map((call) => shortCommand(call.command));
 }
 
 function upgraded(from: string, to: string, upgrades: number) {
@@ -72,22 +105,37 @@ function upgraded(from: string, to: string, upgrades: number) {
   } as const;
 }
 
-export function backgroundList(jobs: readonly Job[]): string[] {
-  const commands = [...new Set(jobs.map((job) => job.command))];
+export function listed(all: readonly string[]): string[] {
+  const commands = [...new Set(all)];
   const more = commands.length - LISTED;
   return more > 0 ? [...commands.slice(-LISTED), `…and ${more} more`] : commands;
 }
 
-function restarted(boot: string, jobs: readonly Job[]) {
+export function backgroundList(jobs: readonly Job[]): string[] {
+  return listed(jobs.map((job) => job.command));
+}
+
+function restartBody(interrupted: readonly string[], jobs: readonly Job[]): string {
+  const cut = listed(interrupted);
   const background = backgroundList(jobs);
+  const parts = [
+    ...(cut.length ? [`Commands that were interrupted mid-run:\n${cut.join('\n')}`] : []),
+    ...(background.length
+      ? [`Background commands that are no longer running:\n${background.join('\n')}`]
+      : []),
+  ];
+  return parts.length
+    ? parts.join('\n\n')
+    : 'Files are unchanged. Start again whatever you still need running.';
+}
+
+function restarted(boot: string, jobs: readonly Job[], interrupted: readonly string[]) {
   return {
     channel: 'session-reload',
     source: 'kernel',
     title: 'The kernel restarted',
     text: 'The page reloaded, so the kernel started fresh: processes from before the reload are gone.',
-    body: background.length
-      ? `Background commands that are no longer running:\n${background.join('\n')}`
-      : 'Files are unchanged. Start again whatever you still need running.',
+    body: restartBody(interrupted, jobs),
     target: 'cone',
     eventId: `boot:${boot}`,
   } as const;
@@ -111,7 +159,11 @@ export async function bootLicks(
   const before = state?.jobs ?? [];
   if (facts.boot !== null && state?.boot && facts.boot !== state.boot) {
     const commands = bashCommands(entries, state.mark);
-    if (commands.length || before.length) await deliver(restarted(facts.boot, before), context);
+    if (commands.length || before.length)
+      await deliver(
+        restarted(facts.boot, before, interruptedCommands(entries, state.mark, facts.boot)),
+        context
+      );
   } else if (facts.boot !== null && facts.boot === state?.boot) jobs?.adopt(before);
   const { entries: after } = await cone.context(context);
   const mark = Number(after.at(-1)?.id ?? 0);

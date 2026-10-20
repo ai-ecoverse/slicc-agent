@@ -458,3 +458,125 @@ test('after a page reload, the session-reload lick lists the background jobs tha
   );
   assert.doesNotMatch(lick.body, /reload-note|reload-done/);
 });
+
+test('after a page reload during a long foreground sleep, the session-reload lick lists it as interrupted', async (t) => {
+  const page = await chrome.page(t);
+  const persist = `/.slicc/interrupted-${Date.now()}`;
+  const step = (spec) => `step=${encodeURIComponent(JSON.stringify(spec))}`;
+  const bash = (command) => step({ tool: { name: 'bash', args: { command } } });
+  const open = (query) =>
+    staged(
+      page,
+      'the interrupted agent',
+      async (query) => {
+        await import('/dist-test/page.js');
+        stage('the kernel');
+        const { bootKernel } = await import('/kernel.js');
+        window.kernel = await bootKernel();
+        stage('the agent');
+        const booted = Date.now();
+        const owner = await startAgent({
+          worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+          kernel: { connect: () => window.kernel.connect() },
+        });
+        window.connection = await owner.connect();
+        window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
+        await window.agent.ready();
+        const { attachKernel } = await import(
+          '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
+        );
+        const client = await attachKernel(await window.kernel.connect());
+        window.running = async (line) =>
+          (await client.ps()).filter((row) => row.state !== 'Z' && row.argv.join(' ') === line)
+            .length;
+        return booted;
+      },
+      query
+    );
+  await page.init(helpers);
+  await page.goto('/');
+  const booted = await open(
+    `persist=${persist}&${bash('sleep 900\necho slept')}&${step({ answer: 'Slept.' })}`
+  );
+  await page.evaluate(() => {
+    window.connection.prompt('Sleep for a while.').catch(() => undefined);
+  });
+  await staged(page, 'the foreground sleep', () =>
+    when([every(100)], async () => (await window.running('sleep 900')) === 1, 'the sleep')
+  );
+  assert.equal(await page.evaluate(() => window.licks().length), 0);
+  await page.within(5000, (at) => Date.now() >= Math.floor(at / 1000) * 1000 + 1000, booted);
+  await page.reload();
+  await open(`persist=${persist}&answer=Noted.&answer=Noted.&answer=Noted.`);
+  const lick = await staged(page, 'the session-reload lick', () =>
+    window.agentWait(
+      () => window.licks().find((found) => found.channel === 'session-reload'),
+      'the session-reload lick'
+    )
+  );
+  assert.equal(lick.title, 'The kernel restarted');
+  assert.equal(lick.body, 'Commands that were interrupted mid-run:\nsleep 900 …');
+});
+
+test('a bash call returns its result while the kernel never answers the process-table read', async (t) => {
+  const page = await chrome.page(t);
+  const step = (spec) => `step=${encodeURIComponent(JSON.stringify(spec))}`;
+  const query = [
+    step({ tool: { name: 'bash', args: { command: 'echo stalled-ps-ok' } } }),
+    step({ answer: 'Echoed.' }),
+  ].join('&');
+  await page.init(helpers);
+  await page.goto('/');
+  await staged(
+    page,
+    'the stalled-ps agent',
+    async (query) => {
+      await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
+      const kernel = await bootKernel(
+        {},
+        { worker: new URL('/stalled-ps-kernel-worker.js', location.href) }
+      );
+      stage('the agent');
+      const owner = await startAgent({
+        worker: () => {
+          window.worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' });
+          return window.worker;
+        },
+        kernel: { connect: () => kernel.connect() },
+      });
+      window.connection = await owner.connect();
+      window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
+      await window.agent.ready();
+      const { attachKernel } = await import(
+        '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
+      );
+      window.client = await attachKernel(await kernel.connect());
+      const stall = new BroadcastChannel('stalled-ps');
+      const stalled = new Promise((resolve) =>
+        stall.addEventListener('message', ({ data }) => data === 'stalled' && resolve())
+      );
+      stall.postMessage('stall');
+      stage('the stall');
+      await stalled;
+    },
+    query
+  );
+  const reply = await staged(page, 'the echo', () => window.connection.prompt('Echo it.'));
+  assert.equal(reply, 'Echoed.');
+  const seen = await page.evaluate(async () => {
+    const channel = new MessageChannel();
+    const logged = new Promise((resolve) => {
+      channel.port1.onmessage = ({ data }) => resolve(data);
+    });
+    window.worker.postMessage({ logged: channel.port2 }, [channel.port2]);
+    const late = new Promise((resolve) => setTimeout(() => resolve('stalled'), 3000));
+    return {
+      ps: await Promise.race([window.client.ps().then(() => 'answered'), late]),
+      warned: (await logged).some((line) => line.includes('the process table read took over')),
+      output: JSON.stringify(window.agent.messages()).includes('stalled-ps-ok'),
+    };
+  });
+  assert.deepEqual(seen, { ps: 'stalled', warned: true, output: true });
+});
