@@ -84,6 +84,22 @@ export class Writer {
     return true;
   }
 
+  async move(from: string, to: string, fresh: boolean): Promise<void> {
+    this.check();
+    await this.direct(to);
+    if (!fresh && !(await this.tree(dirname(to)))) {
+      const old = await this.env.readBinaryFile(to, this.context);
+      this.later(() =>
+        old.ok
+          ? this.env.writeFile(to, old.value, BACKGROUND_CONTEXT)
+          : this.env.remove(to, { force: true }, BACKGROUND_CONTEXT)
+      );
+    }
+    done(await this.env.createDir(dirname(to), { recursive: true }, this.context), dirname(to));
+    done(await this.env.renameFile(from, to, this.context), to);
+    this.later(() => this.env.renameFile(to, from, BACKGROUND_CONTEXT));
+  }
+
   async sh(command: string): Promise<void> {
     let err = '';
     const ran = await this.env.exec(

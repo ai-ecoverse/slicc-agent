@@ -16,6 +16,7 @@ import {
   checkLicks,
   checkManifest,
   checkTranscript,
+  DIRECTORY_ROOT,
   type Licks,
   type Manifest,
   type Transcript,
@@ -83,7 +84,7 @@ export interface ImportResult {
 
 type ReadSource = { path: string } | { bytes: Uint8Array };
 
-export type ImportSource = ReadSource | { upload: string };
+export type ImportSource = ReadSource | { upload: string } | { inPlace: string };
 
 const UPLOAD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -111,9 +112,10 @@ export interface ImportDeps {
 
 export type Opened = {
   manifest: Manifest;
-  entries: Map<string, ZipEntry>;
-  source: ZipSource;
   key: string;
+  read(name: string): Promise<Uint8Array>;
+  dir: string | null;
+  sources: Map<string, string>;
 };
 
 export type Where =
@@ -260,7 +262,101 @@ export async function openProfile(source: ZipSource): Promise<Opened> {
     whereOf(manifest, name);
   }
   const { exportId, part } = manifest;
-  return { manifest, entries, source, key: part ? `${exportId}#${part.index}` : exportId };
+  return {
+    manifest,
+    key: part ? `${exportId}#${part.index}` : exportId,
+    read: (name) => {
+      const entry = entries.get(name);
+      if (!entry) throw new ImportError(`${name} is named in the manifest but not in the zip`);
+      return readEntry(source, entry);
+    },
+    dir: null,
+    sources: new Map(),
+  };
+}
+
+const DIRECTORY = new RegExp(
+  `^${DIRECTORY_ROOT}/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`
+);
+
+async function infoOf(deps: ImportDeps, path: string, context: Context) {
+  const real = await deps.env.canonicalPath(path, context);
+  if (!real.ok) throw new ImportError(`${path} is missing`);
+  if (real.value !== path) throw new ImportError(`${path} leads through a symlink`);
+  const info = await deps.env.fileInfo(path, context);
+  if (!info.ok) throw new ImportError(`${path} is missing`);
+  return info.value;
+}
+
+async function walk(deps: ImportDeps, dir: string, rel: string, context: Context) {
+  const found = new Map<string, number>();
+  const listed = await deps.env.listDir(rel ? `${dir}/${rel}` : dir, context);
+  if (!listed.ok) throw new ImportError(`can't read ${dir}: ${listed.error.message}`);
+  for (const item of listed.value) {
+    const name = rel ? `${rel}/${item.name}` : item.name;
+    if (item.kind === 'directory')
+      for (const [inner, size] of await walk(deps, dir, name, context)) found.set(inner, size);
+    else if (item.kind === 'file') found.set(name, item.size);
+    else throw new ImportError(`${name} is a symlink`);
+  }
+  return found;
+}
+
+export async function openDirectory(
+  deps: ImportDeps,
+  dir: string,
+  context: Context
+): Promise<Opened> {
+  const id = DIRECTORY.exec(dir)?.[1];
+  if (!id) throw new ImportError(`${dir} isn't a SLICC 6 upgrade in ${DIRECTORY_ROOT}`);
+  await infoOf(deps, dir, context);
+  const found = await walk(deps, dir, '', context);
+  const head = found.get('manifest.json');
+  if (head === undefined) throw new ImportError(`${dir} has no manifest.json`);
+  if (head > LIMITS.transcript) throw new ImportError('manifest.json is over 64 MiB');
+  const read = async (path: string, name: string) => {
+    const got = await deps.env.readBinaryFile(path, context);
+    if (!got.ok) throw new ImportError(`can't read ${name}: ${got.error.message}`);
+    return got.value;
+  };
+  const manifest = checkManifest(
+    json(await read(`${dir}/manifest.json`, 'manifest.json'), 'manifest.json'),
+    2
+  );
+  if (manifest.exportId !== id)
+    throw new ImportError(`${dir} holds the export ${manifest.exportId}`);
+  const sources = new Map<string, string>();
+  for (const file of manifest.files) {
+    whereOf(manifest, file.path);
+    const cap = /^(transcripts|frozen)\//.test(file.path) ? LIMITS.transcript : LIMITS.file;
+    if (file.size > cap) throw new ImportError(`${file.path} is over ${cap / MiB} MiB`);
+    if (file.source === undefined) {
+      if (found.get(file.path) !== file.size)
+        throw new ImportError(
+          `${file.path} is in the manifest but not in ${dir}, or not at that size`
+        );
+      continue;
+    }
+    if (found.has(file.path))
+      throw new ImportError(`${file.path} is both in ${dir} and left at ${file.source}`);
+    const info = await infoOf(deps, file.source, context);
+    if (info.kind !== 'file' || info.size !== file.size)
+      throw new ImportError(
+        `${file.source} isn't the file ${file.path} names, or not at that size`
+      );
+    sources.set(file.path, file.source);
+  }
+  const listed = new Set(manifest.files.map((file) => file.path));
+  for (const name of found.keys())
+    if (name !== 'manifest.json' && !listed.has(name))
+      throw new ImportError(`${name} is not listed in the manifest`);
+  return {
+    manifest,
+    key: manifest.exportId,
+    read: (name) => read(sources.get(name) ?? `${dir}/${name}`, name),
+    dir,
+    sources,
+  };
 }
 
 const noLicks: Licks = { crontasks: [], tasks: [], webhooks: [] };
@@ -268,9 +364,7 @@ const noLicks: Licks = { crontasks: [], tasks: [], webhooks: [] };
 async function licksIn(opened: Opened, data?: Map<string, Uint8Array>): Promise<Licks> {
   const name = opened.manifest.licks;
   if (!name) return noLicks;
-  const entry = opened.entries.get(name);
-  if (!entry) throw new ImportError(`${name} is named in the manifest but not in the zip`);
-  return checkLicks(json(data?.get(name) ?? (await readEntry(opened.source, entry)), name));
+  return checkLicks(json(data?.get(name) ?? (await opened.read(name)), name));
 }
 
 const ACCOUNTS: Record<string, string> = {
@@ -410,12 +504,13 @@ async function verify(opened: Opened, writer: Writer, stage: string | null, show
   const { files } = opened.manifest;
   for (const [at, file] of files.entries()) {
     writer.check();
-    const bytes = await readEntry(opened.source, opened.entries.get(file.path) as ZipEntry);
+    const bytes = await opened.read(file.path);
     if ((await sha256(bytes)) !== file.sha256.toLowerCase())
       throw new ImportError(`${file.path} doesn't match its sha256`);
     const where = whereOf(opened.manifest, file.path);
     if (where.kind === 'data') data.set(file.path, bytes);
-    else if (where.kind !== 'skip' && stage) await writer.put(`${stage}/${file.path}`, bytes, true);
+    else if (where.kind !== 'skip' && stage && !opened.dir)
+      await writer.put(`${stage}/${file.path}`, bytes, true);
     show('checking', at + 1, files.length);
   }
   return data;
@@ -793,15 +888,19 @@ async function importOpened(
   const now = (deps.now ?? Date.now)();
   const date = day(now);
   const writer = new Writer(deps.env, context, options.signal);
-  const stage = `${IMPORTS_DIR}/${opened.key.replace('#', '-part')}`;
-  const total = opened.manifest.files.reduce((sum, file) => sum + file.size, 0);
+  const { dir } = opened;
+  const stage = dir ?? `${IMPORTS_DIR}/${opened.key.replace('#', '-part')}`;
+  const total = opened.manifest.files
+    .filter((file) => !opened.sources.has(file.path))
+    .reduce((sum, file) => sum + file.size, 0);
   const room = await (deps.room ?? storageRoom)();
-  if (room !== undefined && room < 2 * total)
+  if (room !== undefined && room < (dir ? 1 : 2) * total)
     throw new ImportError('there is not enough free storage for this import');
   try {
-    await writer.sh(
-      `mkdir -p ${IMPORTS_DIR} && chmod 700 ${IMPORTS_DIR} && rm -rf ${quote(stage)} && mkdir -p ${quote(stage)}`
-    );
+    if (!dir)
+      await writer.sh(
+        `mkdir -p ${IMPORTS_DIR} && chmod 700 ${IMPORTS_DIR} && rm -rf ${quote(stage)} && mkdir -p ${quote(stage)}`
+      );
     const data = await verify(opened, writer, stage, options.show);
     const parsed = await parse(opened, data);
     await assign(deps, opened, parsed.units, options.again, date, context);
@@ -826,6 +925,7 @@ async function importOpened(
       show: options.show,
       fresh: new Map(),
       ready: new Set<Unit>(),
+      at: new Map(opened.sources),
     };
     let made: string[];
     try {
@@ -836,6 +936,7 @@ async function importOpened(
       throw error;
     }
     const report = await reportOf(run, made).catch((error: Error) => `nowhere (${error.message})`);
+    if (dir) await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT);
     const split = accountsSplit(opened.manifest.providers, deps.providers);
     const { origin } = opened.manifest.producer;
     const settings = said(split.settings, split.lacking);
@@ -849,7 +950,7 @@ async function importOpened(
       error: null,
     };
   } finally {
-    await deps.env.remove(stage, { recursive: true, force: true }, BACKGROUND_CONTEXT);
+    if (!dir) await deps.env.remove(stage, { recursive: true, force: true }, BACKGROUND_CONTEXT);
   }
 }
 
@@ -905,19 +1006,21 @@ export function createImporter(deps: ImportDeps): Importer {
       if (running) return result({ error: 'an import is already running' });
       const controller = new AbortController();
       running = controller;
+      const moving = 'inPlace' in source;
+      const writing = moving ? 'Moving' : 'Importing';
       const show: Show = (phase, done, total) =>
         progress.replace(BACKGROUND_CONTEXT, {
           phase,
           done,
           total,
-          text: `${phase === 'checking' ? 'Checking' : 'Importing'} ${done} of ${total}`,
+          text: `${phase === 'checking' ? 'Checking' : writing} ${done} of ${total}`,
         });
       let upload: { path: string } | undefined;
       try {
         upload = uploaded(source);
-        const opened = await openProfile(
-          await sourceOf(deps, upload ?? (source as ReadSource), context)
-        );
+        const opened = moving
+          ? await openDirectory(deps, source.inPlace, context)
+          : await openProfile(await sourceOf(deps, upload ?? (source as ReadSource), context));
         const preview = await previewOf(opened, deps.agents.state(), deps.providers);
         if (options.preview) {
           const writer = new Writer(deps.env, context, controller.signal);

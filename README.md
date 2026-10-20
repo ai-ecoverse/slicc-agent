@@ -546,6 +546,23 @@ SLICC 6 exports a profile as a `slicc-profile` v1 zip (#6). `test/integration/fi
   - The spectrum adapter's `importProfile(blob, { preview, again })` streams the picked file into `/var/lib/slicc/agent/imports/` (root, `0700`) through OPFS and passes its path. On a device without that folder, it sends files of up to 16 MiB as `data`.
   - `FrozenCone.v6` marks imported rows.
 
+#### Upgrading in place on www.sliccy.ai
+
+On `www.sliccy.ai`, seven shares six's origin, so six's files are already in seven's file system at `/slicc-fs/` (ai-ecoverse/slicc-bios#648). Six writes its profile there as `slicc-profile` **version 2**, the directory form (slicc#4056, the exporter in slicc#4051): the same entries as the zip, in `/slicc-v6-upgrade/<exportId>/`. A `files[]` row that six left in place names it as `source`, such as `/slicc-fs/workspace/notes.md`, instead of being written. `freezer import --in-place [--again] [--preview] <dir>`, and `AgentControl.importProfile({ inPlace: '<dir>' })`, import it, both root's and not for guests:
+
+- **The checks** are the zip's, applied to a directory:
+  - `<dir>` must be `/slicc-v6-upgrade/<uuid>`, and its manifest's `exportId` must be that uuid;
+  - the directory itself and every `source` may not lead through a symlink;
+  - every written file must be listed, at its size, and nothing else may be there;
+  - each `source` must be a file under `/slicc-fs/` (never `.metadata.json`), only on `files/`, `skills/` and `sprinkles/` entries, at its size, named once, and not also written;
+  - every file is hashed against its `sha256` before anything is written.
+
+  A version 2 manifest has no `part` and no `archive-limit` skips. A zip refuses `source`, and a version 2 manifest in a zip is refused with a pointer to `--in-place`.
+- **Nothing is staged:** written entries are read from `<dir>`, and the free-room check counts only them, once.
+- **Moving:** each `source` file placed as root (a new cone's files, `/root/v6/home-user`, global skills, sprinkles) is moved with the kernel's rename, so OPFS moves the file instead of copying it. A file for a cone that exists already is written through that cone's own user, as for a zip, and stays in `/slicc-fs`. Ownership and modes are then set as for a zip. Progress reads "Moving n of m".
+- **All or nothing:** when the import fails or is cancelled, every moved file goes back to its `source` path, along with the zip path's undo, and `<dir>` stays for the next try.
+- **On success** `<dir>` is deleted. What six left in `/slicc-fs` (caches, mounts, bundled files, `skipped[]`) is bios's to remove.
+
 ### Changes
 
 pi has no git integration and no changes list; pi coding-agent leaves that to the user's git. So the Changes surface is git, run in the kernel, and works only when git is installed and only in git repos.

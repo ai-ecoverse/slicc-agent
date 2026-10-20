@@ -429,4 +429,34 @@ export function profile({ contents = files(), overrides = {}, edit = (entries) =
   return zip(edit([head, ...rest]));
 }
 
+export const DIRECTORY = `/slicc-v6-upgrade/${EXPORT_ID}`;
+
+const PLACES = [
+  ['files/cones/cone/', '/slicc-fs/workspace/'],
+  ['files/cones/research/', '/slicc-fs/cones/research/workspace/'],
+  ['files/scoops/helper/', '/slicc-fs/scoops/helper/workspace/'],
+  ['files/home-user/', '/slicc-fs/home/user/'],
+  ['skills/', '/slicc-fs/workspace/skills/'],
+  ['sprinkles/', '/slicc-fs/shared/sprinkles/'],
+];
+
+export function sourceOf(path) {
+  const found = PLACES.find(([prefix]) => path.startsWith(prefix));
+  return found ? `${found[1]}${path.slice(found[0].length)}` : undefined;
+}
+
+export function directory({ contents = files(), overrides = {}, keep = () => false } = {}) {
+  const plain = manifest(contents, { version: 2, ...overrides });
+  const moved = {};
+  const written = {};
+  plain.files = plain.files.map((file) => {
+    const source = keep(file.path) ? undefined : sourceOf(file.path);
+    if (source) moved[source] = contents[file.path];
+    else written[`${DIRECTORY}/${file.path}`] = contents[file.path];
+    return source ? { ...file, source } : file;
+  });
+  written[`${DIRECTORY}/manifest.json`] = json(plain);
+  return { manifest: plain, moved, written };
+}
+
 if (argv[1] === fileURLToPath(import.meta.url)) await writeFile(FIXTURE, profile());
