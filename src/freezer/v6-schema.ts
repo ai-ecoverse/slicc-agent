@@ -66,13 +66,13 @@ export type Manifest = {
   skills: { name: string; path: string }[];
   sprinkles: { name: string; path: string }[];
   licks: string | null;
-  gitconfig?: string | null;
+  gitconfig: string | null;
   files: { path: string; size: number; sha256: string; source?: string }[];
   skipped: { path: string; reason: string }[];
   flagged: { path: string; size: number; rule: string }[];
   providers: string[];
-  mcp?: { name: string; url: string }[];
-  secrets?: string[];
+  mcp: { name: string; url: string }[];
+  secrets: string[];
 };
 
 export type Licks = {
@@ -411,6 +411,28 @@ function manifestLists(value: Json) {
     );
 }
 
+const orNull = (value: unknown) => value ?? null;
+
+const scoopOf = (scoop: Json) => ({ ...scoop, conversation: orNull(scoop.conversation) });
+
+function normalised(value: Json): Manifest {
+  return {
+    ...value,
+    cones: (value.cones as Json[]).map((cone) => ({
+      ...scoopOf(cone),
+      transcript: orNull(cone.transcript),
+      memory: orNull(cone.memory),
+      scoops: (cone.scoops as Json[]).map(scoopOf),
+    })),
+    frozen: (value.frozen as Json[]).map((item) => ({ ...item, frozenAt: orNull(item.frozenAt) })),
+    licks: orNull(value.licks),
+    gitconfig: orNull(value.gitconfig),
+    providers: value.providers ?? [],
+    mcp: value.mcp ?? [],
+    secrets: value.secrets ?? [],
+  } as unknown as Manifest;
+}
+
 export function checkManifest(value: unknown, version: 1 | 2 = 1): Manifest {
   need(obj(value) && value.format === 'slicc-profile', 'this is not a SLICC 6 profile export');
   need(
@@ -451,7 +473,7 @@ export function checkManifest(value: unknown, version: 1 | 2 = 1): Manifest {
     ...cone.scoops.map((scoop) => `scoop:${scoop.folder}`),
   ]);
   need(new Set(folders).size === folders.length, 'two cones or two scoops share a folder');
-  return value as unknown as Manifest;
+  return normalised(value);
 }
 
 const optional = (value: unknown) => value === undefined || str(value);
