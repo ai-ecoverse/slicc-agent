@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -15,7 +15,9 @@ const refused = (reason) => `<harness>\n[error] Tool call blocked: ${reason}\n</
 
 async function boot(page, { steps, ttl = null, models = [] }) {
   await page.goto('/');
-  await page.evaluate(
+  await staged(
+    page,
+    'the guest-scoop agent',
     async ({ steps, ttl, models }) => {
       const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
@@ -26,21 +28,14 @@ async function boot(page, { steps, ttl = null, models = [] }) {
         ...models.map((id) => ['model', id]),
         ...steps.map((step) => ['step', JSON.stringify(step)]),
       ])}`;
-      const owner = await startAgent({
+      const owner = await startTracked({
         worker: () => {
           worker = new Worker(url, { type: 'module' });
           return worker;
         },
         kernel: { connect: () => kernel.connect() },
       });
-      const until = async (check, what) => {
-        for (let i = 0; i < 800; i++) {
-          const value = await check();
-          if (value) return value;
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        throw new Error(`timed out waiting for ${what}`);
-      };
+      const until = (check, what) => when([changed, every(100)], check, what);
       const hub = {
         minted: 0,
         async mint() {
@@ -61,7 +56,11 @@ async function boot(page, { steps, ttl = null, models = [] }) {
         const minted = await r.model.guests.mint('cone', { label: 'Anna', expiresAt: null, gates });
         return minted.seat.id;
       };
-      r.join = (seat) => owner.port({ guest: { id: seat, label: 'Anna' } }).then(connectGuest);
+      r.join = (seat) =>
+        owner
+          .port({ guest: { id: seat, label: 'Anna' } })
+          .then(connectGuest)
+          .then(track);
       r.send = (guest, text) =>
         guest.control.send({ text, whenBusy: 'followUp', requestId: null }, BACKGROUND_CONTEXT);
       r.prompt = (text) =>
@@ -131,7 +130,7 @@ test('a scoop reviews a guest run’s tool calls: it sees the call as fenced dat
       answer('Checked.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a scoop reviews a guest', async () => {
     const { until, open, scoop, mint, join, send, prompt, said, results, settled, requests } =
       globalThis.r;
     await open();
@@ -215,7 +214,7 @@ test('a scoop reviews a guest’s messages: an approved one reaches the cone, a 
   await boot(page, {
     steps: [decide('approve', 'A greeting.'), answer('Hello, Anna.'), decide('deny', 'Off topic.')],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a scoop reviews a guest’s', async () => {
     const { until, open, scoop, mint, join, send, said, settled, proposals, texts } = globalThis.r;
     await open();
     await scoop();
@@ -265,7 +264,7 @@ test('a scoop that doesn’t answer in time denies the guest’s message and too
     ttl: 1500,
     steps: [hold, bash('touch /tmp/scoop-late'), hold, answer('Late.')],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a scoop that doesn’t answer', async () => {
     const { until, open, scoop, mint, join, send, said, results, settled, proposals, requests } =
       globalThis.r;
     await open();
@@ -308,7 +307,7 @@ test('a missing scoop, a stopped one, and a call that asks something of the scoo
       answer('Three.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a missing scoop a stopped', async () => {
     const { until, open, scoop, mint, join, send, said, results, settled, proposals } =
       globalThis.r;
     const { local } = await open();
@@ -359,7 +358,7 @@ test('a guest run can’t reach its reviewing scoop however it spells the handle
       answer('Sent.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a guest run can’t reach', async () => {
     const { until, open, scoop, mint, join, send, said, results, texts } = globalThis.r;
     await open();
     const helper = await scoop();
@@ -384,7 +383,7 @@ test('the review turn runs on the scoop’s own model, not the cone’s', async 
     models: ['faux-1', 'faux-2'],
     steps: [bash('echo on-faux'), decide('approve', 'Fine.'), answer('Done.')],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the review turn runs on', async () => {
     const { until, open, scoop, mint, join, send, said, served } = globalThis.r;
     await open();
     const helper = await scoop();

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -36,14 +36,16 @@ const helpers = () => {
 async function boot(page, { query = '', files = {}, users = false } = {}) {
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(
+  await staged(
+    page,
+    'the judge agent',
     async ({ query, files, users }) => {
       for (const [path, text] of Object.entries(files)) await window.write(path, text);
       const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
       const kernel = await bootKernel();
       let worker;
-      const owner = await startAgent({
+      const owner = await startTracked({
         worker: () => {
           worker = new Worker(`/dist-test/main-worker.js?judge&${query}`, { type: 'module' });
           return worker;
@@ -69,14 +71,7 @@ async function boot(page, { query = '', files = {}, users = false } = {}) {
           port1.onmessage = ({ data }) => resolve(data);
           worker.postMessage({ judged: port2 }, [port2]);
         });
-      const until = async (check, what) => {
-        for (let i = 0; i < 400; i++) {
-          const value = await check();
-          if (value) return value;
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        throw new Error(`timed out waiting for ${what}`);
-      };
+      const until = (check, what) => when([changed, every(100)], check, what);
       const guest = { kind: 'guest', name: 'Pat', seat: 'seat-1' };
       const message = (text, extra = {}) => ({
         kind: 'guest-message',
@@ -138,7 +133,7 @@ test("the judge approves a low-risk request that serves the owner's intent and d
       '/home/.slicc/crontab': '61 * * * * broken\n',
     },
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the judge approves a low-risk', async () => {
     const { owner, ask, judged, until, message, tool, settled, verdicts, table } = globalThis.t;
     const local = await owner.connect();
     const model = createAgentModel(local, { storage: localStorage });
@@ -270,7 +265,7 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a j
     query: steps.map((step) => `judge-step=${encodeURIComponent(JSON.stringify(step))}`).join('&'),
     files: { [SETTINGS]: judgeSettings('judge/j-2') },
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'an unsure judge a failed', async () => {
     const { owner, ask, judged, until, message, settled, verdicts, record } = globalThis.t;
     const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
     await import(`${spectrum}/slicc-ui.js`);
@@ -330,6 +325,7 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a j
       () => find(document, 'dialog[data-approval][data-kind="guest-message"]'),
       'the dialog'
     );
+    await until(() => verdicts(local).length === 5, 'the five verdict notes');
     const listed = model.approvals
       .list()
       .map((approval) => [approval.id, approval.verdict ?? null]);
@@ -402,7 +398,7 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a j
     ]
   );
   await shoot(page, 'judge-unsure');
-  const decided = await page.evaluate(async () => {
+  const decided = await staged(page, 'an unsure judge a failed', async () => {
     const { until, find, local, unsure, record, owner } = globalThis.t;
     await new Promise((resolve) => setTimeout(resolve, 600));
     find(document, 'dialog[data-approval][data-kind="guest-message"] [data-action="deny"]').click();
@@ -424,7 +420,7 @@ test("aborting the request stops the judge and withdraws the item, and after a r
     query: `judge-step=${hold}&judge-step=${hold}&persist=/.slicc/judge-${Date.now()}`,
     files: { [SETTINGS]: judgeSettings('judge/j-1') },
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'aborting the request stops the', async () => {
     const { owner, ask, judged, until, message, record, verdicts, abort } = globalThis.t;
     let local = await owner.connect();
     let model = createAgentModel(local, { storage: localStorage });
@@ -479,7 +475,7 @@ test("aborting the request stops the judge and withdraws the item, and after a r
 test('the approvals policy is seeded root-owned without a prompt, and a kernel user cannot change it without sudo', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { query: 'answer=Ready.', users: true });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the approvals policy is seeded', async () => {
     const { owner, kernel, until } = globalThis.t;
     const local = await owner.connect();
     const model = createAgentModel(local, { storage: localStorage });
@@ -509,25 +505,30 @@ test('the approvals policy is seeded root-owned without a prompt, and a kernel u
 test('the eval set: the recorded classifier answers reach the expected verdicts through the approvals surface', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
-  const seen = await page.evaluate(async (cases) => {
-    const { owner, ask, message, tool, settled, table } = globalThis.t;
-    const local = await owner.connect();
-    const untrusted = (entry) =>
-      entry.kind === 'guest-tool' ? `${entry.tool}: ${entry.summary}` : entry.text;
-    table(Object.fromEntries(cases.map((entry) => [untrusted(entry), entry.recorded])));
-    const out = [];
-    for (const entry of cases) {
-      const draft =
-        entry.kind === 'guest-tool' ? tool(entry.tool, entry.summary) : message(entry.text);
-      const item = await settled(local, (await ask(draft)).id);
-      const got =
-        item.state === 'approved' ? 'approve' : item.state === 'rejected' ? 'deny' : 'ask';
-      out.push([entry.name, got]);
-    }
-    await local.close();
-    await owner.release();
-    return out;
-  }, evals.cases);
+  const seen = await staged(
+    page,
+    'the eval set the recorded',
+    async (cases) => {
+      const { owner, ask, message, tool, settled, table } = globalThis.t;
+      const local = await owner.connect();
+      const untrusted = (entry) =>
+        entry.kind === 'guest-tool' ? `${entry.tool}: ${entry.summary}` : entry.text;
+      table(Object.fromEntries(cases.map((entry) => [untrusted(entry), entry.recorded])));
+      const out = [];
+      for (const entry of cases) {
+        const draft =
+          entry.kind === 'guest-tool' ? tool(entry.tool, entry.summary) : message(entry.text);
+        const item = await settled(local, (await ask(draft)).id);
+        const got =
+          item.state === 'approved' ? 'approve' : item.state === 'rejected' ? 'deny' : 'ask';
+        out.push([entry.name, got]);
+      }
+      await local.close();
+      await owner.release();
+      return out;
+    },
+    evals.cases
+  );
   assert.ok(evals.cases.length >= 12);
   assert.deepEqual(
     seen,

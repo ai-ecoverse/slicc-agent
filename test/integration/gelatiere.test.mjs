@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -34,54 +34,55 @@ test('the suggestions sprinkle shows the gelatiere store, a dismiss stays in the
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  const seen = await page.evaluate(async (stored) => {
-    await window.write('/home/.gelatiere/suggestions.json', stored);
-    const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
-    const kernel = await bootKernel();
-    const answers = Array.from({ length: 4 }, () => 'answer=Noted.').join('&');
-    const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    const connection = await owner.connect();
-    const model = createAgentModel(connection, { storage: localStorage });
-    await model.agent.ready();
-    const until = async (check) => {
-      for (let n = 0; n < 200 && !(await check()); n++)
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      return check();
-    };
-    await until(() => model.sprinkles.list().some((item) => item.id === 'suggestions'));
-    const listed = model.sprinkles
-      .list()
-      .map((item) => [item.id, item.title, item.icon, Boolean(item.inline)]);
-    const card = await model.sprinkles.call('suggestions', 'readFile', [
-      '/shared/.gelatiere/suggestions.json',
-    ]);
-    model.sprinkles.send('suggestions', { action: 'gelatiere-dismiss', data: { id: 'tip-utc' } });
-    await until(
-      async () =>
-        JSON.parse(await window.read('/home/.gelatiere/suggestions.json')).find(
-          (item) => item.id === 'tip-utc'
-        ).dismissedAt
-    );
-    model.sprinkles.send('suggestions', {
-      action: 'gelatiere-try',
-      data: { id: 'use-case-release-notes', prompt: 'ignored', title: 'Draft notes' },
-    });
-    const licks = () => model.agent.messages().filter((message) => message.role === 'lick');
-    await until(() => licks().length > 0);
-    const store = JSON.parse(await window.read('/home/.gelatiere/suggestions.json'));
-    await owner.release();
-    return {
-      listed,
-      card: JSON.parse(card).length,
-      licks: licks().map((lick) => [lick.channel, lick.text]),
-      dismissed: Boolean(store.find((item) => item.id === 'tip-utc').dismissedAt),
-      taken: Boolean(store.find((item) => item.id === 'use-case-release-notes').takenAt),
-    };
-  }, fixture);
+  const seen = await staged(
+    page,
+    'the suggestions sprinkle shows the',
+    async (stored) => {
+      await window.write('/home/.gelatiere/suggestions.json', stored);
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      const answers = Array.from({ length: 4 }, () => 'answer=Noted.').join('&');
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const connection = await owner.connect();
+      const model = createAgentModel(connection, { storage: localStorage });
+      await model.agent.ready();
+      const until = (check, what = 'the state') => when([changed, every(100)], check, what);
+      await until(() => model.sprinkles.list().some((item) => item.id === 'suggestions'));
+      const listed = model.sprinkles
+        .list()
+        .map((item) => [item.id, item.title, item.icon, Boolean(item.inline)]);
+      const card = await model.sprinkles.call('suggestions', 'readFile', [
+        '/shared/.gelatiere/suggestions.json',
+      ]);
+      model.sprinkles.send('suggestions', { action: 'gelatiere-dismiss', data: { id: 'tip-utc' } });
+      await until(
+        async () =>
+          JSON.parse(await window.read('/home/.gelatiere/suggestions.json')).find(
+            (item) => item.id === 'tip-utc'
+          ).dismissedAt
+      );
+      model.sprinkles.send('suggestions', {
+        action: 'gelatiere-try',
+        data: { id: 'use-case-release-notes', prompt: 'ignored', title: 'Draft notes' },
+      });
+      const licks = () => model.agent.messages().filter((message) => message.role === 'lick');
+      await until(() => licks().length > 0);
+      const store = JSON.parse(await window.read('/home/.gelatiere/suggestions.json'));
+      await owner.release();
+      return {
+        listed,
+        card: JSON.parse(card).length,
+        licks: licks().map((lick) => [lick.channel, lick.text]),
+        dismissed: Boolean(store.find((item) => item.id === 'tip-utc').dismissedAt),
+        taken: Boolean(store.find((item) => item.id === 'use-case-release-notes').takenAt),
+      };
+    },
+    fixture
+  );
   assert.deepEqual(seen.listed, [
     ['suggestions', 'Suggestions', seen.listed[0][2], false],
     ['welcome', 'Welcome', 'sparkles', true],
@@ -144,7 +145,7 @@ test('the welcome profile ranks a fake www.sliccy.com catalog through the produc
   chrome.overrides.set('/fake-catalog/acme-inc.json', JSON.stringify({ total: 1, data: acme }));
   await page.init(helpers);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the welcome profile ranks a', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
@@ -159,21 +160,15 @@ test('the welcome profile ranks a fake www.sliccy.com catalog through the produc
       ],
       ['answer', 'Welcome!'],
     ]);
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
     const connection = await owner.connect();
     const model = createAgentModel(connection, { storage: localStorage });
     await model.agent.ready();
-    const until = async (check) => {
-      for (let n = 0; n < 400; n++) {
-        const value = await check().catch(() => undefined);
-        if (value) return value;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      return undefined;
-    };
+    const until = (check, what = 'the state') =>
+      when([changed, every(100)], () => check().catch(() => undefined), what);
     await until(async () => model.sprinkles.list().some((item) => item.id === 'welcome'));
     const profile = {
       purpose: 'work',

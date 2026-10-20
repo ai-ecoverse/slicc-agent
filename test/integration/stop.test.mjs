@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -11,7 +11,7 @@ const helpers = () => {
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
     let worker;
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () =>
         (worker = new Worker(`/dist-test/bedrock-agent-worker.js?${query}`, { type: 'module' })),
       kernel: { connect: () => kernel.connect() },
@@ -22,14 +22,7 @@ const helpers = () => {
         channel.port1.onmessage = ({ data }) => resolve(data);
         worker.postMessage({ [key]: channel.port2 }, [channel.port2]);
       });
-    const until = async (check, what) => {
-      for (let n = 0; n < 500; n++) {
-        const value = await check();
-        if (value) return value;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      throw new Error(`timed out waiting for ${what}`);
-    };
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     return { owner, connection: await owner.connect(), ask, until };
   };
 };
@@ -54,7 +47,9 @@ for (const how of ['agent.stop()', 'the remote abort']) {
     const page = await chrome.page(t);
     await page.init(helpers);
     await page.goto('/');
-    const seen = await page.evaluate(
+    const seen = await staged(
+      page,
+      'how during a held model',
       async ({ query, how }) => {
         const { owner, connection, ask, until } = await window.boot(query);
         const { agent, settings } = createAgentModel(connection, { storage: localStorage });

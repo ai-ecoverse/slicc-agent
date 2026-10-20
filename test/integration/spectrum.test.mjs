@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -9,8 +9,8 @@ test('the spectrum adapter shows a conversation with the agent worker', async (t
   const page = await chrome.page(t);
   await page.goto('/');
   await page.evaluate(() => import('/dist-test/page.js'));
-  const seen = await page.evaluate(async () => {
-    const owner = await startAgent({
+  const seen = await staged(page, 'the spectrum adapter shows a', async () => {
+    const owner = await startTracked({
       worker: () =>
         new Worker('/dist-test/agent-worker.js?answer=Hello%20from%20the%20worker.', {
           type: 'module',
@@ -22,9 +22,11 @@ test('the spectrum adapter shows a conversation with the agent worker', async (t
     agent.on('message', () => updates++);
     agent.on('messages', () => updates++);
     await agent.send(agent.active(), 'Hi there');
-    for (let i = 0; i < 100 && !agent.messages().some((m) => m.role === 'assistant'); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    await when(
+      [changed, every(100)],
+      () => agent.messages().some((m) => m.role === 'assistant'),
+      'the answer'
+    );
     return {
       roles: agent.messages().map((message) => message.role),
       reply: agent.messages().at(-1)?.parts?.[0]?.text,
@@ -44,10 +46,10 @@ test('a view-only follower says why each refused fire-and-forget call failed, wi
   const page = await chrome.page(t);
   await page.goto('/');
   await page.evaluate(() => import('/dist-test/page.js'));
-  const notices = await page.evaluate(async () => {
+  const notices = await staged(page, 'a view-only follower says why', async () => {
     const unhandled = [];
     addEventListener('unhandledrejection', (event) => unhandled.push(String(event.reason)));
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/agent-worker.js?answer=Hi.', { type: 'module' }),
     });
     const model = createAgentModel(await owner.connect({ readOnly: true }));
@@ -61,8 +63,7 @@ test('a view-only follower says why each refused fire-and-forget call failed, wi
     model.settings.disconnect('faux');
     agent.compact();
     const shown = () => agent.messages().filter((message) => message.kind === 'notice');
-    for (let i = 0; i < 100 && shown().length < 7; i++)
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    await when([changed, every(100)], () => shown().length >= 7, 'seven notices');
     await new Promise((resolve) => setTimeout(resolve, 50));
     return {
       texts: shown()
@@ -92,11 +93,11 @@ test('a view-only follower says why each refused fire-and-forget call failed, wi
 test('agents show their context fill, and a background cone counts its unread answers until selected', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'agents show their context fill', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () =>
         new Worker(
           `/dist-test/main-worker.js?answer=First.&answer=From%20the%20background.&vault&record=${encodeURIComponent(JSON.stringify({ kind: 'model', name: 'FAUX_API_KEY', provider: 'faux', placeholder: 'fnox_proxy_faux', value: 'faux-model-key-0001' }))}`,
@@ -107,10 +108,7 @@ test('agents show their context fill, and a background cone counts its unread an
     const model = createAgentModel(await owner.connect(), { storage: localStorage });
     const { agent, settings } = model;
     await agent.ready();
-    const until = async (check) => {
-      for (let n = 0; n < 250 && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-      return check();
-    };
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     await until(() => settings.accounts().length > 0);
     await settings.connect('faux');
     await until(() => settings.accounts()[0]?.status === 'connected');

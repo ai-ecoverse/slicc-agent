@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,15 +8,22 @@ after(() => chrome.close());
 const helpers = () => {
   window.pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   window.clock = (now) => new BroadcastChannel('slicc-test-clock').postMessage({ now });
+  window.listening = new Set();
+  window.streams = (look) => {
+    window.listening.add(look);
+    return () => window.listening.delete(look);
+  };
   window.setup = async (query, now) => {
-    const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     window.kernel = now
       ? await bootKernel(
           {},
           { worker: new URL(`/clock-kernel-worker.js?now=${now}`, location.href) }
         )
       : await bootKernel();
+    stage('the agent');
     window.owner = await startAgent({
       worker: () => {
         window.worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' });
@@ -27,16 +34,27 @@ const helpers = () => {
     window.connection = await window.owner.connect();
     window.remote = remoteControl(window.connection);
     window.sh = (command, options = {}) => window.kernel.run(['bash', '-c', command], options);
-    for (let i = 0; i < 600; i++) {
-      if ((await window.sh('test -x /usr/local/bin/agent')).status === 0) break;
-      await window.pause(50);
-    }
+    await when(
+      [files(window.kernel, ['/usr/local/bin'])],
+      async () => (await window.sh('test -x /usr/local/bin/agent')).status === 0,
+      'the agent command'
+    );
   };
+  window.watching = (check, what) =>
+    when([window.streams, ...agentSources(window.connection), every(1000)], check, what);
+  window.helper = (state) =>
+    window.watching(async () => {
+      const listed = await window.sh('SLICC_AGENT=cone:cone subagent list');
+      return new RegExp(`^helper\t.*\t${state}$`, 'm').test(listed.stdout);
+    }, `the helper ${state}`);
   window.follow = async (remote = window.remote, request = { busy: true }) => {
     const watched = await remote.watch(request);
     const seen = [];
     void (async () => {
-      for await (const event of watched.events) seen.push(event);
+      for await (const event of watched.events) {
+        seen.push(event);
+        for (const look of window.listening) look();
+      }
     })();
     return { opened: watched, seen };
   };
@@ -75,57 +93,64 @@ test('a prompt whose run ends while its scoop works stays busy until the notify 
     step({ gate: 'notify', answer: 'Noted.' }),
     ['scoop-step', JSON.stringify({ gate: 'scoop', answer: 'Scoop done.' })],
   ]).toString();
-  await page.evaluate(async (query) => {
-    await window.setup(query);
-    const service = window.connection.remote;
-    const older = remoteControl({
-      remote: {
-        prompt: (...args) => service.prompt(...args),
-        next: (...args) => service.next(...args),
-        close: (...args) => service.close(...args),
-        abort: (...args) => service.abort(...args),
-        watch: async (...args) => {
-          const { busy: _, ...rest } = await service.watch(...args);
-          return rest;
+  await staged(
+    page,
+    'the watched prompt',
+    async (query) => {
+      await window.setup(query);
+      stage('the watches');
+      const service = window.connection.remote;
+      const older = remoteControl({
+        remote: {
+          prompt: (...args) => service.prompt(...args),
+          next: (...args) => service.next(...args),
+          close: (...args) => service.close(...args),
+          abort: (...args) => service.abort(...args),
+          watch: async (...args) => {
+            const { busy: _, ...rest } = await service.watch(...args);
+            return rest;
+          },
         },
-      },
-    });
-    window.plain = await window.follow(window.remote, {});
-    window.old = await window.follow(older);
-    window.first = await window.follow();
-    const prompted = await window.remote.prompt({ text: 'Start a scoop.' });
-    window.prompt = [];
-    for await (const event of prompted.events) window.prompt.push(event);
-  }, query);
-  await page.within(60000, async () => {
-    const listed = await window.sh('SLICC_AGENT=cone:cone subagent list');
-    return /^helper\t.*\tworking$/m.test(listed.stdout);
-  });
-  await page.evaluate(async () => {
+      });
+      window.plain = await window.follow(window.remote, {});
+      window.old = await window.follow(older);
+      window.first = await window.follow();
+      stage('the prompt');
+      const prompted = await window.remote.prompt({ text: 'Start a scoop.' });
+      window.prompt = [];
+      for await (const event of prompted.events) window.prompt.push(event);
+      await window.helper('working');
+    },
+    query
+  );
+  await staged(page, 'the scoop run', async () => {
     window.second = await window.follow();
     window.scoop = await window.follow(
       remoteControl(window.connection, { agent: () => 'scoop:helper' })
     );
     window.during = [...window.first.seen];
     window.worker.postMessage({ gate: 'scoop' });
+    await window.watching(
+      () =>
+        window.first.seen.filter((event) => event.t === 'run' && event.state === 'start').length ===
+        2,
+      'the notify run'
+    );
   });
-  await page.within(
-    60000,
-    () =>
-      window.first.seen.filter((event) => event.t === 'run' && event.state === 'start').length === 2
-  );
   const notifying = await page.evaluate(async () => {
     await window.pause(500);
     const flips = window.flips(window.scoop.seen);
     window.worker.postMessage({ gate: 'notify' });
     return flips;
   });
-  await page.within(
-    60000,
-    () =>
-      window.settled(window.first.seen) &&
-      window.settled(window.second.seen) &&
-      window.settled(window.scoop.seen)
+  await staged(page, 'the settled watches', () =>
+    window.watching(
+      () =>
+        window.settled(window.first.seen) &&
+        window.settled(window.second.seen) &&
+        window.settled(window.scoop.seen),
+      'every watch idle'
+    )
   );
   const seen = await page.evaluate(async () => {
     await window.pause(1000);
@@ -180,22 +205,22 @@ test('a scoop-notify lick held in the outbox until the cone has a model keeps th
     ['answer', 'Scoop done.'],
     ['answer', 'Noted.'],
   ]).toString();
-  const seen = await page.evaluate(
+  const seen = await staged(
+    page,
+    'a held scoop-notify lick',
     async ({ query, command }) => {
       await window.setup(query);
       const watched = await window.follow();
+      stage('the scoop');
       const spawned = await window.sh(command);
-      for (let i = 0; i < 600; i++) {
-        const listed = await window.sh('SLICC_AGENT=cone:cone subagent list');
-        if (/^helper\t.*\tidle$/m.test(listed.stdout)) break;
-        await window.pause(50);
-      }
+      await window.helper('idle');
+      stage('the held lick');
       await window.pause(3000);
       const held = [...watched.seen];
       const { agent } = createAgentModel(window.connection, { storage: localStorage });
       await agent.ready();
       agent.setModel(agent.active(), 'faux/faux-2');
-      for (let i = 0; i < 1200 && !window.settled(watched.seen); i++) await window.pause(50);
+      await window.watching(() => window.settled(watched.seen), 'the notify turn');
       await window.owner.release();
       return { opened: watched.opened.busy, spawned: spawned.status, held, seen: watched.seen };
     },
@@ -223,7 +248,7 @@ test('a cron lick makes the agent busy only once it is queued, and idle again af
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a cron lick', async () => {
     const start = new Date();
     start.setDate(start.getDate() + 1);
     start.setHours(10, 59, 0, 0);
@@ -232,10 +257,11 @@ test('a cron lick makes the agent busy only once it is queued, and idle again af
     const watched = await window.follow();
     const table = "# name: standup\n0 * * * * agent send cone --lick=cron 'Check the build'\n";
     const installed = await window.kernel.run(['crontab', '-'], { stdin: table });
+    stage('a quiet window');
     await window.pause(1500);
     const armed = [...watched.seen];
     window.clock(base + 61_000);
-    for (let i = 0; i < 1200 && !window.settled(watched.seen); i++) await window.pause(50);
+    await window.watching(() => window.settled(watched.seen), 'the cron turn');
     await window.owner.release();
     return { opened: watched.opened.busy, installed: installed.status, armed, seen: watched.seen };
   });

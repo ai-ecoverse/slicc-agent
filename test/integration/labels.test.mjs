@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -16,23 +16,24 @@ function query(turns) {
 
 async function run(page, turns, script) {
   await page.goto('/');
-  return page.evaluate(
+  return staged(
+    page,
+    'the labels',
     async ({ query, script }) => {
-      const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
       const kernel = await bootKernel();
+      stage('the agent');
       const owner = await startAgent({
         worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
         kernel: { connect: () => kernel.connect() },
       });
       const connection = await owner.connect();
-      const { agent } = createAgentModel(connection, { storage: localStorage });
+      const model = createAgentModel(connection, { storage: localStorage });
+      const { agent } = model;
       await agent.ready();
-      const until = async (check, tries = 400) => {
-        for (let n = 0; n < tries && !(await check()); n++)
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        return check();
-      };
+      const until = (check, what) => when(agentSources(connection, model), check, what);
       const tools = () =>
         agent
           .messages('cone')
@@ -44,7 +45,14 @@ async function run(page, turns, script) {
           { text, whenBusy: 'followUp', requestId: null },
           BACKGROUND_CONTEXT
         );
-      const api = { agent, tools, until, send, prompt: (text) => connection.prompt(text) };
+      const api = {
+        agent,
+        tools,
+        until,
+        send,
+        stage,
+        prompt: (text) => connection.prompt(text),
+      };
       try {
         return await new Function('api', `return (async () => { ${script} })()`)(api);
       } finally {
@@ -59,7 +67,8 @@ const running = (count) => `
   await api.until(() => {
     const tools = api.tools();
     return tools.length === ${count} && tools.slice(0, -1).every((tool) => tool.status === 'done') && tools.at(-1).status === 'running';
-  });
+  }, '${count} tools, the last running');
+  api.stage('the labels');
   const ids = api.tools().map((tool) => tool.id);
 `;
 
@@ -97,7 +106,9 @@ test('labels: a growing cluster whose first label the per-minute cap refused sti
       bash('sleep 3; echo w'),
       { answer: 'Second.' },
     ],
-    `await api.prompt('one');
+    `api.stage('the first turn');
+    await api.prompt('one');
+    api.stage('the first labels');
     const earlier = api.tools().map((tool) => tool.id);
     const spent = [];
     for (let n = 0; n < 12; n += 3) spent.push(await api.agent.toolLabel('cone', earlier.slice(n, n + 3)));

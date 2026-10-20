@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -33,7 +33,7 @@ async function boot(page, query) {
     const kernel = await bootKernel();
     const params = new URLSearchParams(query);
     let worker;
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => {
         worker = new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' });
         return worker;
@@ -123,7 +123,9 @@ test('an image from +, paste and drop reaches the model as an image part with th
   const PNG = await dummyImage(page);
   const sources = ['plus', 'paste', 'drop'];
   for (const [at, source] of sources.entries()) {
-    await page.evaluate(
+    await staged(
+      page,
+      'an image from + paste',
       async ({ source, png }) => {
         const { composer, files } = globalThis.attach;
         const dt = files([{ name: `${source}.png`, type: 'image/png', base64: png }]);
@@ -232,7 +234,7 @@ test('a text file arrives as text, and binary files from + and a drop on the cha
     ['answer', 'Read it.'],
     ['answer', 'Saved it.'],
   ]);
-  await page.evaluate(async () => {
+  await staged(page, 'a text file arrives as', async () => {
     const { composer, files } = globalThis.attach;
     const input = composer().shadowRoot.querySelector('input[type=file]');
     input.files = files([
@@ -250,22 +252,32 @@ test('a text file arrives as text, and binary files from + and a drop on the cha
   const bytes = [0, 1, 2, 250, 255, 7];
   const dropped = [9, 8, 7, 0, 255];
   const encode = (list) => Buffer.from(list).toString('base64');
-  await page.evaluate(async (base64) => {
-    const { composer, files } = globalThis.attach;
-    const input = composer().shadowRoot.querySelector('input[type=file]');
-    input.files = files([{ name: 'dummy.bin', type: 'application/octet-stream', base64 }]).files;
-    input.dispatchEvent(new Event('change'));
-  }, encode(bytes));
+  await staged(
+    page,
+    'a text file arrives as',
+    async (base64) => {
+      const { composer, files } = globalThis.attach;
+      const input = composer().shadowRoot.querySelector('input[type=file]');
+      input.files = files([{ name: 'dummy.bin', type: 'application/octet-stream', base64 }]).files;
+      input.dispatchEvent(new Event('change'));
+    },
+    encode(bytes)
+  );
   await page.until(() => globalThis.attach.composer().attachments[0]?.url?.startsWith('blob:'));
-  await page.evaluate(async (base64) => {
-    const { find, files } = globalThis.attach;
-    const dt = files([{ name: 'dropped.bin', type: 'application/octet-stream', base64 }]);
-    const chat = find(document, 'slicc-chat');
-    for (const type of ['dragenter', 'dragover', 'drop'])
-      chat.dispatchEvent(
-        new DragEvent(type, { dataTransfer: dt, bubbles: true, composed: true, cancelable: true })
-      );
-  }, encode(dropped));
+  await staged(
+    page,
+    'a text file arrives as',
+    async (base64) => {
+      const { find, files } = globalThis.attach;
+      const dt = files([{ name: 'dropped.bin', type: 'application/octet-stream', base64 }]);
+      const chat = find(document, 'slicc-chat');
+      for (const type of ['dragenter', 'dragover', 'drop'])
+        chat.dispatchEvent(
+          new DragEvent(type, { dataTransfer: dt, bubbles: true, composed: true, cancelable: true })
+        );
+    },
+    encode(dropped)
+  );
   await page.until(() => globalThis.attach.composer().attachments.length === 2);
   await page.evaluate(() => {
     const composer = globalThis.attach.composer();
@@ -289,7 +301,9 @@ test('a text file arrives as text, and binary files from + and a drop on the cha
   assert.match(binary[1].text, /Saved at \/home\/uploads\/dummy\.bin\./);
   assert.match(binary[2].text, /Saved at \/home\/uploads\/dropped\.bin\./);
   assert.ok(binary.every((part) => part.type === 'text'));
-  const saved = await page.evaluate(
+  const saved = await staged(
+    page,
+    'a text file arrives as',
     async (paths) =>
       Promise.all(
         paths.map(async (path) => [...(await globalThis.attach.client.fs.readFile(path))])
@@ -320,12 +334,17 @@ test('a model without image input gets the image as a saved file and a note', as
     ['blind', 'faux-1'],
     ['answer', 'I cannot see it.'],
   ]);
-  await page.evaluate(async (png) => {
-    const { composer, files } = globalThis.attach;
-    const input = composer().shadowRoot.querySelector('input[type=file]');
-    input.files = files([{ name: 'blind.png', type: 'image/png', base64: png }]).files;
-    input.dispatchEvent(new Event('change'));
-  }, PNG);
+  await staged(
+    page,
+    'a model without image input',
+    async (png) => {
+      const { composer, files } = globalThis.attach;
+      const input = composer().shadowRoot.querySelector('input[type=file]');
+      input.files = files([{ name: 'blind.png', type: 'image/png', base64: png }]).files;
+      input.dispatchEvent(new Event('change'));
+    },
+    PNG
+  );
   await page.until(() => globalThis.attach.composer().attachments.length === 1);
   await page.evaluate(() => {
     const composer = globalThis.attach.composer();
@@ -341,7 +360,7 @@ test('a model without image input gets the image as a saved file and a note', as
     content[1].text,
     /This model can't see images, so the image was saved as a file instead\./
   );
-  const saved = await page.evaluate(async () =>
+  const saved = await staged(page, 'a model without image input', async () =>
     btoa(
       String.fromCharCode(
         ...(await globalThis.attach.client.fs.readFile('/home/uploads/blind.png'))
@@ -357,7 +376,7 @@ test('a conversation whose images pass one 16 MiB frame still attaches, with thu
     page,
     ['1', '2', '3', '4', '5'].map((answer) => ['answer', answer])
   );
-  const sent = await page.evaluate(async () => {
+  const sent = await staged(page, 'a conversation whose images pass', async () => {
     const { model, answered } = globalThis.attach;
     const canvas = new OffscreenCanvas(1100, 1000);
     const draw = canvas.getContext('2d');
@@ -383,7 +402,7 @@ test('a conversation whose images pass one 16 MiB frame still attaches, with thu
           },
         ],
       });
-      for (let i = 0; i < 400 && !answered(n + 1); i++) await new Promise((r) => setTimeout(r, 25));
+      await when([changed, every(100)], () => answered(n + 1), `answer ${n + 1}`);
     }
     return lengths;
   });
@@ -414,14 +433,14 @@ test('a conversation whose images pass one 16 MiB frame still attaches, with thu
     ]),
     sent.map((size, n) => [`noise-${n}.png`, 'image/png', size, 'data:image/jpeg;base64,', true])
   );
-  const retried = await page.evaluate(async () => {
+  const retried = await staged(page, 'a conversation whose images pass', async () => {
     const { model, answered, requests } = globalThis.attach;
     const last = model.agent
       .messages('cone')
       .filter((message) => message.role === 'user')
       .at(-1);
     await model.agent.send('cone', { text: last.text, attachments: last.attachments });
-    for (let i = 0; i < 400 && !answered(5); i++) await new Promise((r) => setTimeout(r, 25));
+    await when([changed, every(100)], () => answered(5), 'five answers');
     const all = await requests();
     const images = (request) =>
       request.messages

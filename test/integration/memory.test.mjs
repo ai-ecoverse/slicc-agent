@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -31,7 +31,7 @@ test('memory: context files and memory reach the prompt, memory_write redacts se
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'memory context files and memory', async () => {
     await window.write('/home/.pi/agent/AGENTS.md', 'Always answer in English.');
     await window.write(
       '/home/.pi/agent/memory/MEMORY.md',
@@ -52,7 +52,7 @@ test('memory: context files and memory reach the prompt, memory_write redacts se
       ],
       ['answer', 'Saved.'],
     ]);
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
@@ -63,11 +63,7 @@ test('memory: context files and memory reach the prompt, memory_write redacts se
     const result = entries
       .filter((entry) => entry.kind === 'pi.tool-result')
       .map((entry) => entry.model[0].content.map((part) => part.text ?? '').join(''))[0];
-    const until = async (check) => {
-      for (let n = 0; n < 200 && !check(); n++)
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      return check();
-    };
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     await until(() => model.memory.list().some((item) => item.id === 'cone/projects/harbor'));
     const listed = model.memory.list().map((item) => [item.id, item.tag]);
     const scopes = model.memory.scopes().map((scope) => scope.id);
@@ -122,11 +118,11 @@ test('memory: context files and memory reach the prompt, memory_write redacts se
 test('memory: a new cone gets its memory scope without a memory file changing', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'memory a new cone gets', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel();
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
@@ -163,7 +159,7 @@ const held = () => {
       { worker: new URL('/held-memory-kernel-worker.js', location.href) }
     );
     let worker;
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => {
         worker = new Worker('/dist-test/main-worker.js', { type: 'module' });
         return worker;
@@ -232,15 +228,20 @@ test('memory: a memory read that never settles does not keep a newer cone from i
   await page.init(helpers);
   await page.init(held);
   await page.goto('/');
-  await page.evaluate(async (files) => {
-    window.agent = await window.heldMemory(files);
-  }, files);
-  await page.evaluate(async () => {
+  await staged(
+    page,
+    'memory a memory read that',
+    async (files) => {
+      window.agent = await window.heldMemory(files);
+    },
+    files
+  );
+  await staged(page, 'memory a memory read that', async () => {
     window.holding = (await window.agent.arm()).held;
     await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
   });
   await page.evaluate(() => window.holding);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'memory a memory read that', async () => {
     const { agent } = window;
     const created = await agent.connection.control.createCone('second', BACKGROUND_CONTEXT);
     const scope = await agent.scoped('second');
@@ -258,16 +259,21 @@ test('memory: after the agent host closes, no memory reload runs', async (t) => 
   await page.init(helpers);
   await page.init(held);
   await page.goto('/');
-  await page.evaluate(async (files) => {
-    window.agent = await window.heldMemory(files);
-  }, files);
-  await page.evaluate(async () => {
+  await staged(
+    page,
+    'memory after the agent host',
+    async (files) => {
+      window.agent = await window.heldMemory(files);
+    },
+    files
+  );
+  await staged(page, 'memory after the agent host', async () => {
     window.holding = (await window.agent.arm()).held;
     await window.agent.connection.control.createCone('first', BACKGROUND_CONTEXT);
   });
   await page.evaluate(() => window.holding);
   assert.equal(await page.evaluate(() => window.agent.close()), 'closed');
-  const later = await page.evaluate(async () => {
+  const later = await staged(page, 'memory after the agent host', async () => {
     const { agent } = window;
     const before = await agent.reads();
     agent.release();

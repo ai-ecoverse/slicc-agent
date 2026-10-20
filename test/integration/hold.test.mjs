@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { extname } from 'node:path';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const types = { '.mjs': 'text/javascript' };
 const fixtures = createServer(async (request, response) => {
@@ -55,7 +55,9 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
     { answer: 'Done.' },
     { answer: 'Later done.' },
   ];
-  await page.evaluate(
+  await staged(
+    page,
+    'spectrum’s composer shows the vault',
     async ({ origin, steps }) => {
       const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
       await import(`${spectrum}/slicc-ui.js`);
@@ -69,7 +71,7 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
         { name: 'DUMMY_TOKEN', value: 'dummy-value-0123456789abcdef', placeholder: 'fnox_dummy' },
       ]);
       const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
-      const owner = await startAgent({
+      const owner = await startTracked({
         worker: () => {
           const worker = new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' });
           worker.postMessage({ vault: channel.port1, scrub: vault.pair }, [channel.port1]);
@@ -107,7 +109,7 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
     globalThis.deep = (selector) => find(document, selector);
   };
   await page.evaluate(deep);
-  await page.evaluate(async () => {
+  await staged(page, 'spectrum’s composer shows the vault', async () => {
     const { model, vault } = globalThis.holdTest;
     vault.pause();
     globalThis.holdTest.first = model.agent.send('cone', 'Run the dummy command.');
@@ -120,7 +122,7 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
   });
   assert.equal(waiting.reason, 'waiting');
   assert.match(waiting.text, /^Waiting for the vault( · \d+ tool results? held)?$/);
-  const queued = await page.evaluate(async () => {
+  const queued = await staged(page, 'spectrum’s composer shows the vault', async () => {
     const { model } = globalThis.holdTest;
     const busy = model.agent.busy('cone');
     globalThis.holdTest.second = model.agent.send('cone', {
@@ -137,7 +139,7 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
     return item?.textContent.includes('Then this, later.') && item.textContent.trim();
   });
   assert.match(shown, /Then this, later\./);
-  const dropped = await page.evaluate(async () => {
+  const dropped = await staged(page, 'spectrum’s composer shows the vault', async () => {
     const { model } = globalThis.holdTest;
     globalThis.holdTest.third = model.agent.send('cone', { text: 'Drop this one.', mode: 'queue' });
     const composer = globalThis.deep('slicc-composer').shadowRoot;
@@ -165,17 +167,13 @@ test("spectrum's composer shows the vault hold, keeps the cone busy, queues a se
   });
   assert.match(locked, /^Unlock the vault to continue · \d+ tool results? held$/);
   if (env.HOLD_SHOT) await page.screenshot(env.HOLD_SHOT);
-  const cleared = await page.evaluate(async () => {
+  const cleared = await staged(page, 'spectrum’s composer shows the vault', async () => {
     const { model, vault, holds, lock, connection, owner } = globalThis.holdTest;
     lock('no');
     vault.resume();
     await globalThis.holdTest.first;
     await globalThis.holdTest.second;
-    const until = async (check) => {
-      for (let n = 0; n < 300 && !check(); n++)
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      return check();
-    };
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
     await until(() => model.agent.hold() === null);
     const texts = () =>
       model.agent.messages('cone').map((message) => message.parts?.[0]?.text ?? message.text);

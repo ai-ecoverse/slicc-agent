@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -8,14 +8,14 @@ after(() => chrome.close());
 test('an agent CLI never reads an exit code the control plane has created but not yet filled', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  await page.evaluate(async () => {
+  await staged(page, 'an agent CLI never reads', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel(
       {},
       { worker: new URL('/slow-code-kernel-worker.js', location.href) }
     );
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });
@@ -39,14 +39,14 @@ test('an agent CLI never reads an exit code the control plane has created but no
 test('an agent CLI still gets a complete exit code when rename fails and the fallback write is slow', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  await page.evaluate(async () => {
+  await staged(page, 'an agent CLI still gets', async () => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
     const kernel = await bootKernel(
       {},
       { worker: new URL('/fail-rename-kernel-worker.js', location.href) }
     );
-    const owner = await startAgent({
+    const owner = await startTracked({
       worker: () => new Worker('/dist-test/main-worker.js', { type: 'module' }),
       kernel: { connect: () => kernel.connect() },
     });

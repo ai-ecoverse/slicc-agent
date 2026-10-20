@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 import { createMcpServer } from './fixtures/mcp-server.mjs';
 
 const chrome = await launch();
@@ -86,7 +86,7 @@ test('an MCP server behind the relay transport answering with SSE: a codemode sc
       })
     )
   );
-  await page.evaluate((q) => window.start(q), query);
+  await staged(page, 'the agent', (q) => window.start(q), query);
   await new Promise((resolve) => setTimeout(resolve, 1000));
   await page.evaluate(() => window.agent.send(window.agent.active(), 'Use the docs.'));
   await page.within(
@@ -129,7 +129,7 @@ test('on the page route a server with CORS works and one without CORS is reporte
         ),
       { open: open.url, closed: closed.url }
     );
-    await page.evaluate((q) => window.start(q, true), query);
+    await staged(page, 'the agent', (q) => window.start(q, true), query);
     await page.within(60000, () => window.licks().some((lick) => /closed/.test(lick.title ?? '')));
     await page.within(60000, () => !window.agent.busy(window.agent.active()));
     await page.evaluate(async () => {
@@ -182,7 +182,7 @@ test('an OAuth MCP server signs in through a popup and the callback page, and wi
         ),
       docs.url
     );
-    await page.evaluate((q) => window.start(q, true), query);
+    await staged(page, 'the agent', (q) => window.start(q, true), query);
     await page.within(60000, () =>
       window.model.settings
         .accounts()
@@ -235,7 +235,7 @@ test('Cancel during an MCP sign-in closes its window, drops its state and reject
         ),
       docs.url
     );
-    await page.evaluate(() => window.start('answer=Noted.', true));
+    await staged(page, 'the agent', () => window.start('answer=Noted.', true));
     await page.within(60000, () =>
       window.model.settings
         .accounts()
@@ -336,7 +336,7 @@ test('a retry right after a cancelled MCP sign-in keeps its own state, even when
         ),
       docs.url
     );
-    await page.evaluate(() => window.start('answer=Noted.'));
+    await staged(page, 'the agent', () => window.start('answer=Noted.'));
     await page.within(60000, () =>
       window.model.settings
         .accounts()
@@ -400,7 +400,7 @@ test('an MCP account carries its server URL without the query or fragment, for t
       })
     )
   );
-  await page.evaluate(() => window.start('relay=mcp.test&vault'));
+  await staged(page, 'the agent', () => window.start('relay=mcp.test&vault'));
   await page.within(
     60000,
     () => window.model.settings.accounts().find((account) => account.id === 'mcp:docs')?.url

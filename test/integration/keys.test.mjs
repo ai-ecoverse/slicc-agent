@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -57,9 +57,11 @@ const helpers = () => {
     const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
     await import(`${spectrum}/slicc-ui.js`);
     const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
-    const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
     const kernel = await bootKernel();
+    stage('the agent');
     let worker;
     const owner = await startAgent({
       worker: () => (worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' })),
@@ -130,7 +132,10 @@ async function boot(page, width = 1280) {
 }
 
 async function start(page, width = 1280, query = QUERY) {
-  await page.evaluate(({ query, width }) => window.bootAgent(query, width), { query, width });
+  await staged(page, 'the keys agent', ({ query, width }) => window.bootAgent(query, width), {
+    query,
+    width,
+  });
 }
 
 async function release(page) {
@@ -198,36 +203,41 @@ test('a 3.x credential store is wiped at the 4.x start, with one dismissible not
     [BEDROCK_MODEL, 'Bedrock'],
     ['adobe/e2e-1', 'Adobe'],
   ]) {
-    const error = await page.evaluate(
+    const error = await staged(
+      page,
+      `a turn on ${name}`,
       async ({ model }) => {
-        const { agent } = window.keysTest.model;
-        const until = async (check, tries = 500) => {
-          for (let n = 0; n < tries && !check(); n++) await new Promise((r) => setTimeout(r, 20));
-          return check();
-        };
+        const { connection, model: adapter } = window.keysTest;
+        const { agent } = adapter;
+        const until = (check, what) => when(agentSources(connection, adapter), check, what);
         agent.setModel(agent.active(), model);
-        await until(() => agent.list().find((row) => row.id === agent.active())?.model === model);
+        await until(
+          () => agent.list().find((row) => row.id === agent.active())?.model === model,
+          `the cone on ${model}`
+        );
         const before = agent.messages().length;
         await agent.send(agent.active(), 'Hello there.');
-        const found = await until(() =>
-          agent
-            .messages()
-            .slice(before)
-            .flatMap((message) =>
-              message.role === 'system' && message.kind === 'error'
-                ? [
-                    {
-                      type: 'error',
-                      message: message.title,
-                      detail: message.text,
-                      action: message.action,
-                    },
-                  ]
-                : (message.parts ?? [])
-            )
-            .find((part) => part.type === 'error')
+        const found = await until(
+          () =>
+            agent
+              .messages()
+              .slice(before)
+              .flatMap((message) =>
+                message.role === 'system' && message.kind === 'error'
+                  ? [
+                      {
+                        type: 'error',
+                        message: message.title,
+                        detail: message.text,
+                        action: message.action,
+                      },
+                    ]
+                  : (message.parts ?? [])
+              )
+              .find((part) => part.type === 'error'),
+          'the error'
         );
-        return found ?? { messages: agent.messages(), list: agent.list() };
+        return found;
       },
       { model }
     );

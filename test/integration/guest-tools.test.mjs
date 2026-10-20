@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -30,7 +30,9 @@ const refused = (reason) => `<harness>\n[error] Tool call blocked: ${reason}\n</
 async function boot(page, options = {}) {
   await page.init(helpers);
   await page.goto('/');
-  await page.evaluate(
+  await staged(
+    page,
+    'the guest-tools agent',
     async ({ steps, later = [], judge = null, persist = null, files = {}, seed = null }) => {
       for (const [path, text] of Object.entries(files)) await window.write(path, text);
       if (seed) {
@@ -56,7 +58,7 @@ async function boot(page, options = {}) {
           ...(persist ? [['persist', persist]] : []),
           ...list.map((step) => ['step', JSON.stringify(step)]),
         ])}`;
-      const owner = await startAgent({
+      const owner = await startTracked({
         worker: () => {
           lives += 1;
           worker = new Worker(url(lives === 1 ? steps : later), { type: 'module' });
@@ -64,14 +66,7 @@ async function boot(page, options = {}) {
         },
         kernel: { connect: () => kernel.connect() },
       });
-      const until = async (check, what) => {
-        for (let i = 0; i < 800; i++) {
-          const value = await check();
-          if (value) return value;
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        throw new Error(`timed out waiting for ${what}`);
-      };
+      const until = (check, what) => when([changed, every(100)], check, what);
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const hub = {
         minted: 0,
@@ -96,7 +91,11 @@ async function boot(page, options = {}) {
         });
         return minted.seat.id;
       };
-      r.join = (seat) => owner.port({ guest: { id: seat, label: 'Anna' } }).then(connectGuest);
+      r.join = (seat) =>
+        owner
+          .port({ guest: { id: seat, label: 'Anna' } })
+          .then(connectGuest)
+          .then(track);
       r.send = (guest, text, whenBusy = 'followUp') =>
         guest.control.send({ text, whenBusy, requestId: null }, BACKGROUND_CONTEXT);
       r.prompt = (text, whenBusy = 'followUp', agentId = 'cone') =>
@@ -192,7 +191,7 @@ test('a guest run waits for the owner: an approved bash runs, a denied one never
       answer('Checked.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a guest run waits for', async () => {
     const { until, pause, open, mint, join, send, prompt, said, results, items, asked, decide } =
       globalThis.r;
     await open();
@@ -247,7 +246,7 @@ test('a guest tool call shows its arguments in full as pretty JSON, and argument
   await boot(page, {
     steps: [bash(''), answer('Empty.'), code(script), answer('Long.')],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a guest tool call shows', async () => {
     const { until, open, mint, join, send, said, decide } = globalThis.r;
     await open();
     const guest = await join(await mint('user'));
@@ -304,7 +303,7 @@ test("a guest run's codemode script hits the same gate for each nested bash: one
       answer('Checked.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a guest run’s codemode script', async () => {
     const { until, open, mint, join, send, prompt, said, results, decide } = globalThis.r;
     await open();
     const guest = await join(await mint('user'));
@@ -339,7 +338,7 @@ test('an owner steer into a guest run still leaves the run gated', async (t) => 
   await boot(page, {
     steps: [bash('echo first'), bash('echo after-steer'), answer('Mixed.')],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'an owner steer into a', async () => {
     const { until, pause, open, mint, join, send, prompt, said, results, asked, decide } =
       globalThis.r;
     const { local } = await open();
@@ -415,7 +414,7 @@ test('aborting the conversation withdraws its waiting guest tool call, which nev
       answer('Checked.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'aborting the conversation withdraws its', async () => {
     const { until, open, mint, join, send, prompt, said, results, items, asked } = globalThis.r;
     const { local } = await open();
     const guest = await join(await mint('user'));
@@ -450,7 +449,7 @@ test('with the judge as the tools gate, the judge allows a call that fits the ow
       '/home/.pi/agent/settings.json': JSON.stringify({ approvals: { judgeModel: 'judge/j-1' } }),
     },
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'with the judge as the', async () => {
     const { until, open, mint, join, send, prompt, said, results, items } = globalThis.r;
     const { model } = await open();
     const seat = await mint('agent');
@@ -507,7 +506,7 @@ test('a seat whose tools gate this agent does not know gets every tool call in i
       answer('Checked.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a seat whose tools gate', async () => {
     const { until, open, join, send, said, results, items } = globalThis.r;
     await open();
     const guest = await join('seat-old');
@@ -533,7 +532,7 @@ test('a guest seat with tools off is refused until the owner allows it, then its
   await boot(page, {
     steps: [bash('echo guest-free'), answer('Free.'), bash('echo guest-again'), answer('Again.')],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a guest seat with tools', async () => {
     const { until, open, mint, join, send, said, results, items } = globalThis.r;
     const { local } = await open();
     const out = {};
@@ -581,7 +580,7 @@ test('Always on a guest tool call, once the policy offers it, lets only that exa
       answer('Four.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'Always on a guest tool', async () => {
     const { until, open, mint, join, send, said, results, asked } = globalThis.r;
     const { local, model } = await open();
     const ctx = BACKGROUND_CONTEXT;
@@ -652,7 +651,7 @@ test('the guest tool call dialog offers Always allow only while the policy does,
   await boot(page, {
     steps: [bash('echo always'), answer('One.'), bash('echo always'), answer('Two.')],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the guest tool call dialog', async () => {
     const { until, pause, open, mint, join, send, said, results } = globalThis.r;
     const { local, model } = await open();
     const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
@@ -748,7 +747,7 @@ test('the gate reaches a conversation stored before it existed, also forked and 
       answer('Thawed.'),
     ],
   });
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'the gate reaches a conversation', async () => {
     const { until, open, mint, join, send, said, decide, entries } = globalThis.r;
     const { local } = await open();
     const ctx = BACKGROUND_CONTEXT;

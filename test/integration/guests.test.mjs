@@ -1,117 +1,117 @@
 import assert from 'node:assert/strict';
 import { env } from 'node:process';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch({ args: ['--js-flags=--expose-gc'] });
 after(() => chrome.close());
 
 async function boot(page, query) {
   await page.goto('/');
-  await page.evaluate(async (query) => {
-    await import('/dist-test/page.js');
-    const url = `/dist-test/agent-worker.js?${query}`;
-    let worker;
-    const owner = await startAgent({
-      worker: () => {
-        worker = new Worker(url, { type: 'module' });
-        return worker;
-      },
-    });
-    const ask = (message, key) =>
-      new Promise((resolve) => {
-        const channel = new MessageChannel();
-        channel.port1.onmessage = ({ data }) => resolve(data);
-        worker.postMessage({ ...message, [key]: channel.port2 }, [channel.port2]);
+  await staged(
+    page,
+    'the guests agent',
+    async (query) => {
+      await import('/dist-test/page.js');
+      const url = `/dist-test/agent-worker.js?${query}`;
+      let worker;
+      const owner = await startTracked({
+        worker: () => {
+          worker = new Worker(url, { type: 'module' });
+          return worker;
+        },
       });
-    const record = (seat) => ask({ seat }, 'reply');
-    const seen = () => ask({}, 'seen');
-    const approve = (draft) => ask({ approve: draft }, 'reply');
-    const guestLinks = () => ask({}, 'guestLinks');
-    const sink = (channel) => ({
-      write: (bytes) => channel.readyState === 'open' && channel.send(bytes),
-      close: () => channel.readyState === 'open' && channel.close(),
-    });
-    const pump = (channel, end) => {
-      channel.binaryType = 'arraybuffer';
-      channel.onmessage = ({ data }) => end.receive(new Uint8Array(data));
-      channel.onclose = () => end.end();
-    };
-    const loopback = async () => {
-      const a = new RTCPeerConnection();
-      const b = new RTCPeerConnection();
-      a.onicecandidate = ({ candidate }) => candidate && b.addIceCandidate(candidate);
-      b.onicecandidate = ({ candidate }) => candidate && a.addIceCandidate(candidate);
-      const ours = a.createDataChannel('pi', { ordered: true });
-      const theirs = new Promise((resolve) => {
-        b.ondatachannel = ({ channel }) => resolve(channel);
+      const ask = (message, key) =>
+        new Promise((resolve) => {
+          const channel = new MessageChannel();
+          channel.port1.onmessage = ({ data }) => resolve(data);
+          worker.postMessage({ ...message, [key]: channel.port2 }, [channel.port2]);
+        });
+      const record = (seat) => ask({ seat }, 'reply');
+      const seen = () => ask({}, 'seen');
+      const approve = (draft) => ask({ approve: draft }, 'reply');
+      const guestLinks = () => ask({}, 'guestLinks');
+      const sink = (channel) => ({
+        write: (bytes) => channel.readyState === 'open' && channel.send(bytes),
+        close: () => channel.readyState === 'open' && channel.close(),
       });
-      await a.setLocalDescription();
-      await b.setRemoteDescription(a.localDescription);
-      await b.setLocalDescription();
-      await a.setRemoteDescription(b.localDescription);
-      const other = await theirs;
-      for (const channel of [ours, other])
-        if (channel.readyState !== 'open')
-          await new Promise((resolve) => channel.addEventListener('open', resolve, { once: true }));
-      return { owner: ours, guest: other };
-    };
-    const join = async (options, connect = connectGuest) => {
-      const rtc = await loopback();
-      const port = await owner.port(options);
-      pump(rtc.owner, bridgePort(port, sink(rtc.owner)));
-      const endpoint = linkEndpoint(sink(rtc.guest));
-      pump(rtc.guest, endpoint);
-      return connect(endpoint);
-    };
-    const until = async (check, what) => {
-      for (let i = 0; i < 400; i++) {
-        const value = await check();
-        if (value) return value;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      throw new Error(`timed out waiting for ${what}`);
-    };
-    const minted = [];
-    const revoked = [];
-    const hub = {
-      async mint(request) {
-        minted.push(request);
-        const id = `seat-${minted.length}`;
-        return { id, url: `https://hub.test/join/${id}-token` };
-      },
-      async revoke(id) {
-        revoked.push(id);
-      },
-    };
-    const said = (model) =>
-      model.agent
-        .messages('cone')
-        .map((message) =>
-          message.role === 'user'
-            ? `${message.origin ?? 'owner'}${message.from ? `(${message.from})` : ''}: ${message.text}`
-            : message.role === 'assistant'
-              ? `agent: ${message.parts
-                  .filter((part) => part.type === 'text')
-                  .map((part) => part.text)
-                  .join('')}`
-              : null
-        )
-        .filter(Boolean);
-    globalThis.seats = {
-      owner,
-      join,
-      until,
-      hub,
-      minted,
-      revoked,
-      said,
-      record,
-      seen,
-      approve,
-      guestLinks,
-    };
-  }, query);
+      const pump = (channel, end) => {
+        channel.binaryType = 'arraybuffer';
+        channel.onmessage = ({ data }) => end.receive(new Uint8Array(data));
+        channel.onclose = () => end.end();
+      };
+      const loopback = async () => {
+        const a = new RTCPeerConnection();
+        const b = new RTCPeerConnection();
+        a.onicecandidate = ({ candidate }) => candidate && b.addIceCandidate(candidate);
+        b.onicecandidate = ({ candidate }) => candidate && a.addIceCandidate(candidate);
+        const ours = a.createDataChannel('pi', { ordered: true });
+        const theirs = new Promise((resolve) => {
+          b.ondatachannel = ({ channel }) => resolve(channel);
+        });
+        await a.setLocalDescription();
+        await b.setRemoteDescription(a.localDescription);
+        await b.setLocalDescription();
+        await a.setRemoteDescription(b.localDescription);
+        const other = await theirs;
+        for (const channel of [ours, other])
+          if (channel.readyState !== 'open')
+            await new Promise((resolve) =>
+              channel.addEventListener('open', resolve, { once: true })
+            );
+        return { owner: ours, guest: other };
+      };
+      const join = async (options, connect = connectGuest) => {
+        const rtc = await loopback();
+        const port = await owner.port(options);
+        pump(rtc.owner, bridgePort(port, sink(rtc.owner)));
+        const endpoint = linkEndpoint(sink(rtc.guest));
+        pump(rtc.guest, endpoint);
+        return track(await connect(endpoint));
+      };
+      const until = (check, what) => when([changed, every(100)], check, what);
+      const minted = [];
+      const revoked = [];
+      const hub = {
+        async mint(request) {
+          minted.push(request);
+          const id = `seat-${minted.length}`;
+          return { id, url: `https://hub.test/join/${id}-token` };
+        },
+        async revoke(id) {
+          revoked.push(id);
+        },
+      };
+      const said = (model) =>
+        model.agent
+          .messages('cone')
+          .map((message) =>
+            message.role === 'user'
+              ? `${message.origin ?? 'owner'}${message.from ? `(${message.from})` : ''}: ${message.text}`
+              : message.role === 'assistant'
+                ? `agent: ${message.parts
+                    .filter((part) => part.type === 'text')
+                    .map((part) => part.text)
+                    .join('')}`
+                : null
+          )
+          .filter(Boolean);
+      globalThis.seats = {
+        owner,
+        join,
+        until,
+        hub,
+        minted,
+        revoked,
+        said,
+        record,
+        seen,
+        approve,
+        guestLinks,
+      };
+    },
+    query
+  );
 }
 
 const hour = 60 * 60 * 1000;
@@ -119,84 +119,90 @@ const hour = 60 * 60 * 1000;
 test('an owner invites a guest through the hub, the guest watches the cone and its message reaches the agent marked as a guest, and revoking ends the seat everywhere', async (t) => {
   const page = await chrome.page(t);
   await boot(page, 'answer=Watched.&answer=Thanks%2C%20Anna.');
-  const result = await page.evaluate(async (hour) => {
-    const { owner, join, until, hub, minted, revoked, said, record, seen, approve } =
-      globalThis.seats;
-    const local = await owner.connect();
-    const model = createAgentModel(local, { guests: hub });
-    const out = { unavailable: model.guests.unavailable() };
-    const expiresAt = Date.now() + hour;
-    const invited = await model.guests.mint('cone', {
-      label: 'Anna',
-      expiresAt,
-      gates: { messages: 'off', tools: 'user' },
-    });
-    out.url = invited.url;
-    out.minted = minted;
-    out.listed = model.guests.list().map(({ id, label, agentId, connected, gates }) => ({
-      id,
-      label,
-      agentId,
-      connected,
-      gates,
-    }));
-    await local.prompt('Owner speaking.');
-    const guest = await join({ guest: { id: invited.seat.id, label: 'Anna' } });
-    const second = await join({ guest: { id: invited.seat.id, label: 'Anna' } });
-    out.guest = guest.guest;
-    const guestModel = createAgentModel(guest);
-    await guestModel.agent.ready();
-    out.seat = guestModel.seat;
-    out.ownerSeat = 'seat' in model;
-    await until(() => said(guestModel).includes('agent: Watched.'), 'the guest to watch');
-    await until(() => model.guests.list()[0]?.connected, 'the seat to show connected');
-    out.guestSees = said(guestModel);
-    await guestModel.agent.send('cone', 'Could you summarise?');
-    await until(
-      () => said(model).includes('agent: Thanks, Anna.'),
-      'the guest message to be answered'
-    );
-    out.ownerSees = said(model);
-    await until(
-      () => said(guestModel).includes('agent: Thanks, Anna.'),
-      'the guest to see the answer'
-    );
-    out.guestSeesAfter = said(guestModel);
-    out.modelSaw = (await seen()).at(-1);
-    const review = await approve({
-      kind: 'guest-message',
-      seat: invited.seat.id,
-      agentId: 'cone',
-      requester: { kind: 'guest', name: 'Anna', seat: invited.seat.id },
-      tier: 'user',
-      detail: { text: 'One more thing?', attachments: [] },
-    });
-    await until(() => model.guests.list()[0]?.pending === 1, 'the pending review to count');
-    out.pending = model.guests.list()[0].pending;
-    out.before = await record(invited.seat.id);
-    await model.guests.revoke(invited.seat.id);
-    await Promise.all([guest.closed, second.closed]);
-    out.after = await record(invited.seat.id);
-    await until(
-      () => local.approvals.value.find((item) => item.id === review.item.id)?.state === 'withdrawn',
-      'the review to be withdrawn'
-    );
-    const ended = local.approvals.value.find((item) => item.id === review.item.id);
-    out.review = { state: ended.state, reason: ended.reason };
-    out.revoked = revoked;
-    out.listedAfter = model.guests.list();
-    out.rejoin = await join({ guest: { id: invited.seat.id, label: 'Anna' } }).then(
-      () => 'joined',
-      (error) => `${error.code}: ${error.message}`
-    );
-    const sent = await guestModel.agent.send('cone', 'Still here?').then(
-      () => 'sent',
-      () => 'refused'
-    );
-    out.late = sent;
-    out.ownerSeesAfter = said(model);
-    return out;
-  }, hour);
+  const result = await staged(
+    page,
+    'an owner invites a guest',
+    async (hour) => {
+      const { owner, join, until, hub, minted, revoked, said, record, seen, approve } =
+        globalThis.seats;
+      const local = await owner.connect();
+      const model = createAgentModel(local, { guests: hub });
+      const out = { unavailable: model.guests.unavailable() };
+      const expiresAt = Date.now() + hour;
+      const invited = await model.guests.mint('cone', {
+        label: 'Anna',
+        expiresAt,
+        gates: { messages: 'off', tools: 'user' },
+      });
+      out.url = invited.url;
+      out.minted = minted;
+      out.listed = model.guests.list().map(({ id, label, agentId, connected, gates }) => ({
+        id,
+        label,
+        agentId,
+        connected,
+        gates,
+      }));
+      await local.prompt('Owner speaking.');
+      const guest = await join({ guest: { id: invited.seat.id, label: 'Anna' } });
+      const second = await join({ guest: { id: invited.seat.id, label: 'Anna' } });
+      out.guest = guest.guest;
+      const guestModel = createAgentModel(guest);
+      await guestModel.agent.ready();
+      out.seat = guestModel.seat;
+      out.ownerSeat = 'seat' in model;
+      await until(() => said(guestModel).includes('agent: Watched.'), 'the guest to watch');
+      await until(() => model.guests.list()[0]?.connected, 'the seat to show connected');
+      out.guestSees = said(guestModel);
+      await guestModel.agent.send('cone', 'Could you summarise?');
+      await until(
+        () => said(model).includes('agent: Thanks, Anna.'),
+        'the guest message to be answered'
+      );
+      out.ownerSees = said(model);
+      await until(
+        () => said(guestModel).includes('agent: Thanks, Anna.'),
+        'the guest to see the answer'
+      );
+      out.guestSeesAfter = said(guestModel);
+      out.modelSaw = (await seen()).at(-1);
+      const review = await approve({
+        kind: 'guest-message',
+        seat: invited.seat.id,
+        agentId: 'cone',
+        requester: { kind: 'guest', name: 'Anna', seat: invited.seat.id },
+        tier: 'user',
+        detail: { text: 'One more thing?', attachments: [] },
+      });
+      await until(() => model.guests.list()[0]?.pending === 1, 'the pending review to count');
+      out.pending = model.guests.list()[0].pending;
+      out.before = await record(invited.seat.id);
+      await model.guests.revoke(invited.seat.id);
+      await Promise.all([guest.closed, second.closed]);
+      out.after = await record(invited.seat.id);
+      await until(
+        () =>
+          local.approvals.value.find((item) => item.id === review.item.id)?.state === 'withdrawn',
+        'the review to be withdrawn'
+      );
+      const ended = local.approvals.value.find((item) => item.id === review.item.id);
+      out.review = { state: ended.state, reason: ended.reason };
+      out.revoked = revoked;
+      out.listedAfter = model.guests.list();
+      out.rejoin = await join({ guest: { id: invited.seat.id, label: 'Anna' } }).then(
+        () => 'joined',
+        (error) => `${error.code}: ${error.message}`
+      );
+      const sent = await guestModel.agent.send('cone', 'Still here?').then(
+        () => 'sent',
+        () => 'refused'
+      );
+      out.late = sent;
+      out.ownerSeesAfter = said(model);
+      return out;
+    },
+    hour
+  );
   assert.equal(result.unavailable, null);
   assert.match(result.url, /^https:\/\/hub\.test\/join\/seat-1-token$/);
   assert.equal(result.minted.length, 1);
@@ -258,7 +264,7 @@ test('an owner invites a guest through the hub, the guest watches the cone and i
 test('a guest advertises nothing it can use: asking for Control and Panels still gets only its own seat, and the follower client is forbidden', async (t) => {
   const page = await chrome.page(t);
   await boot(page, 'answer=Hello.');
-  const result = await page.evaluate(async () => {
+  const result = await staged(page, 'a guest advertises nothing it', async () => {
     const { owner, join, hub } = globalThis.seats;
     const local = await owner.connect();
     const model = createAgentModel(local, { guests: hub });
@@ -365,7 +371,7 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
 test('every owner device manages guests: a follower with Control and one without mint, list and revoke through the Guests port like the owner', async (t) => {
   const page = await chrome.page(t);
   await boot(page, 'answer=Hello.');
-  const result = await page.evaluate(async () => {
+  const result = await staged(page, 'every owner device manages guests', async () => {
     const { owner, join, hub, until, revoked } = globalThis.seats;
     const local = await owner.connect();
     const follower = await join({ pages: false }, connectAgent);
@@ -417,7 +423,7 @@ test('every owner device manages guests: a follower with Control and one without
 test('the approval policy: by default a guest seat with tools off is refused, an owner device allows it, and a guest can never change the policy or manage seats', async (t) => {
   const page = await chrome.page(t);
   await boot(page, 'answer=Hello.');
-  const result = await page.evaluate(async () => {
+  const result = await staged(page, 'the approval policy by default', async () => {
     const { owner, join, hub, until } = globalThis.seats;
     const local = await owner.connect();
     const viewer = await join({ pages: false, readOnly: true }, connectAgent);
@@ -513,7 +519,7 @@ test('the approval policy: by default a guest seat with tools off is refused, an
 test('seats survive a worker restart: a revoked seat stays refused with its epoch bumped, a live one admits again, and an expiring one closes its guest and leaves the list', async (t) => {
   const page = await chrome.page(t);
   await boot(page, `directory=/.slicc/guests-${Date.now()}&answer=Hi.`);
-  const result = await page.evaluate(async () => {
+  const result = await staged(page, 'seats survive a worker restart', async () => {
     const { owner, join, until, hub, record } = globalThis.seats;
     const local = await owner.connect();
     const model = createAgentModel(local, { guests: hub });
@@ -575,7 +581,7 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
     features: [{ name: 'prefers-color-scheme', value: 'light' }],
   });
   await boot(page, 'answer=Hi.');
-  await page.evaluate(async () => {
+  await staged(page, 'the Network panel invites a', async () => {
     const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
     await import(`${spectrum}/slicc-ui.js`);
     const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
@@ -620,7 +626,7 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
   await page.until(() =>
     Boolean(globalThis.ui.find('li[data-seat="seat-1"][data-connected="false"]'))
   );
-  await page.evaluate(async () => {
+  await staged(page, 'the Network panel invites a', async () => {
     globalThis.guest = await globalThis.seats.join({ guest: { id: 'seat-1', label: 'Anna' } });
   });
   await page.until(() =>
@@ -637,7 +643,7 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
     globalThis.ui.all(globalThis.ui.find('slicc-confirm').shadowRoot, '[data-action]')[0].click()
   );
   await page.until(() => Boolean(globalThis.ui.find('section[data-guests] [data-guests-empty]')));
-  const after = await page.evaluate(async () => {
+  const after = await staged(page, 'the Network panel invites a', async () => {
     await globalThis.guest.closed;
     return { revoked: globalThis.seats.revoked, seats: globalThis.ui.model.guests.list() };
   });
@@ -648,7 +654,7 @@ test('the Network panel invites a guest through the agent adapter, shows the lin
 test('a gated guest message waits visibly: the guest sees it pending, an approval delivers it once, and one nobody answers ends as not approved in time', async (t) => {
   const page = await chrome.page(t);
   await boot(page, 'ttl=2500&answer=Welcome%2C%20Anna.');
-  const result = await page.evaluate(async () => {
+  const result = await staged(page, 'a gated guest message waits', async () => {
     const { owner, join, until, hub, said } = globalThis.seats;
     const local = await owner.connect();
     const model = createAgentModel(local, { guests: hub });
@@ -712,7 +718,7 @@ test('a gated guest message waits visibly: the guest sees it pending, an approva
 test('minting and revoking guests leaves nothing of theirs on the agent: each revoked guest link is collected', async (t) => {
   const page = await chrome.page(t);
   await boot(page, 'answer=Hello.');
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'minting and revoking guests leaves', async () => {
     const { owner, guestLinks } = globalThis.seats;
     const local = await owner.connect();
     let minted = 0;
@@ -757,7 +763,7 @@ test('minting and revoking guests leaves nothing of theirs on the agent: each re
 test('a guest link has at most four calls in flight: further calls are answered at once as unavailable, and the link stays open', async (t) => {
   const page = await chrome.page(t);
   await boot(page, `answer=Hello.&directory=/calls-${Date.now()}&crash=before`);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a guest link has at', async () => {
     const { owner } = globalThis.seats;
     const local = await owner.connect();
     const opened = await local.control.guestOpen(
@@ -808,7 +814,7 @@ test('a guest link has at most four calls in flight: further calls are answered 
 test('a guest cannot import a SLICC 6 profile: importProfile and importCancel are refused, and the guest contract has no import', async (t) => {
   const page = await chrome.page(t);
   await boot(page, `answer=Hello.&directory=/import-${Date.now()}`);
-  const seen = await page.evaluate(async () => {
+  const seen = await staged(page, 'a guest cannot import a', async () => {
     const { owner } = globalThis.seats;
     const local = await owner.connect();
     await local.control.guestOpen(
