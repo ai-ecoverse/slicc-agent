@@ -76,6 +76,7 @@ export type Asker = { user: string | null; cwd: string };
 export interface FreezerRuntime {
   readonly frozen: ReplicatedState<FrozenCone[]>;
   readonly importing: ReplicatedState<ImportProgress>;
+  readonly swept: Promise<void>;
   importProfile(
     source: ImportSource,
     options: { again?: boolean; preview?: boolean },
@@ -699,7 +700,7 @@ function importing(
   options: FreezerAttach,
   now: () => number,
   refresh: () => Promise<unknown>
-): Pick<FreezerRuntime, 'importing' | 'importProfile' | 'cancelImport'> {
+): Pick<FreezerRuntime, 'importing' | 'swept' | 'importProfile' | 'cancelImport'> {
   const importer = options.imports
     ? createImporter({
         ...options.imports,
@@ -710,6 +711,7 @@ function importing(
     : undefined;
   return {
     importing: importer?.progress ?? replicatedState<ImportProgress>(IDLE),
+    swept: importer?.swept ?? Promise.resolve(),
     importProfile: async (source, choices, context) =>
       importer
         ? importer.run(source, choices, context).then(async (result) => {
@@ -879,7 +881,8 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
     refresh,
     touch,
     frozenTarget: (target) => frozenTarget(agents.state(), target),
-    command: (argv, _caller, context, asker) => command(options, runtime, argv, context, asker),
+    command: (argv, _caller, context, asker) =>
+      runtime.swept.then(() => command(options, runtime, argv, context, asker)),
     close: () => off(),
   };
   return runtime;
