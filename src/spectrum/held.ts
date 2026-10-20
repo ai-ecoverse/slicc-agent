@@ -43,3 +43,17 @@ export function askHold(
     else channel.postMessage({ type: 'hold', marker });
   });
 }
+
+export function refusal(held: Promise<boolean>, refuse: () => void = () => {}): Promise<void> {
+  const refused = held.then((ok) => {
+    if (ok) return;
+    refuse();
+    throw new Error(UNHELD);
+  });
+  refused.catch(() => undefined);
+  return refused;
+}
+
+export function unlessRefused<T>(work: Promise<T>, refused: Promise<void>): Promise<T> {
+  return Promise.race([work, refused.then(() => work)]);
+}

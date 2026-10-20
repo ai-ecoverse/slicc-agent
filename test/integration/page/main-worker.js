@@ -80,6 +80,7 @@ function signIn(request) {
   const form = new URLSearchParams(new TextDecoder().decode(request.body ?? new Uint8Array()));
   upstream.push({ url: request.url, auth: provider });
   if (DEVICE_PATHS.has(url.pathname)) {
+    if (device.mode === 'stall') return new Promise(() => {});
     if (provider === 'openai-codex')
       return reply(200, { device_auth_id: 'da-e2e', user_code: 'CODE-0001', interval: '1' });
     return reply(200, {

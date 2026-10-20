@@ -429,6 +429,36 @@ for (const holding of ['unheld', 'silent']) {
   });
 }
 
+test('an MCP sign-in whose window the owner refuses fails at once, even while discovery is still waiting', async (t) => {
+  let gate;
+  let release;
+  const docs = await serve(true, { oauth: { hold: () => gate } });
+  try {
+    const page = await mcpPage(t, docs);
+    gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const seen = await page.evaluate(async () => {
+      window.holding = 'unheld';
+      const result = await window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.message
+      );
+      const popup = window.opens.at(-1);
+      return { result, closed: popup.closed, href: popup.location.href };
+    });
+    assert.match(seen.href, /^about:blank#slicc-sign-in-[0-9a-f-]{36}$/);
+    assert.deepEqual(seen, {
+      result: "SLICC couldn't protect the sign-in window. Try again.",
+      closed: true,
+      href: seen.href,
+    });
+  } finally {
+    release?.();
+    docs.close();
+  }
+});
+
 test('a retry right after a cancelled MCP sign-in keeps its own state, even when the cancelled discovery finishes last', async (t) => {
   const held = [];
   let holding = false;

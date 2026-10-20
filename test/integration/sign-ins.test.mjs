@@ -289,7 +289,7 @@ for (const holding of ['unheld', 'silent']) {
           shown,
           closed: started.popup.closed,
           href: started.popup.location.href,
-          status: it.account('kimi-coding').status,
+          signingIn: it.account('kimi-coding')?.status === 'signing-in',
           leaks: await it.leaks(),
         };
         await it.owner.release();
@@ -305,10 +305,35 @@ for (const holding of ['unheld', 'silent']) {
     assert.equal(seen.shown, false);
     assert.equal(seen.closed, true);
     assert.equal(seen.href, seen.marked);
-    assert.equal(seen.status, 'disconnected');
+    assert.equal(seen.signingIn, false);
     assert.deepEqual(seen.leaks, []);
   });
 }
+
+test('a device sign-in whose window the owner refuses fails at once, even while the device code is still on its way', async (t) => {
+  const page = await opened(t);
+  const seen = await page.evaluate(async (query) => {
+    const it = await window.openSignIns(query);
+    await it.device('stall');
+    window.holding = 'unheld';
+    const started = it.signIn('kimi-coding');
+    const failure = await started.done;
+    const result = {
+      failure,
+      closed: started.popup.closed,
+      signingIn: it.account('kimi-coding')?.status === 'signing-in',
+      issued: (await it.polls()).issued,
+    };
+    await it.owner.release();
+    return result;
+  }, QUERY);
+  assert.deepEqual(seen, {
+    failure: { name: 'Error', message: "SLICC couldn't protect the sign-in window. Try again." },
+    closed: true,
+    signingIn: false,
+    issued: 0,
+  });
+});
 
 test('Cancel ends a waiting sign-in at once, stops its polling, and a new sign-in starts clean', async (t) => {
   const page = await opened(t);

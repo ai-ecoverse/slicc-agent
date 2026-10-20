@@ -18,7 +18,7 @@ import {
 import type { AgentAdapter } from './agent-port.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
-import { askHold, markerUrl, UNHELD } from './held.ts';
+import { askHold, markerUrl, refusal, unlessRefused } from './held.ts';
 import { mcpLogin, type SignInWindow, untilAborted } from './mcp-login.ts';
 
 export const SETTINGS_KEY = 'slicc-agent.settings';
@@ -262,15 +262,19 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     const popup = this.#window.open(markerUrl(marker));
     const controller = this.#begin(id);
     const { signal } = controller;
-    const held = popup ? this.#window.hold(marker, signal) : Promise.resolve(false);
+    const unheld = new AbortController();
+    const refused = refusal(popup ? this.#window.hold(marker, signal) : Promise.resolve(true), () =>
+      unheld.abort(new DOMException('The sign-in window was not held.', 'AbortError'))
+    );
     const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
+    const discovery = withAbortSignal(AbortSignal.any([signal, unheld.signal]), BACKGROUND_CONTEXT);
     try {
       const started = (await untilAborted(
-        this.#settings.signIn(id, context),
+        unlessRefused(this.#settings.signIn(id, discovery), refused),
         signal
       )) as DeviceSignIn | null;
       if (!started || !httpsUrl(started.url)) throw new Error(UNFINISHED);
-      if (popup && !(await untilAborted(held, signal))) throw new Error(UNHELD);
+      await untilAborted(refused, signal);
       const code = typeof started.code === 'string' && started.code ? started.code : undefined;
       this.#prompts.set(id, { url: started.url, ...(code ? { code } : {}) });
       this.emit('accounts', this.accounts());
