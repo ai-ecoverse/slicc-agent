@@ -29,6 +29,7 @@ export type SeatSubmission = { id: string; approval: string | null; tools: Guest
 export type AlwaysTool = {
   approval: string;
   tool: string;
+  argumentsHash: string;
   arguments: string;
   by: DecidedBy | null;
   at: number;
