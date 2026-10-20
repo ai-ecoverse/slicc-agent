@@ -337,3 +337,75 @@ test('secrets: a model call goes out prepared by the vault, with the key filled 
   assert.ok(seen.vault.some((message) => message.op === 'endpoints'));
   assert.ok(!seen.messages.includes(key));
 });
+
+test('secrets: a guest tool call asks with its arguments scrubbed, a secret shown as its placeholder, and once approved runs with the real value', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const steps = [
+    {
+      tool: {
+        name: 'bash',
+        args: { command: `printf '%s' ${alpha} > /home/guest-ran.txt`, timeout: 5 },
+      },
+    },
+    { answer: 'Ran.' },
+  ];
+  const seen = await page.evaluate(
+    async ({ origin, steps }) => {
+      const { owner, connection } = await window.withVault(origin, steps);
+      const hub = {
+        mint: async () => ({ id: 'seat-1', url: 'https://hub.test/join/seat-1' }),
+        revoke: async () => {},
+      };
+      const model = createAgentModel(connection, { guests: hub });
+      await model.agent.ready();
+      const minted = await model.guests.mint('cone', {
+        label: 'Anna',
+        expiresAt: null,
+        gates: { messages: 'off', tools: 'user' },
+      });
+      const guest = await connectGuest(
+        await owner.port({ guest: { id: minted.seat.id, label: 'Anna' } })
+      );
+      await guest.control.send(
+        { text: 'Echo it.', whenBusy: 'followUp', requestId: null },
+        BACKGROUND_CONTEXT
+      );
+      const asked = () =>
+        model.approvals.list().filter((approval) => approval.kind === 'guest-tool');
+      for (let n = 0; n < 300 && !asked().length; n++)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      const [first] = asked();
+      const result = {
+        approval: JSON.stringify(first ?? null),
+        args: first?.args,
+        summary: first?.summary,
+        items: JSON.stringify(connection.approvals.value),
+      };
+      if (first) await model.approvals.decide(first.id, 'once');
+      const ran = () =>
+        connection.transcript.value.entries.some(
+          (entry) =>
+            entry.kind === 'pi.assistant' &&
+            entry.model?.[0]?.content?.some((block) => block.text === 'Ran.')
+        );
+      for (let n = 0; n < 300 && !ran(); n++)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      result.written = await window.read('/home/guest-ran.txt').catch(() => null);
+      await guest.close();
+      await owner.release();
+      return result;
+    },
+    { origin: vaultOrigin, steps }
+  );
+  captured.push(
+    { what: 'the approval shown', text: seen.approval },
+    { what: 'the approval records', text: seen.items }
+  );
+  const placeholder = seeds.values[0].placeholder;
+  const shown = `printf '%s' ${placeholder} > /home/guest-ran.txt`;
+  assert.equal(seen.args, JSON.stringify({ command: shown, timeout: 5 }, null, 2));
+  assert.equal(seen.summary, JSON.stringify({ command: shown, timeout: 5 }));
+  assert.equal(seen.written, alpha);
+});
