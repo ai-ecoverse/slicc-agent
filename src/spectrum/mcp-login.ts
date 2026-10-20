@@ -1,4 +1,5 @@
 import type { McpSignIn, SignIn } from '../services.ts';
+import { askHold, markerUrl, UNHELD } from './held.ts';
 
 export const MCP_CHANNEL = 'slicc-mcp-oauth';
 export const MCP_NAME_KEY = 'slicc-mcp-oauth:';
@@ -14,16 +15,20 @@ export interface Channel {
   close(): void;
 }
 
-export interface McpLoginHost {
-  open(): Popup | null;
+export interface SignInWindow {
+  open(url: string): Popup | null;
+  hold(marker: string, signal: AbortSignal): Promise<boolean>;
+}
+
+export interface McpLoginHost extends SignInWindow {
   channel(): Channel;
   remember?(state: string, name: string | null): void;
   timeoutMs?: number;
 }
 
 const browser: McpLoginHost = {
-  open: () =>
-    globalThis.open?.('about:blank', 'slicc-mcp-oauth', 'popup,width=520,height=720') ?? null,
+  open: (url) => globalThis.open?.(url, 'slicc-mcp-oauth', 'popup,width=520,height=720') ?? null,
+  hold: (marker, signal) => askHold(marker, signal),
   channel: () => new BroadcastChannel(MCP_CHANNEL) as unknown as Channel,
   remember: (state, name) => {
     const key = `${MCP_NAME_KEY}${state}`;
@@ -79,7 +84,9 @@ export function mcpLogin(host: McpLoginHost = browser) {
     signIn: () => Promise<SignIn | McpSignIn | null>,
     options: { signal: AbortSignal }
   ): Promise<string> => {
-    const popup = host.open();
+    const marker = crypto.randomUUID();
+    const popup = host.open(markerUrl(marker));
+    const held = popup ? host.hold(marker, options.signal) : Promise.resolve(false);
     const channel = host.channel();
     let state: string | undefined;
     try {
@@ -89,6 +96,7 @@ export function mcpLogin(host: McpLoginHost = browser) {
         throw new Error("The authorization server gave a sign-in address that isn't https.");
       if (!popup)
         throw new Error('The browser blocked the sign-in window. Allow pop-ups for SLICC.');
+      if (!(await untilAborted(held, options.signal))) throw new Error(UNHELD);
       state = started.state;
       host.remember?.(state, providerId.replace(/^mcp:/, ''));
       popup.location.href = started.url;

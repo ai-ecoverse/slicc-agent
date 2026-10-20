@@ -18,7 +18,8 @@ import {
 import type { AgentAdapter } from './agent-port.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
-import { mcpLogin, type Popup, untilAborted } from './mcp-login.ts';
+import { askHold, markerUrl, UNHELD } from './held.ts';
+import { mcpLogin, type SignInWindow, untilAborted } from './mcp-login.ts';
 
 export const SETTINGS_KEY = 'slicc-agent.settings';
 
@@ -44,10 +45,10 @@ export type Login = (
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
 export const UNFINISHED = SIGN_IN_UNFINISHED;
 
-export type OpenPopup = () => Popup | null;
-
-const openPopup: OpenPopup = () =>
-  globalThis.open?.('about:blank', 'slicc-sign-in', 'popup,width=520,height=720') ?? null;
+const signInWindow: SignInWindow = {
+  open: (url) => globalThis.open?.(url, 'slicc-sign-in', 'popup,width=520,height=720') ?? null,
+  hold: (marker, signal) => askHold(marker, signal),
+};
 
 export function readable(error: unknown): Error {
   if (error instanceof DOMException && error.name === 'AbortError') return error;
@@ -67,7 +68,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   readonly #mcpLogin: Login;
   readonly #signing = new Map<string, AbortController>();
   readonly #prompts = new Map<string, DeviceSignIn>();
-  readonly #open: OpenPopup;
+  readonly #window: SignInWindow;
   #local: Local;
   #offered = '';
   readonly #urls = new Map<string, string>();
@@ -78,11 +79,11 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     storage: Pick<Storage, 'getItem' | 'setItem'> | null,
     login: Login | null = null,
     mcp: Login = mcpLogin() as Login,
-    open: OpenPopup = openPopup
+    popups: SignInWindow = signInWindow
   ) {
     super();
     this.#mcpLogin = mcp;
-    this.#open = open;
+    this.#window = popups;
     this.#settings = settings;
     this.#agent = agent;
     this.#storage = storage;
@@ -257,9 +258,11 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   }
 
   async #device(id: string, given: Record<string, string> | null): Promise<void> {
-    const popup = this.#open();
+    const marker = crypto.randomUUID();
+    const popup = this.#window.open(markerUrl(marker));
     const controller = this.#begin(id);
     const { signal } = controller;
+    const held = popup ? this.#window.hold(marker, signal) : Promise.resolve(false);
     const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
     try {
       const started = (await untilAborted(
@@ -267,6 +270,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
         signal
       )) as DeviceSignIn | null;
       if (!started || !httpsUrl(started.url)) throw new Error(UNFINISHED);
+      if (popup && !(await untilAborted(held, signal))) throw new Error(UNHELD);
       const code = typeof started.code === 'string' && started.code ? started.code : undefined;
       this.#prompts.set(id, { url: started.url, ...(code ? { code } : {}) });
       this.emit('accounts', this.accounts());
