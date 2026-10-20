@@ -5,6 +5,7 @@ import type {
   ApprovalRequester,
   ApprovalsEvents,
   ApprovalsPort,
+  GuestToolApproval,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Approval as Item } from '../approvals/record.ts';
@@ -28,7 +29,7 @@ function pretty(text: string): string {
   }
 }
 
-function argsOf(text: string | undefined): { args?: string; argsTruncated?: true } {
+function argsOf(text: string | undefined): Pick<GuestToolApproval, 'args' | 'argsTruncated'> {
   if (text === undefined) return {};
   const args = pretty(text);
   if (args.length <= ARGS_LENGTH) return { args };
@@ -76,16 +77,14 @@ export function shown(item: Item, agentName: string | undefined): Approval {
       ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } }
       : {}),
   };
-  if (item.kind === 'guest-tool') {
-    const tool = {
+  if (item.kind === 'guest-tool')
+    return {
       ...guest,
-      kind: 'guest-tool' as const,
+      kind: 'guest-tool',
       tool: item.detail.tool,
       summary: item.detail.summary,
       ...argsOf(item.detail.arguments),
     };
-    return tool;
-  }
   return {
     ...guest,
     kind: 'guest-message',

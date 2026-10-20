@@ -684,15 +684,18 @@ test('the guest tool call dialog offers Always allow only while the policy does,
       dialog().querySelector(`[data-action="${action}"]`).click();
       await until(() => !dialog(), 'the dialog to close');
     };
-    const shown = () => ({
-      always: Boolean(dialog().querySelector('[data-action="always"]')),
-      text: dialog().textContent.replace(/\s+/g, ' '),
-    });
+    const shown = async () => {
+      await until(() => dialog()?.querySelector('[data-action="once"]'), 'the whole request seen');
+      return {
+        always: Boolean(dialog().querySelector('[data-action="always"]')),
+        text: dialog().textContent.replace(/\s+/g, ' '),
+      };
+    };
     const seat = await mint('user');
     const guest = await join(seat);
     await send(guest, 'First.');
     await until(dialog, 'the first dialog');
-    const off = shown();
+    const off = await shown();
     await click('deny');
     await until(() => said().includes('One.'), 'the first run');
     await local.control.approvalPolicySet(
@@ -701,7 +704,7 @@ test('the guest tool call dialog offers Always allow only while the policy does,
     );
     await send(guest, 'Second.');
     await until(dialog, 'the second dialog');
-    const on = shown();
+    const on = await shown();
     await click('always');
     await until(() => said().includes('Two.'), 'the second run');
     const record = local.guests.value.find((entry) => entry.id === seat);
