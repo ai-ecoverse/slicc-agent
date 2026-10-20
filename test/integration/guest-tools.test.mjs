@@ -640,7 +640,7 @@ test('Always on a guest tool call, once the policy offers it, lets only that exa
   ]);
 });
 
-for (let rep = 0; rep < 30; rep += 1)
+for (let rep = 0; rep < 120; rep += 1)
   test(`the guest tool call dialog offers Always allow only while the policy does, and Always there records that exact call on the seat ${rep}`, async (t) => {
     const page = await chrome.page(t);
     await page.send('Emulation.setDeviceMetricsOverride', {
