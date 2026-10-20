@@ -351,6 +351,7 @@ test('a review nobody answers expires as unanswered, and the next message in the
     await until(() => listed(model).length === 1, 'the first to be asked');
     const out = { first: listed(model) };
     await until(() => listed(model)[0] === 'But this one', 'the second after the expiry');
+    await until(() => notices(guest).length === 1, "the guest's notice");
     out.notices = notices(guest);
     await model.approvals.decide(model.approvals.list()[0].id, 'once');
     await until(() => said(model).includes('agent: Got the second.'), 'the second answer');
