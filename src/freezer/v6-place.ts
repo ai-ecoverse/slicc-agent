@@ -398,7 +398,7 @@ function nextSteps(run: Run, mounts: readonly string[]): string[] {
   return [
     'Re-enter your keys and logins in Settings.',
     ...(mounts.length ? [`Mount these folders again: ${mounts.join(', ')}.`] : []),
-    ...(manifest.mcp?.length
+    ...(manifest.mcp.length
       ? [
           `Add these MCP servers again: ${manifest.mcp.map((item) => `${item.name} (${item.url})`).join(', ')}.`,
         ]
@@ -454,7 +454,7 @@ export async function reportOf(run: Run, made: readonly string[]): Promise<strin
     ...split.again.map((id) => `${split.nameOf(id)}: re-enter in Settings`),
     ...split.missing.map((id) => `${split.nameOf(id)}: SLICC 7 has no such provider`),
   ];
-  const never = (manifest.secrets ?? []).map((name) => NEVER[name] ?? name);
+  const never = manifest.secrets.map((name) => NEVER[name] ?? name);
   const part = manifest.part ? `, part ${manifest.part.index} of ${manifest.part.of}` : '';
   const text = [
     `# SLICC 6 import, ${date}`,

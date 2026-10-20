@@ -988,6 +988,56 @@ test("freezer import --in-place moves six's files out of /slicc-fs into seven, w
   assert.ok(!progress.seen.some((line) => line.startsWith('Importing')), progress.seen.join('|'));
 });
 
+test('freezer import --in-place takes a directory form whose manifest leaves out providers, secrets, mcp and the optional cone fields', async (t) => {
+  const page = await booted(t);
+  const form = directory({
+    contents: { 'files/home-user/notes.txt': 'Feed the cat\n' },
+    overrides: {
+      cones: [{ key: '/workspace::cone_1', folder: 'cone', name: 'sliccy', scoops: [] }],
+      frozen: [],
+      skills: [],
+      sprinkles: [],
+      licks: undefined,
+      gitconfig: undefined,
+      skipped: [],
+      flagged: [],
+      providers: undefined,
+      mcp: undefined,
+      secrets: undefined,
+    },
+  });
+  await lay(page, form);
+  const preview = await staged(
+    page,
+    'the bare preview',
+    (dir) => window.imported(dir, '--in-place --preview'),
+    DIRECTORY
+  );
+  assert.equal(preview.status, 0, preview.stdout + preview.stderr);
+  assert.match(
+    preview.stdout,
+    /^SLICC 6 profile from www\.sliccy\.ai, exported 2026-07-12: 1 cone,/
+  );
+  const ran = await staged(
+    page,
+    'the bare import',
+    async (dir) => {
+      const ran = await window.imported(dir, '--in-place');
+      const notes = (await window.sh('cat /root/v6/home-user/notes.txt')).stdout;
+      const report = (await window.sh('cat /root/v6-import-*.md')).stdout;
+      return { ran, notes, report };
+    },
+    DIRECTORY
+  );
+  assert.equal(ran.ran.status, 0, ran.ran.stdout + ran.ran.stderr);
+  assert.match(
+    ran.ran.stdout,
+    /^Imported 1 frozen cone from https:\/\/www\.sliccy\.ai: frozen-1\./
+  );
+  assert.equal(ran.notes, 'Feed the cat\n');
+  assert.match(ran.report, /## Re-enter in Settings\n\n- no providers\n/);
+});
+
 test('a failed in-place import moves every file back to /slicc-fs and keeps the directory for the next try', async (t) => {
   const page = await booted(t);
   const form = directory();
