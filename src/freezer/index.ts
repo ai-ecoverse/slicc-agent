@@ -104,6 +104,8 @@ export const USAGE = `usage:
   freezer thaw <id>    continue a stopped conversation as a cone
   freezer import [--again] [--preview] <zip>
                        import a SLICC 6 profile export as frozen cones (root only)
+  freezer import --in-place [--again] [--preview] <dir>
+                       import SLICC 6's directory form on this origin, moving its files
 
 Delete a cone, or start a new conversation, from the chat toolbar or the command palette.
 `;
@@ -330,10 +332,12 @@ async function importCommand(
     return { code: 1, out: 'freezer: only root can import; run sudo freezer import\n' };
   const flags = args.filter((arg) => arg.startsWith('--'));
   const paths = args.filter((arg) => !arg.startsWith('--'));
-  if (paths.length !== 1 || flags.some((flag) => flag !== '--again' && flag !== '--preview'))
+  const known = ['--again', '--preview', '--in-place'];
+  if (paths.length !== 1 || flags.some((flag) => !known.includes(flag)))
     return { code: 2, out: USAGE };
+  const path = resolve(asker?.cwd ?? ROOT_HOME, paths[0] as string);
   const result = await runtime.importProfile(
-    { path: resolve(asker?.cwd ?? ROOT_HOME, paths[0] as string) },
+    flags.includes('--in-place') ? { inPlace: path } : { path },
     { again: flags.includes('--again'), preview: flags.includes('--preview') },
     context
   );

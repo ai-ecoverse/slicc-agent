@@ -52,12 +52,16 @@ export type Run = {
   show: (phase: 'writing', done: number, total: number) => void;
   fresh: Map<string, boolean>;
   ready: Set<Unit>;
+  at: Map<string, string>;
 };
 
 type Source = Uint8Array | { zip: string };
 
 async function staged(run: Run, zip: string): Promise<Uint8Array> {
-  const read = await run.writer.env.readBinaryFile(`${run.stage}/${zip}`, run.writer.context);
+  const read = await run.writer.env.readBinaryFile(
+    run.at.get(zip) ?? `${run.stage}/${zip}`,
+    run.writer.context
+  );
   if (!read.ok) throw new ImportError(`the staged copy of ${zip} is gone`);
   return read.value;
 }
@@ -91,7 +95,17 @@ async function putIn(run: Run, unit: Unit | null, root: string, rest: string, so
   }
   if (unit?.fresh) unit.roots.add(root);
   const path = `${root}/${rest}`;
-  await run.writer.put(path, 'zip' in source ? await staged(run, source.zip) : source, fresh, env);
+  const from = 'zip' in source && !env ? run.at.get(source.zip) : undefined;
+  if (from && 'zip' in source) {
+    await run.writer.move(from, path, fresh);
+    run.at.set(source.zip, path);
+  } else
+    await run.writer.put(
+      path,
+      'zip' in source ? await staged(run, source.zip) : source,
+      fresh,
+      env
+    );
   if ('zip' in source && !run.notes.placed.has(source.zip)) run.notes.placed.set(source.zip, path);
 }
 

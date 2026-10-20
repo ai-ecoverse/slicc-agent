@@ -67,7 +67,7 @@ export type Manifest = {
   sprinkles: { name: string; path: string }[];
   licks: string | null;
   gitconfig?: string | null;
-  files: { path: string; size: number; sha256: string }[];
+  files: { path: string; size: number; sha256: string; source?: string }[];
   skipped: { path: string; reason: string }[];
   flagged: { path: string; size: number; rule: string }[];
   providers: string[];
@@ -335,6 +335,43 @@ function named(item: Json, path: string) {
   need(maybe(item.conversation, str), `${path}.conversation must be a string`);
 }
 
+export const DIRECTORY_ROOT = '/slicc-v6-upgrade';
+export const SOURCE_ROOT = '/slicc-fs/';
+const SIDECAR = '/slicc-fs/.metadata.json';
+const MOVABLE = ['files/', 'skills/', 'sprinkles/'];
+
+export function safeSource(path: string): boolean {
+  if (!path.startsWith(SOURCE_ROOT) || path === SIDECAR) return false;
+  const rest = path.slice(SOURCE_ROOT.length);
+  return (
+    !/\\|\0/.test(rest) &&
+    rest.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
+  );
+}
+
+function sources(value: Json, version: 1 | 2) {
+  const seen = new Set<string>();
+  for (const [at, file] of (value.files as Json[]).entries()) {
+    if (file.source === undefined) continue;
+    need(version === 2, `files[${at}].source needs version 2, the directory form`);
+    need(
+      str(file.source) && safeSource(file.source),
+      `files[${at}].source must be a path under ${SOURCE_ROOT}`
+    );
+    need(
+      MOVABLE.some((top) => String(file.path).startsWith(top)),
+      `files[${at}] can't stay in place: only ${MOVABLE.join(', ')} entries can`
+    );
+    need(!seen.has(file.source), `files moves ${file.source} twice`);
+    seen.add(file.source);
+  }
+  if (version === 2)
+    need(
+      (value.skipped as Json[]).every((item) => item.reason !== 'archive-limit'),
+      'a directory form has no archive-limit skips'
+    );
+}
+
 function manifestLists(value: Json) {
   list(value.cones, 'cones', (cone, path) => {
     named(cone, path);
@@ -374,13 +411,17 @@ function manifestLists(value: Json) {
     );
 }
 
-export function checkManifest(value: unknown): Manifest {
+export function checkManifest(value: unknown, version: 1 | 2 = 1): Manifest {
   need(obj(value) && value.format === 'slicc-profile', 'this is not a SLICC 6 profile export');
   need(
-    !(typeof value.version === 'number' && value.version > 1),
+    !(typeof value.version === 'number' && value.version > 2),
     'This export is from a newer SLICC 6; update seven.'
   );
-  need(value.version === 1, 'the export version must be 1');
+  need(
+    value.version !== 2 || version === 2,
+    "this is SLICC 6's directory form; import it with freezer import --in-place"
+  );
+  need(value.version === version, `the export version must be ${version}`);
   need(
     str(value.exportId) && /^[A-Za-z0-9-]{1,64}$/.test(value.exportId),
     'exportId must be a UUID'
@@ -394,6 +435,7 @@ export function checkManifest(value: unknown): Manifest {
     'createdAt, licks or gitconfig is malformed'
   );
   const part = value.part as Json | undefined;
+  need(version === 1 || part === undefined, 'a directory form is never split into parts');
   need(
     part === undefined ||
       (obj(part) &&
@@ -403,6 +445,7 @@ export function checkManifest(value: unknown): Manifest {
     'part is malformed'
   );
   manifestLists(value);
+  sources(value, version);
   const folders = (value.cones as Manifest['cones']).flatMap((cone) => [
     `cone:${cone.folder}`,
     ...cone.scoops.map((scoop) => `scoop:${scoop.folder}`),
