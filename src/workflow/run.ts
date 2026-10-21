@@ -199,8 +199,7 @@ export class Driver {
   }
 
   get lanes(): number {
-    const record = this.record as RunRecord;
-    return record.budget === null ? record.concurrency : 1;
+    return (this.record as RunRecord).concurrency;
   }
 
   async load(): Promise<void> {

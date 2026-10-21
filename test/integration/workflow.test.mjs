@@ -233,7 +233,7 @@ test('--concurrency caps the scoops running at once, and --budget stops new agen
   assert.ok(!seen.prompts.includes('say never'));
 });
 
-test('a script cannot reach the prelude or lift its caps: a burst of direct host calls still runs two at a time, and a budget stops a parallel burst', async (t) => {
+test('a script cannot reach the prelude or lift its caps: a burst of direct host calls still runs two at a time, and a budget lets running agents finish but stops new ones', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
@@ -246,7 +246,11 @@ test('a script cannot reach the prelude or lift its caps: a burst of direct host
     ].join('\n')
   );
   const burst = workflow(
-    "return parallel([1, 2, 3].map(() => () => agent('say twenty characters')));"
+    [
+      "const first = await parallel([1, 2, 3].map(() => () => agent('say twenty characters')));",
+      "const after = await agent('say never').then(() => 'resolved', (e) => e.message);",
+      'return { first, after, spent: budget.spent() };',
+    ].join('\n')
   );
   const seen = await staged(
     page,
@@ -279,8 +283,12 @@ test('a script cannot reach the prelude or lift its caps: a burst of direct host
   assert.equal(seen.during, 2);
   assert.equal(seen.most, 2);
   assert.equal(seen.budgeted.code, 0, seen.budgeted.out);
-  assert.deepEqual(JSON.parse(seen.budgeted.out), ['twenty characters', null, null]);
-  assert.equal(seen.ran, 1);
+  assert.deepEqual(JSON.parse(seen.budgeted.out), {
+    first: ['twenty characters', 'twenty characters', 'twenty characters'],
+    after: 'agent(): the budget of 5 output tokens is spent',
+    spent: 15,
+  });
+  assert.equal(seen.ran, 3);
 });
 
 test('agent workflow stop withdraws the running scoops, and save keeps the source to run again by name', async (t) => {

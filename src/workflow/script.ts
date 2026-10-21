@@ -100,7 +100,7 @@ const performance = Object.freeze({ now: banned('performance.now()') });
 const setTimeout = banned('setTimeout()');
 const setInterval = banned('setInterval()');
 const OPTIONS = ['label', 'phase', 'schema', 'model', 'effort', 'agentType', 'isolation'];
-const lanes = config.budget === null ? config.concurrency : 1;
+const lanes = config.concurrency;
 let started = 0;
 let spent = 0;
 let current = null;
