@@ -30,6 +30,31 @@ const helpers = () => {
     return found;
   };
   window.opens = [];
+  window.hits = [];
+  const named = (node) =>
+    node?.tagName
+      ? `${node.tagName.toLowerCase()}${node.dataset?.action ? `[data-action=${node.dataset.action}]` : ''}`
+      : (node?.nodeName ?? 'nothing');
+  for (const type of ['pointerdown', 'pointerup', 'click'])
+    document.addEventListener(
+      type,
+      (event) => {
+        const path = event.composedPath();
+        const acting = path.find((node) => node.dataset?.action);
+        window.hits.push(
+          `${type} ${Math.round(event.clientX)},${Math.round(event.clientY)} on ${named(path[0])} in ${named(acting)}`
+        );
+      },
+      true
+    );
+  window.clicked = (box) => {
+    const button = window.loginTest.card()?.querySelector('[data-action=login]');
+    const rect = button?.getBoundingClientRect();
+    const now =
+      rect &&
+      `${Math.round(rect.x)},${Math.round(rect.y)} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+    return `aimed at ${Math.round(box.x)},${Math.round(box.y)}, the button is at ${now ?? 'nothing'}, heard ${window.hits.join('; ') || 'nothing'}`;
+  };
   window.open = (url, name) => {
     const popup = {
       closed: false,
@@ -221,27 +246,35 @@ test('a sign-in whose window is closed rejects with a sentence, shown on the car
   });
   for (const type of ['mousePressed', 'mouseReleased'])
     await page.send('Input.dispatchMouseEvent', { type, ...box, button: 'left', clickCount: 1 });
-  const seen = await staged(page, 'a sign-in whose window is', async () => {
-    const { card } = window.loginTest;
-    await window.until(() => window.opens.length === 1);
-    const { gesture, popup } = window.opens[0];
-    await window.until(() => card().dataset.login === 'signing-in');
-    popup.close();
-    await window.until(() => card().querySelector('[data-error=login]'));
-    const failed = {
-      gesture,
-      help: card().querySelector('[data-error=login] sp-help-text').textContent.trim(),
-      login: Boolean(card().querySelector('[data-action=login]')),
-      settings: Boolean(card().querySelector('[data-error=login] [data-action=settings]')),
-    };
-    const direct = window.loginTest.model.settings.connect('adobe').then(
-      () => null,
-      (error) => error.message
-    );
-    window.opens.at(-1).popup.close();
-    failed.rejected = await direct;
-    return failed;
-  });
+  const seen = await staged(
+    page,
+    'a sign-in whose window is',
+    async (box) => {
+      const { card } = window.loginTest;
+      await window.until(
+        () => window.opens.length === 1,
+        `the sign-in window to open, ${window.clicked(box)}`
+      );
+      const { gesture, popup } = window.opens[0];
+      await window.until(() => card().dataset.login === 'signing-in');
+      popup.close();
+      await window.until(() => card().querySelector('[data-error=login]'));
+      const failed = {
+        gesture,
+        help: card().querySelector('[data-error=login] sp-help-text').textContent.trim(),
+        login: Boolean(card().querySelector('[data-action=login]')),
+        settings: Boolean(card().querySelector('[data-error=login] [data-action=settings]')),
+      };
+      const direct = window.loginTest.model.settings.connect('adobe').then(
+        () => null,
+        (error) => error.message
+      );
+      window.opens.at(-1).popup.close();
+      failed.rejected = await direct;
+      return failed;
+    },
+    box
+  );
   assert.deepEqual(seen, {
     gesture: true,
     help: 'The sign-in window was closed before it finished.',

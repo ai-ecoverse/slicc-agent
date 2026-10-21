@@ -501,6 +501,12 @@ const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]
   : [];
 const judged = [];
+const judgedWakes = [];
+const judgedAt = (count) =>
+  new Promise((resolve) => {
+    const check = () => (judged.length >= count ? resolve() : judgedWakes.push(check));
+    check();
+  });
 let judgeTable = {};
 const judgeSteps = params.getAll('judge-step').map((step) => JSON.parse(step));
 const inner = (fenced) => fenced.split('\n').slice(1, -1).join('\n');
@@ -516,6 +522,7 @@ const answers = (low, aligned) => ({
 async function classify(model, context, options) {
   const seen = { model: `${model.provider}/${model.id}`, state: context.state, aborted: false };
   judged.push(seen);
+  for (const wake of judgedWakes.splice(0)) wake();
   const step = judgeTable[inner(context.state.request.untrusted)] ?? judgeSteps.shift() ?? {};
   const base = { api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
   if (step.hold) {
@@ -611,10 +618,15 @@ self.addEventListener('message', ({ data }) => {
   if (!data?.approve) return;
   const controller = new AbortController();
   if (data.key) aborts.set(data.key, controller);
+  const count = judged.length + 1;
   running
     .then((host) =>
       host.approvals.request(data.approve, withAbortSignal(controller.signal, BACKGROUND_CONTEXT))
     )
+    .then(async (item) => {
+      if (params.has('reply-judged')) await judgedAt(count);
+      return item;
+    })
     .then(
       (item) => data.reply.postMessage({ item }),
       (error) => data.reply.postMessage({ error: error.message })
