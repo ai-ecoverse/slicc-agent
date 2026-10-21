@@ -69,12 +69,7 @@ async function staged(run: Run, zip: string): Promise<Uint8Array> {
 async function prepare(run: Run, unit: Unit): Promise<void> {
   if (run.ready.has(unit)) return;
   run.ready.add(unit);
-  const { users, layout, env } = run.deps;
-  if (unit.fresh)
-    run.writer.later(async () => {
-      await users?.remove(unit.cone).catch(() => false);
-      await env.remove(unit.home, { recursive: true, force: true }, BACKGROUND_CONTEXT);
-    });
+  const { users, layout } = run.deps;
   if (layout.users && users) await users.add(coneSpec(unit.cone));
 }
 

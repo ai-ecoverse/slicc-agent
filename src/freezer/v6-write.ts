@@ -1,11 +1,11 @@
 import type { Context } from '@earendil-works/chord';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ExecutionEnv, Result } from '@earendil-works/pi-durable/env';
 import { quote } from '../kernel/env.ts';
 import { dirname } from '../kernel/paths.ts';
 import { readTable, sendCommand, writeTable } from '../licks/crontab.ts';
 import type { LickTarget } from '../licks/lick.ts';
 import { byteLength, MAX_BYTES, MAX_LINES } from '../memory/format.ts';
+import type { Journal } from './v6-journal.ts';
 import { ImportError } from './zip.ts';
 
 const encoder = new TextEncoder();
@@ -28,25 +28,21 @@ function chunks<T>(items: readonly T[]): T[][] {
 }
 
 export class Writer {
-  readonly #undo: (() => Promise<unknown>)[] = [];
   readonly #modes = new Map<string, string>();
-  readonly #moved: string[] = [];
   readonly env: ExecutionEnv;
   readonly context: Context;
   readonly signal: AbortSignal;
+  readonly journal: Journal;
 
-  constructor(env: ExecutionEnv, context: Context, signal: AbortSignal) {
+  constructor(env: ExecutionEnv, context: Context, signal: AbortSignal, journal: Journal) {
     this.env = env;
     this.context = context;
     this.signal = signal;
+    this.journal = journal;
   }
 
   check(): void {
     if (this.signal.aborted) throw new ImportError('the import was cancelled');
-  }
-
-  later(step: () => Promise<unknown>): void {
-    this.#undo.push(step);
   }
 
   async exists(path: string, env = this.env): Promise<boolean> {
@@ -59,8 +55,7 @@ export class Writer {
     for (let dir = root; dir !== '/' && !(await this.exists(dir, env)); dir = dirname(dir))
       top = dir;
     if (top === undefined) return false;
-    const gone = top;
-    this.later(() => env.remove(gone, { recursive: true, force: true }, BACKGROUND_CONTEXT));
+    await this.journal.log({ made: top }, this.context);
     return true;
   }
 
@@ -84,11 +79,7 @@ export class Writer {
     if (!fresh && !(await this.tree(dirname(path), env))) {
       const old = await env.readBinaryFile(path, this.context);
       if (old.ok && same(old.value, bytes)) return false;
-      this.later(() =>
-        old.ok
-          ? env.writeFile(path, old.value, BACKGROUND_CONTEXT)
-          : env.remove(path, { force: true }, BACKGROUND_CONTEXT)
-      );
+      await this.#keep(path, old.ok ? old.value : null);
     }
     done(await env.writeFile(path, bytes, this.context), path);
     return true;
@@ -104,41 +95,21 @@ export class Writer {
     }
   }
 
-  async #restore(): Promise<void> {
-    const groups = new Map<string, string[]>();
-    for (const path of this.#moved) {
-      const mode = this.#modes.get(path);
-      if (mode) groups.set(mode, [...(groups.get(mode) ?? []), path]);
-    }
-    for (const [both, paths] of groups) {
-      const [owner, mode] = both.split(' ') as [string, string];
-      for (const part of chunks(paths)) {
-        const list = part.map(quote).join(' ');
-        await this.env.exec(
-          `chown ${quote(owner)} -- ${list} && chmod ${quote(mode)} -- ${list}`,
-          undefined,
-          BACKGROUND_CONTEXT
-        );
-      }
-    }
+  async #keep(path: string, old: Uint8Array | null): Promise<void> {
+    const backup = old ? await this.journal.backup(old, this.context) : null;
+    await this.journal.log({ file: path, backup }, this.context);
   }
 
   async move(from: string, to: string, fresh: boolean): Promise<void> {
     this.check();
-    if (!this.#moved.length) this.later(() => this.#restore());
     await this.direct(to);
     if (!fresh && !(await this.tree(dirname(to)))) {
       const old = await this.env.readBinaryFile(to, this.context);
-      this.later(() =>
-        old.ok
-          ? this.env.writeFile(to, old.value, BACKGROUND_CONTEXT)
-          : this.env.remove(to, { force: true }, BACKGROUND_CONTEXT)
-      );
+      await this.#keep(to, old.ok ? old.value : null);
     }
     done(await this.env.createDir(dirname(to), { recursive: true }, this.context), dirname(to));
+    await this.journal.log({ moved: from, to, mode: this.#modes.get(from) ?? null }, this.context);
     done(await this.env.renameFile(from, to, this.context), to);
-    this.#moved.push(from);
-    this.later(() => this.env.renameFile(to, from, BACKGROUND_CONTEXT));
   }
 
   async out(command: string): Promise<string> {
@@ -179,8 +150,8 @@ export class Writer {
     if (failed) throw new ImportError(`${command.split(' ')[0]}: ${failed}`);
   }
 
-  async rollback(): Promise<void> {
-    for (const step of this.#undo.reverse()) await step().catch(() => undefined);
+  rollback(): Promise<boolean> {
+    return this.journal.rollback();
   }
 }
 
@@ -259,11 +230,8 @@ export async function installCrons(
     );
   const kept = withoutImported(before, new Set(crons.map((cron) => cron.name)));
   const table = `${[...kept, head, ...notes, ...blocks].join('\n')}\n`;
-  writer.later(async () =>
-    before
-      ? writeTable(writer.env, user, before, BACKGROUND_CONTEXT)
-      : writer.env.exec(`crontab -u ${quote(user)} -r`, undefined, BACKGROUND_CONTEXT)
-  );
+  const backup = before ? await writer.journal.backup(before, writer.context) : null;
+  await writer.journal.log({ cron: user, backup }, writer.context);
   const ran = await writeTable(writer.env, user, table, writer.context);
   if (ran.code !== 0) throw new ImportError(`crontab -u ${user}: ${ran.err.trim()}`);
   return changed;

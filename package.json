@@ -45,7 +45,7 @@
     "packages/vfs-root"
   ],
   "scripts": {
-    "prepare": "lefthook install",
+    "prepare": "slicc-install-hooks",
     "build": "node build.mjs && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "start": "npm run build && node test/integration/chrome.mjs",
@@ -65,10 +65,10 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.141.1",
+    "@ai-ecoverse/slicc-kernel": "1.141.2",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
-    "@ai-ecoverse/slicc-shared-web": "1.29.6",
-    "@ai-ecoverse/slicc-spectrum": "1.103.3",
+    "@ai-ecoverse/slicc-shared-web": "1.29.7",
+    "@ai-ecoverse/slicc-spectrum": "1.104.0",
     "@ai-ecoverse/wasi-fnox": "1.39.0-6",
     "@ai-ecoverse/wasm-bash": "5.3.0-22",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-12",
