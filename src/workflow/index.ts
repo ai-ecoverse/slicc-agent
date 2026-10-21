@@ -13,7 +13,7 @@ import {
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents } from '../agents.ts';
 import { MEMORY_LIMIT_BYTES, sharedSandbox } from '../codemode/index.ts';
-import { runTaints } from '../guests/guard.ts';
+import { type InheritedTaint, runTaints } from '../guests/guard.ts';
 import { resolve } from '../kernel/paths.ts';
 import type { Layout } from '../layout.ts';
 import { coneOf } from '../scoops/service.ts';
@@ -43,6 +43,7 @@ export interface Files {
 export interface RunRequest {
   cone: string;
   from?: number | null;
+  taints?: InheritedTaint[];
   files: Files;
   target: string;
   script?: boolean;
@@ -140,7 +141,9 @@ export function createWorkflows(host: Promise<WorkflowHost>) {
     const cone = await agents.conversation(request.cone, context);
     if (!cone) throw new Error(`there is no cone ${request.cone}`);
     const from = request.from ?? null;
-    const taints = from === null ? [] : await runTaints(harness, from as ConversationId, context);
+    const taints =
+      request.taints ??
+      (from === null ? [] : await runTaints(harness, from as ConversationId, context));
     return harness.commit(async (tx) => {
       const task = await tx.createTask(
         (await host).tasks.run as never,
@@ -234,6 +237,7 @@ export interface Invocation {
   cone: string;
   scoop: boolean;
   from: number | null;
+  taints?: InheritedTaint[];
   files: Files;
 }
 
@@ -312,6 +316,7 @@ export async function runWorkflow(
     {
       cone: who.cone,
       from: who.from,
+      ...(who.taints ? { taints: who.taints } : {}),
       files: who.files,
       target,
       ...(options.script !== undefined ? { script: true } : {}),
@@ -536,7 +541,7 @@ export function cliCommand(
   agents: Pick<Agents, 'state'>
 ): (
   argv: readonly string[],
-  who: { cone: string; scoop: string | null; fromAgent: boolean },
+  who: { cone: string; scoop: string | null; fromAgent: boolean; taints: InheritedTaint[] },
   request: { user?: string | null; cwd: string },
   context: Context
 ) => Promise<Answer> {
@@ -550,7 +555,7 @@ export function cliCommand(
     const from = who.fromAgent ? (agents.state().cones[who.cone]?.conversation ?? null) : null;
     return command(
       workflows,
-      { cone: who.cone, scoop: who.scoop !== null, from, files },
+      { cone: who.cone, scoop: who.scoop !== null, from, taints: who.taints, files },
       argv,
       context
     );

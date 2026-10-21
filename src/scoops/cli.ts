@@ -2,6 +2,7 @@ import type { Context } from '@earendil-works/chord';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState } from '../agents.ts';
+import type { InheritedTaint } from '../guests/guard.ts';
 import { reviewersOf } from '../guests/scoop.ts';
 import { CONE_PREFIX } from '../kernel/accounts.ts';
 import { resolve } from '../kernel/paths.ts';
@@ -15,6 +16,7 @@ import { findRole, type Roles } from '../roles/roles.ts';
 import type { Request, Runner } from './requests.ts';
 import { type Answer, findScoop, modelOf, type Scoops } from './service.ts';
 import { cancelSync, detachSync, runSync, type SyncState } from './sync.ts';
+import { callerTaints } from './taints.ts';
 
 export const DEFAULT_WAIT_S = 30;
 export const MAX_DEPTH = 3;
@@ -68,7 +70,7 @@ export interface CliOptions {
   webhook?: (name: string, delivery: WebhookDelivery, context: Context) => Promise<boolean>;
   workflow?: (
     argv: readonly string[],
-    who: Caller,
+    who: Caller & { taints: InheritedTaint[] },
     request: Request,
     context: Context
   ) => Promise<Answer>;
@@ -133,6 +135,10 @@ function claimed(agents: Agents, caller: string): Caller | undefined {
 }
 
 export class CallerError extends Error {}
+
+export function taintsOf(deps: Deps, request: Request, who: Caller, context: Context) {
+  return callerTaints(deps.harness, deps.agents.state(), who, request.caller, context);
+}
 
 export function callerOf(agents: Agents, request: Request): Caller {
   const user = request.user;
@@ -299,6 +305,7 @@ async function spawnAsync(
   if (isAnswer(chosen)) return chosen;
   const found = await role(deps, parsed);
   if (found.error) return found.error;
+  const taints = await taintsOf(deps, request, who, context);
   return deps.scoops.spawn(
     {
       cone: who.cone,
@@ -313,6 +320,7 @@ async function spawnAsync(
       fromAgent: who.fromAgent,
       request: request.id,
       limits: found.roles.limits,
+      taints,
     },
     context
   );
@@ -394,10 +402,11 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   const refused = await reviewing(deps, who, found, context);
   if (refused) return refused;
   const followUp = parsed.switches.has('--follow-up');
+  const taints = await taintsOf(deps, request, who, context);
   return deps.scoops.feed(
     found[0],
     text,
-    { fromAgent: who.fromAgent, request: request.id, followUp, target: who.id },
+    { fromAgent: who.fromAgent, request: request.id, followUp, target: who.id, taints },
     context
   );
 }
@@ -611,10 +620,15 @@ const VERBS: Record<string, Verb> = {
   wait,
   stop,
   rename,
-  workflow: (deps, request, who, context) =>
+  workflow: async (deps, request, who, context) =>
     deps.workflow
-      ? deps.workflow(request.argv.slice(1), who, request, context)
-      : Promise.resolve(fail('workflows are not available in this agent')),
+      ? deps.workflow(
+          request.argv.slice(1),
+          { ...who, taints: await taintsOf(deps, request, who, context) },
+          request,
+          context
+        )
+      : fail('workflows are not available in this agent'),
   help,
   '--help': help,
   '-h': help,

@@ -23,7 +23,7 @@ import {
   scoopId,
 } from '../agents.ts';
 import { CODEMODE } from '../codemode/index.ts';
-import { GuestTaintDoc, type InheritedTaint } from '../guests/guard.ts';
+import { distinctTaints, GuestTaintDoc, type InheritedTaint } from '../guests/guard.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
 import { type Layout, LEGACY } from '../layout.ts';
 import type { Licks } from '../licks/licks.ts';
@@ -126,6 +126,14 @@ export interface SpawnRequest {
   limits: Limits;
   taints?: InheritedTaint[];
   created?: (tx: Tx, made: Spawned) => Promise<void>;
+}
+
+export interface FeedOptions {
+  fromAgent: boolean;
+  request: string;
+  followUp: boolean;
+  target: string | null;
+  taints?: InheritedTaint[];
 }
 
 export interface Spawned {
@@ -411,7 +419,7 @@ async function feed(
   core: Core,
   id: string,
   prompt: string,
-  options: { fromAgent: boolean; request: string; followUp: boolean; target: string | null },
+  options: FeedOptions,
   context: Context
 ): Promise<Answer> {
   const done = await answered(core, options.request, context);
@@ -423,6 +431,10 @@ async function feed(
   const created = options.fromAgent ? await tail(parent, context) : null;
   const { target } = options;
   return harness.commit(async (tx) => {
+    if (options.taints?.length) {
+      const doc = await tx.doc(GuestTaintDoc, record.conversation as ConversationId);
+      doc.taints = distinctTaints([...doc.taints, ...options.taints]);
+    }
     await addFeed(core, tx, parent.id, {
       scoop: id,
       created,
@@ -672,12 +684,8 @@ export function createScoops(host: Promise<ScoopsHost>, tasks: () => ScoopTasks)
       detach(core, made, target, context),
     note: (id: string, text: string, context: Context) => note(core, id, text, context),
     spawn: (request: SpawnRequest, context: Context) => spawn(core, request, context),
-    feed: (
-      id: string,
-      prompt: string,
-      options: { fromAgent: boolean; request: string; followUp: boolean; target: string | null },
-      context: Context
-    ) => feed(core, id, prompt, options, context),
+    feed: (id: string, prompt: string, options: FeedOptions, context: Context) =>
+      feed(core, id, prompt, options, context),
     stop: (id: string, fromAgent: boolean, context: Context) => stop(core, id, fromAgent, context),
     rename: (id: string, name: string, context: Context) => rename(core, id, name, context),
     rewound: (coneId: string, fork: Conversation, context: Context) =>
