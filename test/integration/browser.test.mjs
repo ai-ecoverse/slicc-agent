@@ -117,6 +117,11 @@ test("bash refuses to point playwright-cli at SLICC's own pages, through the pro
       ),
       bash(`playwright-cli open ${location.origin}/home/x.html`),
       bash(`chmod +x ${bin}/playwright-cli && playwright-cli open https://example.com/`),
+      bash('playwright-cli open exa%20mple.sliccy.ai/home'),
+      bash('playwright-cli fill e1 "hello world [draft]"'),
+      bash('playwright-cli open exa%20mple%2Esliccy%2Eai/home'),
+      bash('playwright-cli open exa%20mple\u3002sliccy\uff0eai/home'),
+      bash('playwright-cli open exa%20mple%E3%80%82sliccy%EF%BD%A1ai/home'),
       ['answer', 'Refused.'],
     ]);
     const owner = await startTracked({
@@ -133,12 +138,18 @@ test("bash refuses to point playwright-cli at SLICC's own pages, through the pro
   });
   const refusal = /SLICC's own pages can't be opened or driven from the browser tools\./;
   assert.equal(seen.answer, 'Refused.');
-  assert.equal(seen.results.length, 4);
+  assert.equal(seen.results.length, 9);
   assert.match(seen.results[0], refusal);
   assert.match(seen.results[1], refusal);
   assert.doesNotMatch(seen.results[1], /opened open/);
   assert.match(seen.results[2], refusal);
   assert.match(seen.results[3], /opened open https:\/\/example\.com\//);
+  assert.match(seen.results[4], refusal);
+  assert.doesNotMatch(seen.results[4], /opened open/);
+  assert.match(seen.results[5], /opened fill e1 hello world \[draft\]/);
+  assert.match(seen.results[6], refusal);
+  assert.match(seen.results[7], refusal);
+  assert.match(seen.results[8], refusal);
 });
 
 test("with SLICC_CDP_URL set and no browser attached, the browser skill's check reports not connected", async (t) => {

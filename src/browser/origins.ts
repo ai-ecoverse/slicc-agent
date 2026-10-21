@@ -4,7 +4,7 @@ import { protectedOrigins } from '@ai-ecoverse/slicc-browsers/protected.mjs';
 export const PROTECTED_RULES = catalog.protectedOrigins;
 
 export interface ProtectedMatcher {
-  url(text: string): boolean;
+  url(text: string, options?: { readOnly?: boolean }): boolean;
   target(target: { url: string; previous?: boolean; opener?: string }): boolean;
   cookieDomain(domain: string): boolean;
   storageKey(key: string): boolean;

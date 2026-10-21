@@ -14,6 +14,13 @@ const SCHEMED = /^[a-z][a-z0-9+.-]*:/i;
 const EMBEDDED = /[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>(){}\\]+/gi;
 const RELATIVE = /(?<![:\w/])\/\/[^\s'"`<>(){}\\/]+/g;
 const PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|-{1,2}[A-Za-z0-9-]+)=/;
+const HOSTLIKE =
+  /^[^\s/?#]*(?:\.|%2e|%e3%80%82|%ef%bc%8e|%ef%bd%a1|[\u3002\uff0e\uff61])[^\s/?#]*(?:[/?#]\S*)?$/i;
+
+export interface Candidate {
+  url: string;
+  lenient: boolean;
+}
 
 function parse(url: string): URL | undefined {
   try {
@@ -32,11 +39,11 @@ export function foreignKernel(url: string): boolean {
   return kernelHost(host) && !ownKernelServer(host);
 }
 
-export function forbidden(url: string, matcher: ProtectedMatcher): boolean {
-  return matcher.url(url) || foreignKernel(url);
+export function forbidden(url: string, matcher: ProtectedMatcher, lenient = false): boolean {
+  return matcher.url(url, { readOnly: lenient }) || foreignKernel(url);
 }
 
-export function candidates(raw: string): string[] {
+export function candidates(raw: string): Candidate[] {
   const word = raw.replace(/[\t\n\r]/g, '').replace(/^[\0- ]+|[\0- ]+$/g, '');
   const value = word.replace(PREFIX, '');
   const found = [
@@ -44,11 +51,11 @@ export function candidates(raw: string): string[] {
     value,
     ...(value.match(EMBEDDED) ?? []),
     ...(value.match(RELATIVE) ?? []).map((relative) => `https:${relative}`),
-  ];
+  ].map((url) => ({ url, lenient: false }));
   if (!/^[/.~-]/.test(value) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(value))
-    found.push(`https://${value}`);
-  if (value.startsWith('//')) found.push(`https:${value}`);
-  return found.filter((each) => SCHEMED.test(each));
+    found.push({ url: `https://${value}`, lenient: !HOSTLIKE.test(value) });
+  if (value.startsWith('//')) found.push({ url: `https:${value}`, lenient: false });
+  return found.filter((each) => SCHEMED.test(each.url));
 }
 
 function browserCommand(word: string): boolean {
@@ -58,7 +65,9 @@ function browserCommand(word: string): boolean {
 export function refused(command: string, matcher: ProtectedMatcher): boolean {
   const all = words(command);
   if (!all.some(browserCommand)) return false;
-  return all.some((word) => candidates(word).some((url) => forbidden(url, matcher)));
+  return all.some((word) =>
+    candidates(word).some(({ url, lenient }) => forbidden(url, matcher, lenient))
+  );
 }
 
 function commandOf(args: unknown): string {
