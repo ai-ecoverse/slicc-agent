@@ -1104,3 +1104,47 @@ test("a guest run's bash can't hand in a request under a clean scoop's running b
   assert.match(seen.results[1], /agent: process \d+ is not this agent call/);
   assert.equal(seen.results.at(-1), 'never');
 });
+
+test('a guest run’s agent wait --notify on a clean scoop taints the cone run its wait lick starts: that run’s bash is asked', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    extra: [['scoop-step', JSON.stringify({ gate: 'scoop', answer: 'Scoop done.' })]],
+    steps: [
+      bash("agent --async --name helper --prompt 'Work on it'"),
+      answer('Started.'),
+      bash('agent wait $(agent list | cut -f1 | head -n1) --notify --timeout 60'),
+      answer('Waiting.'),
+      bash('echo after-wait'),
+      answer('Waited.'),
+      answer('Spare.'),
+    ],
+  });
+  const seen = await staged(page, 'a guest run’s agent wait --notify', async () => {
+    const { until, open, mint, join, send, prompt, said, results, asked, decide, gate } =
+      globalThis.r;
+    await open();
+    await prompt('Start a helper.');
+    await until(() => said().includes('Started.'), 'the helper');
+    const guest = await join(await mint('user'));
+    await send(guest, 'Wait for it.');
+    const out = { asked: [(await decide('once')).summary] };
+    await until(() => said().includes('Waiting.'), 'the waiting run');
+    gate('scoop');
+    await until(
+      () =>
+        asked().some((item) => item.summary === 'echo after-wait') ||
+        results().some((result) => result.includes('after-wait')),
+      'the cone run the wait lick starts'
+    );
+    out.ranUnasked = results().some((result) => result.includes('after-wait'));
+    if (!out.ranUnasked) out.asked.push((await decide('once')).summary);
+    await until(() => said().includes('Waited.'), 'the waited run');
+    await guest.close();
+    return out;
+  });
+  assert.equal(seen.ranUnasked, false);
+  assert.deepEqual(seen.asked, [
+    'agent wait $(agent list | cut -f1 | head -n1) --notify --timeout 60',
+    'echo after-wait',
+  ]);
+});

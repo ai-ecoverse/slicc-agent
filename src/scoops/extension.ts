@@ -32,9 +32,10 @@ export async function scoopTainted(
   state: Readonly<AgentsState>,
   scoops: readonly string[],
   event: LickEvent,
-  context: Context
+  context: Context,
+  extra: readonly InheritedTaint[] = []
 ): Promise<LickEvent> {
-  const found: InheritedTaint[] = [];
+  const found: InheritedTaint[] = [...extra];
   for (const id of scoops) {
     const conversation = state.scoops[id]?.conversation;
     if (conversation !== undefined)
@@ -130,7 +131,12 @@ export async function noteWhenPlaced(
 export const NOTE_POLL_MS = 100;
 
 export function waitTask(lookup: Lookup) {
-  type WaitInput = { scoops: string[]; cone: string; deadline: number };
+  type WaitInput = {
+    scoops: string[];
+    cone: string;
+    deadline: number;
+    taints?: InheritedTaint[];
+  };
 
   return defineTask<WaitInput, { phase: 'start' } | { phase: 'watch' }, null>({
     name: 'slicc.scoop-wait',
@@ -181,7 +187,14 @@ export function waitTask(lookup: Lookup) {
             eventId: `wait:${key}`,
           };
           await licks.deliver(
-            await scoopTainted(host, agents.state(), state.scoops, lick, context),
+            await scoopTainted(
+              host,
+              agents.state(),
+              state.scoops,
+              lick,
+              context,
+              task.input.taints
+            ),
             context
           );
           break;

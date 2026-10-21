@@ -645,7 +645,8 @@ async function wait(deps: Deps, request: Request, who: Caller, context: Context)
   if (!parsed.switches.has('--notify')) return block(deps, ids, seconds, context);
   if (!who.fromAgent || who.scoop)
     return fail('wait --notify is for a cone; a terminal waits with agent wait');
-  await deps.scoops.notifyWhenDone(who.cone, ids, deps.now() + seconds * 1000, context);
+  const taints = await taintsOf(deps, request, who, context);
+  await deps.scoops.notifyWhenDone(who.cone, ids, deps.now() + seconds * 1000, taints, context);
   return ok(`you'll get one scoop-wait lick when ${ids.length > 1 ? 'they are' : 'it is'} done\n`);
 }
 

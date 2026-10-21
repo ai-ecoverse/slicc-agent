@@ -629,6 +629,7 @@ async function notifyWhenDone(
   coneId: string,
   ids: string[],
   deadline: number,
+  taints: readonly InheritedTaint[],
   context: Context
 ) {
   const { harness } = await core.host;
@@ -637,7 +638,7 @@ async function notifyWhenDone(
     (tx) =>
       tx.createTask(
         core.tasks().wait as never,
-        { scoops: ids, cone: coneId, deadline },
+        { scoops: ids, cone: coneId, deadline, ...(taints.length ? { taints } : {}) },
         { ownership: { kind: 'conversation' }, conversationId: parent.id, background: true }
       ),
     context
@@ -702,8 +703,13 @@ export function createScoops(host: Promise<ScoopsHost>, tasks: () => ScoopTasks)
     list: (coneId: string | null, context: Context) => list(core, coneId, context),
     busy: (conversation: number, context: Context) => isBusy(core, conversation, context),
     working: (ids: readonly string[], context: Context) => working(core, ids, context),
-    notifyWhenDone: (coneId: string, ids: string[], deadline: number, context: Context) =>
-      notifyWhenDone(core, coneId, ids, deadline, context),
+    notifyWhenDone: (
+      coneId: string,
+      ids: string[],
+      deadline: number,
+      taints: readonly InheritedTaint[],
+      context: Context
+    ) => notifyWhenDone(core, coneId, ids, deadline, taints, context),
   };
 }
 
