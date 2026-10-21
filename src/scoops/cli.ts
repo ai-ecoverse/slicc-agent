@@ -5,6 +5,7 @@ import type { Agents, AgentsState } from '../agents.ts';
 import type { InheritedTaint } from '../guests/guard.ts';
 import { reviewersOf } from '../guests/scoop.ts';
 import { CONE_PREFIX } from '../kernel/accounts.ts';
+import type { Lineage } from '../kernel/lineage.ts';
 import { resolve } from '../kernel/paths.ts';
 import { agentOfUser, type Layout, LEGACY, ROOT_USER } from '../layout.ts';
 import { cronLick } from '../licks/crontab.ts';
@@ -13,6 +14,7 @@ import { LICK_CHANNELS, type LickTarget } from '../licks/lick.ts';
 import type { Licks } from '../licks/licks.ts';
 import { scopedName, type WebhookDelivery } from '../licks/sources.ts';
 import { findRole, type Roles } from '../roles/roles.ts';
+import { callerOf as agentOf } from './identity.ts';
 import type { Request, Runner } from './requests.ts';
 import { type Answer, findScoop, modelOf, type Scoops } from './service.ts';
 import { cancelSync, detachSync, runSync, type SyncState } from './sync.ts';
@@ -140,24 +142,67 @@ export function taintsOf(deps: Deps, request: Request, who: Caller, context: Con
   return callerTaints(deps.harness, deps.agents.state(), who, request.caller, context);
 }
 
-export function callerOf(agents: Agents, request: Request): Caller {
+function anonymous(agents: Agents): Caller {
+  return { id: null, cone: agents.activeCone(), fromAgent: false, scoop: null, depth: 0 };
+}
+
+export function callerOf(agents: Agents, request: Request, lineage: Lineage | undefined): Caller {
+  if (!lineage) throw new CallerError("can't tell which process is asking from the process table");
+  const walked = lineage.agent === null ? undefined : agentOf(agents, lineage.agent);
   const user = request.user;
-  if (!user || user === ROOT_USER)
-    return (
-      claimed(agents, request.caller) ?? {
-        id: null,
-        cone: agents.activeCone(),
-        fromAgent: false,
-        scoop: null,
-        depth: 0,
-      }
-    );
+  if (!user || user === ROOT_USER) {
+    if (request.caller && request.caller !== walked)
+      throw new CallerError(
+        `SLICC_AGENT says ${request.caller}, but this process belongs to ${walked ?? 'no agent'}`
+      );
+    return (walked ? claimed(agents, walked) : undefined) ?? anonymous(agents);
+  }
   const own = agentOfUser(agents.state(), user);
   if (request.caller && request.caller !== own)
     throw new CallerError(`SLICC_AGENT says ${request.caller}, but you are ${user}`);
+  if (walked && walked !== own)
+    throw new CallerError(`you are ${user}, but this process belongs to ${walked}`);
   const found = own ? claimed(agents, own) : undefined;
   if (!found) throw new CallerError(`${user} is no cone or live scoop`);
   return found;
+}
+
+const UNCHECKED = new Set(['__cancel', '__detach']);
+
+function unchecked(request: Request): boolean {
+  return request.as === 'agent' && UNCHECKED.has(request.argv[0] ?? '');
+}
+
+function sameArgs(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((arg, at) => arg === b[at]);
+}
+
+function runsCommand(argv: readonly string[], request: Request): boolean {
+  return argv.some(
+    (arg, at) =>
+      at > 0 && arg.split('/').at(-1) === request.as && sameArgs(argv.slice(at + 1), request.argv)
+  );
+}
+
+async function uidOf(deps: Deps, user: string, context: Context): Promise<number | undefined> {
+  const read = await deps.env.readTextFile('/etc/passwd', context);
+  const line = read.ok ? read.value.split('\n').find((entry) => entry.startsWith(`${user}:`)) : '';
+  const uid = Number(line?.split(':')[2] ?? Number.NaN);
+  return Number.isInteger(uid) ? uid : undefined;
+}
+
+async function attested(
+  deps: Deps,
+  request: Request,
+  context: Context
+): Promise<Lineage | undefined> {
+  const lineage = await deps.scoops.lineage(request.pid);
+  if (!lineage) return undefined;
+  if (!runsCommand(lineage.argv, request))
+    throw new CallerError(`process ${request.pid} is not this ${request.as} call`);
+  if (request.user && lineage.uid !== (await uidOf(deps, request.user, context)))
+    throw new CallerError(`process ${request.pid} does not run as ${request.user}`);
+  return lineage;
 }
 
 export async function readText(
@@ -394,7 +439,7 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   if (!text.trim()) return fail('send needs a message, --file or -', 2);
   if (request.argv[1] === 'parent') {
     if (!who.scoop) return fail('only a scoop has a parent to send to');
-    return deps.scoops.note(who.scoop, text, context);
+    return deps.scoops.note(who.scoop, text, await taintsOf(deps, request, who, context), context);
   }
   if (who.scoop) return fail('a scoop can only send to its parent');
   const found = handle(deps, who, request.argv[1]);
@@ -451,21 +496,28 @@ function refusedChannel(channel: string): Answer {
   );
 }
 
+type Sender = { who: Caller; spawned: boolean };
+
 async function cronSend(
   deps: Deps,
   licks: Pick<Licks, 'deliver'>,
   request: Request,
   parsed: Flags,
+  sender: Sender,
   context: Context
 ): Promise<Answer> {
   if (!request.cron)
     return fail('--lick=cron only works inside a cron job, which sets SLICC_CRON_JOB');
+  if (sender.spawned)
+    return fail("--lick=cron only works inside a cron job, and an agent's bash started this one");
   if (last(parsed, '--source') !== undefined)
     return fail("--source is for --lick=webhook; a cron lick is named by its job's # name:", 2);
   const target = cronTarget(deps, request, parsed.rest[0] ?? '');
   if (isAnswer(target)) return target;
   const text = (await message(deps, unnamed(parsed), request, context)).trim();
-  await licks.deliver(cronLick(request.cron, target, text), context);
+  const taints = await taintsOf(deps, request, sender.who, context);
+  const lick = cronLick(request.cron, target, text);
+  await licks.deliver(taints.length ? { ...lick, taints } : lick, context);
   return ok('');
 }
 
@@ -482,6 +534,7 @@ async function webhookSend(
   deps: Deps,
   request: Request,
   parsed: Flags,
+  sender: Sender,
   context: Context
 ): Promise<Answer> {
   if (!deps.webhook) return fail('webhooks are not available in this agent');
@@ -494,9 +547,10 @@ async function webhookSend(
   if (isAnswer(scope)) return scope;
   const text = await message(deps, unnamed(parsed), request, context);
   if (!text.trim()) return fail('send needs a message, --file or -', 2);
+  const taints = await taintsOf(deps, request, sender.who, context);
   const delivered = await deps.webhook(
     scopedName(source, scope),
-    webhookDelivery(text.trimEnd()),
+    { ...webhookDelivery(text.trimEnd()), taints },
     context
   );
   return delivered
@@ -508,16 +562,25 @@ function unnamed(parsed: Flags): Flags {
   return { ...parsed, rest: parsed.rest.slice(1) };
 }
 
-async function lickSend(deps: Deps, request: Request, context: Context): Promise<Answer> {
+async function lickSend(
+  deps: Deps,
+  request: Request,
+  lineage: Lineage | undefined,
+  context: Context
+): Promise<Answer> {
   const parsed = flags(request.argv.slice(1), ['--file', '--lick', '--source']);
   const unknown = [...parsed.switches][0];
   if (unknown) return fail(`unknown option ${unknown}`, 2);
   const channel = last(parsed, '--lick') ?? '';
   if (!PROCESS_LICKS.includes(channel)) return refusedChannel(channel);
   if (!deps.licks) return fail('licks are not available in this agent');
+  const sender = {
+    who: callerOf(deps.agents, request, lineage),
+    spawned: (lineage as Lineage).spawned,
+  };
   return channel === 'cron'
-    ? cronSend(deps, deps.licks, request, parsed, context)
-    : webhookSend(deps, request, parsed, context);
+    ? cronSend(deps, deps.licks, request, parsed, sender, context)
+    : webhookSend(deps, request, parsed, sender, context);
 }
 
 async function latest(
@@ -582,7 +645,8 @@ async function wait(deps: Deps, request: Request, who: Caller, context: Context)
   if (!parsed.switches.has('--notify')) return block(deps, ids, seconds, context);
   if (!who.fromAgent || who.scoop)
     return fail('wait --notify is for a cone; a terminal waits with agent wait');
-  await deps.scoops.notifyWhenDone(who.cone, ids, deps.now() + seconds * 1000, context);
+  const taints = await taintsOf(deps, request, who, context);
+  await deps.scoops.notifyWhenDone(who.cone, ids, deps.now() + seconds * 1000, taints, context);
   return ok(`you'll get one scoop-wait lick when ${ids.length > 1 ? 'they are' : 'it is'} done\n`);
 }
 
@@ -724,10 +788,13 @@ export function createCli(options: CliOptions): Runner {
     },
     async run(request, context) {
       try {
+        if (unchecked(request))
+          return await dispatch(deps, request, anonymous(deps.agents), context);
+        const lineage = await attested(deps, request, context);
         const argv = expanded(request.argv);
         if (request.as === 'agent' && argv[0] === 'send' && argv.includes('--lick'))
-          return await lickSend(deps, { ...request, argv }, context);
-        return await dispatch(deps, request, callerOf(options.agents, request), context);
+          return await lickSend(deps, { ...request, argv }, lineage, context);
+        return await dispatch(deps, request, callerOf(deps.agents, request, lineage), context);
       } catch (error) {
         return fail((error as Error).message);
       }

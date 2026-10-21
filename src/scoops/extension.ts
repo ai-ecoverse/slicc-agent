@@ -13,7 +13,8 @@ import {
   type Tx,
 } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
-import { AgentsDoc, live, type ScoopRecord } from '../agents.ts';
+import { AgentsDoc, type AgentsState, live, type ScoopRecord } from '../agents.ts';
+import { distinctTaints, type InheritedTaint, runTaints } from '../guests/guard.ts';
 import { HOME } from '../kernel/env.ts';
 import { normalize, resolve } from '../kernel/paths.ts';
 import { type Layout, LEGACY } from '../layout.ts';
@@ -25,6 +26,24 @@ import { cardOf } from './summary.ts';
 export const PREVIEW = 1000;
 
 type Lookup = () => Promise<ScoopsHost>;
+
+export async function scoopTainted(
+  host: Pick<ScoopsHost, 'harness'>,
+  state: Readonly<AgentsState>,
+  scoops: readonly string[],
+  event: LickEvent,
+  context: Context,
+  extra: readonly InheritedTaint[] = []
+): Promise<LickEvent> {
+  const found: InheritedTaint[] = [...extra];
+  for (const id of scoops) {
+    const conversation = state.scoops[id]?.conversation;
+    if (conversation !== undefined)
+      found.push(...(await runTaints(host.harness, conversation as ConversationId, context)));
+  }
+  const taints = distinctTaints(found);
+  return taints.length ? { ...event, taints } : event;
+}
 
 export function scoopFacts(
   record: Pick<ScoopRecord, 'name' | 'folder' | 'role'> & { cone?: string },
@@ -112,7 +131,12 @@ export async function noteWhenPlaced(
 export const NOTE_POLL_MS = 100;
 
 export function waitTask(lookup: Lookup) {
-  type WaitInput = { scoops: string[]; cone: string; deadline: number };
+  type WaitInput = {
+    scoops: string[];
+    cone: string;
+    deadline: number;
+    taints?: InheritedTaint[];
+  };
 
   return defineTask<WaitInput, { phase: 'start' } | { phase: 'watch' }, null>({
     name: 'slicc.scoop-wait',
@@ -130,7 +154,8 @@ export function waitTask(lookup: Lookup) {
         }, context);
       },
       async watch(task, runtime, context) {
-        const { agents, licks } = await lookup();
+        const host = await lookup();
+        const { agents, licks } = host;
         const key = String(task.id);
         for (;;) {
           const work = await runtime.snapshot(ScoopWorkDoc, context);
@@ -149,19 +174,27 @@ export function waitTask(lookup: Lookup) {
               ? `## ${names(id)}\n(still working when the wait timed out)`
               : `## ${names(id)}\n${state.done[id] ?? '(nothing was running)'}`
           );
+          const lick: LickEvent = {
+            channel: 'scoop-wait',
+            source: key,
+            title: `Waited for ${state.scoops.map(names).join(', ')}`,
+            text: open.length
+              ? `${state.scoops.length - open.length} of ${state.scoops.length} done; timed out waiting for ${open.map(names).join(', ')}`
+              : `All ${state.scoops.length} done`,
+            body: body.join('\n\n'),
+            target: `cone:${state.cone}`,
+            coalesce: false,
+            eventId: `wait:${key}`,
+          };
           await licks.deliver(
-            {
-              channel: 'scoop-wait',
-              source: key,
-              title: `Waited for ${state.scoops.map(names).join(', ')}`,
-              text: open.length
-                ? `${state.scoops.length - open.length} of ${state.scoops.length} done; timed out waiting for ${open.map(names).join(', ')}`
-                : `All ${state.scoops.length} done`,
-              body: body.join('\n\n'),
-              target: `cone:${state.cone}`,
-              coalesce: false,
-              eventId: `wait:${key}`,
-            },
+            await scoopTainted(
+              host,
+              agents.state(),
+              state.scoops,
+              lick,
+              context,
+              task.input.taints
+            ),
             context
           );
           break;
@@ -273,7 +306,8 @@ export function scoopTasks(lookup: Lookup) {
         }, context);
       },
       async report(task, runtime, context) {
-        const { agents, licks, layout = LEGACY } = await lookup();
+        const host = await lookup();
+        const { agents, licks, layout = LEGACY } = host;
         const id = task.input.scoop;
         const record = agents.state().scoops[id];
         const { text, failed } = task.state.checkpoint;
@@ -293,10 +327,16 @@ export function scoopTasks(lookup: Lookup) {
         const route = { target: entry.target, channel: entry.channel };
         if (!folded && record && entry.report && failed !== 'aborted')
           await licks.deliver(
-            {
-              ...reportLick(record, id, { text, failed, path }, route),
-              eventId: `report:${task.id}`,
-            },
+            await scoopTainted(
+              host,
+              agents.state(),
+              [id],
+              {
+                ...reportLick(record, id, { text, failed, path }, route),
+                eventId: `report:${task.id}`,
+              },
+              context
+            ),
             context
           );
         await runtime.commit(async (tx) => {

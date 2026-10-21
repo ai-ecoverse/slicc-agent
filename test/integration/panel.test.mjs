@@ -13,6 +13,7 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
   const query = [
     `step=${encodeURIComponent(JSON.stringify({ tool: { name: 'bash', args: { command: script } } }))}`,
     `step=${encodeURIComponent(JSON.stringify({ answer: 'Opened.' }))}`,
+    'scoop-say=',
   ].join('&');
   await staged(page, 'spectrum', async () => {
     const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
@@ -96,6 +97,27 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
         });
         return { code: await process.exited, out, err };
       };
+      let asked = 0;
+      const asScoop = async (id, command) => {
+        asked += 1;
+        const base = `/tmp/as-scoop-${asked}`;
+        await terminal.fs.writeFile(
+          `${base}.sh`,
+          `${command} >${base}.out 2>${base}.err; echo $? >${base}.c; mv ${base}.c ${base}.code\n`
+        );
+        stage(`${command} from the scoop`);
+        await first.control.send(
+          { text: `bash bash ${base}.sh`, whenBusy: 'followUp', requestId: null, agentId: id },
+          BACKGROUND_CONTEXT
+        );
+        await when([every(50)], () => terminal.fs.exists(`${base}.code`), command);
+        const read = (ext) => terminal.fs.readText(`${base}.${ext}`);
+        return {
+          code: Number((await read('code')).trim()),
+          out: await read('out'),
+          err: await read('err'),
+        };
+      };
       await when(
         [files(kernel, ['/usr/local/bin'])],
         () => terminal.fs.exists('/usr/local/bin/panel'),
@@ -111,12 +133,12 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
         },
         'both tabs reported'
       );
-      globalThis.panelTest = { owner, first, a, b, app, run, other, hang, runs, kernel };
+      globalThis.panelTest = { owner, first, a, b, app, run, asScoop, other, hang, runs, kernel };
     },
     query
   );
   const seen = await staged(page, 'the panel commands', async () => {
-    const { first, a, app, run, other } = globalThis.panelTest;
+    const { first, a, app, run, asScoop, other } = globalThis.panelTest;
     stage('the answer');
     const answer = await first.prompt('Open the files.');
     stage('the scoop and its commands');
@@ -127,13 +149,13 @@ test("panel runs spectrum's panelCommand in the tab showing the caller cone, thr
       .filter((part) => part.type === 'tool')
       .map((part) => part.tool.output);
     const scoop = await first.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
-    const fromScoop = await run(`SLICC_AGENT=${scoop.id} panel list --json`);
-    const missing = await run(`SLICC_AGENT=${scoop.id} panel open chat:${other.id}`);
+    const fromScoop = await asScoop(scoop.id, 'panel list --json');
+    const missing = await asScoop(scoop.id, `panel open chat:${other.id}`);
     const fromTab = await run('SLICC_TAB=B panel list');
     const tabs = await run('panel tabs --json');
     const pinned = await run('SLICC_TAB=A panel list --tab B');
-    const fenced = await run(`SLICC_AGENT=${scoop.id} panel list --tab B`);
-    const scoopTabs = await run(`SLICC_AGENT=${scoop.id} panel tabs`);
+    const fenced = await asScoop(scoop.id, 'panel list --tab B');
+    const scoopTabs = await asScoop(scoop.id, 'panel tabs');
     const sprinkle = await run('command -v sprinkle');
     return {
       tabs,
