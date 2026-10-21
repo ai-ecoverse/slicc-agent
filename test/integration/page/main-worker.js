@@ -281,9 +281,43 @@ let labels = 0;
 const labelling = (context) =>
   context.messages.length === 1 &&
   JSON.stringify(context.messages[0].content).includes('Label this group of tool runs');
+const sayStats = { active: 0, most: 0, prompts: [] };
+self.addEventListener('message', ({ data }) => {
+  data?.sayStats?.postMessage(sayStats);
+});
+const said = async (context, ...rest) => {
+  const last = context.messages.findLast((message) => message.role === 'user');
+  const text =
+    typeof last.content === 'string'
+      ? last.content
+      : last.content
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text)
+          .join('');
+  const line = text.split('\n')[0];
+  sayStats.prompts.push(line);
+  sayStats.active += 1;
+  sayStats.most = Math.max(sayStats.most, sayStats.active);
+  try {
+    const held = /^hold (\S+) (.*)$/.exec(line);
+    const signal = rest[0]?.signal;
+    const stopped = new Promise((resolve) => {
+      if (signal?.aborted) resolve(true);
+      signal?.addEventListener('abort', () => resolve(true), { once: true });
+    });
+    if (held && (await Promise.race([gate(held[1]).promise.then(() => false), stopped])))
+      return fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' });
+    const answer = held ? held[2] : line.replace(/^say /, '');
+    return recorded(fauxAssistantMessage(answer))(context, ...rest);
+  } finally {
+    sayStats.active -= 1;
+  }
+};
 const dispatch = (context, ...rest) => {
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
   if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
+  if (params.has('scoop-say') && JSON.stringify(context).includes('You are the scoop'))
+    return said(context, ...rest);
   if (scoopSteps.length && JSON.stringify(context).includes('You are the scoop'))
     return scoopSteps.shift()(context, ...rest);
   const step = queued.shift();

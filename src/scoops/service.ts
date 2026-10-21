@@ -6,6 +6,7 @@ import {
   type ConversationId,
   configure,
   defineDoc,
+  type Extension,
   type Harness,
   type TaskId,
   type ToolRegistration,
@@ -81,6 +82,7 @@ export interface ScoopsHost {
   mcp?: (names: readonly string[]) => ToolRegistration[];
   layout?: Layout;
   enforced?: boolean;
+  exclude?: readonly Extension[];
 }
 
 export interface Rewound {
@@ -266,10 +268,10 @@ function claimTurn(
   return undefined;
 }
 
-function agentChange(
+export function agentChange(
   request: SpawnRequest,
   folder: string,
-  host: Pick<ScoopsHost, 'tools' | 'mcp' | 'layout'>
+  host: Pick<ScoopsHost, 'tools' | 'mcp' | 'layout' | 'exclude'>
 ): AgentChange {
   const { tools, mcp } = host;
   const model = request.model ?? modelOf(request.role?.model);
@@ -282,6 +284,7 @@ function agentChange(
     ...(model ? { model } : {}),
     ...(thinking ? { thinkingLevel: thinking as AgentChange['thinkingLevel'] } : {}),
     ...(chosen ? { tools: chosen } : {}),
+    ...(host.exclude?.length ? { extensions: { remove: host.exclude } } : {}),
   };
 }
 

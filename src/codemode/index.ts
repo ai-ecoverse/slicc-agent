@@ -6,6 +6,8 @@ import {
   type CodemodeJsonSchema,
   type CodemodeOutputItem,
   type CodemodeResult,
+  type CodemodeRun,
+  type CodemodeRunOptions,
   CodemodeSandbox,
   type CodemodeSandboxOptions,
   type CodemodeTool,
@@ -45,6 +47,7 @@ export interface Sandbox {
     code: string,
     options: { signal?: AbortSignal; store?: Record<string, unknown> }
   ): Promise<CodemodeResult>;
+  start(code: string, options: CodemodeRunOptions): CodemodeRun;
   close(): Promise<void>;
 }
 
@@ -349,12 +352,18 @@ export async function locateWasm(
   return undefined;
 }
 
+let shared: SandboxFactory | undefined;
+
+export function sharedSandbox(): SandboxFactory | undefined {
+  return shared;
+}
+
 export function sandboxFactory(
   wasm: () => Promise<WebAssembly.Module | undefined>,
   workerUrl?: string | URL
 ): SandboxFactory {
   let found: Promise<WebAssembly.Module | undefined> | undefined;
-  return (options) => {
+  const factory: SandboxFactory = (options) => {
     found ??= wasm().catch(() => undefined);
     return new CodemodeSandbox({
       ...options,
@@ -362,4 +371,6 @@ export function sandboxFactory(
       wasm: found.then((module) => module ?? loadQuickJSWasm()),
     });
   };
+  shared = factory;
+  return factory;
 }

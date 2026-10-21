@@ -13,6 +13,7 @@ import {
   type Roles,
 } from '../roles/roles.ts';
 import type { Choosable } from '../selection.ts';
+import { cliCommand, setupWorkflows, workflowEngine } from '../workflow/index.ts';
 import { type CliOptions, createCli, RUN_DIR } from './cli.ts';
 import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
 import {
@@ -282,6 +283,7 @@ export function setupScoops(
   let layout = LEGACY;
   registry.install(scoopsExtension(tasks, () => layout));
   registry.install(guardExtension(lookup));
+  const workflows = setupWorkflows(registry);
   return {
     scoops,
     choosable: choosable(fileTools),
@@ -300,6 +302,7 @@ export function setupScoops(
         layout,
         ...(options.enforced ? { enforced: true } : {}),
         envOf: options.envOf,
+        exclude: [workflows.extension],
         ...(options.mcp ? { mcp: options.mcp } : {}),
       });
       const builtin = async () => {
@@ -348,7 +351,18 @@ export function setupScoops(
         layout,
         ...(options.panel ? { panel: options.panel } : {}),
         ...(options.webhook ? { webhook: options.webhook } : {}),
+        workflow: cliCommand(workflows.workflows, layout, env),
         licks,
+      });
+      workflows.attach({
+        harness,
+        agents,
+        scoops,
+        roles,
+        env,
+        layout,
+        engine: workflowEngine(),
+        envFor: async (user, using) => (await layout.envFor(user, using)) ?? env,
       });
       const plane = planeOf(env, cli, options, context);
       await plane.start(context);

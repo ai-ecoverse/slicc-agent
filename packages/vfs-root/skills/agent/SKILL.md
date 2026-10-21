@@ -73,6 +73,10 @@ A scoop can post a progress note to its cone; it arrives as a lick:
 agent send parent "Halfway: the parser is done, starting on the tests"
 ```
 
+## Workflows
+
+A Claude Code `.workflow.js` runs as a durable background run that survives a reload: `agent workflow run <file.js> [--args <json>] [--budget <tokens>] [--concurrency <n>] [--wait]`. Its `agent()` calls are scoops. `agent workflow list`, `status <run>`, `wait <run>`, `stop <run>` and `save <run> <name>` manage runs, and `agent workflow help` lists the script's globals. A cone can also use the `workflow` tool.
+
 ## Limits
 
 A cone can have 16 live scoops and start 64 per turn (`subagents.maxLiveScoops` and `subagents.maxPerTurn` in `~/.pi/agent/settings.json`).
