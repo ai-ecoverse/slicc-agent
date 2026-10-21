@@ -420,10 +420,11 @@ function freezerOf(
     people: AgentUsers | undefined;
     users: UserClients | undefined;
     ready: { providers: readonly Provider[]; models: ReturnType<typeof createSliccModels> };
+    licks: ReturnType<typeof setupLicks>;
   }
 ) {
   const { home, memory, titles, people, users, ready } = parts;
-  return attachFreezer({
+  const freezer = attachFreezer({
     harness: agent.harness,
     agents: agent.agents,
     env: home,
@@ -440,6 +441,8 @@ function freezerOf(
       ...(people ? { envOf: (cone: string) => people.envOfAgent(`cone:${cone}`) } : {}),
     },
   });
+  parts.licks.licks.guard(freezer.frozenTarget);
+  return freezer;
 }
 
 async function start(
@@ -482,6 +485,8 @@ async function start(
   const agent = await openUnfrozen(options, scoops, { models, model, registry, env: environment });
   opened = agent;
   await people?.start(agent.agents);
+  const freezer = freezerOf(agent, { home, memory, titles, people, users, ready, licks });
+  await freezer.swept;
   const sources = licks.attach(agent, {
     env: home,
     home: HOME,
@@ -546,8 +551,6 @@ async function start(
     },
     BACKGROUND_CONTEXT
   );
-  const freezer = freezerOf(agent, { home, memory, titles, people, users, ready });
-  licks.licks.guard(freezer.frozenTarget);
   const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped, licks: licks.licks });
   const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(

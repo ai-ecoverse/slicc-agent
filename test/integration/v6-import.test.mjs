@@ -899,6 +899,84 @@ test('a worker that dies while an import writes leaves no orphans and no lost fi
   assert.equal(seen.rows, 3);
 });
 
+test('a boot after an interrupted import never shows the skills and memory that its rollback undoes', async (t) => {
+  const page = await booted(t);
+  const seen = await staged(page, 'the interrupted import', async () => {
+    const dir = '/var/lib/slicc/agent/imports/interrupted';
+    const memory = '/root/.pi/agent/memory/MEMORY.md';
+    const skill = '/usr/share/skills/imported-skill';
+    const entry = (title) => `## Projects\n\n### ${title}\ntag: project\n\n${title} notes.\n`;
+    const view = () => ({
+      skills: window.connection.commands.value
+        .map((command) => command.name)
+        .filter((name) => name.startsWith('skill:imported')),
+      memory: window.connection.memories.value
+        .map((item) => item.id)
+        .filter((id) => id.startsWith('global/projects/')),
+    });
+    stage('the half-imported state');
+    const steps = [
+      { file: memory, backup: `${dir}/journal/0` },
+      { made: skill },
+      ...Array.from({ length: 1500 }, (_, n) => ({ made: `/tmp/never-made/${n}` })),
+    ];
+    const files = [
+      [
+        `${dir}/journal.json`,
+        JSON.stringify({ key: 'interrupted', at: 1, cones: [], source: null }),
+      ],
+      [`${dir}/journal/0`, entry('Mine')],
+      ...steps.map((step, n) => [`${dir}/journal/${n + 1}.json`, JSON.stringify(step)]),
+      [memory, entry('Imported')],
+      [
+        `${skill}/SKILL.md`,
+        '---\nname: imported-skill\ndescription: An imported skill.\n---\nBody.\n',
+      ],
+    ];
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const terminal = await attachKernel(await window.kernel.connect());
+    for (const [path, text] of files) {
+      await terminal.fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+      await terminal.fs.writeFile(path, text);
+    }
+    const dirty = await when(
+      [window.connection.commands, window.connection.memories],
+      () => {
+        const now = view();
+        return now.skills.length > 0 && now.memory.length > 0 && now;
+      },
+      'the half-imported skills and memory'
+    );
+    stage('the killed worker');
+    await window.owner.restart();
+    window.connection = await window.owner.connect();
+    const views = [];
+    const look = () => views.push(JSON.stringify(view()));
+    const offs = await Promise.all([
+      window.connection.commands.subscribe(look),
+      window.connection.memories.subscribe(look),
+    ]);
+    look();
+    const clean = await when(
+      [window.connection.commands, window.connection.memories, every(100)],
+      async () =>
+        (await window.sh(`test -e ${dir}`)).status === 1 &&
+        view().skills.length === 0 &&
+        view().memory.includes('global/projects/mine') &&
+        view(),
+      'the rolled-back skills and memory'
+    );
+    for (const off of offs) off?.();
+    return { dirty, clean, views: [...new Set(views)] };
+  });
+  assert.deepEqual(seen.dirty, {
+    skills: ['skill:imported-skill'],
+    memory: ['global/projects/imported'],
+  });
+  assert.deepEqual(seen.clean, { skills: [], memory: ['global/projects/mine'] });
+  assert.deepEqual(seen.views, [JSON.stringify(seen.clean)]);
+});
+
 test('freezer import never writes memory through a symlink, and leaves its target and everything else alone', async (t) => {
   const page = await booted(t);
   await upload(page, '/tmp/profile.zip', await readFile(FIXTURE));
