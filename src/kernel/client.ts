@@ -45,7 +45,16 @@ export interface KernelClient {
   fs: KernelFs;
   spawn(argv: readonly string[], options: SpawnOptions): Promise<KernelProcess>;
   kill?(pid: number, signal?: string): Promise<void>;
-  ps?(): Promise<readonly { pid: number; ppid?: number; pgid?: number; state?: string }[]>;
+  ps?(): Promise<
+    readonly {
+      pid: number;
+      ppid?: number;
+      pgid?: number;
+      state?: string;
+      argv?: readonly string[];
+      uid?: number;
+    }[]
+  >;
   loopbackFetch?(
     request: Request,
     options: { port: number; signal?: AbortSignal }

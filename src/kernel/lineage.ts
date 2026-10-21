@@ -4,6 +4,8 @@ import { boundedPs, PS_MS } from './jobs.ts';
 export interface Lineage {
   agent: number | null;
   spawned: boolean;
+  argv: readonly string[];
+  uid?: number;
 }
 
 export interface Spawns {
@@ -11,7 +13,13 @@ export interface Spawns {
   lineage(pid: number | null): Promise<Lineage | undefined>;
 }
 
-type Row = { pid: number; ppid?: number; pgid?: number };
+type Row = {
+  pid: number;
+  ppid?: number;
+  pgid?: number;
+  argv?: readonly string[];
+  uid?: number;
+};
 
 function indexed(rows: readonly Row[]): Map<number, Row> {
   const byPid = new Map<number, Row>();
@@ -40,9 +48,14 @@ export function spawns(
     for (const pgid of [...groups]) if (!rows.some((row) => row.pgid === pgid)) groups.delete(pgid);
     const byPid = indexed(rows);
     const visited = new Set<number>();
-    const found: Lineage = { agent: null, spawned: false };
     let row = byPid.get(pid);
     if (!row) return undefined;
+    const found: Lineage = {
+      agent: null,
+      spawned: false,
+      argv: row.argv ?? [],
+      ...(row.uid === undefined ? {} : { uid: row.uid }),
+    };
     for (; row && !visited.has(row.pid); row = parentOf(byPid, row)) {
       visited.add(row.pid);
       seen(found, row);
