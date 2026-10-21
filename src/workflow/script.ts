@@ -73,77 +73,82 @@ class WorkflowError extends Error {
     this.name = 'WorkflowError';
   }
 }
-const __RealDate = globalThis.Date;
-const __RealMath = globalThis.Math;
-const __banned = (what) => () => {
+const RealDate = globalThis.Date;
+const RealMath = globalThis.Math;
+const banned = (what) => () => {
   throw new WorkflowError(what + ' is not allowed in a workflow; pass time or randomness in args');
 };
 const Date = function Date(...given) {
-  if (new.target === undefined) __banned('Date()')();
-  if (given.length === 0) __banned('new Date()')();
-  return new __RealDate(...given);
+  if (new.target === undefined) banned('Date()')();
+  if (given.length === 0) banned('new Date()')();
+  return new RealDate(...given);
 };
-Date.prototype = __RealDate.prototype;
-Date.UTC = __RealDate.UTC;
-Date.parse = __RealDate.parse;
-Date.now = __banned('Date.now()');
+Date.prototype = RealDate.prototype;
+Date.UTC = RealDate.UTC;
+Date.parse = RealDate.parse;
+Date.now = banned('Date.now()');
+Object.freeze(Date);
 const Math = {};
-for (const key of Object.getOwnPropertyNames(__RealMath)) Math[key] = __RealMath[key];
-Math.random = __banned('Math.random()');
-const crypto = { getRandomValues: __banned('crypto.getRandomValues()'), randomUUID: __banned('crypto.randomUUID()') };
-const performance = { now: __banned('performance.now()') };
-const setTimeout = __banned('setTimeout()');
-const setInterval = __banned('setInterval()');
-const args = __WF.args;
-const __OPTIONS = ['label', 'phase', 'schema', 'model', 'effort', 'agentType', 'isolation'];
-let __started = 0;
-let __spent = 0;
-let __phase = null;
-let __active = 0;
-const __waiting = [];
-const __acquire = async () => {
-  if (__active < __WF.concurrency) {
-    __active++;
+for (const key of Object.getOwnPropertyNames(RealMath)) Math[key] = RealMath[key];
+Math.random = banned('Math.random()');
+Object.freeze(Math);
+const crypto = Object.freeze({
+  getRandomValues: banned('crypto.getRandomValues()'),
+  randomUUID: banned('crypto.randomUUID()'),
+});
+const performance = Object.freeze({ now: banned('performance.now()') });
+const setTimeout = banned('setTimeout()');
+const setInterval = banned('setInterval()');
+const OPTIONS = ['label', 'phase', 'schema', 'model', 'effort', 'agentType', 'isolation'];
+const lanes = config.budget === null ? config.concurrency : 1;
+let started = 0;
+let spent = 0;
+let current = null;
+let active = 0;
+const waiting = [];
+const acquire = async () => {
+  if (active < lanes) {
+    active++;
     return;
   }
-  await new Promise((resume) => __waiting.push(resume));
+  await new Promise((resume) => waiting.push(resume));
 };
-const __release = () => {
-  const next = __waiting.shift();
+const release = () => {
+  const next = waiting.shift();
   if (next) next();
-  else __active--;
+  else active--;
 };
-const __text = (values) =>
+const textOf = (values) =>
   values.map((value) => (typeof value === 'string' ? value : JSON.stringify(value))).join(' ');
-const __note = (kind, text) => {
-  __notify({ kind, text }).then(undefined, () => undefined);
+const note = (kind, text) => {
+  tell({ kind, text }).then(undefined, () => undefined);
 };
-const __gate = () => {
-  if (__WF.budget !== null && __spent >= __WF.budget)
-    throw new WorkflowError('agent(): the budget of ' + __WF.budget + ' output tokens is spent');
+const gate = () => {
+  if (config.budget !== null && spent >= config.budget)
+    throw new WorkflowError('agent(): the budget of ' + config.budget + ' output tokens is spent');
 };
-const __failed = (error) => {
-  __note('log', '[error] ' + (error && error.message ? error.message : String(error)));
+const failed = (error) => {
+  note('log', '[error] ' + (error && error.message ? error.message : String(error)));
   return null;
 };
-const console = {
-  log: (...values) => __note('log', __text(values)),
-  info: (...values) => __note('log', __text(values)),
-  debug: (...values) => __note('log', __text(values)),
-  warn: (...values) => __note('log', '[warn] ' + __text(values)),
-  error: (...values) => __note('log', '[error] ' + __text(values)),
-};
+const console = Object.freeze({
+  log: (...values) => note('log', textOf(values)),
+  info: (...values) => note('log', textOf(values)),
+  debug: (...values) => note('log', textOf(values)),
+  warn: (...values) => note('log', '[warn] ' + textOf(values)),
+  error: (...values) => note('log', '[error] ' + textOf(values)),
+});
 const budget = Object.freeze({
-  total: __WF.budget,
-  spent: () => __spent,
-  remaining: () => (__WF.budget === null ? Infinity : Math.max(0, __WF.budget - __spent)),
+  total: config.budget,
+  spent: () => spent,
+  remaining: () => (config.budget === null ? Infinity : Math.max(0, config.budget - spent)),
 });
 function phase(title) {
-  __phase = String(title);
-  __note('phase', __phase);
+  current = String(title);
+  note('phase', current);
 }
 function log(message) {
-  __note('log', String(message));
+  note('log', String(message));
 }
 function workflow() {
   throw new WorkflowError('workflow(): nested workflows are not supported in SLICC');
@@ -153,26 +158,26 @@ async function agent(prompt, options) {
   const given = options === undefined || options === null ? {} : options;
   if (typeof given !== 'object' || Array.isArray(given)) throw new WorkflowError('agent(): options must be an object');
   for (const key of Object.keys(given))
-    if (!__OPTIONS.includes(key)) throw new WorkflowError('agent(): unknown option ' + key);
+    if (!OPTIONS.includes(key)) throw new WorkflowError('agent(): unknown option ' + key);
   if (given.isolation !== undefined) throw new WorkflowError('agent(): isolation is not supported in SLICC');
-  if (__started >= ${MAX_AGENTS}) throw new WorkflowError('agent(): a workflow starts at most ${MAX_AGENTS} agents');
-  __gate();
-  __started++;
-  await __acquire();
+  if (started >= ${MAX_AGENTS}) throw new WorkflowError('agent(): a workflow starts at most ${MAX_AGENTS} agents');
+  gate();
+  started++;
+  await acquire();
   try {
-    __gate();
+    gate();
     const call = { ...given, prompt };
-    if (call.phase === undefined && __phase !== null) call.phase = __phase;
+    if (call.phase === undefined && current !== null) call.phase = current;
     try {
-      const answer = await __agent(call);
-      __spent += answer.outputTokens;
+      const answer = await host(call);
+      spent += answer.outputTokens;
       return answer.value;
     } catch (error) {
-      __spent += error && typeof error.outputTokens === 'number' ? error.outputTokens : 0;
+      spent += error && typeof error.outputTokens === 'number' ? error.outputTokens : 0;
       throw error;
     }
   } finally {
-    __release();
+    release();
   }
 }
 async function parallel(thunks) {
@@ -184,7 +189,7 @@ async function parallel(thunks) {
       try {
         return await thunk();
       } catch (error) {
-        return __failed(error);
+        return failed(error);
       }
     })
   );
@@ -200,7 +205,7 @@ async function pipeline(items, ...stages) {
         try {
           value = await stage(value, item, index);
         } catch (error) {
-          return __failed(error);
+          return failed(error);
         }
         if (value === null) return null;
       }
@@ -208,19 +213,46 @@ async function pipeline(items, ...stages) {
     })
   );
 }
+return Object.freeze({
+  agent, parallel, pipeline, phase, log, workflow, console, budget, args: config.args,
+  Date, Math, crypto, performance, setTimeout, setInterval, WorkflowError,
+});
 `;
+
+export const PUBLIC = [
+  'agent',
+  'parallel',
+  'pipeline',
+  'phase',
+  'log',
+  'workflow',
+  'console',
+  'budget',
+  'args',
+  'Date',
+  'Math',
+  'crypto',
+  'performance',
+  'setTimeout',
+  'setInterval',
+  'WorkflowError',
+];
 
 export function buildCode(source: string, config: Config): string {
   return [
     '{',
+    `const __api = (function (config, host, tell) {${PRELUDE}})(Object.freeze(${JSON.stringify(config)}), __agent, __notify);`,
+    '{',
     'const tools = undefined;',
-    `const __WF = ${JSON.stringify(config)};`,
-    PRELUDE,
+    'const __agent = undefined;',
+    'const __notify = undefined;',
+    `const { ${PUBLIC.join(', ')} } = __api;`,
     'const __main = async () => {',
     stripExports(source),
     '};',
     'const __value = await __main();',
     'return __value === undefined ? null : __value;',
+    '}',
     '}',
   ].join('\n');
 }

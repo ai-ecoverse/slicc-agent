@@ -233,6 +233,56 @@ test('--concurrency caps the scoops running at once, and --budget stops new agen
   assert.ok(!seen.prompts.includes('say never'));
 });
 
+test('a script cannot reach the prelude or lift its caps: a burst of direct host calls still runs two at a time, and a budget stops a parallel burst', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const bypass = workflow(
+    [
+      "const reach = [typeof __WF, typeof __started, typeof __agent, typeof __notify, typeof config, typeof host].join(',');",
+      'try { __WF.concurrency = 100; __WF.budget = null; } catch (e) {}',
+      "const direct = await Promise.all([1, 2, 3, 4, 5].map((n) => globalThis.__agent({ prompt: 'hold burst direct ' + n }).then((r) => r.value, (e) => e.message)));",
+      'return { reach, direct };',
+    ].join('\n')
+  );
+  const burst = workflow(
+    "return parallel([1, 2, 3].map(() => () => agent('say twenty characters')));"
+  );
+  const seen = await staged(
+    page,
+    'a script cannot reach the prelude',
+    async (bypass, burst) => {
+      await window.boot('');
+      await window.put('/home/bypass.workflow.js', bypass);
+      await window.put('/home/burst.workflow.js', burst);
+      const started = await window.sh('agent workflow run bypass.workflow.js --concurrency 2');
+      const id = started.out.split('\n')[0];
+      await window.held(2);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const during = (await window.stats()).active;
+      window.release('burst');
+      const waited = await window.sh(`agent workflow wait ${id}`);
+      const most = (await window.stats()).most;
+      const before = (await window.stats()).prompts.length;
+      const budgeted = await window.sh('agent workflow run burst.workflow.js --budget 5 --wait');
+      const status = await window.sh('agent workflow list');
+      const ran = (await window.stats()).prompts.length - before;
+      return { during, most, waited, budgeted, ran, status };
+    },
+    bypass,
+    burst
+  );
+  assert.equal(seen.waited.code, 0, seen.waited.out);
+  const result = JSON.parse(seen.waited.out);
+  assert.equal(result.reach, 'undefined,undefined,undefined,undefined,undefined,undefined');
+  assert.deepEqual(result.direct, ['direct 1', 'direct 2', 'direct 3', 'direct 4', 'direct 5']);
+  assert.equal(seen.during, 2);
+  assert.equal(seen.most, 2);
+  assert.equal(seen.budgeted.code, 0, seen.budgeted.out);
+  assert.deepEqual(JSON.parse(seen.budgeted.out), ['twenty characters', null, null]);
+  assert.equal(seen.ran, 1);
+});
+
 test('agent workflow stop withdraws the running scoops, and save keeps the source to run again by name', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
@@ -324,7 +374,10 @@ test('a workflow run survives a page reload mid-run, and no finished step runs t
       window.release('reload');
       const waited = await window.sh(`agent workflow wait ${id}`);
       const status = await window.sh(`agent workflow status ${id}`);
-      return { waited, status, prompts: (await window.stats()).prompts };
+      const asked = (await window.requests())
+        .filter((text) => text.includes('hold reload after the reload'))
+        .map((text) => text.split('hold reload after the reload').length - 1);
+      return { waited, status, prompts: (await window.stats()).prompts, asked };
     },
     persist,
     id
@@ -337,6 +390,7 @@ test('a workflow run survives a page reload mid-run, and no finished step runs t
   ]);
   assert.deepEqual(after.prompts, ['hold reload after the reload', 'say at the end']);
   assert.match(after.status.out, /agents: 3 done, 0 failed, 0 running, 3 started/);
+  assert.deepEqual(after.asked, [1]);
 });
 
 test('the cone runs a workflow through its workflow tool and gets the result back', async (t) => {

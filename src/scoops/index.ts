@@ -351,7 +351,7 @@ export function setupScoops(
         layout,
         ...(options.panel ? { panel: options.panel } : {}),
         ...(options.webhook ? { webhook: options.webhook } : {}),
-        workflow: cliCommand(workflows.workflows, layout, env),
+        workflow: cliCommand(workflows.workflows, layout, env, agents),
         licks,
       });
       workflows.attach({

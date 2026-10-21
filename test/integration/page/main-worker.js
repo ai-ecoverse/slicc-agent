@@ -286,6 +286,11 @@ self.addEventListener('message', ({ data }) => {
   data?.sayStats?.postMessage(sayStats);
 });
 const said = async (context, ...rest) => {
+  const final = context.messages.at(-1);
+  if (final.role === 'toolResult') {
+    const result = final.content.map((part) => part.text ?? '').join('');
+    return recorded(fauxAssistantMessage(`ran: ${result}`))(context, ...rest);
+  }
   const last = context.messages.findLast((message) => message.role === 'user');
   const text =
     typeof last.content === 'string'
@@ -299,6 +304,13 @@ const said = async (context, ...rest) => {
   sayStats.active += 1;
   sayStats.most = Math.max(sayStats.most, sayStats.active);
   try {
+    const shell = /^bash (.*)$/.exec(line);
+    if (shell)
+      return recorded(
+        fauxAssistantMessage([fauxToolCall('bash', { command: shell[1] })], {
+          stopReason: 'toolUse',
+        })
+      )(context, ...rest);
     const held = /^hold (\S+) (.*)$/.exec(line);
     const signal = rest[0]?.signal;
     const stopped = new Promise((resolve) => {

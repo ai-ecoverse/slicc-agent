@@ -69,7 +69,22 @@ export function instruction(schema: object): string {
   return `\n\nEnd your work with a final answer that is only JSON, with no other text and no code fence, matching this JSON Schema:\n${JSON.stringify(schema)}`;
 }
 
-export function plan(call: AgentCall, roles: Roles): Planned {
+const OPTIONS = new Set(['prompt', 'label', 'phase', 'schema', 'model', 'effort', 'agentType']);
+
+function checked(call: unknown): AgentCall {
+  if (typeof call !== 'object' || call === null || Array.isArray(call))
+    throw new StepError('agent(): options must be an object');
+  const given = call as Record<string, unknown>;
+  if (typeof given.prompt !== 'string' || !given.prompt.trim())
+    throw new StepError('agent() needs a prompt string');
+  if ('isolation' in given) throw new StepError('agent(): isolation is not supported in SLICC');
+  const unknown = Object.keys(given).find((key) => !OPTIONS.has(key));
+  if (unknown) throw new StepError(`agent(): unknown option ${unknown}`);
+  return given as unknown as AgentCall;
+}
+
+export function plan(given: unknown, roles: Roles): Planned {
+  const call = checked(given);
   const role = call.agentType === undefined ? undefined : findRole(roles.roles, call.agentType);
   if (call.agentType !== undefined && !role)
     throw new StepError(`agent(): there is no agent role ${call.agentType}`);

@@ -11,7 +11,9 @@ import {
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import type { Agents } from '../agents.ts';
 import { MEMORY_LIMIT_BYTES, sharedSandbox } from '../codemode/index.ts';
+import { runTaints } from '../guests/guard.ts';
 import { resolve } from '../kernel/paths.ts';
 import type { Layout } from '../layout.ts';
 import { coneOf } from '../scoops/service.ts';
@@ -40,6 +42,7 @@ export interface Files {
 
 export interface RunRequest {
   cone: string;
+  from?: number | null;
   files: Files;
   target: string;
   script?: boolean;
@@ -136,6 +139,8 @@ export function createWorkflows(host: Promise<WorkflowHost>) {
     });
     const cone = await agents.conversation(request.cone, context);
     if (!cone) throw new Error(`there is no cone ${request.cone}`);
+    const from = request.from ?? null;
+    const taints = from === null ? [] : await runTaints(harness, from as ConversationId, context);
     return harness.commit(async (tx) => {
       const task = await tx.createTask(
         (await host).tasks.run as never,
@@ -166,6 +171,8 @@ export function createWorkflows(host: Promise<WorkflowHost>) {
         agents: { started: 0, done: 0, failed: 0, running: [] },
         spent: 0,
         logs: [],
+        fromAgent: from !== null,
+        taints,
       };
       return id;
     }, context);
@@ -226,6 +233,7 @@ export type Workflows = ReturnType<typeof createWorkflows>;
 export interface Invocation {
   cone: string;
   scoop: boolean;
+  from: number | null;
   files: Files;
 }
 
@@ -303,6 +311,7 @@ export async function runWorkflow(
   const id = await workflows.start(
     {
       cone: who.cone,
+      from: who.from,
       files: who.files,
       target,
       ...(options.script !== undefined ? { script: true } : {}),
@@ -501,6 +510,7 @@ export function setupWorkflows(registry: Registry): WorkflowsSetup {
     return {
       cone,
       scoop: false,
+      from: conversation,
       files: { dir: workflowsDir(home), env: await bound.envFor(cone, context), cwd: home },
     };
   };
@@ -522,10 +532,11 @@ export function setupWorkflows(registry: Registry): WorkflowsSetup {
 export function cliCommand(
   workflows: Workflows,
   layout: Layout,
-  env: Files['env']
+  env: Files['env'],
+  agents: Pick<Agents, 'state'>
 ): (
   argv: readonly string[],
-  who: { cone: string; scoop: string | null },
+  who: { cone: string; scoop: string | null; fromAgent: boolean },
   request: { user?: string | null; cwd: string },
   context: Context
 ) => Promise<Answer> {
@@ -536,7 +547,13 @@ export function cliCommand(
       env: (await layout.envFor(user, context)) ?? env,
       cwd: request.cwd,
     };
-    return command(workflows, { cone: who.cone, scoop: who.scoop !== null, files }, argv, context);
+    const from = who.fromAgent ? (agents.state().cones[who.cone]?.conversation ?? null) : null;
+    return command(
+      workflows,
+      { cone: who.cone, scoop: who.scoop !== null, from, files },
+      argv,
+      context
+    );
   };
 }
 

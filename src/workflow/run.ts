@@ -14,6 +14,8 @@ import {
   type TaskRuntime,
   type Tx,
 } from '@earendil-works/pi-durable';
+import type { InheritedTaint } from '../guests/guard.ts';
+import type { Spawned } from '../scoops/service.ts';
 import { MAX_AGENTS } from './script.ts';
 import {
   type AgentCall,
@@ -47,6 +49,8 @@ export type RunRecord = {
   agents: { started: number; done: number; failed: number; running: string[] };
   spent: number;
   logs: string[];
+  fromAgent: boolean;
+  taints: InheritedTaint[];
   result?: JsonValue;
   error?: string;
 };
@@ -58,23 +62,45 @@ export const WorkflowsDoc = defineDoc<{ runs: Record<string, RunRecord> }>({
   initial: () => ({ runs: {} }),
 });
 
-type Start = { startedAt: number; seed: number; fingerprint: string | null; count: number };
+type Start = {
+  startedAt: number;
+  seed: number;
+  fingerprint: string | null;
+  count: number;
+  firstIssued: number | null;
+};
 
 const StartDoc = defineDoc<Start>({
   kind: 'slicc.workflow.start',
   version: 1,
   scope: 'task',
-  initial: () => ({ startedAt: 0, seed: 0, fingerprint: null, count: 0 }),
+  initial: () => ({ startedAt: 0, seed: 0, fingerprint: null, count: 0, firstIssued: null }),
 });
 
-type Entry = { id: number; name: string; at: number; outcome: JsonValue };
+type Entry = {
+  id: number;
+  name: string;
+  at: number;
+  outcome: JsonValue;
+  issuedAfter: number | null;
+};
 
 const JournalDoc = defineDocFamily<Entry, null>({
   kind: 'slicc.workflow.journal',
   version: 1,
   scope: 'task',
   family: true,
-  initial: () => ({ id: 0, name: '', at: 0, outcome: null }),
+  initial: () => ({ id: 0, name: '', at: 0, outcome: null, issuedAfter: null }),
+});
+
+type Step = { folder: string; task: number; conversation: number };
+
+const StepDoc = defineDocFamily<Step, null>({
+  kind: 'slicc.workflow.step',
+  version: 1,
+  scope: 'task',
+  family: true,
+  initial: () => ({ folder: '', task: 0, conversation: 0 }),
 });
 
 export interface Engine {
@@ -90,6 +116,9 @@ type RunInput = { code: string };
 type RunState = { phase: 'start' } | { phase: 'run' };
 
 export const GLOBALS = [{ name: '__agent' }, { name: '__notify' }];
+
+export const DIVERGED =
+  'the workflow took another path than before the restart, so it cannot resume';
 
 function addLog(record: RunRecord, line: string): void {
   record.logs.push(line);
@@ -120,17 +149,6 @@ function spentOf(outcome: CodemodeOutcome): number {
   return typeof tokens === 'number' ? tokens : 0;
 }
 
-export function refusal(record: RunRecord | undefined, inflight: number): string | null {
-  if (!record) return 'the run is gone';
-  if (record.agents.started >= MAX_AGENTS)
-    return `agent(): a workflow starts at most ${MAX_AGENTS} agents`;
-  if (record.budget !== null && record.spent >= record.budget)
-    return `agent(): the budget of ${record.budget} output tokens is spent`;
-  if (inflight >= record.concurrency)
-    return `agent(): at most ${record.concurrency} agents run at once`;
-  return null;
-}
-
 export function errorText(result: CodemodeResult): string {
   if (result.ok) return '';
   const { error } = result;
@@ -143,19 +161,31 @@ async function runOf(tx: Tx, id: string): Promise<RunRecord | undefined> {
   return (await tx.doc(WorkflowsDoc)).runs[id] as RunRecord | undefined;
 }
 
+type Event =
+  | { kind: 'call'; call: CodemodeHostCall }
+  | { kind: 'idle'; seq: number; issued: number }
+  | { kind: 'started'; fingerprint: string };
+
 export class Driver {
   readonly id: string;
-  readonly issued = new Map<number, CodemodeHostCall>();
-  readonly steps = new Set<Promise<void>>();
-  journal: Entry[] = [];
-  next = 0;
-  inflight = 0;
-  stopped: string | null = null;
-  run: CodemodeRun | undefined;
-  readonly controller = new AbortController();
   readonly host: RunHost;
   readonly runtime: Runtime;
   readonly context: Context;
+  readonly controller = new AbortController();
+  readonly issued = new Map<number, CodemodeHostCall>();
+  readonly steps = new Set<Promise<void>>();
+  readonly deferred: CodemodeHostCall[] = [];
+  readonly queue: (() => void)[] = [];
+  journal: Entry[] = [];
+  start: Start = { startedAt: 0, seed: 0, fingerprint: null, count: 0, firstIssued: null };
+  record: RunRecord | undefined;
+  next = 0;
+  idle: { seq: number; issued: number } | null = null;
+  agents = 0;
+  inflight = 0;
+  spent = 0;
+  stopped: string | null = null;
+  run: CodemodeRun | undefined;
 
   constructor(host: RunHost, runtime: Runtime, context: Context) {
     this.host = host;
@@ -168,8 +198,21 @@ export class Driver {
     return withAbortSignal(this.controller.signal, this.context);
   }
 
-  async load(count: number): Promise<void> {
-    for (let seq = 1; seq <= count; seq++) {
+  get lanes(): number {
+    const record = this.record as RunRecord;
+    return record.budget === null ? record.concurrency : 1;
+  }
+
+  async load(): Promise<void> {
+    this.start = (await this.runtime.snapshot(
+      StartDoc,
+      this.runtime.taskId,
+      this.context
+    )) as Start;
+    this.record = (await this.runtime.snapshot(WorkflowsDoc, this.context))?.runs[this.id];
+    if (!this.record) throw new Error('the run is gone');
+    this.spent = this.record.spent;
+    for (let seq = 1; seq <= this.start.count; seq++) {
       const entry = await this.runtime.snapshot(
         JournalDoc,
         this.runtime.taskId,
@@ -186,34 +229,65 @@ export class Driver {
     this.controller.abort();
   }
 
+  replaying(): boolean {
+    return this.next < this.journal.length;
+  }
+
   deliver(seq: number, at: number, id: number, outcome: CodemodeOutcome): void {
     if (this.run && !this.run.finished) this.run.deliver(seq, at, id, outcome);
   }
 
+  expected(): number | null {
+    return this.next === 0
+      ? this.start.firstIssued
+      : (this.journal[this.next - 1] as Entry).issuedAfter;
+  }
+
   pump(): void {
-    while (this.next < this.journal.length) {
+    while (this.replaying()) {
+      if (this.idle?.seq !== this.next) return;
       const entry = this.journal[this.next] as Entry;
+      const expected = this.expected();
       const call = this.issued.get(entry.id);
-      if (!call) return;
-      if (call.name !== entry.name) {
-        this.halt('the workflow took another path than before the restart, so it cannot resume');
+      if ((expected !== null && this.idle.issued !== expected) || call?.name !== entry.name) {
+        this.halt(DIVERGED);
         return;
       }
       this.next++;
       this.deliver(this.next, entry.at, entry.id, entry.outcome as CodemodeOutcome);
     }
+    for (const call of this.deferred.splice(0)) this.launch(call);
   }
 
-  replayed(id: number): boolean {
-    return this.journal.some((entry) => entry.id === id);
-  }
-
-  onCall(call: CodemodeHostCall): void {
-    this.issued.set(call.id, call);
-    if (this.replayed(call.id)) {
+  handle(event: Event): void {
+    if (event.kind === 'started') {
+      void this.fingerprint(event.fingerprint).catch(() => undefined);
+      return;
+    }
+    if (event.kind === 'idle') {
+      this.idle = { seq: event.seq, issued: event.issued };
+      void this.acknowledge(event.seq, event.issued).catch(() => undefined);
       this.pump();
       return;
     }
+    this.issued.set(event.call.id, event.call);
+    if (event.call.name === '__agent') this.agents++;
+    if (!this.replaying()) this.launch(event.call);
+    else if (!this.journal.some((entry) => entry.id === event.call.id))
+      this.deferred.push(event.call);
+  }
+
+  async acknowledge(seq: number, issued: number): Promise<void> {
+    if (seq === 0 && this.start.firstIssued !== null) return;
+    if (seq > 0 && seq <= this.journal.length) return;
+    await this.runtime.commit(async (tx) => {
+      if (seq === 0) (await tx.doc(StartDoc, this.runtime.taskId)).firstIssued = issued;
+      else (await tx.doc(JournalDoc, this.runtime.taskId, String(seq), null)).issuedAfter = issued;
+      return undefined;
+    }, this.scoped);
+  }
+
+  launch(call: CodemodeHostCall): void {
     const step = this.live(call).catch((error) => {
       if (!this.controller.signal.aborted) this.halt((error as Error).message);
     });
@@ -221,7 +295,7 @@ export class Driver {
     void step.finally(() => this.steps.delete(step));
   }
 
-  async record(
+  async journalize(
     call: CodemodeHostCall,
     outcome: CodemodeOutcome,
     effect: (record: RunRecord) => void
@@ -237,6 +311,7 @@ export class Driver {
         name: call.name,
         at,
         outcome: outcome as JsonValue,
+        issuedAfter: null,
       });
       const record = await runOf(tx, this.id);
       if (record) effect(record);
@@ -245,40 +320,76 @@ export class Driver {
     this.deliver(seq, at, call.id, outcome);
   }
 
-  async snapshot(): Promise<RunRecord | undefined> {
-    return (await this.runtime.snapshot(WorkflowsDoc, this.context))?.runs[this.id];
+  refused(): string | null {
+    if (this.agents > MAX_AGENTS) return `agent(): a workflow starts at most ${MAX_AGENTS} agents`;
+    const { budget } = this.record as RunRecord;
+    if (budget !== null && this.spent >= budget)
+      return `agent(): the budget of ${budget} output tokens is spent`;
+    return null;
+  }
+
+  async admit(): Promise<void> {
+    if (this.inflight < this.lanes) {
+      this.inflight++;
+      return;
+    }
+    await new Promise<void>((resume) => this.queue.push(resume));
+  }
+
+  free(): void {
+    const next = this.queue.shift();
+    if (next) next();
+    else this.inflight--;
   }
 
   async live(call: CodemodeHostCall): Promise<void> {
     if (call.name !== '__agent')
-      return this.record(call, { ok: true, value: null }, (record) => noted(record, call.args));
-    const current = await this.snapshot();
-    const refused = refusal(current, this.inflight);
-    if (refused) return this.record(call, { ok: false, message: refused }, () => {});
-    this.inflight++;
+      return this.journalize(call, { ok: true, value: null }, (record) => noted(record, call.args));
+    if (this.agents > MAX_AGENTS)
+      return this.journalize(call, { ok: false, message: this.refused() as string }, () => {});
+    await this.admit();
+    const refused = this.refused();
     let outcome: CodemodeOutcome;
-    try {
-      outcome = { ok: true, value: await this.step(call, current as RunRecord) };
-    } catch (error) {
-      if (this.controller.signal.aborted) throw error;
-      outcome = failure(error);
-    } finally {
-      this.inflight--;
-    }
+    if (refused) outcome = { ok: false, message: refused };
+    else
+      try {
+        outcome = { ok: true, value: await this.step(call) };
+      } catch (error) {
+        if (this.controller.signal.aborted) {
+          this.free();
+          throw error;
+        }
+        outcome = failure(error);
+      }
     const tokens = spentOf(outcome);
-    return this.record(call, outcome, (record) => {
+    this.spent += tokens;
+    this.free();
+    return this.journalize(call, outcome, (record) => {
       record.spent += tokens;
+      if (refused) return;
       if (outcome.ok) record.agents.done++;
       else record.agents.failed++;
     });
   }
 
-  async step(call: CodemodeHostCall, record: RunRecord): Promise<JsonValue> {
-    const host = this.host;
-    const args = call.args as AgentCall;
-    const roles = await host.roles(this.scoped);
-    const planned = plan(args, roles);
-    const answer = await host.scoops.spawn(
+  created(call: CodemodeHostCall) {
+    return async (tx: Tx, made: Spawned) => {
+      Object.assign(await tx.doc(StepDoc, this.runtime.taskId, String(call.id), null), {
+        folder: made.folder,
+        task: made.tasks[0] as number,
+        conversation: made.conversation,
+      });
+      const current = await runOf(tx, this.id);
+      if (current) {
+        current.agents.started++;
+        current.agents.running.push(`scoop:${made.folder}`);
+      }
+    };
+  }
+
+  async spawn(call: CodemodeHostCall, planned: ReturnType<typeof plan>, limits: object) {
+    const record = this.record as RunRecord;
+    const answer = await this.host.scoops.spawn(
       {
         cone: record.cone,
         kind: 'sync',
@@ -289,35 +400,42 @@ export class Driver {
         ...(planned.model ? { model: planned.model } : {}),
         ...(planned.thinking ? { thinking: planned.thinking as never } : {}),
         prompts: [planned.prompt],
-        fromAgent: false,
+        fromAgent: record.fromAgent,
         request: `workflow:${this.id}:${call.id}`,
-        limits: roles.limits,
+        limits: limits as never,
+        taints: record.taints,
+        created: this.created(call),
       },
       this.scoped
     );
     if (answer.code !== 0) throw new StepError(answer.out.trim().replace(/^subagent: /, ''));
-    const folder = answer.out.trim();
-    const scoop = `scoop:${folder}`;
-    await this.runtime.commit(async (tx) => {
-      const current = await runOf(tx, this.id);
-      if (current && !current.agents.running.includes(scoop)) {
-        current.agents.started++;
-        current.agents.running.push(scoop);
-      }
-      return undefined;
-    }, this.scoped);
+    return { folder: answer.out.trim(), task: (answer.tasks as number[])[0] as number };
+  }
+
+  async step(call: CodemodeHostCall): Promise<JsonValue> {
+    const host = this.host;
+    const roles = await host.roles(this.scoped);
+    const planned = plan(call.args as AgentCall, roles);
+    const kept = await this.runtime.snapshot(
+      StepDoc,
+      this.runtime.taskId,
+      String(call.id),
+      this.scoped
+    );
+    const step = kept ?? (await this.spawn(call, planned, roles.limits));
+    const scoop = `scoop:${step.folder}`;
     try {
       const done = await settle(
         host,
-        folder,
-        (answer.tasks as number[])[0] as number,
+        step.folder,
+        step.task,
         planned,
         (task) => waitReport((id, using) => this.runtime.waitForTask(id, using), task, this.scoped),
         this.scoped
       );
       return { value: done.value, outputTokens: done.outputTokens } as unknown as JsonValue;
     } finally {
-      await cleanup(host, folder);
+      await cleanup(host, step.folder);
       await this.runtime
         .commit(async (tx) => {
           const current = await runOf(tx, this.id);
@@ -329,9 +447,9 @@ export class Driver {
     }
   }
 
-  async fingerprint(start: Start, value: string): Promise<void> {
-    if (start.fingerprint === value) return;
-    if (start.fingerprint !== null) {
+  async fingerprint(value: string): Promise<void> {
+    if (this.start.fingerprint === value) return;
+    if (this.start.fingerprint !== null) {
       this.halt('the sandbox changed since the run started, so it cannot resume');
       return;
     }
@@ -341,30 +459,30 @@ export class Driver {
     }, this.scoped);
   }
 
-  async execute(code: string, start: Start): Promise<CodemodeResult> {
-    const signal = this.controller.signal;
+  async execute(code: string): Promise<CodemodeResult> {
     const abort = () => this.controller.abort();
     this.runtime.signal.addEventListener('abort', abort, { once: true });
     this.context.abortSignal?.addEventListener('abort', abort, { once: true });
-    const calls: CodemodeHostCall[] = [];
+    const early: Event[] = [];
     let ready = false;
+    const emit = (event: Event) => {
+      if (ready) this.handle(event);
+      else early.push(event);
+    };
     const run = this.host.engine().start(code, {
-      startedAt: start.startedAt,
-      seed: start.seed,
+      startedAt: this.start.startedAt,
+      seed: this.start.seed,
       globals: GLOBALS,
-      signal,
-      onStarted: (value) => {
-        void this.fingerprint(start, value).catch(() => undefined);
-      },
-      onCall: (call) => {
-        if (ready) this.onCall(call);
-        else calls.push(call);
-      },
+      signal: this.controller.signal,
+      onStarted: (fingerprint) => emit({ kind: 'started', fingerprint }),
+      onCall: (call) => emit({ kind: 'call', call }),
+      onIdle: (seq, issued) => emit({ kind: 'idle', seq, issued }),
     });
     this.run = run;
     ready = true;
-    for (const call of calls.splice(0)) this.onCall(call);
+    for (const event of early.splice(0)) this.handle(event);
     const result = await run.result;
+    if (this.replaying()) this.halt(DIVERGED);
     this.controller.abort();
     await Promise.allSettled([...this.steps]);
     return result;
@@ -373,6 +491,26 @@ export class Driver {
 
 function seed(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0] as number;
+}
+
+async function finish(
+  runtime: Runtime,
+  driver: Driver,
+  result: CodemodeResult,
+  context: Context
+): Promise<void> {
+  const error = driver.stopped ?? (result.ok ? null : errorText(result));
+  await runtime.commit(async (tx) => {
+    const record = await runOf(tx, String(runtime.taskId));
+    if (record) {
+      record.status = error === null ? 'completed' : 'failed';
+      record.ended = runtime.now();
+      record.agents.running = [];
+      if (error === null) record.result = (result.ok ? (result.value ?? null) : null) as never;
+      else record.error = error;
+    }
+    return { status: 'terminal', outcome: { status: 'completed', result: null } };
+  }, context);
 }
 
 export function runTask(lookup: Lookup) {
@@ -390,25 +528,11 @@ export function runTask(lookup: Lookup) {
           return { status: 'running', checkpoint: { phase: 'run' } };
         }, context),
       async run(task, runtime, context) {
-        const host = await lookup();
-        const start = (await runtime.snapshot(StartDoc, runtime.taskId, context)) as Start;
-        const driver = new Driver(host, runtime, context);
-        await driver.load(start.count);
-        const result = await driver.execute(task.input.code, start);
+        const driver = new Driver(await lookup(), runtime, context);
+        await driver.load();
+        const result = await driver.execute(task.input.code);
         if (runtime.signal.aborted || context.abortSignal?.aborted) return;
-        const error = driver.stopped ?? (result.ok ? null : errorText(result));
-        await runtime.commit(async (tx) => {
-          const record = await runOf(tx, String(runtime.taskId));
-          if (record) {
-            record.status = error === null ? 'completed' : 'failed';
-            record.ended = runtime.now();
-            record.agents.running = [];
-            if (error === null)
-              record.result = (result.ok ? (result.value ?? null) : null) as never;
-            else record.error = error;
-          }
-          return { status: 'terminal', outcome: { status: 'completed', result: null } };
-        }, context);
+        await finish(runtime, driver, result, context);
       },
     },
     async abort(_task, runtime, context) {
