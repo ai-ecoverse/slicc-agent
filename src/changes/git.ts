@@ -67,6 +67,30 @@ export const STATUS = [
   '--ignore-submodules=all',
 ];
 
+export const BATCH_BYTES = 4 * MAX_TEXT;
+
+export interface Stored {
+  path: string;
+  oid: string;
+  size: number;
+}
+
+const CHECKED = /^([0-9a-f]+) (\S+) (\d+)$/;
+
+export function parseCheck(out: string, paths: readonly string[]): Stored[] | null {
+  const lines = out.split('\n');
+  if (lines.length !== paths.length + 1 || lines.at(-1) !== '') return null;
+  const found: Stored[] = [];
+  for (const [i, path] of paths.entries()) {
+    const line = lines[i] as string;
+    const match = CHECKED.exec(line);
+    if (match?.[2] === 'blob')
+      found.push({ path, oid: match[1] as string, size: Number(match[3]) });
+    else if (!match && !line.endsWith(' missing') && !line.endsWith(' ambiguous')) return null;
+  }
+  return found;
+}
+
 const NEWLINE = 10;
 const HEADER = /^[0-9a-f]+ (\S+) (\d+)$/;
 

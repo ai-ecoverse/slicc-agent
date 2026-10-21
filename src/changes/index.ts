@@ -3,15 +3,18 @@ import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Agents } from '../agents.ts';
 import { HOME } from '../kernel/env.ts';
 import {
+  BATCH_BYTES,
   type ChangesView,
   type FileChange,
   failure,
   joined,
   MAX_FILES,
+  MAX_TEXT,
   NO_GIT,
   NO_REPO,
   type Pending,
   parseBatch,
+  parseCheck,
   parseStatus,
   quote,
   relative,
@@ -19,6 +22,7 @@ import {
   SCAN_DEPTH,
   SCAN_ENTRIES,
   STATUS,
+  type Stored,
   scanned,
   shown,
   textOf,
@@ -97,6 +101,28 @@ async function discover(options: ChangesOptions, context: Context): Promise<stri
   );
 }
 
+const piped = (words: readonly string[], command: string) =>
+  `printf '%s\\n' ${words.map(quote).join(' ')} | ${command}`;
+
+async function shownOne(env: Env, repo: string, path: string, context: Context) {
+  const ran = await run(env, ['git', 'show', `:${path}`], repo, context);
+  return ran.code === 0 ? shown(ran.out) : null;
+}
+
+function chunked(items: readonly Stored[]): Stored[][] {
+  const out: Stored[][] = [];
+  let bytes = Infinity;
+  for (const item of items) {
+    if (bytes + item.size > BATCH_BYTES) {
+      out.push([]);
+      bytes = 0;
+    }
+    out.at(-1)?.push(item);
+    bytes += item.size;
+  }
+  return out;
+}
+
 async function befores(
   env: Env,
   repo: string,
@@ -106,26 +132,45 @@ async function befores(
   const paths = pending.filter((item) => item.status !== 'added').map((item) => item.path);
   const out = new Map<string, string | null>();
   if (!paths.length) return out;
-  const batch = paths.some((path) => path.includes('\n'))
+  const listing = paths.some((path) => path.includes('\n'))
     ? null
     : await run(
         env,
-        `printf '%s\\n' ${paths.map((path) => quote(`:${path}`)).join(' ')} | git cat-file --batch`,
+        piped(
+          paths.map((path) => `:${path}`),
+          'git cat-file --batch-check'
+        ),
         repo,
         context
       );
-  const parsed =
-    batch?.code === 0 && !batch.out.includes('\uFFFD')
-      ? parseBatch(new TextEncoder().encode(batch.out), paths.length)
-      : null;
-  for (const [i, path] of paths.entries()) {
-    if (parsed) {
-      const bytes = parsed[i];
-      out.set(path, bytes ? textOf(bytes) : null);
-      continue;
+  const checked = listing?.code === 0 ? parseCheck(listing.out, paths) : null;
+  if (!checked) {
+    for (const path of paths) out.set(path, await shownOne(env, repo, path, context));
+    return out;
+  }
+  for (const path of paths) out.set(path, null);
+  const small = checked.filter((item) => item.size <= MAX_TEXT);
+  for (const chunk of chunked(small)) {
+    const batch = await run(
+      env,
+      piped(
+        chunk.map((item) => item.oid),
+        'git cat-file --batch'
+      ),
+      repo,
+      context
+    );
+    const parsed =
+      batch.code === 0 && !batch.out.includes('\uFFFD')
+        ? parseBatch(new TextEncoder().encode(batch.out), chunk.length)
+        : null;
+    for (const [i, item] of chunk.entries()) {
+      const bytes = parsed?.[i];
+      out.set(
+        item.path,
+        parsed ? (bytes ? textOf(bytes) : null) : await shownOne(env, repo, item.path, context)
+      );
     }
-    const single = await run(env, ['git', 'show', `:${path}`], repo, context);
-    out.set(path, single.code === 0 ? shown(single.out) : null);
   }
   return out;
 }
