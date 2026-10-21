@@ -382,6 +382,45 @@ test("a guest run's workflow keeps its agent() steps under the guest gate: the s
   assert.equal(seen.results[1], 'never');
 });
 
+test("a scoop a guest run starts with agent from bash stays under the guest gate: the scoop's own bash is asked, and a denied one never runs", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    extra: [['scoop-say', '']],
+    steps: [
+      bash("agent --prompt 'bash touch /tmp/agent-guest'"),
+      answer('Delegated.'),
+      bash('test -e /tmp/agent-guest && echo ran || echo never'),
+      answer('Checked.'),
+    ],
+  });
+  const seen = await staged(page, 'a scoop a guest run starts', async () => {
+    const { until, open, mint, join, send, prompt, said, results, decide } = globalThis.r;
+    await open();
+    const guest = await join(await mint('user'));
+    await send(guest, 'Delegate it.');
+    const out = { asked: [] };
+    const first = await decide('once');
+    out.asked.push(`${first.tool}: ${first.summary}`);
+    const second = await decide('deny', 'Not from a scoop.');
+    out.asked.push(`${second.tool}: ${second.summary}`);
+    await until(() => said().includes('Delegated.'), 'the delegated run');
+    await prompt('Check the file.');
+    await until(() => said().includes('Checked.'), 'the owner check');
+    out.results = results();
+    await guest.close();
+    return out;
+  });
+  assert.deepEqual(seen.asked, [
+    "bash: agent --prompt 'bash touch /tmp/agent-guest'",
+    'bash: touch /tmp/agent-guest',
+  ]);
+  assert.match(
+    seen.results[0],
+    /^ran: [\s\S]*The owner declined this tool call in a run a guest started\. Not from a scoop\./
+  );
+  assert.equal(seen.results[1], 'never');
+});
+
 test('an owner steer into a guest run still leaves the run gated', async (t) => {
   const page = await chrome.page(t);
   await boot(page, {

@@ -175,10 +175,16 @@ export async function runTaints(
   const inherited = (await harness.snapshot(GuestTaintDoc, conversationId, context))?.taints ?? [];
   const seats = (await harness.snapshot(GuestsDoc, context))?.seats ?? {};
   const found = inputs.length ? await taintsOf(inputs, seats, harness, context) : [];
-  return [
+  return distinctTaints([
     ...found.map((taint) => ({ seat: taint.seat?.id ?? null, tier: taint.tier })),
     ...inherited,
-  ];
+  ]);
+}
+
+export function distinctTaints(taints: readonly InheritedTaint[]): InheritedTaint[] {
+  const kept = new Map<string, InheritedTaint>();
+  for (const taint of taints) kept.set(`${taint.seat}\n${taint.tier}`, taint);
+  return [...kept.values()];
 }
 
 function inheritedTaints(

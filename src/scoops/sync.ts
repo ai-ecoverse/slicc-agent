@@ -16,6 +16,7 @@ import {
   prompts,
   readText,
   role,
+  taintsOf,
   unsupported,
 } from './cli.ts';
 import type { ReportResult } from './extension.ts';
@@ -337,6 +338,7 @@ export async function runSync(
   if (isAnswer(chosen)) return chosen;
   const found = await role(deps, parsed);
   if (found.error) return found.error;
+  const taints = await taintsOf(deps, request, who, context);
   await share(deps, request, planned.shares, context);
   const spawned = await deps.scoops.spawn(
     {
@@ -359,6 +361,7 @@ export async function runSync(
       fromAgent: who.fromAgent,
       request: request.id,
       limits: found.roles.limits,
+      taints,
     },
     context
   );
