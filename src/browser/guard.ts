@@ -14,7 +14,7 @@ const SCHEMED = /^[a-z][a-z0-9+.-]*:/i;
 const EMBEDDED = /[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>(){}\\]+/gi;
 const RELATIVE = /(?<![:\w/])\/\/[^\s'"`<>(){}\\/]+/g;
 const PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|-{1,2}[A-Za-z0-9-]+)=/;
-const HOSTLIKE = /^[^\s/?#]*\.[^\s/?#]*(?:[/?#]\S*)?$/;
+const HOSTLIKE = /^[^\s/?#]*(?:\.|%2e|[\u3002\uff0e\uff61])[^\s/?#]*(?:[/?#]\S*)?$/i;
 
 export interface Candidate {
   url: string;
