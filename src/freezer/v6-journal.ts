@@ -53,9 +53,11 @@ function headerOf(value: unknown): Header | undefined {
     : undefined;
 }
 
+const UNREAD = Symbol('unread');
+
 async function jsonIn(env: ExecutionEnv, path: string): Promise<unknown> {
   const read = await env.readTextFile(path, BACKGROUND_CONTEXT);
-  if (!read.ok) return undefined;
+  if (!read.ok) return (await exists(env, path)) === false ? undefined : UNREAD;
   try {
     return JSON.parse(read.value);
   } catch {
@@ -73,15 +75,17 @@ async function stepsIn(env: ExecutionEnv, dir: string): Promise<Step[] | undefin
     .sort((a, b) => a - b);
   const steps: Step[] = [];
   for (const n of numbers) {
-    const step = stepOf(await jsonIn(env, `${dir}/${STEPS}/${n}.json`));
+    const value = await jsonIn(env, `${dir}/${STEPS}/${n}.json`);
+    if (value === UNREAD) return undefined;
+    const step = stepOf(value);
     if (step) steps.push(step);
   }
   return steps;
 }
 
-async function exists(env: ExecutionEnv, path: string): Promise<boolean> {
+async function exists(env: ExecutionEnv, path: string): Promise<boolean | undefined> {
   const found = await env.exists(path, BACKGROUND_CONTEXT);
-  return found.ok && found.value;
+  return found.ok ? found.value : undefined;
 }
 
 async function bytesOf(env: ExecutionEnv, path: string | null): Promise<Uint8Array | null> {
@@ -94,7 +98,7 @@ const done = (result: { ok: boolean }) => result.ok;
 
 async function gone(env: ExecutionEnv, path: string, recursive = true): Promise<boolean> {
   const removed = await env.remove(path, { recursive, force: true }, BACKGROUND_CONTEXT);
-  return removed.ok || !(await exists(env, path));
+  return removed.ok || (await exists(env, path)) === false;
 }
 
 async function undoStep(deps: Undoing, step: Step, owners: Map<string, string[]>) {
@@ -107,7 +111,9 @@ async function undoStep(deps: Undoing, step: Step, owners: Map<string, string[]>
   }
   if ('moved' in step) {
     const there = await exists(env, step.moved);
-    if (!there && !(await exists(env, step.to))) return true;
+    const to = await exists(env, step.to);
+    if (there === undefined || to === undefined) return false;
+    if (!there && !to) return true;
     const back = there || done(await env.renameFile(step.to, step.moved, BACKGROUND_CONTEXT));
     if (back && step.mode) owners.set(step.mode, [...(owners.get(step.mode) ?? []), step.moved]);
     return back;
@@ -168,7 +174,9 @@ export async function undo(deps: Undoing, header: Header, steps: readonly Step[]
 }
 
 async function settle(deps: Undoing, dir: string) {
-  const header = headerOf(await jsonIn(deps.env, `${dir}/${HEADER}`));
+  const value = await jsonIn(deps.env, `${dir}/${HEADER}`);
+  if (value === UNREAD) return false;
+  const header = headerOf(value);
   if (!header) return true;
   if (deps.state().imports?.[header.key]?.at !== header.at) {
     const steps = await stepsIn(deps.env, dir);
@@ -180,7 +188,7 @@ async function settle(deps: Undoing, dir: string) {
 
 export async function sweep(deps: Undoing): Promise<string[]> {
   const listed = await deps.env.listDir(IMPORTS_DIR, BACKGROUND_CONTEXT);
-  if (!listed.ok) return [];
+  if (!listed.ok) return (await exists(deps.env, IMPORTS_DIR)) === false ? [] : [IMPORTS_DIR];
   const kept: string[] = [];
   for (const item of listed.value) {
     if (item.kind !== 'directory') continue;
