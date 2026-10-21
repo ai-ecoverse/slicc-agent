@@ -11,6 +11,7 @@ import type { Layout } from '../layout.ts';
 import { opfsFile } from '../opfs-pool.ts';
 import { TITLE_TURNS } from '../titles/extension.ts';
 import { IMPORTS_DIR } from './paths.ts';
+import { Journal, sweep, type Undoing } from './v6-journal.ts';
 import { type Notes, place, reportOf } from './v6-place.ts';
 import {
   checkLicks,
@@ -932,23 +933,27 @@ async function importOpened(
 ): Promise<ImportResult> {
   const now = (deps.now ?? Date.now)();
   const date = day(now);
-  const writer = new Writer(deps.env, context, options.signal);
   const { dir } = opened;
-  const stage = dir ?? `${IMPORTS_DIR}/${opened.key.replace('#', '-part')}`;
+  const own = `${IMPORTS_DIR}/${opened.key.replace('#', '-part')}`;
+  const stage = dir ?? own;
+  const journal = new Journal(undoing(deps), own);
+  const writer = new Writer(deps.env, context, options.signal, journal);
   const total = opened.manifest.files
     .filter((file) => !opened.sources.has(file.path))
     .reduce((sum, file) => sum + file.size, 0);
   const room = await (deps.room ?? storageRoom)();
   if (room !== undefined && room < (dir ? 1 : 2) * total)
     throw new ImportError('there is not enough free storage for this import');
+  let keep = false;
   try {
-    if (!dir)
-      await writer.sh(
-        `mkdir -p ${IMPORTS_DIR} && chmod 700 ${IMPORTS_DIR} && rm -rf ${quote(stage)} && mkdir -p ${quote(stage)}`
-      );
+    await writer.sh(
+      `mkdir -p ${IMPORTS_DIR} && chmod 700 ${IMPORTS_DIR} && rm -rf ${quote(own)} && mkdir -p ${quote(own)}`
+    );
     const data = await verify(opened, writer, stage, options.show);
     const parsed = await parse(opened, data);
     await assign(deps, opened, parsed.units, options.again, date, context);
+    const cones = parsed.units.filter((unit) => unit.fresh).map((unit) => unit.cone);
+    await journal.open({ key: opened.key, at: now, cones, source: dir }, context);
     const notes: Notes = {
       lines: [],
       skipped: [],
@@ -979,11 +984,14 @@ async function importOpened(
       await settled(opened, run.at, writer);
       made = await commit(deps, opened, parsed.units, now, context);
     } catch (error) {
-      await writer.rollback();
+      keep = !(await writer.rollback());
       throw error;
     }
+    keep =
+      dir !== null &&
+      !(await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT)).ok;
+    if (!keep) await journal.close().catch(() => undefined);
     const report = await reportOf(run, made).catch((error: Error) => `nowhere (${error.message})`);
-    if (dir) await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT);
     const split = accountsSplit(opened.manifest.providers, deps.providers);
     const { origin } = opened.manifest.producer;
     const settings = said(split.settings, split.lacking);
@@ -997,7 +1005,7 @@ async function importOpened(
       error: null,
     };
   } finally {
-    if (!dir) await deps.env.remove(stage, { recursive: true, force: true }, BACKGROUND_CONTEXT);
+    if (!keep) await deps.env.remove(own, { recursive: true, force: true }, BACKGROUND_CONTEXT);
   }
 }
 
@@ -1021,8 +1029,13 @@ async function sourceOf(
   return bytesSource(read.value);
 }
 
+function undoing(deps: ImportDeps): Undoing {
+  return { env: deps.env, users: deps.users, state: () => deps.agents.state() };
+}
+
 export interface Importer {
   readonly progress: ReplicatedState<ImportProgress>;
+  readonly swept: Promise<void>;
   run(
     source: ImportSource,
     options: { again?: boolean; preview?: boolean },
@@ -1035,6 +1048,8 @@ export const IDLE: ImportProgress = { phase: 'idle', done: 0, total: 0, text: ''
 
 export function createImporter(deps: ImportDeps): Importer {
   const progress = replicatedState<ImportProgress>(IDLE);
+  let sweeping = sweep(undoing(deps)).catch(() => [IMPORTS_DIR]);
+  const swept = sweeping.then(() => undefined);
   let running: AbortController | undefined;
   const result = (fields: Partial<ImportResult>): ImportResult => ({
     done: false,
@@ -1048,11 +1063,14 @@ export function createImporter(deps: ImportDeps): Importer {
   });
   return {
     progress,
+    swept,
     cancel: () => running?.abort(),
     async run(source, options, context) {
       if (running) return result({ error: 'an import is already running' });
       const controller = new AbortController();
       running = controller;
+      sweeping = sweeping.then(() => sweep(undoing(deps))).catch(() => [IMPORTS_DIR]);
+      const kept = await sweeping;
       const moving = 'inPlace' in source;
       const writing = moving ? 'Moving' : 'Importing';
       const show: Show = (phase, done, total) =>
@@ -1070,7 +1088,8 @@ export function createImporter(deps: ImportDeps): Importer {
           : await openProfile(await sourceOf(deps, upload ?? (source as ReadSource), context));
         const preview = await previewOf(opened, deps.agents.state(), deps.providers);
         if (options.preview) {
-          const writer = new Writer(deps.env, context, controller.signal);
+          const journal = new Journal(undoing(deps), IMPORTS_DIR);
+          const writer = new Writer(deps.env, context, controller.signal, journal);
           await parse(opened, await verify(opened, writer, null, show));
           progress.replace(BACKGROUND_CONTEXT, IDLE);
           return result({ preview, text: preview.text, line: `${preview.line}\n` });
@@ -1081,6 +1100,10 @@ export function createImporter(deps: ImportDeps): Importer {
             text: `Already imported on ${day(preview.already)}.`,
             line: `Already imported on ${day(preview.already)}; freezer import --again makes fresh copies.\n`,
           });
+        if (kept.length)
+          throw new ImportError(
+            `an earlier import couldn't be rolled back completely; its journal is in ${kept.join(', ')}`
+          );
         const done = await importOpened(
           deps,
           opened,
