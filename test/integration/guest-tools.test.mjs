@@ -683,11 +683,34 @@ test('the guest tool call dialog offers Always allow only while the policy does,
       dialog().querySelector(`[data-action="${action}"]`).click();
       await until(() => !dialog(), 'the dialog to close');
     };
+    const trail = [];
+    const sample = () => {
+      const open = dialog();
+      const shownNow = open
+        ? [
+            open.dataset.approval,
+            ...[...open.querySelectorAll('[data-action]')].map((node) => node.dataset.action),
+          ].join(',')
+        : '-';
+      const listed = model.approvals
+        .list()
+        .map((item) => `${item.id}:${item.always}`)
+        .join(' ');
+      const items = (local.approvals.value ?? [])
+        .map((item) => `${item.id}:${item.state}:${item.always}`)
+        .join(' ');
+      const frame = `${shownNow} | ${listed} | ${items}`;
+      if (trail.at(-1)?.[1] !== frame) trail.push([Math.round(performance.now()), frame]);
+    };
+    const sampling = setInterval(sample, 5);
+    model.approvals.on('approvals', sample);
+    local.approvals.subscribe(sample);
     const shown = async () => {
       await until(() => dialog()?.querySelector('[data-action="once"]'), 'the whole request seen');
       return {
         always: Boolean(dialog().querySelector('[data-action="always"]')),
         text: dialog().textContent.replace(/\s+/g, ' '),
+        at: Math.round(performance.now()),
       };
     };
     const seat = await mint('user');
@@ -711,12 +734,22 @@ test('the guest tool call dialog offers Always allow only while the policy does,
     const answers = local.approvals.value
       .filter((item) => item.kind === 'guest-tool')
       .map((item) => [item.always, item.state, item.answer ?? null]);
-    const out = { off, on, rules, answers, results: results() };
+    clearInterval(sampling);
+    const out = { off, on, rules, answers, results: results(), trail };
     await guest.close();
     return out;
   });
-  assert.equal(seen.off.always, false, 'no Always while the policy is off');
-  assert.equal(seen.on.always, true, 'Always once the policy offers it');
+  const trail = seen.trail.map(([at, frame]) => `${at} ${frame}`).join('\n');
+  assert.equal(
+    seen.off.always,
+    false,
+    `no Always while the policy is off (read at ${seen.off.at})\n${trail}`
+  );
+  assert.equal(
+    seen.on.always,
+    true,
+    `Always once the policy offers it (read at ${seen.on.at})\n${trail}`
+  );
   assert.match(seen.on.text, /run exactly this bash call for Anna without asking again/);
   assert.deepEqual(seen.rules, ['bash {"command":"echo always"}']);
   assert.deepEqual(seen.answers, [
