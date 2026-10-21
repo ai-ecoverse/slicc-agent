@@ -486,6 +486,7 @@ async function start(
   opened = agent;
   await people?.start(agent.agents);
   const freezer = freezerOf(agent, { home, memory, titles, people, users, ready, licks });
+  await freezer.swept;
   const sources = licks.attach(agent, {
     env: home,
     home: HOME,
@@ -497,7 +498,6 @@ async function start(
   await sources.start(BACKGROUND_CONTEXT);
   const booted = { version: facts.version, boot: await kernelBoot(client) };
   await sources.boot(booted, BACKGROUND_CONTEXT);
-  await freezer.swept;
   const skillsRuntime = await skills.attach(
     {
       env: home,
