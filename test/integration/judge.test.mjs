@@ -417,7 +417,7 @@ test("aborting the request stops the judge and withdraws the item, and after a r
   const page = await chrome.page(t);
   const hold = encodeURIComponent(JSON.stringify({ hold: true }));
   await boot(page, {
-    query: `judge-step=${hold}&judge-step=${hold}&persist=/.slicc/judge-${Date.now()}`,
+    query: `reply-judged&judge-step=${hold}&judge-step=${hold}&persist=/.slicc/judge-${Date.now()}`,
     files: { [SETTINGS]: judgeSettings('judge/j-1') },
   });
   const seen = await staged(page, 'aborting the request stops the', async () => {
@@ -441,7 +441,7 @@ test("aborting the request stops the judge and withdraws the item, and after a r
       message('Fix the link.', { expiresAt: Date.now() + 120_000 }),
       'second'
     );
-    await until(async () => (await judged()).length === 1, 'the judge to be asked again');
+    await until(async () => (await judged()).length === 2, 'the judge to be asked again');
     await local.close();
     await owner.restart();
     local = await owner.connect();
