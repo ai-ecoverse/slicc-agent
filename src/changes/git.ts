@@ -57,6 +57,66 @@ export function parseStatus(out: string): Pending[] {
   return found;
 }
 
+export const STATUS = [
+  'git',
+  '--no-optional-locks',
+  'status',
+  '--porcelain=v1',
+  '-z',
+  '--untracked-files=all',
+  '--ignore-submodules=all',
+];
+
+export const BATCH_BYTES = 4 * MAX_TEXT;
+
+export interface Stored {
+  path: string;
+  oid: string;
+  size: number;
+}
+
+const CHECKED = /^([0-9a-f]+) (\S+) (\d+)$/;
+
+export function parseCheck(out: string, paths: readonly string[]): Stored[] | null {
+  const lines = out.split('\n');
+  if (lines.length !== paths.length + 1 || lines.at(-1) !== '') return null;
+  const found: Stored[] = [];
+  for (const [i, path] of paths.entries()) {
+    const line = lines[i] as string;
+    const match = CHECKED.exec(line);
+    if (match?.[2] === 'blob')
+      found.push({ path, oid: match[1] as string, size: Number(match[3]) });
+    else if (!match && !line.endsWith(' missing') && !line.endsWith(' ambiguous')) return null;
+  }
+  return found;
+}
+
+const NEWLINE = 10;
+const HEADER = /^[0-9a-f]+ (\S+) (\d+)$/;
+
+export function parseBatch(bytes: Uint8Array, count: number): (Uint8Array | null)[] | null {
+  const decoder = new TextDecoder();
+  const out: (Uint8Array | null)[] = [];
+  let at = 0;
+  while (out.length < count) {
+    const end = bytes.indexOf(NEWLINE, at);
+    if (end < 0) return null;
+    const header = decoder.decode(bytes.subarray(at, end));
+    at = end + 1;
+    if (header.endsWith(' missing') || header.endsWith(' ambiguous')) {
+      out.push(null);
+      continue;
+    }
+    const match = HEADER.exec(header);
+    if (!match) return null;
+    const size = Number(match[2]);
+    if (bytes[at + size] !== NEWLINE) return null;
+    out.push(match[1] === 'blob' ? bytes.slice(at, at + size) : null);
+    at += size + 1;
+  }
+  return at === bytes.length ? out : null;
+}
+
 export function textOf(bytes: Uint8Array): string | null {
   if (bytes.length > MAX_TEXT || bytes.includes(0)) return null;
   try {

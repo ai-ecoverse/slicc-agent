@@ -151,21 +151,13 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
       );
       const client = await attachKernel(await kernel.connect());
       const setup = [
+        'git --version > /tmp/version.txt 2> /tmp/install.log',
         'mkdir -p /home/proj && cd /home/proj && git init -q',
-        'git config user.email test@example.com && git config user.name Test',
-        "printf 'one\\n' > a.txt && printf 'bye\\n' > gone.txt && git add -A && git commit -qm init",
+        "printf 'one\\n' > a.txt && printf 'bye\\n' > gone.txt && git add -A",
+        'git -c user.email=test@example.com -c user.name=Test commit -qm init',
         "printf 'two\\n' > a.txt && rm gone.txt && printf 'hi\\n' > new.txt",
       ].join(' && ');
       const params = new URLSearchParams([
-        [
-          'tool',
-          JSON.stringify({
-            name: 'bash',
-            args: {
-              command: 'git --version > /tmp/version.txt 2> /tmp/install.log',
-            },
-          }),
-        ],
         ['tool', JSON.stringify({ name: 'bash', args: { command: setup } })],
         ['answer', 'Done.'],
       ]);
