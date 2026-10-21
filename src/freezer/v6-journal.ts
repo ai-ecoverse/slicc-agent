@@ -54,6 +54,7 @@ function headerOf(value: unknown): Header | undefined {
 }
 
 const UNREAD = Symbol('unread');
+const ABSENT = new Set(['not_found', 'not_directory']);
 
 async function jsonIn(env: ExecutionEnv, path: string): Promise<unknown> {
   const read = await env.readTextFile(path, BACKGROUND_CONTEXT);
@@ -85,7 +86,8 @@ async function stepsIn(env: ExecutionEnv, dir: string): Promise<Step[] | undefin
 
 async function exists(env: ExecutionEnv, path: string): Promise<boolean | undefined> {
   const found = await env.exists(path, BACKGROUND_CONTEXT);
-  return found.ok ? found.value : undefined;
+  if (found.ok) return found.value;
+  return ABSENT.has(found.error.code) ? false : undefined;
 }
 
 async function bytesOf(env: ExecutionEnv, path: string | null): Promise<Uint8Array | null> {
