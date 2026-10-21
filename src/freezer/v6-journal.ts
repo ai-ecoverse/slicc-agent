@@ -195,9 +195,7 @@ export async function sweep(deps: Undoing): Promise<string[]> {
   for (const item of listed.value) {
     if (item.kind !== 'directory') continue;
     const dir = `${IMPORTS_DIR}/${item.name}`;
-    if (await settle(deps, dir))
-      await deps.env.remove(dir, { recursive: true, force: true }, BACKGROUND_CONTEXT);
-    else kept.push(dir);
+    if (!((await settle(deps, dir)) && (await gone(deps.env, dir)))) kept.push(dir);
   }
   return kept;
 }
