@@ -658,7 +658,13 @@ async function detach(core: Core, tasks: readonly number[], target: string, cont
   }, context);
 }
 
-async function note(core: Core, id: string, text: string, context: Context): Promise<Answer> {
+async function note(
+  core: Core,
+  id: string,
+  text: string,
+  taints: readonly InheritedTaint[],
+  context: Context
+): Promise<Answer> {
   const { agents, licks } = await core.host;
   const record = agents.state().scoops[id];
   if (!record || !live(record)) return missing(id);
@@ -671,6 +677,7 @@ async function note(core: Core, id: string, text: string, context: Context): Pro
       text: `[scoop ${label} progress]`,
       body: text,
       target: `cone:${record.cone}`,
+      ...(taints.length ? { taints } : {}),
     },
     context
   );
@@ -682,7 +689,9 @@ export function createScoops(host: Promise<ScoopsHost>, tasks: () => ScoopTasks)
   return {
     detach: (made: readonly number[], target: string, context: Context) =>
       detach(core, made, target, context),
-    note: (id: string, text: string, context: Context) => note(core, id, text, context),
+    note: (id: string, text: string, taints: readonly InheritedTaint[], context: Context) =>
+      note(core, id, text, taints, context),
+    lineage: async (pid: number | null) => (await core.host).groups?.lineage(pid),
     spawn: (request: SpawnRequest, context: Context) => spawn(core, request, context),
     feed: (id: string, prompt: string, options: FeedOptions, context: Context) =>
       feed(core, id, prompt, options, context),

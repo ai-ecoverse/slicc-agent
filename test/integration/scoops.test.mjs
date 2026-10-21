@@ -225,14 +225,24 @@ test('with per-user kernel clients, a scoop report is written as the cone, so th
 test("a scoop's notify card reads as its one-line result, or says it failed, and keeps the raw line and report for the agent", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
+  const spawn = (name, prompt) => ({
+    tool: { name: 'bash', args: { command: `subagent spawn --name ${name} --prompt "${prompt}"` } },
+  });
   const steps = [
-    { answer: 'Found **two** bugs in `secret list`.\n\nDetails follow.' },
-    { answer: 'Noted.' },
-    { error: 'boom' },
-    { answer: 'Noted again.' },
-  ]
-    .map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`)
-    .join('&');
+    ...[
+      spawn('auditor', 'Audit it'),
+      { answer: 'Spawned.' },
+      { answer: 'Noted.' },
+      spawn('breaker', 'Break it'),
+      { answer: 'Spawned again.' },
+      { answer: 'Noted again.' },
+      { answer: 'Spare.' },
+    ].map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`),
+    ...[
+      { gate: 'audit', answer: 'Found **two** bugs in `secret list`.\n\nDetails follow.' },
+      { gate: 'break', error: 'boom' },
+    ].map((step) => `scoop-step=${encodeURIComponent(JSON.stringify(step))}`),
+  ].join('&');
   await staged(
     page,
     'a scoop’s notify card reads',
@@ -241,12 +251,14 @@ test("a scoop's notify card reads as its one-line result, or says it failed, and
       await import('/dist-test/page.js');
       const kernel = await bootKernel();
       window.owner = await startTracked({
-        worker: () => new Worker(`/dist-test/main-worker.js?${steps}`, { type: 'module' }),
+        worker: () => {
+          window.worker = new Worker(`/dist-test/main-worker.js?${steps}`, { type: 'module' });
+          return window.worker;
+        },
         kernel: { connect: () => kernel.connect() },
       });
-      window.agent = createAgentModel(await window.owner.connect(), {
-        storage: localStorage,
-      }).agent;
+      window.connection = await window.owner.connect();
+      window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
       await window.agent.ready();
       window.sh = (command) => kernel.run(['bash', '-c', command]);
       window.cards = () =>
@@ -268,10 +280,10 @@ test("a scoop's notify card reads as its one-line result, or says it failed, and
     60000,
     async () => (await window.sh('test -x /usr/local/bin/agent')).status === 0
   );
-  const first = await page.evaluate(() =>
-    window.sh('SLICC_AGENT=cone:cone subagent spawn --name auditor --prompt "Audit it"')
-  );
-  assert.equal(first.status, 0, first.stderr);
+  await page.evaluate(async () => {
+    await window.connection.prompt('Spawn an auditor.');
+    window.worker.postMessage({ gate: 'audit' });
+  });
   const [done] = await page.within(60000, () =>
     window.cards().length === 1 && !window.agent.busy(window.agent.active())
       ? window.cards()
@@ -283,10 +295,10 @@ test("a scoop's notify card reads as its one-line result, or says it failed, and
   assert.equal(done.text, '[scoop auditor (scoop) completed]');
   assert.ok(done.body.startsWith(`Output: ${done.report} (3 lines)`), done.body);
   assert.match(done.body, /Found \*\*two\*\* bugs in `secret list`\./);
-  const second = await page.evaluate(() =>
-    window.sh('SLICC_AGENT=cone:cone subagent spawn --name breaker --prompt "Break it"')
-  );
-  assert.equal(second.status, 0, second.stderr);
+  await page.evaluate(async () => {
+    await window.connection.prompt('Spawn a breaker.');
+    window.worker.postMessage({ gate: 'break' });
+  });
   const cards = await page.within(60000, () =>
     window.cards().length === 2 ? window.cards() : undefined
   );

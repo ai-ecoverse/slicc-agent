@@ -1,6 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import type { Conversation, Harness, TaskId } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
+import type { InheritedTaint } from '../guests/guard.ts';
 import type { Activity } from '../kernel/activity.ts';
 import type { Jobs } from '../kernel/jobs.ts';
 import { ROOT_USER } from '../layout.ts';
@@ -61,6 +62,7 @@ export interface WebhookDelivery {
   body: unknown;
   verified?: boolean;
   attachment?: Attachment;
+  taints?: readonly InheritedTaint[];
 }
 
 export async function withAttachment(
@@ -143,6 +145,7 @@ export function webhookLick(
     coalesce: false,
     ...(delivery.id ? { eventId: delivery.id } : {}),
     ...(entry.triage ? { triage: entry.triage } : {}),
+    ...(delivery.taints?.length ? { taints: delivery.taints } : {}),
   };
 }
 

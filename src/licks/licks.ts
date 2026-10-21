@@ -5,6 +5,7 @@ import {
   type Harness,
   type SubmissionId,
 } from '@earendil-works/pi-durable';
+import { distinctTaints, type InheritedTaint, LickTaintDoc } from '../guests/guard.ts';
 import { scrubTexts } from '../secrets/scrub.ts';
 import {
   clip,
@@ -35,6 +36,7 @@ export interface LickEvent {
   triage?: string;
   summary?: string;
   report?: string;
+  taints?: readonly InheritedTaint[];
 }
 
 function card(event: LickEvent): Pick<Lick, 'summary' | 'report'> {
@@ -48,7 +50,12 @@ type Pending = {
   lick: Lick;
   items: string[];
   body: string | null;
+  taints?: InheritedTaint[];
 };
+
+function tainted(taints: readonly InheritedTaint[]): Pick<Pending, 'taints'> {
+  return taints.length ? { taints: distinctTaints(taints) } : {};
+}
 
 type Queue = {
   submission: number | null;
@@ -107,6 +114,7 @@ export function frozenNotice(event: LickEvent, blocked: Blocked): LickEvent {
     target: 'cone',
     severity: 'warn',
     eventId: `${blocked.id}|${event.target}|${event.channel}|${event.source}|${blocked.at}`,
+    ...(event.taints ? { taints: event.taints } : {}),
   };
 }
 
@@ -147,6 +155,7 @@ function merge(pending: Pending, event: LickEvent, now: number): Pending {
   for (const item of event.items ?? []) if (!items.includes(item)) items.push(item);
   const { severity: _, summary: __, report: ___, ...lick } = pending.lick;
   const severity = strongest(pending.lick.severity, event.severity);
+  const taints = tainted([...(pending.taints ?? []), ...(event.taints ?? [])]);
   return {
     lick: {
       ...lick,
@@ -159,6 +168,7 @@ function merge(pending: Pending, event: LickEvent, now: number): Pending {
     },
     items,
     body: event.body ?? pending.body,
+    ...taints,
   };
 }
 
@@ -178,6 +188,7 @@ function fresh(event: LickEvent, now: number, listed: LickAction[] | undefined):
     },
     items: [...new Set(event.items ?? [])],
     body: event.body ?? null,
+    ...tainted(event.taints ?? []),
   };
 }
 
@@ -199,6 +210,14 @@ export async function scrubbedLick(event: LickEvent): Promise<LickEvent> {
   if (event.items) out.items = scrubbed.slice(fields.length);
   if (out.summary !== undefined) out.summary = clip(out.summary);
   return out;
+}
+
+async function marked(harness: Harness, pending: Pending, id: string, context: Context) {
+  const taints = pending.taints;
+  if (!taints) return;
+  await harness.commit(async (tx) => {
+    (await tx.doc(LickTaintDoc)).licks[id] = taints;
+  }, context);
 }
 
 export function createLicks(host: Promise<LicksHost>): Licks {
@@ -252,6 +271,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     const target = key.split('|')[0] as LickTarget;
     const conversation = await resolve(target, queue.pending.lick.channel, context);
     if (runnable && !(await runnable(conversation, context))) return;
+    await marked(harness, queue.pending, lick.id, context);
     const submission = await conversation.submit(
       {
         type: 'input',

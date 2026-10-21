@@ -1,5 +1,5 @@
 import type { Context } from '@earendil-works/chord';
-import { type ConversationId, type Harness, LiveDoc } from '@earendil-works/pi-durable';
+import type { ConversationId, Harness } from '@earendil-works/pi-durable';
 import { type AgentsState, live } from '../agents.ts';
 import { distinctTaints, type InheritedTaint, runTaints } from '../guests/guard.ts';
 
@@ -36,10 +36,7 @@ export async function callerTaints(
   }
   if (claim) throw new Error(`there is no agent ${claim} to ask for`);
   const found: InheritedTaint[] = [];
-  for (const conversation of conversations(state)) {
-    const id = conversation as ConversationId;
-    if ((await harness.snapshot(LiveDoc, id, context))?.run)
-      found.push(...(await runTaints(harness, id, context)));
-  }
+  for (const conversation of conversations(state))
+    found.push(...(await runTaints(harness, conversation as ConversationId, context)));
   return distinctTaints(found);
 }

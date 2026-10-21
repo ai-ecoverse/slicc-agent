@@ -1,4 +1,5 @@
 import type { KernelClient, KernelProcess } from './client.ts';
+import { type Lineage, spawns } from './lineage.ts';
 
 export const REFUSED = new Set(['ESRCH', 'EPERM', 'ENOSYS']);
 
@@ -12,15 +13,18 @@ export interface ProcessGroups {
   reserve(owner: number): () => void;
   refused(owner: number, code: string): void;
   signal(owner: number, signal?: string): Promise<number[]>;
+  lineage(pid: number | null): Promise<Lineage | undefined>;
 }
 
-export function processGroups(client: Pick<KernelClient, 'kill'>): ProcessGroups {
+export function processGroups(client: Pick<KernelClient, 'kill' | 'ps'>): ProcessGroups {
+  const spawned = spawns(client);
   const groups = new Map<number, Set<number>>();
   const shared = new Map<number, number>();
   const leading = new Map<number, Promise<void>>();
   let joining = true;
   return {
     track(owner, process) {
+      spawned.started(process, owner);
       const set = groups.get(owner) ?? new Set<number>();
       groups.set(owner, set);
       set.add(process.pgid);
@@ -74,6 +78,7 @@ export function processGroups(client: Pick<KernelClient, 'kill'>): ProcessGroups
       shared.delete(owner);
       return signalled;
     },
+    lineage: spawned.lineage,
   };
 }
 

@@ -238,8 +238,10 @@ const gated = (name, message) => async (context, options, state, model) => {
   return recorded(message)(context, options, state, model);
 };
 const scoopSteps = params.getAll('scoop-step').map((spec) => {
-  const { gate: name, answer } = JSON.parse(spec);
-  const message = fauxAssistantMessage(answer);
+  const { gate: name, answer, error } = JSON.parse(spec);
+  const message = error
+    ? fauxAssistantMessage([], { stopReason: 'error', errorMessage: error })
+    : fauxAssistantMessage(answer);
   return name ? gated(name, message) : recorded(message);
 });
 const steps = [

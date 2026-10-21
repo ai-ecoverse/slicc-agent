@@ -13,7 +13,7 @@ const helpers = () => {
     window.listening.add(look);
     return () => window.listening.delete(look);
   };
-  window.setup = async (query, now) => {
+  window.setup = async (query, now, users = false) => {
     await import('/dist-test/page.js');
     stage('the kernel');
     const { bootKernel } = await import('/kernel.js');
@@ -29,7 +29,11 @@ const helpers = () => {
         window.worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' });
         return window.worker;
       },
-      kernel: { connect: () => window.kernel.connect() },
+      kernel: {
+        connect: (options) =>
+          window.kernel.connect(options?.user ? { user: options.user } : undefined),
+        ...(users ? { users: window.kernel.users } : {}),
+      },
     });
     window.connection = await window.owner.connect();
     window.remote = remoteControl(window.connection);
@@ -44,7 +48,7 @@ const helpers = () => {
     when([window.streams, ...agentSources(window.connection), every(1000)], check, what);
   window.helper = (state) =>
     window.watching(async () => {
-      const listed = await window.sh('SLICC_AGENT=cone:cone subagent list');
+      const listed = await window.sh('subagent list');
       return new RegExp(`^helper\t.*\t${state}$`, 'm').test(listed.stdout);
     }, `the helper ${state}`);
   window.follow = async (remote = window.remote, request = { busy: true }) => {
@@ -209,10 +213,15 @@ test('a scoop-notify lick held in the outbox until the cone has a model keeps th
     page,
     'a held scoop-notify lick',
     async ({ query, command }) => {
-      await window.setup(query);
+      await window.setup(query, undefined, true);
+      await when(
+        [files(window.kernel, ['/var/lib/slicc/agent/requests'])],
+        async () => (await window.sh('test -d /var/lib/slicc/agent/requests/cone/in')).status === 0,
+        'the cone control directory'
+      );
       const watched = await window.follow();
       stage('the scoop');
-      const spawned = await window.sh(command);
+      const spawned = await window.sh(command, { user: 'cone' });
       await window.helper('idle');
       stage('the held lick');
       await window.pause(3000);
@@ -224,7 +233,7 @@ test('a scoop-notify lick held in the outbox until the cone has a model keeps th
       await window.owner.release();
       return { opened: watched.opened.busy, spawned: spawned.status, held, seen: watched.seen };
     },
-    { query, command: spawn('--model faux/faux-2 ') }
+    { query, command: spawn('--model faux/faux-2 ').replace('SLICC_AGENT=cone:cone ', '') }
   );
   assert.equal(seen.opened, false);
   assert.equal(seen.spawned, 0);

@@ -895,3 +895,126 @@ test('the gate reaches a conversation stored before it existed, also forked and 
   });
   assert.deepEqual(seen.asked, ['echo old', 'echo forked', 'echo thawed']);
 });
+
+test("a guest run's bash can't forge a cron lick: agent send --lick=cron with SLICC_CRON_* set by an agent's bash is refused, and no cron lick reaches the cone", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    steps: [
+      bash(
+        "SLICC_CRON_JOB=forged SLICC_CRON_DUE=2026-01-01T00:00:00Z agent send cone --lick=cron 'from the guest'"
+      ),
+      answer('Forged.'),
+      answer('Licked.'),
+    ],
+  });
+  const seen = await staged(page, "a guest run's bash can't forge", async () => {
+    const { until, pause, open, mint, join, send, said, results, entries, decide } = globalThis.r;
+    await open();
+    const guest = await join(await mint('user'));
+    await send(guest, 'Forge a cron lick.');
+    await decide('once');
+    await until(() => said().includes('Forged.'), 'the forging run');
+    await pause(1500);
+    const out = {
+      result: results()[0],
+      said: said(),
+      licks: entries().filter((entry) => JSON.stringify(entry).includes('from the guest')).length,
+    };
+    await guest.close();
+    return out;
+  });
+  assert.match(
+    seen.result,
+    /agent: --lick=cron only works inside a cron job, and an agent's bash started this one/
+  );
+  assert.deepEqual(seen.said, ['Forged.']);
+  assert.equal(seen.licks, 1);
+});
+
+test('a note a guest-started scoop sends with agent send parent taints the cone run it starts: that run’s bash is asked', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    extra: [['scoop-say', '']],
+    steps: [
+      bash("agent --async --name helper --prompt 'bash agent send parent wake-up'"),
+      answer('Delegated.'),
+      bash('echo after-note'),
+      answer('Noted.'),
+      answer('Reported.'),
+      answer('Again.'),
+    ],
+  });
+  const seen = await staged(page, 'a note a guest-started scoop sends', async () => {
+    const { until, open, mint, join, send, said, results, asked, decide } = globalThis.r;
+    await open();
+    const guest = await join(await mint('user'));
+    await send(guest, 'Delegate it.');
+    const out = { asked: [] };
+    out.asked.push((await decide('once')).summary);
+    await until(() => said().includes('Delegated.'), 'the delegating run');
+    out.asked.push((await decide('once')).summary);
+    await until(
+      () =>
+        asked().some((item) => item.summary === 'echo after-note') ||
+        results().some((result) => result.includes('after-note')),
+      'the cone run the note starts'
+    );
+    out.ranUnasked = results().some((result) => result.includes('after-note'));
+    if (!out.ranUnasked) out.asked.push((await decide('once')).summary);
+    await until(() => said().includes('Noted.'), 'the noted run');
+    await guest.close();
+    return out;
+  });
+  assert.equal(seen.ranUnasked, false);
+  assert.deepEqual(seen.asked, [
+    "agent --async --name helper --prompt 'bash agent send parent wake-up'",
+    'agent send parent wake-up',
+    'echo after-note',
+  ]);
+});
+
+test("a guest run's bash can't borrow a clean scoop's identity with SLICC_AGENT: the claim is refused, and nothing runs unasked", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    extra: [['scoop-say', '']],
+    steps: [
+      bash("agent --async --name helper --prompt 'say ready'"),
+      answer('Started.'),
+      bash(
+        "SLICC_AGENT=scoop:$(agent list | cut -f1 | head -n1) agent --prompt 'bash touch /tmp/spoofed'"
+      ),
+      answer('Spoofed.'),
+      bash('test -e /tmp/spoofed && echo ran || echo never'),
+      answer('Checked.'),
+    ],
+  });
+  const seen = await staged(page, "a guest run's bash can't borrow", async () => {
+    const { until, pause, open, mint, join, send, prompt, said, results, asked, decide } =
+      globalThis.r;
+    await open();
+    await prompt('Start a helper.');
+    await until(() => said().includes('Started.'), 'the helper');
+    await until(() => results().at(-1), 'the helper handle');
+    await pause(1000);
+    const guest = await join(await mint('user'));
+    await send(guest, 'Borrow it.');
+    const out = { asked: [(await decide('once')).summary] };
+    await until(() => said().includes('Spoofed.'), 'the spoofing run');
+    await pause(500);
+    out.left = asked().map((item) => item.summary);
+    await prompt('Check the file.');
+    await until(() => said().includes('Checked.'), 'the owner check');
+    out.results = results();
+    await guest.close();
+    return out;
+  });
+  assert.deepEqual(seen.asked, [
+    "SLICC_AGENT=scoop:$(agent list | cut -f1 | head -n1) agent --prompt 'bash touch /tmp/spoofed'",
+  ]);
+  assert.deepEqual(seen.left, []);
+  assert.match(
+    seen.results[1],
+    /agent: SLICC_AGENT says scoop:\S+, but this process belongs to cone:/
+  );
+  assert.equal(seen.results[2], 'never');
+});

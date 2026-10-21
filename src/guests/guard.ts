@@ -22,6 +22,7 @@ import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from '.
 
 export const GUEST_GUARD = 'slicc-guest-guard';
 export const GUEST_REQUEST = 'guest:';
+export const LICK_REQUEST = 'lick:';
 export const GUEST_TOOL_MEMO = 'slicc.guest-tool';
 export const SUMMARY_LENGTH = 2000;
 
@@ -163,7 +164,31 @@ export const GuestTaintDoc = defineDoc<{ taints: InheritedTaint[] }>({
   initial: () => ({ taints: [] }),
 });
 
+export const LickTaintDoc = defineDoc<{ licks: Record<string, InheritedTaint[]> }>({
+  kind: 'slicc.lick-taint',
+  version: 1,
+  scope: 'session',
+  initial: () => ({ licks: {} }),
+});
+
 type TaintReader = Pick<Harness, 'submission' | 'snapshot'>;
+
+export async function lickTaints(
+  inputs: readonly SubmissionId[],
+  licks: Readonly<Record<string, InheritedTaint[]>>,
+  harness: Pick<Harness, 'submission'>,
+  context: Context
+): Promise<InheritedTaint[]> {
+  if (!Object.keys(licks).length) return [];
+  const found: InheritedTaint[] = [];
+  for (const id of inputs) {
+    const record = await (await harness.submission(id, context))?.status(context);
+    const request = record?.requestId ?? '';
+    if (request.startsWith(LICK_REQUEST))
+      found.push(...(licks[request.slice(LICK_REQUEST.length)] ?? []));
+  }
+  return distinctTaints(found);
+}
 
 export async function runTaints(
   harness: TaintReader,
@@ -175,9 +200,11 @@ export async function runTaints(
   const inherited = (await harness.snapshot(GuestTaintDoc, conversationId, context))?.taints ?? [];
   const seats = (await harness.snapshot(GuestsDoc, context))?.seats ?? {};
   const found = inputs.length ? await taintsOf(inputs, seats, harness, context) : [];
+  const licks = (await harness.snapshot(LickTaintDoc, context))?.licks ?? {};
   return distinctTaints([
     ...found.map((taint) => ({ seat: taint.seat?.id ?? null, tier: taint.tier })),
     ...inherited,
+    ...(await lickTaints(inputs, licks, harness, context)),
   ]);
 }
 
@@ -341,7 +368,9 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
             const seats = (await api.snapshot(GuestsDoc, context))?.seats ?? {};
             const held = harness() as Held;
             const found = inputs.length ? await taintsOf(inputs, seats, held, context) : [];
-            for (const taint of [...found, ...inheritedTaints(inherited, seats)]) {
+            const licks = (await api.snapshot(LickTaintDoc, context))?.licks ?? {};
+            const licked = await lickTaints(inputs, licks, held, context);
+            for (const taint of [...found, ...inheritedTaints([...inherited, ...licked], seats)]) {
               const block = await review(taint, call, api, context);
               if (block) return { block };
             }
