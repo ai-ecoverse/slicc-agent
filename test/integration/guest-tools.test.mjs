@@ -33,7 +33,15 @@ async function boot(page, options = {}) {
   await staged(
     page,
     'the guest-tools agent',
-    async ({ steps, later = [], judge = null, persist = null, files = {}, seed = null }) => {
+    async ({
+      steps,
+      later = [],
+      judge = null,
+      persist = null,
+      files = {},
+      seed = null,
+      extra = [],
+    }) => {
       for (const [path, text] of Object.entries(files)) await window.write(path, text);
       if (seed) {
         const seeded = await new Promise((resolve) => {
@@ -56,6 +64,7 @@ async function boot(page, options = {}) {
             ? [['judge', ''], ...judge.map((step) => ['judge-step', JSON.stringify(step)])]
             : []),
           ...(persist ? [['persist', persist]] : []),
+          ...extra,
           ...list.map((step) => ['step', JSON.stringify(step)]),
         ])}`;
       const owner = await startTracked({
@@ -329,6 +338,46 @@ test("a guest run's codemode script hits the same gate for each nested bash: one
   assert.match(
     seen.results[0],
     /Tool call blocked: The owner declined this tool call in a run a guest started\./
+  );
+  assert.equal(seen.results[1], 'never');
+});
+
+test("a guest run's workflow keeps its agent() steps under the guest gate: the step's bash is asked, and a denied one never runs", async (t) => {
+  const page = await chrome.page(t);
+  const script = [
+    "export const meta = { name: 'guested', description: 'A guest workflow.' };",
+    "return agent('bash touch /tmp/workflow-guest');",
+  ].join('\n');
+  await boot(page, {
+    extra: [['scoop-say', '']],
+    steps: [
+      { tool: { name: 'workflow', args: { action: 'run', script, wait: true } } },
+      answer('Workflowed.'),
+      bash('test -e /tmp/workflow-guest && echo ran || echo never'),
+      answer('Checked.'),
+    ],
+  });
+  const seen = await staged(page, 'a guest run’s workflow keeps', async () => {
+    const { until, open, mint, join, send, prompt, said, results, decide } = globalThis.r;
+    await open();
+    const guest = await join(await mint('user'));
+    await send(guest, 'Run a workflow.');
+    const out = { asked: [] };
+    const first = await decide('once');
+    out.asked.push(first.tool);
+    const second = await decide('deny', 'Not from a workflow.');
+    out.asked.push(`${second.tool}: ${second.summary}`);
+    await until(() => said().includes('Workflowed.'), 'the workflow run');
+    await prompt('Check the file.');
+    await until(() => said().includes('Checked.'), 'the owner check');
+    out.results = results();
+    await guest.close();
+    return out;
+  });
+  assert.deepEqual(seen.asked, ['workflow', 'bash: touch /tmp/workflow-guest']);
+  assert.match(
+    seen.results[0],
+    /^"ran: .*The owner declined this tool call in a run a guest started\. Not from a workflow\./
   );
   assert.equal(seen.results[1], 'never');
 });

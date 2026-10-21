@@ -33,6 +33,7 @@ export const USAGE = `usage:
   agent send parent <note>                                        from a scoop: a progress note to its cone
   agent wait <handle>... [--timeout <seconds>] [--notify]
   agent stop <handle>
+  agent workflow run|list|status|stop|save ...                    Claude Code workflows; agent workflow help
 
 options:
   --name <name>  --agent <role>  --model <provider/model>  --thinking <level> | --effort <low|medium|high|max>
@@ -65,6 +66,12 @@ export interface CliOptions {
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
   licks?: Pick<Licks, 'deliver'>;
   webhook?: (name: string, delivery: WebhookDelivery, context: Context) => Promise<boolean>;
+  workflow?: (
+    argv: readonly string[],
+    who: Caller,
+    request: Request,
+    context: Context
+  ) => Promise<Answer>;
 }
 
 export interface PanelCaller {
@@ -604,6 +611,10 @@ const VERBS: Record<string, Verb> = {
   wait,
   stop,
   rename,
+  workflow: (deps, request, who, context) =>
+    deps.workflow
+      ? deps.workflow(request.argv.slice(1), who, request, context)
+      : Promise.resolve(fail('workflows are not available in this agent')),
   help,
   '--help': help,
   '-h': help,
@@ -673,6 +684,7 @@ async function dispatch(
 
 const BLOCKING = new Set([
   'wait',
+  'workflow',
   'list',
   'status',
   'help',

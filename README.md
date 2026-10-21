@@ -317,7 +317,7 @@ Root's global pnpm (`/usr/local/share/pnpm`) isn't scanned. The first name wins.
 - **Memory:** `memory` is rewritten here (below); its `status`, `log`, `curate` and `dream` and the curation ledger are not ported. `gelatiere` is rewritten here (below), reading v6's www.sliccy.com catalog; `wiki` needs its `wiki` CLI.
 - **The tray hub, upskill or the Install/Update panel:** `upgrade` (`upgrade apply`, bios#70), `handoff`, `slicc`, `ssh`, `cherry`.
 - **A browser and CDP:** `playwright-cli` is rewritten as the `browser` skill (below); `computer` and `v86` don't apply.
-- **v6's JS realm, `.jsh` and `ipk` (slicc-kernel#68):** `jshd`, `mcp`, `workflows`, `package-execution`, `biome`, `ffmpeg`.
+- **v6's JS realm, `.jsh` and `ipk` (slicc-kernel#68):** `jshd`, `mcp`, `package-execution`, `biome`, `ffmpeg`. `workflows` is replaced by `agent workflow` (below).
 - **Commands the kernel doesn't have:** `mount`, `theme`, `dips`, `image-processing` (ImageMagick), `dns` (`dig`), `meminfo`, `x-search` (xAI credentials).
 
 ### Codemode
@@ -340,6 +340,28 @@ The model can write a short JavaScript program that calls its tools, with the `c
 - **The wasm.** The agent compiles `quickjs.wasm` itself and hands it over: it walks up the `node_modules` folders from its own module, as bios's resolver does, and fetches the first `quickjs-wasi/quickjs.wasm` it finds. On Node, pi-codemode loads it itself.
 - **Isolation.** Seven is cross-origin isolated, so pi-codemode's `SharedArrayBuffer` interrupt works.
 - **Overrides.** `runAgentWorker` takes `codemodeWasm` and `codemodeWorker` to override both, for bundled hosts.
+
+### Workflows
+
+A **workflow** is a Claude Code dynamic workflow script, a `.workflow.js`, run as a durable task. Its observable behaviour follows [`awsl-workflow@1`](https://github.com/XhinLiang/awsl/blob/main/docs/specifications/awsl-workflow-1.md), the portable contract awsl wrote down from Claude Code, with the differences listed below. No pi package runs this format in a browser, so the runtime is built here, on pi-codemode's deterministic runs; no pi patch is needed.
+
+- **The script.** It starts with `export const meta = { name, description }`, whose `name` and `description` must be non-empty strings; 512 KiB at most. The body may use top-level `await` and `return`, and returns the run's JSON result.
+- **Globals.**
+  - `agent(prompt, { label, phase, schema, model, effort, agentType })` runs one synchronous scoop and resolves to its final answer. With `schema` (a JSON Schema of at most 64 KiB), the scoop is asked for JSON only and the answer is parsed and validated. A failure (no answer, an answer that isn't JSON or doesn't match, an unknown role, a `model` that isn't `provider/model`) rejects. `agentType` names a role and `effort` is `low`, `medium`, `high`, `xhigh` or `max`. `isolation` and any unknown option reject.
+  - `parallel(thunks)` and `pipeline(items, ...stages)` keep input order, and turn a failed branch or item into `null` with a log line. A stage that returns `null` skips the item's later stages. At most 4,096 items per call.
+  - `phase(title)`, `log(message)` and `console.*` write the run's log; `args` is the `--args` JSON.
+  - `budget` is `{ total, spent(), remaining() }` in **output tokens** of the scoops. Once `spent()` reaches `total`, a new `agent()` call rejects; agents already running may finish above it, as in Claude Code and awsl, so a run can overshoot its budget by what its running agents spend.
+  - `Date.now()`, `new Date()` without arguments, `Math.random()`, `crypto`, `performance.now()` and timers throw, and there is no `require`, file system, network or `tools`. Nested `workflow()` throws: it isn't supported in SLICC. The sandbox's own clock and randomness, which `globalThis` still reaches, are virtual and seeded, so a run replays the same way.
+- **Scope.** The script's body sees only the globals above. The prelude's state (its counters, the config and the host functions) lives in a closure the body can't name. The host functions stay on `globalThis`, so the host checks every call on its own: the options, the 1,000-agent cap, the concurrency cap (a call over it waits) and the budget.
+- **Limits.** At most 1,000 agents per run. Agents running at once are capped by `--concurrency` (8 by default, at most `min(16, max(8, cores × 4))`); each one is a scoop, so the cone's `subagents.maxLiveScoops` applies too, and a run an agent started counts its steps against `subagents.maxPerTurn`.
+- **Durability.** Each run is a background task (`slicc.workflow-run`) owned by its cone, so Stop in the cone doesn't end it. The script runs in pi-codemode's QuickJS sandbox with a virtual clock and seeded randomness. Every result the script gets is journaled in the task's documents before the script sees it, with the number of calls the script had made by the time it processed that result. After a reload the task starts the script again and hands it the journaled results in order, each only once the script has made the same calls as before; calls it makes meanwhile wait until the journal is used up. A different path, a changed sandbox fingerprint, or a script that ends early fails the run. Each step's scoop and reporter task are journaled in the same transaction that creates them, so a step running at the reload reattaches to its scoop and is never spawned or sent again.
+- **Stop.** `agent workflow stop` aborts the task, which stops every scoop the run has running (each is listed with its creation) and removes their folders.
+- **State.** The session document `slicc.workflows` holds every run: its name, source, status (`running`, `completed`, `failed`, `stopped`), phase, agent counts, output tokens, the last 200 log lines and the result or error. The newest 50 finished runs are kept.
+- **Steps are scoops.** Each agent is a synchronous scoop with the scoop guard, removed when it answers. Scoops don't get the `workflow` tool, and a scoop can't start, stop or save workflows.
+- **Guests.** A run started from a run a guest started (through the `workflow` tool or `agent workflow run` in its bash) records the guest's seats and tiers. Each step's scoop gets them in its `slicc.guest-taint` document, and the guest tool gate reviews every tool call in that scoop as it would the guest's own; a seat that is gone denies them.
+- **The `workflow` tool.** A cone's model calls it with `action: run` (`file`, a path or a saved name, or `script`, the source, with `args`, `budget`, `concurrency` and `wait`), `list`, `status`, `stop` or `save` (`run`, `name`, `force`). Guest runs go through the guest tool gate as any tool call does.
+- **The CLI.** `agent workflow run <file.js | name> [--args <json>] [--budget <tokens>] [--concurrency <n>] [--wait]`, or `--script '<js>'`, prints the run id, or with `--wait` the result as JSON (exit 1 if it failed or was stopped). `list`, `status <run>`, `wait <run>`, `stop <run>` and `save <run> <name> [--force]` manage runs. `save` writes the run's source to `~/.slicc/workflows/<name>.workflow.js`, and `agent workflow run <name>` runs it; v6's bare `<name>` command is gone.
+- **Differences from awsl-workflow@1.** No nested `workflow()`, `isolation`, timers or model tiers; a direct `agent()` failure always rejects, with no Claude-compatible `null`; a resumed run continues the same attempt instead of starting a new one with a fresh budget.
 
 ### MCP servers
 

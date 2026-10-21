@@ -6,6 +6,7 @@ import {
   type ConversationId,
   configure,
   defineDoc,
+  type Extension,
   type Harness,
   type TaskId,
   type ToolRegistration,
@@ -22,6 +23,7 @@ import {
   scoopId,
 } from '../agents.ts';
 import { CODEMODE } from '../codemode/index.ts';
+import { GuestTaintDoc, type InheritedTaint } from '../guests/guard.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
 import { type Layout, LEGACY } from '../layout.ts';
 import type { Licks } from '../licks/licks.ts';
@@ -81,6 +83,7 @@ export interface ScoopsHost {
   mcp?: (names: readonly string[]) => ToolRegistration[];
   layout?: Layout;
   enforced?: boolean;
+  exclude?: readonly Extension[];
 }
 
 export interface Rewound {
@@ -121,6 +124,14 @@ export interface SpawnRequest {
   fromAgent: boolean;
   request?: string;
   limits: Limits;
+  taints?: InheritedTaint[];
+  created?: (tx: Tx, made: Spawned) => Promise<void>;
+}
+
+export interface Spawned {
+  folder: string;
+  conversation: number;
+  tasks: number[];
 }
 
 export function workspace(folder: string, layout: Layout = LEGACY): string {
@@ -266,10 +277,10 @@ function claimTurn(
   return undefined;
 }
 
-function agentChange(
+export function agentChange(
   request: SpawnRequest,
   folder: string,
-  host: Pick<ScoopsHost, 'tools' | 'mcp' | 'layout'>
+  host: Pick<ScoopsHost, 'tools' | 'mcp' | 'layout' | 'exclude'>
 ): AgentChange {
   const { tools, mcp } = host;
   const model = request.model ?? modelOf(request.role?.model);
@@ -282,6 +293,7 @@ function agentChange(
     ...(model ? { model } : {}),
     ...(thinking ? { thinkingLevel: thinking as AgentChange['thinkingLevel'] } : {}),
     ...(chosen ? { tools: chosen } : {}),
+    ...(host.exclude?.length ? { extensions: { remove: host.exclude } } : {}),
   };
 }
 
@@ -354,6 +366,7 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
     const child = await tx.createConversation({ ownership: { kind: 'task', taskId: anchor } });
     await configure(tx, child.id, agentChange(request, folder, host));
     await narrowMcp(tx, doc, parent.id, child.id, request);
+    if (request.taints?.length) (await tx.doc(GuestTaintDoc, child.id)).taints = request.taints;
     doc.scoops[id] = scoopRecord(request, folder, child.id, Number(anchor), created);
     const target =
       request.target === undefined
@@ -377,6 +390,7 @@ async function spawn(core: Core, request: SpawnRequest, context: Context): Promi
         })
       );
     const answer = { code: 0, out: `${folder}\n`, tasks: made };
+    await request.created?.(tx, { folder, conversation: Number(child.id), tasks: made });
     remember(work as WorkState, request.request, answer);
     return answer;
   }, context);

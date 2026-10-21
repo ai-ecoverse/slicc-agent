@@ -1,6 +1,8 @@
 import type { Context } from '@earendil-works/chord';
 import { awaitWithContext, BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import {
+  type ConversationId,
+  defineDoc,
   defineExtension,
   type Extension,
   type Harness,
@@ -150,6 +152,45 @@ export function reasonOf(item: Approval): string {
   return GATE_REASONS.unanswered;
 }
 
+export type InheritedTaint = { seat: string | null; tier: string };
+
+export const GuestTaintDoc = defineDoc<{ taints: InheritedTaint[] }>({
+  kind: 'slicc.guest-taint',
+  version: 1,
+  scope: 'conversation',
+  history: 'rewindable',
+  fork: 'asOf',
+  initial: () => ({ taints: [] }),
+});
+
+type TaintReader = Pick<Harness, 'submission' | 'snapshot'>;
+
+export async function runTaints(
+  harness: TaintReader,
+  conversationId: ConversationId,
+  context: Context
+): Promise<InheritedTaint[]> {
+  const live = await harness.snapshot(LiveDoc, conversationId, context);
+  const inputs = live?.run?.inputs ?? [];
+  const inherited = (await harness.snapshot(GuestTaintDoc, conversationId, context))?.taints ?? [];
+  const seats = (await harness.snapshot(GuestsDoc, context))?.seats ?? {};
+  const found = inputs.length ? await taintsOf(inputs, seats, harness, context) : [];
+  return [
+    ...found.map((taint) => ({ seat: taint.seat?.id ?? null, tier: taint.tier })),
+    ...inherited,
+  ];
+}
+
+function inheritedTaints(
+  inherited: readonly InheritedTaint[],
+  seats: Readonly<Record<string, SeatRecord>>
+): Taint[] {
+  return inherited.map((taint) => ({
+    seat: taint.seat === null ? null : (seats[taint.seat] ?? null),
+    tier: taint.tier,
+  }));
+}
+
 export async function taintsOf(
   inputs: readonly SubmissionId[],
   seats: Readonly<Record<string, SeatRecord>>,
@@ -288,10 +329,13 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
           async beforeTool(call, api, context) {
             const live = await api.snapshot(LiveDoc, api.conversationId, context);
             const inputs = live?.run?.inputs ?? [];
-            if (!inputs.length) return undefined;
+            const inherited =
+              (await api.snapshot(GuestTaintDoc, api.conversationId, context))?.taints ?? [];
+            if (!inputs.length && !inherited.length) return undefined;
             const seats = (await api.snapshot(GuestsDoc, context))?.seats ?? {};
             const held = harness() as Held;
-            for (const taint of await taintsOf(inputs, seats, held, context)) {
+            const found = inputs.length ? await taintsOf(inputs, seats, held, context) : [];
+            for (const taint of [...found, ...inheritedTaints(inherited, seats)]) {
               const block = await review(taint, call, api, context);
               if (block) return { block };
             }
