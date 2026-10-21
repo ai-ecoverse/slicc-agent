@@ -85,7 +85,7 @@ async function boot(page, options = {}) {
         },
         async revoke() {},
       };
-      const r = { owner, until, pause, hub };
+      const r = { owner, until, pause, hub, gate: (name) => worker.postMessage({ gate: name }) };
       r.open = async () => {
         r.local = await owner.connect();
         r.model = createAgentModel(r.local, { guests: hub });
@@ -1017,4 +1017,43 @@ test("a guest run's bash can't borrow a clean scoop's identity with SLICC_AGENT:
     /agent: SLICC_AGENT says scoop:\S+, but this process belongs to cone:/
   );
   assert.equal(seen.results[2], 'never');
+});
+
+test('a guest-started scoop’s completion report taints the cone run it starts: that run’s bash is asked', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    extra: [['scoop-step', JSON.stringify({ gate: 'scoop', answer: 'Scoop done.' })]],
+    steps: [
+      bash("agent --async --name helper --prompt 'Work on it'"),
+      answer('Delegated.'),
+      bash('echo after-report'),
+      answer('Reported.'),
+      answer('Spare.'),
+    ],
+  });
+  const seen = await staged(page, 'a guest-started scoop’s completion report', async () => {
+    const { until, open, mint, join, send, said, results, asked, decide, gate } = globalThis.r;
+    await open();
+    const guest = await join(await mint('user'));
+    await send(guest, 'Delegate it.');
+    const out = { asked: [(await decide('once')).summary] };
+    await until(() => said().includes('Delegated.'), 'the delegating run');
+    gate('scoop');
+    await until(
+      () =>
+        asked().some((item) => item.summary === 'echo after-report') ||
+        results().some((result) => result.includes('after-report')),
+      'the cone run the report starts'
+    );
+    out.ranUnasked = results().some((result) => result.includes('after-report'));
+    if (!out.ranUnasked) out.asked.push((await decide('once')).summary);
+    await until(() => said().includes('Reported.'), 'the reported run');
+    await guest.close();
+    return out;
+  });
+  assert.equal(seen.ranUnasked, false);
+  assert.deepEqual(seen.asked, [
+    "agent --async --name helper --prompt 'Work on it'",
+    'echo after-report',
+  ]);
 });
