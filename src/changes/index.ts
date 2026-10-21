@@ -11,11 +11,14 @@ import {
   NO_GIT,
   NO_REPO,
   type Pending,
+  parseBatch,
   parseStatus,
+  quote,
   relative,
   run,
   SCAN_DEPTH,
   SCAN_ENTRIES,
+  STATUS,
   scanned,
   shown,
   textOf,
@@ -94,14 +97,47 @@ async function discover(options: ChangesOptions, context: Context): Promise<stri
   );
 }
 
-async function sideOf(env: Env, repo: string, pending: Pending, context: Context) {
+async function befores(
+  env: Env,
+  repo: string,
+  pending: readonly Pending[],
+  context: Context
+): Promise<Map<string, string | null>> {
+  const paths = pending.filter((item) => item.status !== 'added').map((item) => item.path);
+  const out = new Map<string, string | null>();
+  if (!paths.length) return out;
+  const batch = paths.some((path) => path.includes('\n'))
+    ? null
+    : await run(
+        env,
+        `printf '%s\\n' ${paths.map((path) => quote(`:${path}`)).join(' ')} | git cat-file --batch`,
+        repo,
+        context
+      );
+  const parsed =
+    batch?.code === 0 && !batch.out.includes('\uFFFD')
+      ? parseBatch(new TextEncoder().encode(batch.out), paths.length)
+      : null;
+  for (const [i, path] of paths.entries()) {
+    if (parsed) {
+      const bytes = parsed[i];
+      out.set(path, bytes ? textOf(bytes) : null);
+      continue;
+    }
+    const single = await run(env, ['git', 'show', `:${path}`], repo, context);
+    out.set(path, single.code === 0 ? shown(single.out) : null);
+  }
+  return out;
+}
+
+async function sideOf(
+  env: Env,
+  repo: string,
+  pending: Pending,
+  before: string | null,
+  context: Context
+) {
   const path = joined(repo, pending.path);
-  const before =
-    pending.status === 'added'
-      ? null
-      : await run(env, ['git', 'show', `:${pending.path}`], repo, context).then((ran) =>
-          ran.code === 0 ? shown(ran.out) : null
-        );
   const read = pending.status === 'deleted' ? null : await env.readBinaryFile(path, context);
   const after = read?.ok ? textOf(read.value) : null;
   const opaque =
@@ -111,30 +147,21 @@ async function sideOf(env: Env, repo: string, pending: Pending, context: Context
 }
 
 async function statusOf(env: Env, repo: string, context: Context): Promise<FileChange[] | null> {
-  const ran = await run(
-    env,
-    [
-      'git',
-      '--no-optional-locks',
-      'status',
-      '--porcelain=v1',
-      '-z',
-      '--untracked-files=all',
-      '--ignore-submodules=all',
-    ],
-    repo,
-    context
-  );
+  const ran = await run(env, STATUS, repo, context);
   if (ran.code !== 0) return null;
+  const pending = parseStatus(ran.out).slice(0, MAX_FILES);
+  const before = await befores(env, repo, pending, context);
   const out: FileChange[] = [];
-  for (const pending of parseStatus(ran.out).slice(0, MAX_FILES)) {
-    const side = await sideOf(env, repo, pending, context);
-    out.push({ ...side, repo, status: pending.status, kind: pending.kind });
+  for (const item of pending) {
+    const side = await sideOf(env, repo, item, before.get(item.path) ?? null, context);
+    out.push({ ...side, repo, status: item.status, kind: item.kind });
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 const STATE = ['index', 'HEAD', 'refs'];
+
+type Target = Pick<FileChange, 'path' | 'repo' | 'kind'>;
 
 function noise(path: string, repos: readonly string[]): boolean {
   return repos.some((repo) => {
@@ -171,18 +198,23 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     lock = next.catch(() => undefined);
     return next;
   };
+  const hasGit = async (context: Context) =>
+    (await run(env, 'command -v git', HOME, context)).code === 0;
+  const missing = (context: Context) => {
+    repos = null;
+    view.replace(context, { unavailable: NO_GIT, changes: [] });
+  };
   const scan = async (context: Context) => {
-    const git = await run(env, 'command -v git', HOME, context);
-    if (git.code !== 0) {
-      view.replace(context, { unavailable: NO_GIT, changes: [] });
-      return;
-    }
+    if (!repos?.length && !(await hasGit(context))) return missing(context);
     repos ??= await discover(options, context);
     const changes: FileChange[] = [];
     const live: string[] = [];
+    let checked = false;
     for (const repo of repos) {
       const found = await statusOf(env, repo, context);
       if (!found) {
+        if (!checked && !(await hasGit(context))) return missing(context);
+        checked = true;
         const still = await env.exists(joined(repo, '.git'), context);
         if (!still.ok || !still.value) continue;
       }
@@ -191,6 +223,19 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     }
     repos = live;
     view.replace(context, { unavailable: live.length ? null : NO_REPO, changes });
+  };
+  const pendingOf = async (path: string, context: Context): Promise<Target | null> => {
+    const listed = () => view.value.changes.find((item) => item.path === path);
+    if (!listed()) await scan(context);
+    const repo = listed()?.repo;
+    if (!repo) return null;
+    const rel = relative(path, repo);
+    const ran = await run(env, [...STATUS, '--', `:(literal)${rel}`], repo, context);
+    if (ran.code !== 0) throw failure(ran, `git status ${rel}`);
+    const fresh = parseStatus(ran.out).find((item) => item.path === rel);
+    if (fresh) return { path, repo, kind: fresh.kind };
+    await scan(context);
+    return null;
   };
   const refresh = (context: Context) => serial(() => scan(context));
   let running = false;
@@ -211,10 +256,9 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     clearTimeout(timer);
     timer = setTimeout(() => void kick(context), options.reloadMs);
   };
-  const change = (path: string, context: Context, act: (found: FileChange) => Promise<void>) =>
+  const change = (path: string, context: Context, act: (found: Target) => Promise<void>) =>
     serial(async () => {
-      await scan(context);
-      const found = view.value.changes.find((item) => item.path === path);
+      const found = await pendingOf(path, context);
       if (!found) throw new Error(`${path} has no pending change`);
       await act(found);
       await scan(context);
