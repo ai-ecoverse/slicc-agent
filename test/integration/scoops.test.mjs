@@ -310,3 +310,88 @@ test("a scoop's notify card reads as its one-line result, or says it failed, and
   assert.match(failed.body, /^Reason: /);
   await page.evaluate(() => window.owner.release());
 });
+
+test('a request queued behind a busy scoop shows who sent it once it is placed, and agent wait --notify sends one lick when the scoop is done', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const command =
+    'subagent spawn --name helper --prompt First. && agent send helper --follow-up Second. && agent wait helper --notify';
+  const steps = [
+    ...[
+      { tool: { name: 'bash', args: { command } } },
+      { answer: 'Waiting.' },
+      { answer: 'Noted.' },
+      { answer: 'Spare.' },
+      { answer: 'Spare.' },
+      { answer: 'Spare.' },
+    ].map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`),
+    ...[{ gate: 'first', answer: 'First done.' }, { answer: 'Second done.' }].map(
+      (step) => `scoop-step=${encodeURIComponent(JSON.stringify(step))}`
+    ),
+  ].join('&');
+  const seen = await staged(
+    page,
+    'a queued request and a notify wait',
+    async (steps) => {
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      let worker;
+      const owner = await startTracked({
+        worker: () => {
+          worker = new Worker(`/dist-test/main-worker.js?${steps}`, { type: 'module' });
+          return worker;
+        },
+        kernel: { connect: () => kernel.connect() },
+      });
+      const connection = await owner.connect();
+      const model = createAgentModel(connection, { storage: localStorage });
+      const agent = model.agent;
+      await agent.ready();
+      await when(
+        [files(kernel, ['/usr/local/bin'])],
+        async () => (await kernel.run(['test', '-x', '/usr/local/bin/agent'])).status === 0,
+        'the agent command'
+      );
+      stage('the busy scoop');
+      const started = await connection.prompt('Start a helper and wait for it.');
+      worker.postMessage({ gate: 'first' });
+      stage('the wait lick');
+      const sources = agentSources(connection, model);
+      const licks = () =>
+        agent
+          .messages()
+          .filter((message) => message.role === 'lick' && message.channel === 'scoop-wait');
+      const [lick] = await when(sources, () => licks().length && licks(), 'the scoop-wait lick');
+      stage('the placed request');
+      const scoop = agent.list().find((row) => row.name === 'helper');
+      agent.select(scoop.id);
+      const second = await when(
+        sources,
+        () =>
+          agent
+            .messages()
+            .find(
+              (message) => message.role === 'user' && message.text === 'Second.' && message.from
+            ),
+        'the placed request with its sender'
+      );
+      agent.select('cone');
+      const waits = licks().length;
+      await owner.release();
+      return {
+        started,
+        lick: { title: lick.title, text: lick.text, body: lick.body },
+        from: second.from,
+        waits,
+      };
+    },
+    steps
+  );
+  assert.equal(seen.started, 'Waiting.');
+  assert.equal(seen.lick.title, 'Waited for helper');
+  assert.equal(seen.lick.text, 'All 1 done');
+  assert.match(seen.lick.body, /## helper\n/);
+  assert.equal(seen.from, 'sliccy');
+  assert.equal(seen.waits, 1);
+});
