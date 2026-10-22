@@ -1,4 +1,5 @@
 import type { Context } from '@earendil-works/chord';
+import { withCancel } from '@earendil-works/chord/context';
 import {
   AssistantEntry,
   type ConversationId,
@@ -101,17 +102,44 @@ type Noting = {
   ) => Promise<unknown>;
 };
 
+type Commits = Pick<ScoopsHost['harness'], 'subscribeCommits'>;
+
+function submissionChanged(commits: Commits, id: Submission['id'], context: Context) {
+  let done = () => {};
+  const changed = new Promise<void>((resolve) => {
+    const stop = commits.subscribeCommits((publication) => {
+      if (
+        publication.changes.some((change) => change.type === 'submission' && change.value.id === id)
+      )
+        done();
+    });
+    done = () => {
+      stop();
+      context.abortSignal?.removeEventListener('abort', done);
+      resolve();
+    };
+    context.abortSignal?.addEventListener('abort', done, { once: true });
+  });
+  return { changed, stop: () => done() };
+}
+
 export async function noteWhenPlaced(
   runtime: Noting,
-  submission: Pick<Submission, 'status'>,
+  commits: Commits,
+  submission: Pick<Submission, 'id' | 'status'>,
   conversation: ConversationId,
   note: { from: string | undefined; agent?: boolean; noted: boolean | undefined },
   context: Context
 ): Promise<void> {
   const { from } = note;
   while (from && !note.noted && !context.abortSignal?.aborted) {
-    const record = await submission.status(context);
+    const next = submissionChanged(commits, submission.id, context);
+    const record = await submission.status(context).catch((error: unknown) => {
+      next.stop();
+      throw error;
+    });
     if (record.status !== 'queued') {
+      next.stop();
       if (!('entry' in record) || record.entry === undefined) return;
       const entry = record.entry;
       await runtime
@@ -125,11 +153,9 @@ export async function noteWhenPlaced(
         .catch(() => undefined);
       return;
     }
-    await new Promise((done) => setTimeout(done, NOTE_POLL_MS));
+    await next.changed;
   }
 }
-
-export const NOTE_POLL_MS = 100;
 
 export function waitTask(lookup: Lookup) {
   type WaitInput = {
@@ -158,47 +184,61 @@ export function waitTask(lookup: Lookup) {
         const host = await lookup();
         const { agents, licks } = host;
         const key = String(task.id);
-        for (;;) {
-          const work = await runtime.snapshot(ScoopWorkDoc, context);
-          const state = work?.waits[key];
-          if (!state) break;
-          const feeding = new Set(Object.values(work?.feeds ?? {}).map((feed) => feed.scoop));
-          const open = state.scoops.filter((id) => !(id in state.done) && feeding.has(id));
-          const expired = runtime.now() >= task.input.deadline;
-          if (open.length && !expired) {
-            await pauseUntil(runtime, Math.min(runtime.now() + 300, task.input.deadline), context);
-            continue;
+        const { context: using, cancel } = withCancel(context);
+        const watch = await runtime.watchDoc(ScoopWorkDoc, using);
+        let poke = () => {};
+        watch?.start(async () => poke());
+        const due = pauseUntil(runtime, task.input.deadline, using).catch(() => undefined);
+        try {
+          for (;;) {
+            const changed = new Promise<void>((resolve) => {
+              poke = resolve;
+            });
+            const work = await runtime.snapshot(ScoopWorkDoc, context);
+            const state = work?.waits[key];
+            if (!state) break;
+            const feeding = new Set(Object.values(work?.feeds ?? {}).map((feed) => feed.scoop));
+            const open = state.scoops.filter((id) => !(id in state.done) && feeding.has(id));
+            const expired = runtime.now() >= task.input.deadline;
+            if (open.length && !expired) {
+              await Promise.race([changed, due]);
+              context.abortSignal?.throwIfAborted();
+              continue;
+            }
+            const names = (id: string) => agents.state().scoops[id]?.name ?? id;
+            const body = state.scoops.map((id) =>
+              open.includes(id)
+                ? `## ${names(id)}\n(still working when the wait timed out)`
+                : `## ${names(id)}\n${state.done[id] ?? '(nothing was running)'}`
+            );
+            const lick: LickEvent = {
+              channel: 'scoop-wait',
+              source: key,
+              title: `Waited for ${state.scoops.map(names).join(', ')}`,
+              text: open.length
+                ? `${state.scoops.length - open.length} of ${state.scoops.length} done; timed out waiting for ${open.map(names).join(', ')}`
+                : `All ${state.scoops.length} done`,
+              body: body.join('\n\n'),
+              target: `cone:${state.cone}`,
+              coalesce: false,
+              eventId: `wait:${key}`,
+            };
+            await licks.deliver(
+              await scoopTainted(
+                host,
+                agents.state(),
+                state.scoops,
+                lick,
+                context,
+                task.input.taints
+              ),
+              context
+            );
+            break;
           }
-          const names = (id: string) => agents.state().scoops[id]?.name ?? id;
-          const body = state.scoops.map((id) =>
-            open.includes(id)
-              ? `## ${names(id)}\n(still working when the wait timed out)`
-              : `## ${names(id)}\n${state.done[id] ?? '(nothing was running)'}`
-          );
-          const lick: LickEvent = {
-            channel: 'scoop-wait',
-            source: key,
-            title: `Waited for ${state.scoops.map(names).join(', ')}`,
-            text: open.length
-              ? `${state.scoops.length - open.length} of ${state.scoops.length} done; timed out waiting for ${open.map(names).join(', ')}`
-              : `All ${state.scoops.length} done`,
-            body: body.join('\n\n'),
-            target: `cone:${state.cone}`,
-            coalesce: false,
-            eventId: `wait:${key}`,
-          };
-          await licks.deliver(
-            await scoopTainted(
-              host,
-              agents.state(),
-              state.scoops,
-              lick,
-              context,
-              task.input.taints
-            ),
-            context
-          );
-          break;
+        } finally {
+          cancel();
+          await watch?.stop();
         }
         await runtime.commit(async (tx) => {
           delete (await tx.doc(ScoopWorkDoc)).waits[key];
@@ -246,7 +286,8 @@ export function scoopTasks(lookup: Lookup) {
     initial: () => ({ phase: 'deliver' }),
     phases: {
       async deliver(task, runtime, context) {
-        const { agents } = await lookup();
+        const host = await lookup();
+        const { agents } = host;
         const record = agents.state().scoops[task.input.scoop];
         const handle =
           record && live(record)
@@ -278,6 +319,7 @@ export function scoopTasks(lookup: Lookup) {
         );
         const noting = noteWhenPlaced(
           runtime,
+          host.harness,
           submission,
           record?.conversation as ConversationId,
           { from: feed?.from, agent: feed?.agent === true, noted: task.state.checkpoint.noted },
