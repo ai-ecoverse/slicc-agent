@@ -10,7 +10,7 @@ import {
   UsageDoc,
 } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import type { VaultState } from '../secrets/vault.ts';
 import { vaultHold } from '../secrets/view.ts';
 import { callIdsOf, clusterOf, describe } from './cluster.ts';
@@ -21,7 +21,7 @@ export type LabelsState = { labels: Record<string, string> };
 
 export const LabelsDoc = defineDoc<LabelsState>({
   kind: 'slicc.labels',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ labels: {} }),

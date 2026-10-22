@@ -1,6 +1,6 @@
 import { defineDoc } from '@earendil-works/pi-durable';
 import type { ApprovalTier, DecidedBy } from '../approvals/record.ts';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import {
   DAY_MS,
   DEFAULT_GUEST_POLICY,
@@ -64,7 +64,7 @@ export type GuestsState = { seats: Record<string, SeatRecord> };
 
 export const GuestsDoc = defineDoc<GuestsState>({
   kind: 'slicc.guests',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ seats: {} }),

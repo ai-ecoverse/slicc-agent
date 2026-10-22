@@ -16,7 +16,7 @@ import {
 } from '@earendil-works/pi-durable';
 import type { Approval, Approvals } from '../approvals/index.ts';
 import { REASONS, scoopTier } from '../approvals/record.ts';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import { scrubText, scrubTexts } from '../secrets/scrub.ts';
 import { type GuestPolicy, gateKind, gateRefusal } from './policy.ts';
 import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from './seats.ts';
@@ -158,7 +158,7 @@ export type InheritedTaint = { seat: string | null; tier: string };
 
 export const GuestTaintDoc = defineDoc<{ taints: InheritedTaint[] }>({
   kind: 'slicc.guest-taint',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'conversation',
   history: 'rewindable',
@@ -168,7 +168,7 @@ export const GuestTaintDoc = defineDoc<{ taints: InheritedTaint[] }>({
 
 export const LickTaintDoc = defineDoc<{ licks: Record<string, InheritedTaint[]> }>({
   kind: 'slicc.lick-taint',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ licks: {} }),

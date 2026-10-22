@@ -11,7 +11,7 @@ import {
   type ModelRef,
   type TaskId,
 } from '@earendil-works/pi-durable';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import type { MemoryTag } from './format.ts';
 import { MAX_BYTES, parseMemory, redactSecrets, serializeMemory } from './format.ts';
 import { type Host, whoIs } from './prompt.ts';
@@ -28,7 +28,7 @@ export type ExtractState = {
 
 export const ExtractDoc = defineDoc<ExtractState>({
   kind: 'slicc.memory-extract',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ cursors: {}, pending: {} }),
@@ -272,7 +272,7 @@ export const IDLE_TASK = 'slicc.memory-idle';
 
 export const IdleDoc = defineDoc<{ tasks: Record<string, number> }>({
   kind: 'slicc.memory-idle',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ tasks: {} }),

@@ -1,7 +1,7 @@
 import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { defineDoc, type Harness } from '@earendil-works/pi-durable';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import type { VaultRecords } from './records.ts';
 import type { Vault } from './vault.ts';
 
@@ -18,7 +18,7 @@ export type MovedState = {
 
 export const MovedDoc = defineDoc<MovedState>({
   kind: 'slicc.keys-moved',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ accounts: [], dismissed: false }),

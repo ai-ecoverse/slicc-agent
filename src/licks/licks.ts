@@ -5,7 +5,7 @@ import {
   type Harness,
   type SubmissionId,
 } from '@earendil-works/pi-durable';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import { distinctTaints, type InheritedTaint, LickTaintDoc } from '../guests/guard.ts';
 import { scrubTexts } from '../secrets/scrub.ts';
 import {
@@ -70,7 +70,7 @@ type OutboxState = {
 
 export const LicksOutbox = defineDoc<OutboxState>({
   kind: 'slicc.licks',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ queues: {}, events: {} }),

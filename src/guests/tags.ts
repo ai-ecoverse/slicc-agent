@@ -1,12 +1,12 @@
 import type { Context } from '@earendil-works/chord';
 import { type ConversationId, defineDoc, type Harness } from '@earendil-works/pi-durable';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import { TAINT_TAG } from '../kernel/sightings.ts';
 import { canonical, distinctTaints, type InheritedTaint, runTaints } from './guard.ts';
 
 export const TaintTagDoc = defineDoc<{ tags: Record<string, InheritedTaint[]> }>({
   kind: 'slicc.taint-tags',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ tags: {} }),

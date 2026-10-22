@@ -14,7 +14,7 @@ import {
 import type { Agents } from '../agents.ts';
 import type { Approval, Approvals, ApprovalsState } from '../approvals/index.ts';
 import { ApprovalsDoc } from '../approvals/record.ts';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import { pauseUntil } from '../pause.ts';
 import {
   GUEST_INPUT_KIND,
@@ -61,7 +61,7 @@ export type ReviewsState = { next: number; reviews: Record<string, Review> };
 
 export const GuestReviewsDoc = defineDoc<ReviewsState>({
   kind: 'slicc.guest-reviews',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ next: 1, reviews: {} }),

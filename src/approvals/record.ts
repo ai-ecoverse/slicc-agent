@@ -1,5 +1,5 @@
 import { defineDoc } from '@earendil-works/pi-durable';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 
 export type ApprovalKind = 'guest-message' | 'guest-tool' | 'sudo';
 
@@ -82,7 +82,7 @@ export type ApprovalsState = { items: Approval[] };
 
 export const ApprovalsDoc = defineDoc<ApprovalsState>({
   kind: 'slicc.approvals',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ items: [] }),

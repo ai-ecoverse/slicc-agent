@@ -6,7 +6,7 @@ import {
   type Harness,
   type Tx,
 } from '@earendil-works/pi-durable';
-import { deltasOnly } from './checkpoints.ts';
+import { boundedDeltas } from './checkpoints.ts';
 import { ConeDoc } from './cone.ts';
 import type { RoleMemory } from './memory/store.ts';
 
@@ -75,7 +75,7 @@ export type AgentsState = {
 
 export const AgentsDoc = defineDoc<AgentsState>({
   kind: 'slicc.agents',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ cones: {}, active: FIRST_CONE, next: 2, scoops: {} }),

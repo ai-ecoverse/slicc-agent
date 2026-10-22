@@ -22,7 +22,7 @@ import {
   type ScoopRecord,
   scoopId,
 } from '../agents.ts';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import { CODEMODE } from '../codemode/index.ts';
 import { distinctTaints, GuestTaintDoc, type InheritedTaint } from '../guests/guard.ts';
 import type { ProcessGroups } from '../kernel/groups.ts';
@@ -56,7 +56,7 @@ type WorkState = {
 
 export const ScoopWorkDoc = defineDoc<WorkState>({
   kind: 'slicc.scoops.work',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ feeds: {}, waits: {}, ledger: {}, turns: {} }),

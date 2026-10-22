@@ -17,6 +17,9 @@ async function session(directory, prompt) {
   });
   const agent = await openAgent({ models, model, storage });
   const answer = prompt ? await agent.prompt(prompt) : null;
+  for (let n = 0; n < Number(params.get('cones') ?? 0); n++)
+    await agent.agents.createCone(`many-${n}`, BACKGROUND_CONTEXT);
+  const cones = Object.values(agent.agents.state().cones).map((cone) => cone.name);
   const page = await agent.root.entries({}, 50, undefined, BACKGROUND_CONTEXT);
   const kinds = [...page.items].reverse().map((entry) => entry.kind);
   if (params.has('hold')) {
@@ -24,7 +27,7 @@ async function session(directory, prompt) {
     return new Promise(() => {});
   }
   await agent.close();
-  return { answer, kinds };
+  return { answer, kinds, cones };
 }
 
 async function run() {

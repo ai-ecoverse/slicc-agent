@@ -161,3 +161,14 @@ test('a later open keeps a higher durableSchema someone else recorded, and names
   assert.equal(marker.data.error, undefined);
   assert.deepEqual(marker.marker, { durableSchema: 3, agent: '7.1.0' });
 });
+
+test('a session document changed well over a hundred times reads the same after the worker restarts', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const first = await page.evaluate(start, 'directory=/.slicc/test-g&cones=150');
+  assert.equal(first.error, undefined);
+  assert.equal(first.cones.length, 151);
+  const second = await page.evaluate(start, 'directory=/.slicc/test-g');
+  assert.equal(second.error, undefined);
+  assert.deepEqual(second.cones, first.cones);
+});
