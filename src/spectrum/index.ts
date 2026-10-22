@@ -3,6 +3,7 @@ import type { AgentConnection } from '../client.ts';
 import type { GuestGates } from '../guests/seats.ts';
 import { AgentAdapter } from './agent-port.ts';
 import { ApprovalsAdapter, type HostApprovals } from './approvals-port.ts';
+import { agentSelection } from './budget.ts';
 import { ChangesAdapter } from './changes-port.ts';
 import { GuestAdapter, type GuestHub } from './guest-port.ts';
 import { MemoryAdapter } from './memory-port.ts';
@@ -104,6 +105,7 @@ export function createAgentModel(
   seat?: GuestSeatShown;
 } {
   const agent = new AgentAdapter(connection);
+  const selected = agentSelection(agent);
   const report = (text: string) => agent.notify(text);
   const run = options.page?.run;
   return {
@@ -118,14 +120,14 @@ export function createAgentModel(
       options.storage ?? null,
       options.login ?? null
     ),
-    tray: new TrayAdapter(connection.settings),
+    tray: new TrayAdapter(connection.settings, selected),
     sprinkles: new SprinkleAdapter(connection, report),
     memory: new MemoryAdapter(connection, report),
     changes: new ChangesAdapter(connection, report),
     notices: new NoticesAdapter(connection.settings, report, options.notices),
-    monitor: new MonitorAdapter(
-      connection,
-      options.monitor?.extra ? { extra: options.monitor.extra } : {}
-    ),
+    monitor: new MonitorAdapter(connection, {
+      selected,
+      ...(options.monitor?.extra ? { extra: options.monitor.extra } : {}),
+    }),
   };
 }
