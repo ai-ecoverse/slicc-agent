@@ -17,6 +17,7 @@ import { scopedName, type WebhookDelivery } from '../licks/sources.ts';
 import { findRole, type Roles } from '../roles/roles.ts';
 import { callerOf as agentOf } from './identity.ts';
 import type { Request, Runner } from './requests.ts';
+import { retryParked } from './retry.ts';
 import { type Answer, findScoop, modelOf, type Scoops } from './service.ts';
 import { cancelSync, detachSync, runSync, type SyncState } from './sync.ts';
 import { callerTaints } from './taints.ts';
@@ -38,6 +39,7 @@ export const USAGE = `usage:
   agent send parent <note>                                        from a scoop: a progress note to its cone
   agent wait <handle>... [--timeout <seconds>] [--notify]
   agent stop <handle>
+  agent retry <task id>                                           run a task parked after 5 restarts again
   agent workflow run|list|status|stop|save ...                    Claude Code workflows; agent workflow help
 
 options:
@@ -690,6 +692,9 @@ async function rename(
   return deps.scoops.rename(found[0], request.argv.slice(2).join(' '), context);
 }
 
+const retry = (deps: Deps, request: Request, who: Caller, context: Context) =>
+  retryParked(deps.harness, request.argv[1], who.fromAgent, context);
+
 type Verb = (deps: Deps, request: Request, who: Caller, context: Context) => Promise<Answer>;
 
 const help: Verb = async () => ok(USAGE);
@@ -701,6 +706,7 @@ const VERBS: Record<string, Verb> = {
   wait,
   stop,
   rename,
+  retry,
   workflow: async (deps, request, who, context) =>
     deps.workflow
       ? deps.workflow(
