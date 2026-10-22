@@ -141,7 +141,7 @@ test('an API-key provider is offered, added with its key in the vault, answers a
   assert.equal(seen.groq.needs, undefined);
   assert.equal(seen.nvidia.needs, 'cors-free-transport');
   assert.equal(seen.zai.needs, 'cors-free-transport');
-  assert.equal(seen.zaiCodingCn.needs, undefined);
+  assert.equal(seen.zaiCodingCn.needs, 'cors-free-transport');
   assert.equal(seen.added.store, 'vault');
   assert.equal(seen.added.vaultName, 'GROQ_API_KEY');
   assert.equal(seen.nvidiaAccount.needs, 'cors-free-transport');

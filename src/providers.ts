@@ -406,7 +406,7 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     env: 'ZAI_CODING_CN_API_KEY',
     description: 'GLM models on Zhipu’s coding plan in China.',
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-    cors: true,
+    cors: false,
   },
   {
     id: 'nvidia',

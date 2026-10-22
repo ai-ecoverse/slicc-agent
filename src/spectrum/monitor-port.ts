@@ -20,6 +20,7 @@ import type {
   MonitorProcess,
   MonitorTask,
 } from '../services.ts';
+import { budgetName, type Selected, selectedBudget } from './budget.ts';
 import { Emitter } from './emitter.ts';
 
 export const RENEW_MS = 10000;
@@ -270,6 +271,8 @@ function budgetVital(budget: BudgetState, now: number): MonitorVital {
   const resets = new Date(budget.resets);
   return {
     id: 'budget',
+    provider: budget.provider,
+    window: budget.window,
     label: `Budget (${budget.window})`,
     value: `${budget.percent}%`,
     ...(Number.isNaN(resets.getTime())
@@ -449,7 +452,7 @@ function budgetAlerts(budget: BudgetState | null | undefined): AgentMonitorAlert
   return [
     {
       id: 'budget',
-      title: `Budget ${budget.percent}% used`,
+      title: `${budgetName(budget.provider)} budget ${budget.percent}% used`,
       detail: resetLine(budget),
       severity: budget.percent >= BUDGET_ERROR ? 'error' : 'warn',
     },
@@ -784,6 +787,7 @@ export interface MonitorAdapterOptions {
   sampleMs?: number;
   intervals?: Intervals;
   now?: () => number;
+  selected?: Selected;
 }
 
 interface Open {
@@ -800,6 +804,7 @@ export class MonitorAdapter implements MonitorPort {
   readonly #sampleMs: number;
   readonly #intervals: Intervals;
   readonly #now: () => number;
+  readonly #selected: Selected | undefined;
   #listeners = 0;
   #open: Open | undefined;
   #history: Sample[] = [];
@@ -816,6 +821,14 @@ export class MonitorAdapter implements MonitorPort {
     this.#sampleMs = options.sampleMs ?? SAMPLE_MS;
     this.#intervals = options.intervals ?? globalIntervals;
     this.#now = options.now ?? Date.now;
+    this.#selected = options.selected;
+    let provider = options.selected?.provider();
+    options.selected?.onChange(() => {
+      const next = options.selected?.provider();
+      if (next === provider) return;
+      provider = next;
+      if (this.#listeners) this.#emitter.emit('snapshot', this.snapshot());
+    });
     connection.monitor?.subscribe(() => this.#update());
     connection.settings.state.subscribe(() => this.#update());
     connection.changes?.subscribe(() => this.#update());
@@ -842,7 +855,7 @@ export class MonitorAdapter implements MonitorPort {
     const settings = this.#connection.settings.state.value;
     return monitorSnapshot({
       feed: this.#connection.monitor?.value,
-      budget: settings?.budget,
+      budget: selectedBudget(settings, this.#selected?.provider()),
       models: settings?.models ?? [],
       changes: this.#connection.changes?.value?.changes ?? [],
       extra: this.#extra(),

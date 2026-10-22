@@ -13,6 +13,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+import { xaiProvider } from '@earendil-works/pi-ai/providers/xai';
 import { MemoryStorage } from '@earendil-works/pi-durable';
 import {
   adobeProvider,
@@ -173,6 +174,11 @@ self.addEventListener('message', ({ data }) => {
   if (data?.killGrant) self.fakeVault?.killGrant(data.killGrant);
   data?.deviced?.postMessage({ polls: device.polls, issued: device.issued });
   data?.logged?.postMessage([...logged]);
+  data?.vaultUrls?.postMessage(
+    (self.fakeVault?.log ?? [])
+      .filter((entry) => entry.op === 'model')
+      .map((entry) => entry.request?.url ?? null)
+  );
   data?.vaultRecords?.postMessage(
     (self.fakeVault?.records ?? []).map(({ value: _value, ...record }) => record)
   );
@@ -474,6 +480,29 @@ const ATTRIBUTION = new Set([
   'x-opencode-client',
 ]);
 const registry = params.has('registry') ? sliccProviders() : [];
+const GROK_HOST = 'cli-chat-proxy.grok.com';
+const GROK_BILLING = `https://${GROK_HOST}/v1/billing`;
+const grokPercent = Number(params.get('grok-percent') ?? 23);
+function billing(request) {
+  const authorization =
+    request.headers.find(([name]) => name.toLowerCase() === 'authorization')?.[1] ?? '';
+  const signedIn = /^Bearer xai-access-SECRET\d+VALUE$/.test(authorization);
+  upstream.push({ url: request.url, billing: signedIn ? 'signed-in' : 'refused' });
+  if (!signedIn) return reply(401, { error: 'invalid_token' });
+  const pad = params.get('grok-billing') === 'huge' ? { pad: 'x'.repeat(70 * 1024) } : {};
+  return json({
+    ...pad,
+    config: {
+      currentPeriod: {
+        type: 'USAGE_PERIOD_TYPE_WEEKLY',
+        start: '2026-10-20T19:03:46.999237+00:00',
+        end: '2026-10-27T19:03:46.999237+00:00',
+      },
+      creditUsagePercent: grokPercent,
+      productUsage: [{ product: 'GrokBuild', usagePercent: grokPercent }],
+    },
+  });
+}
 const completions = (request) => {
   const url = new URL(request.url);
   const authorization =
@@ -508,6 +537,7 @@ const relay = {
   traits: { crossOrigin: 'any' },
   async fetch(request) {
     if (AUTH_HOSTS.has(new URL(request.url).host)) return signIn(request);
+    if (new URL(request.url).host === GROK_HOST) return billing(request);
     if (new URL(request.url).host === 'chatgpt.com') return codexTurn(request);
     if (registry.length && new URL(request.url).pathname.endsWith('/chat/completions'))
       return completions(request);
@@ -554,7 +584,7 @@ const routed = params.has('route')
     }
   : {};
 const attach =
-  relayed || params.has('gateway') || registry.length
+  relayed || params.has('gateway') || registry.length || params.has('xai')
     ? async (port) => Object.assign(await attachKernel(port), { transport: relay, ...routed })
     : undefined;
 const e2e = params.has('e2e')
@@ -715,6 +745,7 @@ const running = runAgentWorker(self, {
     ...e2e,
     ...accounts,
     ...(params.has('bedrock') ? [amazonBedrockProvider()] : []),
+    ...(params.has('xai') ? [xaiProvider()] : []),
     ...registry,
   ],
   storage: params.has('persist')
@@ -732,6 +763,8 @@ if (params.has('vault')) {
     ...(params.has('bedrock')
       ? [{ provider: 'amazon-bedrock', url: 'https://bedrock-runtime.us-west-2.amazonaws.com' }]
       : []),
+    ...(params.has('xai') ? [{ provider: 'xai', url: 'https://api.x.ai/v1' }] : []),
+    ...(params.has('grok-billing') ? [{ provider: 'xai', url: GROK_BILLING }] : []),
     ...registry.flatMap((provider) =>
       provider.getModels().map((model) => ({ provider: provider.id, url: model.baseUrl }))
     ),
