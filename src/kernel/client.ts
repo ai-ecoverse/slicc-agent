@@ -37,6 +37,7 @@ export interface SpawnOptions {
   cwd?: string;
   env?: Record<string, string>;
   pgid?: number;
+  tag?: string;
   onStdout?(bytes: Uint8Array): void;
   onStderr?(bytes: Uint8Array): void;
 }
@@ -53,6 +54,8 @@ export interface KernelClient {
       state?: string;
       argv?: readonly string[];
       uid?: number;
+      tag?: string;
+      tags?: readonly string[];
     }[]
   >;
   loopbackFetch?(

@@ -2,8 +2,9 @@ import type { Context } from '@earendil-works/chord';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Agents, AgentsState } from '../agents.ts';
-import type { InheritedTaint } from '../guests/guard.ts';
+import { distinctTaints, type InheritedTaint } from '../guests/guard.ts';
 import { reviewersOf } from '../guests/scoop.ts';
+import { taggedTaints } from '../guests/tags.ts';
 import { CONE_PREFIX } from '../kernel/accounts.ts';
 import type { Lineage } from '../kernel/lineage.ts';
 import { resolve } from '../kernel/paths.ts';
@@ -92,6 +93,7 @@ export interface Caller {
   fromAgent: boolean;
   scoop: string | null;
   depth: number;
+  tagged?: InheritedTaint[];
 }
 
 export type Flags = { values: Map<string, string[]>; switches: Set<string>; rest: string[] };
@@ -138,8 +140,9 @@ function claimed(agents: Agents, caller: string): Caller | undefined {
 
 export class CallerError extends Error {}
 
-export function taintsOf(deps: Deps, request: Request, who: Caller, context: Context) {
-  return callerTaints(deps.harness, deps.agents.state(), who, request.caller, context);
+export async function taintsOf(deps: Deps, request: Request, who: Caller, context: Context) {
+  const own = await callerTaints(deps.harness, deps.agents.state(), who, request.caller, context);
+  return who.tagged ? distinctTaints([...own, ...who.tagged]) : own;
 }
 
 function anonymous(agents: Agents): Caller {
@@ -203,6 +206,19 @@ async function attested(
   if (request.user && lineage.uid !== (await uidOf(deps, request.user, context)))
     throw new CallerError(`process ${request.pid} does not run as ${request.user}`);
   return lineage;
+}
+
+async function tagTaints(
+  deps: Deps,
+  lineage: Lineage | undefined,
+  context: Context
+): Promise<InheritedTaint[]> {
+  const tags = lineage ? [...lineage.tags, ...lineage.recent] : [];
+  return tags.length ? taggedTaints(deps.harness, tags, context) : [];
+}
+
+function withTags(who: Caller, tagged: readonly InheritedTaint[]): Caller {
+  return tagged.length ? { ...who, tagged: [...tagged] } : who;
 }
 
 export async function readText(
@@ -566,6 +582,7 @@ async function lickSend(
   deps: Deps,
   request: Request,
   lineage: Lineage | undefined,
+  tagged: readonly InheritedTaint[],
   context: Context
 ): Promise<Answer> {
   const parsed = flags(request.argv.slice(1), ['--file', '--lick', '--source']);
@@ -575,7 +592,7 @@ async function lickSend(
   if (!PROCESS_LICKS.includes(channel)) return refusedChannel(channel);
   if (!deps.licks) return fail('licks are not available in this agent');
   const sender = {
-    who: callerOf(deps.agents, request, lineage),
+    who: withTags(callerOf(deps.agents, request, lineage), tagged),
     spawned: (lineage as Lineage).spawned,
   };
   return channel === 'cron'
@@ -791,10 +808,12 @@ export function createCli(options: CliOptions): Runner {
         if (unchecked(request))
           return await dispatch(deps, request, anonymous(deps.agents), context);
         const lineage = await attested(deps, request, context);
+        const tagged = await tagTaints(deps, lineage, context);
         const argv = expanded(request.argv);
         if (request.as === 'agent' && argv[0] === 'send' && argv.includes('--lick'))
-          return await lickSend(deps, { ...request, argv }, lineage, context);
-        return await dispatch(deps, request, callerOf(deps.agents, request, lineage), context);
+          return await lickSend(deps, { ...request, argv }, lineage, tagged, context);
+        const who = withTags(callerOf(deps.agents, request, lineage), tagged);
+        return await dispatch(deps, request, who, context);
       } catch (error) {
         return fail((error as Error).message);
       }
