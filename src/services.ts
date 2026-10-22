@@ -542,6 +542,7 @@ export interface SettingsState {
   accounts: AccountState[];
   providers?: ProviderOption[];
   budget?: BudgetState | null;
+  budgets?: BudgetState[];
   moved?: { kind: 'model' | 'mcp'; label: string }[];
   labels?: Record<string, string>;
 }

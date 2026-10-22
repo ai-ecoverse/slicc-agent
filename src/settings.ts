@@ -36,11 +36,13 @@ import type {
   AccountField,
   AccountState,
   AgentSettings,
+  BudgetState,
   ModelChoice,
   ProviderOption,
   SettingsState,
 } from './services.ts';
 import { DEVICE_NEEDS_VAULT, DEVICE_SIGN_INS } from './sign-ins.ts';
+import { XAI, xaiUsage } from './supergrok.ts';
 
 export { BEDROCK, PREFERRED_MODELS, preferredModel } from './preferred.ts';
 
@@ -349,10 +351,29 @@ export async function providerFields(
 
 export type UsageReader = (token: string) => Promise<Budget | null>;
 
-async function budget(records: Pick<VaultRecords, 'model'>, usage: UsageReader) {
+async function adobeBudget(records: Pick<VaultRecords, 'model'>, usage: UsageReader) {
   const key = records.model(ADOBE)?.placeholder;
   const found = key ? await usage(key).catch(() => null) : null;
   return found ? { provider: ADOBE, ...found } : null;
+}
+
+export function grokBudgets(
+  records: Pick<VaultRecords, 'model'>,
+  usage: UsageReader,
+  { reach, every, now }: { reach?: Reach; every: number; now: () => number }
+): () => Promise<BudgetState | null> {
+  let kept: { key: string; at: number; found: Promise<Budget | null> } | undefined;
+  return async () => {
+    const record = records.model(XAI);
+    if (!record || record.expiresAt === undefined || record.state === 'expired') return null;
+    if (reach?.free() !== true) return null;
+    const key = `${record.placeholder} ${record.expiresAt}`;
+    const at = now();
+    if (!kept || kept.key !== key || at - kept.at >= every)
+      kept = { key, at, found: usage(record.placeholder).catch(() => null) };
+    const found = await kept.found;
+    return found ? { provider: XAI, ...found } : null;
+  };
 }
 
 export interface SettingsSources {
@@ -376,6 +397,8 @@ export async function createAgentSettings(
     reach?: Reach;
     vault?: Pick<Vault, 'connected' | 'needed' | 'grantProvider'>;
     flows?: DeviceFlows;
+    grok?: UsageReader;
+    now?: () => number;
   } = {}
 ): Promise<AgentSettings> {
   const { mcp, moved, reach, vault } = options;
@@ -401,6 +424,17 @@ export async function createAgentSettings(
   const endpoint = adobe?.baseUrl ?? ADOBE_PROXY;
   const identity = (adobe?.headers as Record<string, string> | undefined) ?? adobeIdentity();
   const usage = options.usage ?? ((token: string) => adobeUsage(token, { endpoint, identity }));
+  const every = options.every ?? BUDGET_EVERY;
+  const grok = grokBudgets(records, options.grok ?? ((token: string) => xaiUsage(token)), {
+    reach,
+    every,
+    now: options.now ?? Date.now,
+  });
+  const polled = providers.some((provider) => provider.id === XAI);
+  const budgets = async () =>
+    (await Promise.all([adobeBudget(records, usage), polled ? grok() : null])).filter(
+      (found): found is BudgetState => found !== null
+    );
   const snapshot = async (): Promise<SettingsState> => {
     const stored = new Set(
       providers
@@ -410,12 +444,14 @@ export async function createAgentSettings(
     const show = listed(records, fields);
     const shown = providers.filter((provider) => show(provider.id));
     const open = (list: Provider[]) => list.filter((provider) => !blocked(provider.id));
+    const held = await budgets();
     return {
       models: choices(models, open(providers), stored),
       labels: labels(models, open(shown), stored),
       accounts: [...accounts(records, shown, fields, blocked), ...((await mcp?.accounts()) ?? [])],
       providers: offered(providers, blocked),
-      budget: await budget(records, usage),
+      budget: held[0] ?? null,
+      budgets: held,
       ...(moved?.state.value?.length
         ? { moved: moved.state.value.map((name) => ({ ...name })) }
         : {}),
@@ -436,13 +472,13 @@ export async function createAgentSettings(
       () => undefined,
       () => undefined
     );
-  if (signedIn.length) {
+  if (signedIn.length || polled) {
     const cycle = () =>
-      void discover(signedIn)
+      void (signedIn.length ? discover(signedIn) : Promise.resolve())
         .then(() => refresh(BACKGROUND_CONTEXT))
         .catch(() => undefined);
     cycle();
-    const timer: unknown = setInterval(cycle, options.every ?? BUDGET_EVERY);
+    const timer: unknown = setInterval(cycle, every);
     (timer as { unref?: () => void }).unref?.();
   }
   mcp?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
