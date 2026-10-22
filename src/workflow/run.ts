@@ -14,6 +14,7 @@ import {
   type TaskRuntime,
   type Tx,
 } from '@earendil-works/pi-durable';
+import { deltasOnly } from '../checkpoints.ts';
 import type { InheritedTaint } from '../guests/guard.ts';
 import type { Spawned } from '../scoops/service.ts';
 import { MAX_AGENTS } from './script.ts';
@@ -57,6 +58,7 @@ export type RunRecord = {
 
 export const WorkflowsDoc = defineDoc<{ runs: Record<string, RunRecord> }>({
   kind: 'slicc.workflows',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'session',
   initial: () => ({ runs: {} }),
@@ -72,6 +74,7 @@ type Start = {
 
 const StartDoc = defineDoc<Start>({
   kind: 'slicc.workflow.start',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'task',
   initial: () => ({ startedAt: 0, seed: 0, fingerprint: null, count: 0, firstIssued: null }),
@@ -87,6 +90,7 @@ type Entry = {
 
 const JournalDoc = defineDocFamily<Entry, null>({
   kind: 'slicc.workflow.journal',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'task',
   family: true,
@@ -97,6 +101,7 @@ type Step = { folder: string; task: number; conversation: number };
 
 const StepDoc = defineDocFamily<Step, null>({
   kind: 'slicc.workflow.step',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'task',
   family: true,

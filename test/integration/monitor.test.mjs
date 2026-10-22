@@ -174,3 +174,54 @@ test('the budget card says when the weekly budget resets in calendar days, with 
   assert.equal(vital.unit, 'resets in 2 days');
   assert.equal(vital.hint, `resets ${resets.slice(0, 16).replace('T', ' ')} UTC`);
 });
+
+test('a generation waiting out a retry backoff shows in the monitor as a sleeping task', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const query = new URLSearchParams([
+    ['step', JSON.stringify({ error: 'overloaded_error: Overloaded' })],
+    ['answer', 'Recovered.'],
+  ]).toString();
+  const seen = await staged(
+    page,
+    'the sleeping retry',
+    async (query) => {
+      await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
+      const kernel = await bootKernel();
+      stage('the agent');
+      const owner = await startAgent({
+        worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const connection = await owner.connect();
+      const model = createAgentModel(connection);
+      const off = model.monitor.on('snapshot', () => {});
+      const answered = connection.prompt('Try.');
+      const sleeping = await when(
+        [connection.monitor, heard(model.monitor, 'snapshot')],
+        () => {
+          const task = connection.monitor.value?.tasks?.find((row) => row.status === 'sleeping');
+          const row = model.monitor
+            .snapshot()
+            .sections.find((section) => section.id === 'tasks')
+            ?.rows.find((entry) => entry.id === task?.id);
+          return task && row && { task, row };
+        },
+        'the sleeping generation'
+      );
+      const answer = await answered;
+      off();
+      await owner.release();
+      return { ...sleeping, answer };
+    },
+    query
+  );
+  assert.equal(seen.task.status, 'sleeping');
+  assert.equal(typeof seen.task.until, 'number');
+  assert.equal(seen.task.blocked, null);
+  assert.ok(seen.row.badges?.some((badge) => /^sleeps \d+s$/.test(badge)));
+  assert.equal(seen.row.status, 'idle');
+  assert.equal(seen.answer, 'Recovered.');
+});

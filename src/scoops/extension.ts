@@ -19,6 +19,7 @@ import { HOME } from '../kernel/env.ts';
 import { normalize, resolve } from '../kernel/paths.ts';
 import { type Layout, LEGACY } from '../layout.ts';
 import type { LickEvent } from '../licks/licks.ts';
+import { pauseUntil } from '../pause.ts';
 import { FROM_KIND } from './from.ts';
 import { type Feed, type ScoopsHost, ScoopWorkDoc } from './service.ts';
 import { cardOf } from './summary.ts';
@@ -165,7 +166,7 @@ export function waitTask(lookup: Lookup) {
           const open = state.scoops.filter((id) => !(id in state.done) && feeding.has(id));
           const expired = runtime.now() >= task.input.deadline;
           if (open.length && !expired) {
-            await runtime.sleep(Math.min(runtime.now() + 300, task.input.deadline), context);
+            await pauseUntil(runtime, Math.min(runtime.now() + 300, task.input.deadline), context);
             continue;
           }
           const names = (id: string) => agents.state().scoops[id]?.name ?? id;

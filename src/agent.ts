@@ -66,6 +66,14 @@ async function prompt(root: Conversation, text: string, context: Context): Promi
   return answerText(entry?.model?.[0]?.content);
 }
 
+const IDENTITY = { attribution: null };
+const RESTARTS = { restartLimit: Number.POSITIVE_INFINITY };
+
+function withRestarts(settings: HarnessOptions['settings']): HarnessOptions['settings'] {
+  if (typeof settings === 'function') return () => ({ ...RESTARTS, ...settings() });
+  return { ...RESTARTS, ...settings };
+}
+
 export async function openAgent(options: AgentOptions): Promise<Agent> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const registry = options.registry ?? createRegistry();
@@ -81,7 +89,8 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     {
       models: options.models,
       registry,
-      ...(options.settings ? { settings: options.settings } : {}),
+      identity: IDENTITY,
+      settings: withRestarts(options.settings),
       ...(options.env ? { env: options.env } : {}),
       ...(options.conversationCreated ? { conversationCreated: options.conversationCreated } : {}),
     },

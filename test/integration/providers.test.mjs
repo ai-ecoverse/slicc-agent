@@ -157,6 +157,11 @@ test('an API-key provider is offered, added with its key in the vault, answers a
       (entry) => entry.authorization === 'Bearer nvapi-key-0001'
     )
   );
+  assert.ok(
+    sent('integrate.api.nvidia.com').every(
+      (entry) => !entry.names.includes('x-billing-invoke-origin')
+    )
+  );
   assert.deepEqual(
     seen.registered.filter((entry) => typeof entry === 'object' && entry.provider !== 'adobe'),
     []
@@ -412,4 +417,33 @@ test('a cors-free provider is shown but blocked without a CORS-free route, unblo
     models: 0,
     option: 'cors-free-transport',
   });
+});
+
+test('Xiaomi offers MiMo V2.6 Pro as its default, the model pi-coding-agent 1.4.0 picks', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await page.evaluate(async (query) => {
+    const { owner, settings, put } = await window.openRegistry(query);
+    await window.until(() => settings.providers().length > 0);
+    const option = settings.providers().find((entry) => entry.id === 'xiaomi');
+    await put({
+      kind: 'model',
+      name: option.vaultName,
+      provider: option.id,
+      placeholder: 'fnox_proxy_xiaomi',
+      value: 'sk-xiaomi-key-0001',
+    });
+    await settings.connect(option.id);
+    const xiaomi = () => settings.models().filter((entry) => entry.id.startsWith('xiaomi/'));
+    await window.until(() => xiaomi().length > 0);
+    const defaults = xiaomi()
+      .filter((entry) => entry.default)
+      .map((entry) => entry.id);
+    const first = xiaomi()[0]?.id;
+    await owner.release();
+    return { defaults, first };
+  }, QUERY);
+  assert.deepEqual(seen.defaults, ['xiaomi/mimo-v2.6-pro']);
+  assert.notEqual(seen.first, 'xiaomi/mimo-v2.6-pro');
 });

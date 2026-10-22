@@ -10,6 +10,7 @@ import {
   type HarnessOptions,
   type Storage,
 } from '@earendil-works/pi-durable';
+import { deltasOnly } from './checkpoints.ts';
 
 export type Choosable = (tool: string) => boolean;
 
@@ -21,6 +22,7 @@ const ALL: readonly Field[] = ['model', 'thinkingLevel', 'cwd', ...SELECTION];
 
 export const SelectionDoc = defineDoc<{ version: number }>({
   kind: 'slicc.selection',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'session',
   initial: () => ({ version: 0 }),

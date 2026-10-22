@@ -472,6 +472,8 @@ class Session {
       aborting: node.abortRequested ? this.#since(`abort:${id}`) : null,
       since: this.#since(`task:${id}:${status}`),
       waits: node.state.status === 'waiting' ? node.state.on.length : 0,
+      until: node.state.status === 'sleeping' ? node.state.until : null,
+      blocked: node.blocked ?? null,
     };
   }
 
