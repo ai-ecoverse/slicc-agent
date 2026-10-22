@@ -17,6 +17,7 @@ import type {
 } from '@earendil-works/pi-durable';
 import { type AgentsState, live } from '../agents.ts';
 import { contextTokens } from '../context.ts';
+import type { Report, Reports } from '../reports.ts';
 import type {
   MonitorAgent,
   MonitorFeed,
@@ -94,6 +95,7 @@ export interface MonitorOptions {
   harness: Pick<Harness, 'watchTaskGraph' | 'usage' | 'subscribeCommits' | 'inspect'>;
   agents: { state(): Readonly<AgentsState>; onChange(listener: () => void): () => void };
   views: ReplicatedState<Record<string, ConversationView>>;
+  reports?: Reports;
   kernel?: { ps?(): Promise<readonly PsEntry[]> };
   groups?: { owned(owner: number): number[] };
   users?: () => Promise<readonly { name: string; uid: number }[]>;
@@ -266,6 +268,15 @@ class Session {
       options.agents.onChange(() => this.schedule()),
       options.views.subscribe(() => this.schedule())
     );
+    if (options.reports) {
+      for (const report of [...options.reports.list()].reverse()) this.#reported(report);
+      this.#off.push(
+        options.reports.subscribe((report) => {
+          this.#reported(report);
+          this.schedule();
+        })
+      );
+    }
     void options.harness.watchTaskGraph(this.#settings.context).then(
       (watch) => this.#watching(watch),
       () => undefined
@@ -377,6 +388,21 @@ class Session {
         this.#usageChanged();
     }
     if (changed) this.schedule();
+  }
+
+  #reported(report: Report): void {
+    const owner =
+      report.conversationId === null
+        ? null
+        : (conversations(this.#options.agents.state()).get(report.conversationId) ?? null);
+    this.#problem({
+      id: report.id,
+      at: report.at,
+      agentId: owner,
+      kind: report.id.startsWith('task:') ? 'task' : 'report',
+      message: redacted(report.message),
+      report: { type: report.type, source: report.source },
+    });
   }
 
   #failed(task: TaskRecord<JsonValue, JsonValue, JsonValue>): boolean {

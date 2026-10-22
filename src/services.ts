@@ -205,8 +205,9 @@ export interface MonitorProblem {
   id: string;
   at: number;
   agentId: string | null;
-  kind: 'task' | 'retry' | 'turn';
+  kind: 'task' | 'retry' | 'turn' | 'report';
   message: string;
+  report?: { type: string; source: string | null };
 }
 
 export interface MonitorFeed {

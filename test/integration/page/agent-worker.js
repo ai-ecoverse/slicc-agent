@@ -7,7 +7,7 @@ import {
   fauxText,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux';
-import { createRegistry } from '@earendil-works/pi-durable';
+import { createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import {
   attachApprovals,
@@ -65,6 +65,17 @@ async function start() {
   const directory = params.get('directory');
   const storage = directory ? crashing(await openOpfsSqliteStorage({ directory })) : undefined;
   const registry = createRegistry();
+  if (params.has('failing-section'))
+    registry.install(
+      defineExtension({
+        name: 'broken-notes',
+        sections: [
+          section('notes', () => {
+            throw new Error(params.get('failing-section'));
+          }),
+        ],
+      })
+    );
   let env;
   if (kernel) {
     registry.install(CodingTools);
