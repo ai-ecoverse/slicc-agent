@@ -31,10 +31,11 @@ import {
 import { codexFetch } from './codex.ts';
 import { attachFreezer } from './freezer/index.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
+import { runTag } from './guests/tags.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { imageReads } from './images/index.ts';
 import { createActivity } from './kernel/activity.ts';
-import { type AgentUsers, agentUsers, warnSupport } from './kernel/agent-users.ts';
+import { type AgentUsers, agentUsers, modeOf, warnSupport } from './kernel/agent-users.ts';
 import type { KernelClient } from './kernel/client.ts';
 import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
@@ -445,6 +446,10 @@ function freezerOf(
   return freezer;
 }
 
+function kernelParts(client: KernelClient) {
+  return [createActivity(), processGroups(client), backgroundJobs(client)] as const;
+}
+
 async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
@@ -465,11 +470,7 @@ async function start(
   const skills = setupSkills(registry, licks.licks);
   registry.install(secretsExtension({ names, vault }));
   const titles = setupTitles(registry, models, home, at, () => opened);
-  const [activity, groups, jobs] = [
-    createActivity(),
-    processGroups(client),
-    backgroundJobs(client),
-  ];
+  const [activity, groups, jobs] = kernelParts(client);
   const model = options.model ?? (await ready.defaultModel());
   let opened: Agent | undefined;
   const people = users ? agentUsers(users, client, home, () => opened?.agents) : undefined;
@@ -481,6 +482,7 @@ async function start(
     scrub: vault,
     spawn: shellGrants(names),
     ...(people ? { route: people.route } : {}),
+    ...(modeOf(client) === 'off' ? {} : { tagOf: runTag(() => opened?.harness) }),
   });
   const agent = await openUnfrozen(options, scoops, { models, model, registry, env: environment });
   opened = agent;

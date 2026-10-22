@@ -38,6 +38,7 @@ export interface KernelEnvOptions {
   exports?: Readonly<Record<string, string>>;
   scrub?: Scrub;
   spawn?: (argv: readonly string[]) => readonly string[];
+  tag?: (context: Context) => Promise<string | undefined>;
 }
 
 export const STREAMED_READ = 8 * 1024 * 1024;
@@ -104,6 +105,7 @@ export class SliccKernelEnv implements ExecutionEnv {
     this.#hooks = {
       ...(scrub ? { scrub: () => scrub.stream() } : {}),
       ...(options.spawn ? { spawn: options.spawn } : {}),
+      ...(options.tag ? { tag: options.tag } : {}),
     };
   }
 
@@ -397,8 +399,8 @@ export class SliccKernelEnv implements ExecutionEnv {
     for (let wait = groups.pending(owner); wait; wait = groups.pending(owner)) await wait;
     const pgid = groups.shared(owner);
     const release = pgid === undefined && groups.joins() ? groups.reserve(owner) : () => undefined;
-    const spawned = (process: KernelProcess) => {
-      groups.track(owner, process);
+    const spawned = (process: KernelProcess, tag?: string) => {
+      groups.track(owner, process, tag);
       tracked?.(process);
       release();
     };
@@ -437,16 +439,20 @@ export function kernelEnvironment(
   options: Omit<KernelEnvOptions, 'cwd'> & {
     identify?: (target: EnvTargetLike, context: Context) => Promise<Record<string, string>>;
     route?: (target: EnvTargetLike) => Promise<EnvRoute | undefined>;
+    tagOf?: (conversationId: number, context: Context) => Promise<string | undefined>;
   } = {}
 ): (target: EnvTargetLike, context?: Context) => SliccKernelEnv | Promise<SliccKernelEnv> {
-  const { identify, route, ...rest } = options;
-  const make = (target: EnvTargetLike, exports?: Record<string, string>, routed?: EnvRoute) =>
-    new SliccKernelEnv(routed?.client ?? client, {
+  const { identify, route, tagOf, ...rest } = options;
+  const make = (target: EnvTargetLike, exports?: Record<string, string>, routed?: EnvRoute) => {
+    const owner = target.conversationId;
+    return new SliccKernelEnv(routed?.client ?? client, {
       ...rest,
       cwd: routed?.cwd ?? target.cwd ?? routed?.home ?? HOME,
-      ...(target.conversationId === undefined ? {} : { owner: target.conversationId }),
+      ...(owner === undefined ? {} : { owner }),
+      ...(owner !== undefined && tagOf ? { tag: (context: Context) => tagOf(owner, context) } : {}),
       ...(exports ? { exports } : {}),
     });
+  };
   if (route)
     return async (target, context) => {
       const routed = await route(target);

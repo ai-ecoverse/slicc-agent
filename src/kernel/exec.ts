@@ -20,6 +20,7 @@ export const HELD = 'output held: waiting for the vault';
 export interface ExecHooks {
   scrub?: () => ScrubStream;
   spawn?: (argv: readonly string[]) => readonly string[];
+  tag?: (context: Context) => Promise<string | undefined>;
 }
 
 class Spill {
@@ -182,6 +183,21 @@ export interface Join {
   refused(code: string): void;
 }
 
+async function tagged(
+  client: KernelClient,
+  argv: readonly string[],
+  options: SpawnOptions
+): Promise<KernelProcess> {
+  if (options.tag === undefined) return client.spawn(argv, options);
+  try {
+    return await client.spawn(argv, options);
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== 'ENOSYS') throw error;
+    const { tag: _, ...untagged } = options;
+    return client.spawn(argv, untagged);
+  }
+}
+
 async function start(
   client: KernelClient,
   argv: readonly string[],
@@ -190,14 +206,17 @@ async function start(
 ): Promise<{ process: KernelProcess; joined: boolean }> {
   if (join?.pgid !== undefined) {
     try {
-      return { process: await client.spawn(argv, { ...options, pgid: join.pgid }), joined: true };
+      return {
+        process: await tagged(client, argv, { ...options, pgid: join.pgid }),
+        joined: true,
+      };
     } catch (error) {
       const code = String((error as { code?: unknown }).code ?? '');
       if (!REFUSED.has(code)) throw error;
       join.refused(code);
     }
   }
-  return { process: await client.spawn(argv, options), joined: false };
+  return { process: await tagged(client, argv, options), joined: false };
 }
 
 export async function execute(
@@ -206,7 +225,7 @@ export async function execute(
   command: string | readonly string[],
   options: ShellExecOptions | undefined,
   context: Context,
-  spawned?: (process: KernelProcess) => void,
+  spawned?: (process: KernelProcess, tag?: string) => void,
   join?: Join,
   hooks: ExecHooks = {}
 ): Promise<Result<ShellExecResult, ExecutionError>> {
@@ -232,13 +251,16 @@ export async function execute(
   const out = sink('stdout', spill, options, context, scrubbed());
   const errors = sink('stderr', spill, options, context, scrubbed());
   let started: { process: KernelProcess; joined: boolean };
+  let tag: string | undefined;
   try {
+    tag = await hooks.tag?.(context);
     started = await start(
       client,
       argv,
       {
         cwd: resolve(cwd, options?.cwd ?? '.'),
         ...(options?.env ? { env: options.env } : {}),
+        ...(tag === undefined ? {} : { tag }),
         onStdout: (bytes) => out.push(bytes),
         onStderr: (bytes) => errors.push(bytes),
       },
@@ -249,7 +271,7 @@ export async function execute(
     return err(new ExecutionError('spawn_error', message));
   }
   const { process } = started;
-  spawned?.(process);
+  spawned?.(process, tag);
   const watch = guard(process, options, context, () =>
     join ? void sweep(client, process) : process.signal('SIGKILL')
   );

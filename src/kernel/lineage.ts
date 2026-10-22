@@ -1,15 +1,18 @@
 import type { KernelClient, KernelProcess } from './client.ts';
 import { boundedPs, PS_MS } from './jobs.ts';
+import { type Recent, sightings, tagsOf } from './sightings.ts';
 
 export interface Lineage {
   agent: number | null;
   spawned: boolean;
   argv: readonly string[];
   uid?: number;
+  tags: string[];
+  recent: Recent[];
 }
 
 export interface Spawns {
-  started(process: KernelProcess, owner: number): void;
+  started(process: KernelProcess, owner: number, tag?: string): void;
   lineage(pid: number | null): Promise<Lineage | undefined>;
 }
 
@@ -19,6 +22,9 @@ type Row = {
   pgid?: number;
   argv?: readonly string[];
   uid?: number;
+  started?: number;
+  tag?: string;
+  tags?: readonly string[];
 };
 
 function indexed(rows: readonly Row[]): Map<number, Row> {
@@ -32,11 +38,12 @@ function parentOf(byPid: ReadonlyMap<number, Row>, row: Row): Row | undefined {
 }
 
 export function spawns(
-  client: Pick<KernelClient, 'ps'>,
+  client: Pick<KernelClient, 'ps' | 'fs'>,
   warn: (message: string) => void = (message) => console.warn(message),
   bound = PS_MS
 ): Spawns {
   const live = new Map<number, number>();
+  const tagged = sightings(client, bound);
   const groups = new Set<number>();
   const seen = (found: Lineage, row: Row) => {
     const owner = live.get(row.pid);
@@ -55,6 +62,8 @@ export function spawns(
       spawned: false,
       argv: row.argv ?? [],
       ...(row.uid === undefined ? {} : { uid: row.uid }),
+      tags: tagsOf(row),
+      recent: tagged.recent(pid, rows),
     };
     for (; row && !visited.has(row.pid); row = parentOf(byPid, row)) {
       visited.add(row.pid);
@@ -63,7 +72,8 @@ export function spawns(
     return found;
   };
   return {
-    started(process, owner) {
+    started(process, owner, tag) {
+      if (tag !== undefined) tagged.spawned(process, tag);
       live.set(process.pid, owner);
       groups.add(process.pgid);
       const ended = () => live.delete(process.pid);
@@ -72,7 +82,9 @@ export function spawns(
     async lineage(pid) {
       if (pid === null) return undefined;
       const rows = await boundedPs(client, warn, bound);
-      return rows ? walk(rows, pid) : undefined;
+      if (!rows) return undefined;
+      await tagged.observe(rows);
+      return walk(rows, pid);
     },
   };
 }
