@@ -1,12 +1,14 @@
 import type { Storage } from '@earendil-works/pi-durable';
 import {
+  CURRENT_SQLITE_SCHEMA_VERSION,
   type SqliteDatabase,
   type SqliteExecutor,
   SqliteStorage,
   type SqliteValue,
 } from '@earendil-works/pi-durable/storage/sqlite';
 import init, { type Database, type PreparedStatement } from '@sqlite.org/sqlite-wasm';
-import { holdLock, type PoolAccess, settlePool, vfsName } from './opfs-pool.ts';
+import { holdLock, type PoolAccess, settlePool, vfsName, writeProfile } from './opfs-pool.ts';
+import { agentVersion } from './system.ts';
 
 type Row = Record<string, unknown>;
 
@@ -158,6 +160,7 @@ export interface OpfsSqliteOptions extends PoolAccess {
   directory?: string;
   file?: string;
   load?: typeof init;
+  agent?: string;
 }
 
 export const AGENT_DIRECTORY = '/.slicc/agent';
@@ -175,6 +178,12 @@ export async function openOpfsSqliteStorage(options: OpfsSqliteOptions = {}): Pr
   );
   try {
     await settlePool(directory, options);
+    await writeProfile(
+      directory,
+      CURRENT_SQLITE_SCHEMA_VERSION,
+      options.agent ?? (await agentVersion((url) => fetch(url))),
+      options
+    );
     const sqlite3 = await (options.load ?? init)();
     const pool = await sqlite3.installOpfsSAHPoolVfs({ name: vfsName(directory), directory });
     const db = new pool.OpfsSAHPoolDb(options.file ?? '/agent.sqlite');
