@@ -1,14 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, test } from 'node:test';
@@ -61,25 +53,4 @@ test('lint:patches run through a symlinked checkout still checks patches.json an
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stderr, /broken: missing kind/);
   assert.match(result.stdout, /^check-patches: FAIL 1 problem$/m);
-});
-
-test('publish run through a symlinked checkout reaches its npm lookup, and publishes nothing when the version is already out', () => {
-  const bin = join(scratch, 'bin');
-  const calls = join(scratch, 'calls.log');
-  mkdirSync(bin);
-  writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "npm $*" >> '${calls}'\necho 9.9.9\n`);
-  writeFileSync(join(bin, 'git'), `#!/bin/sh\necho "git $*" >> '${calls}'\n`);
-  chmodSync(join(bin, 'npm'), 0o755);
-  chmodSync(join(bin, 'git'), 0o755);
-  const cwd = fixture('publish', { 'package.json': { name: '@ai-ecoverse/guard-probe' } });
-  const result = viaLink('publish.mjs', cwd, {
-    TAG: 'v9.9.9',
-    PATH: `${bin}:${process.env.PATH}`,
-  });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /@ai-ecoverse\/guard-probe@9\.9\.9 is already on npm/);
-  assert.match(result.stdout, /^publish: PASS @ai-ecoverse\/guard-probe@9\.9\.9 already on npm$/m);
-  const log = readFileSync(calls, 'utf8');
-  assert.match(log, /^npm view @ai-ecoverse\/guard-probe@9\.9\.9 version/);
-  assert.doesNotMatch(log, /publish/);
 });

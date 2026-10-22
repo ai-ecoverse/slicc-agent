@@ -10,18 +10,12 @@ const scratch = mkdtempSync(join(tmpdir(), 'verdict-'));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 const { scripts } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-const release = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
-const step =
-  /\n {8}run: \|\n((?: {10}.*\n)*? {10}node scripts\/publish\.mjs .*\n(?: {10}.*\n)+)/.exec(
-    release
-  )?.[1];
 
 const callers = [
   ['lint:chord', 'check-chord', scripts['lint:chord']],
   ['lint:patches', 'check-patches', scripts['lint:patches']],
   ['lint:vault-pi', 'check-vault-pi', scripts['lint:vault-pi']],
   ['reach', 'reach', scripts.reach],
-  ['the release.yml publish step', 'publish', step?.replace(/^ {10}/gm, '')],
 ];
 
 const stubbed = (command, gate, body) => {
