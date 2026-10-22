@@ -16,6 +16,7 @@ import type {
   ModelChoice,
   MonitorAgent,
   MonitorFeed,
+  MonitorProblem,
   MonitorProcess,
   MonitorTask,
 } from '../services.ts';
@@ -490,6 +491,17 @@ function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): Agen
         detail: problem.message,
         severity: 'error',
       });
+    else if (
+      problem.kind === 'report' &&
+      SERIOUS.has(problem.report?.type ?? '') &&
+      input.now - problem.at < FAILED_MS
+    )
+      out.push({
+        id: `reported-${problem.id}`,
+        title: `${nameOf(problem.agentId)}: ${problemName(problem)}`,
+        detail: problem.message,
+        severity: 'error',
+      });
   for (const task of feed.tasks)
     if (task.aborting !== null && input.now - task.aborting > ABORT_MS)
       out.push({
@@ -666,7 +678,39 @@ function processRows(input: MonitorInput, feed: MonitorFeed): MonitorRow[] {
   });
 }
 
-const PROBLEM_KINDS = { task: 'task failed', retry: 'retry', turn: 'turn failed' } as const;
+const PROBLEM_KINDS = {
+  task: 'task failed',
+  retry: 'retry',
+  turn: 'turn failed',
+  report: 'problem',
+} as const;
+
+const REPORTED: Record<string, string> = {
+  session_failed: 'session failed',
+  task_faulted: 'task failed',
+  task_parked: 'task parked',
+  migration_failed: 'migration failed',
+  task_outdated: 'task outdated',
+  task_error: 'task error',
+  extension_error: 'extension error',
+  host_error: 'host error',
+  listener_error: 'listener error',
+};
+
+const SERIOUS = new Set(['session_failed', 'task_faulted', 'task_parked', 'migration_failed']);
+
+function problemName(problem: MonitorProblem): string {
+  const report = problem.report;
+  if (!report) return PROBLEM_KINDS[problem.kind];
+  const label = REPORTED[report.type] ?? PROBLEM_KINDS[problem.kind];
+  return report.source ? `${label} (${report.source})` : label;
+}
+
+function problemStatus(problem: MonitorProblem): MonitorStatus {
+  if (problem.kind === 'retry') return 'warn';
+  if (problem.kind === 'report' && !SERIOUS.has(problem.report?.type ?? '')) return 'warn';
+  return 'error';
+}
 
 function sections(input: MonitorInput, feed: MonitorFeed): MonitorSection[] {
   const agents = new Map(feed.agents.map((agent) => [agent.id, agent]));
@@ -685,9 +729,9 @@ function sections(input: MonitorInput, feed: MonitorFeed): MonitorSection[] {
       label: 'Recent problems',
       rows: feed.problems.map((problem) => ({
         id: problem.id,
-        name: `${nameOf(problem.agentId)} · ${PROBLEM_KINDS[problem.kind]}`,
+        name: `${nameOf(problem.agentId)} · ${problemName(problem)}`,
         meta: problem.message,
-        status: problem.kind === 'retry' ? 'warn' : 'error',
+        status: problemStatus(problem),
       })),
     },
   ];

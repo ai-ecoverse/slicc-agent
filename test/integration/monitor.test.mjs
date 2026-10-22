@@ -225,3 +225,50 @@ test('a generation waiting out a retry backoff shows in the monitor as a sleepin
   assert.equal(seen.row.status, 'idle');
   assert.equal(seen.answer, 'Recovered.');
 });
+
+test('a failure pi durable reports without failing the turn shows in the monitor, also when it happened before the panel opened', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'the reported failure', async () => {
+    await import('/dist-test/page.js');
+    stage('the agent');
+    const owner = await startAgent({
+      worker: () =>
+        new Worker('/dist-test/agent-worker.js?failing-section=notes are unreadable&answer=Fine.', {
+          type: 'module',
+        }),
+    });
+    const connection = await owner.connect();
+    stage('the answer');
+    const answer = await connection.prompt('Hello.');
+    const before = connection.monitor.value?.open ?? false;
+    const model = createAgentModel(connection);
+    const off = model.monitor.on('snapshot', () => {});
+    stage('the problem');
+    const shown = await when(
+      [connection.monitor, heard(model.monitor, 'snapshot')],
+      () => {
+        const problem = connection.monitor.value?.problems?.find(
+          (entry) => entry.kind === 'report'
+        );
+        const row = model.monitor
+          .snapshot()
+          .sections.find((section) => section.id === 'problems')
+          ?.rows.find((entry) => entry.id === problem?.id);
+        return problem && row && { problem, row };
+      },
+      'the reported problem'
+    );
+    off();
+    await owner.release();
+    return { answer, before, ...shown };
+  });
+  assert.equal(seen.answer, 'Fine.');
+  assert.equal(seen.before, false);
+  assert.equal(seen.problem.agentId, 'cone');
+  assert.equal(seen.problem.message, 'notes are unreadable');
+  assert.deepEqual(seen.problem.report, { type: 'extension_error', source: 'broken-notes' });
+  assert.equal(seen.row.name, 'sliccy · extension error (broken-notes)');
+  assert.equal(seen.row.meta, 'notes are unreadable');
+  assert.equal(seen.row.status, 'warn');
+});
