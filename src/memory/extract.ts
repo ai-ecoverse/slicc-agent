@@ -306,10 +306,14 @@ export function idleTask(
         const idleMs = (on ? idleMinutes : DEFAULT_IDLE_MINUTES) * 60_000;
         const now = runtime.now();
         const view = await runtime.context(conversation, context);
-        const tail = view.entries.at(-1)?.id ?? 0;
+        const last = view.entries.at(-1);
+        const tail = last?.id ?? 0;
         const seen = task.state.checkpoint;
-        if (tail !== seen.tail)
-          return runtime.sleepUntil(now + idleMs, { phase: 'watch', tail, since: now }, context);
+        if (tail !== seen.tail) {
+          const stamp = last?.model?.at(-1)?.timestamp;
+          const since = typeof stamp === 'number' && stamp <= now ? stamp : now;
+          return runtime.sleepUntil(since + idleMs, { phase: 'watch', tail, since }, context);
+        }
         const due = seen.since + idleMs;
         if (now < due) return runtime.sleepUntil(due, seen, context);
         if (on) await schedule(conversation, tail, context, who.id);
