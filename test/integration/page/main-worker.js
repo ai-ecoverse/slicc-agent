@@ -472,6 +472,13 @@ function gateway(request) {
     })(),
   };
 }
+const ATTRIBUTION = new Set([
+  'http-referer',
+  'x-openrouter-title',
+  'x-openrouter-categories',
+  'x-billing-invoke-origin',
+  'x-opencode-client',
+]);
 const registry = params.has('registry') ? sliccProviders() : [];
 const GROK_HOST = 'cli-chat-proxy.grok.com';
 const GROK_BILLING = `https://${GROK_HOST}/v1/billing`;
@@ -503,6 +510,11 @@ const completions = (request) => {
     url: request.url,
     authorization,
     names: request.headers.map(([name]) => name.toLowerCase()),
+    attribution: Object.fromEntries(
+      request.headers
+        .map(([name, value]) => [name.toLowerCase(), value])
+        .filter(([name]) => ATTRIBUTION.has(name))
+    ),
   });
   if (device.revoked.has(authorization?.replace(/^Bearer /, '')))
     return {

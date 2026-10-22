@@ -1,5 +1,5 @@
 import type { Context, JsonValue, RemoteContract, ReplicatedState } from '@earendil-works/chord';
-import type { ConversationView } from '@earendil-works/pi-durable';
+import type { BlockedReason, ConversationView } from '@earendil-works/pi-durable';
 import type { Approval, ApprovalAnswer, ApprovalDecided } from './approvals/index.ts';
 import type {
   ApprovalPolicy,
@@ -174,12 +174,14 @@ export interface MonitorTask {
   detail: string | null;
   agentId: string | null;
   owner: string | null;
-  status: 'pending' | 'running' | 'waiting' | 'completing';
+  status: 'pending' | 'running' | 'waiting' | 'sleeping' | 'completing';
   phase: string;
   background: boolean;
   aborting: number | null;
   since: number;
   waits: number;
+  until: number | null;
+  blocked: BlockedReason | null;
 }
 
 export interface MonitorProcess {

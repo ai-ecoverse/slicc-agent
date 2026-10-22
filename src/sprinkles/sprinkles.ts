@@ -1,6 +1,7 @@
 import type { Context, JsonValue } from '@earendil-works/chord';
 import { defineDoc } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { deltasOnly } from '../checkpoints.ts';
 import { normalize } from '../kernel/paths.ts';
 
 export { SPRINKLE_KIND, type Sprinkle } from './kind.ts';
@@ -22,6 +23,7 @@ export const SprinklesDoc = defineDoc<{
   welcomed: boolean;
 }>({
   kind: 'slicc.sprinkles',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'session',
   initial: () => ({ owners: {}, state: {}, welcomed: false }),

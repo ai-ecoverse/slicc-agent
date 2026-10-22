@@ -585,6 +585,13 @@ function alerts(input: MonitorInput, feed: MonitorFeed): AgentMonitorAlert[] {
   ];
 }
 
+const BLOCKED: Record<NonNullable<MonitorTask['blocked']>, string> = {
+  missing_task: 'blocked: no definition',
+  task_too_old: 'blocked: definition too old',
+  migration_failed: 'blocked: migration failed',
+  restart_limit: 'blocked: restart limit',
+};
+
 function taskRow(
   task: MonitorTask,
   depth: number,
@@ -592,15 +599,18 @@ function taskRow(
   now: number
 ): MonitorRow {
   const aborting = task.aborting !== null && now - task.aborting > ABORT_ROW_MS;
-  const status: MonitorStatus = aborting
-    ? 'warn'
-    : task.status === 'running' || task.status === 'completing'
-      ? 'active'
-      : 'idle';
+  const status: MonitorStatus =
+    aborting || task.blocked
+      ? 'warn'
+      : task.status === 'running' || task.status === 'completing'
+        ? 'active'
+        : 'idle';
   const badges = [
     ...(task.background ? ['background'] : []),
     ...(task.aborting !== null ? ['aborting'] : []),
     ...(task.waits ? [`waits on ${task.waits}`] : []),
+    ...(typeof task.until === 'number' ? [`sleeps ${age(task.until - now)}`] : []),
+    ...(task.blocked ? [BLOCKED[task.blocked]] : []),
   ];
   return {
     id: task.id,
