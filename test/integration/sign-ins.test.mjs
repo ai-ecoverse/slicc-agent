@@ -600,7 +600,13 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
       await it.device('approve');
       const failure = await started.done;
       await window.until(() => it.account('openai-codex')?.status === 'connected');
-      const reply = await window.reply(it.agent, 'openai-codex/gpt-5.5', 'Hello ChatGPT.');
+      const codex = () =>
+        it.settings.models().filter((entry) => entry.id.startsWith('openai-codex/'));
+      await window.until(() => codex().length > 0);
+      const preferred = codex()
+        .filter((entry) => entry.default)
+        .map((entry) => entry.id);
+      const reply = await window.reply(it.agent, preferred[0], 'Hello ChatGPT.');
       const turn = (await it.log()).upstream.find((entry) =>
         entry.url?.startsWith('https://chatgpt.com/')
       );
@@ -610,6 +616,7 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
         secret: shown.secret ?? null,
         shown: shown.signIn,
         failure,
+        preferred,
         reply,
         account: turn?.account,
         authorization: turn?.authorization?.replace(/^(Bearer e2e\.)[^.]+\./, '$1….'),
@@ -625,6 +632,7 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
   assert.equal(seen.secret, null);
   assert.deepEqual(seen.shown, { url: 'https://auth.openai.com/codex/device', code: 'CODE-0001' });
   assert.equal(seen.failure, null);
+  assert.deepEqual(seen.preferred, ['openai-codex/gpt-6.1-sol']);
   assert.equal(seen.reply, 'From chatgpt.com.');
   assert.equal(seen.account, 'acct-e2e-0001');
   assert.equal(seen.authorization, 'Bearer e2e.….SECRET1VALUE');
