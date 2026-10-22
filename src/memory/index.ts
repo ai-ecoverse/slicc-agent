@@ -5,15 +5,20 @@ import {
   type Registry,
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
-import { compactionHook, extractTask, idleWatch, scheduler, settingsReader } from './extract.ts';
+import {
+  compactionHook,
+  extractTask,
+  idleTask,
+  idleWatch,
+  scheduler,
+  settingsReader,
+} from './extract.ts';
 import { contextSection, type Host, memorySection, memoryWriteTool } from './prompt.ts';
 import { attachMemory, type MemoryAttach, type MemoryRuntime } from './runtime.ts';
 
 export { MEMORY_WRITE, whoIs } from './prompt.ts';
 export type { MemoryAttach, MemoryDraft, MemoryRuntime } from './runtime.ts';
 export { USAGE } from './runtime.ts';
-
-export const IDLE_CHECK_MS = 60_000;
 
 export interface MemorySetup {
   extension: Extension;
@@ -31,11 +36,12 @@ export function setupMemory(registry: Registry): MemorySetup {
   const settings = settingsReader(ready);
   const task = extractTask(ready, settings);
   const schedule = scheduler(ready, task, settings);
+  const idle = idleTask(ready, schedule, settings);
   const extension = defineExtension({
     name: 'slicc-memory',
     sections: [contextSection(ready), memorySection(ready)],
     tools: [tool],
-    tasks: [task],
+    tasks: [task, idle],
     hooks: [compactionHook(schedule)],
   });
   registry.install(extension);
@@ -45,13 +51,7 @@ export function setupMemory(registry: Registry): MemorySetup {
     extract: schedule,
     async attach(options, context) {
       const runtime = await attachMemory(options, connect, context);
-      const stop = idleWatch(
-        await ready,
-        schedule,
-        settings,
-        options.idleCheckMs ?? IDLE_CHECK_MS,
-        context
-      );
+      const stop = idleWatch(await ready, idle, context);
       return {
         ...runtime,
         async close(using) {

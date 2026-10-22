@@ -52,7 +52,6 @@ export interface MemoryAttach {
   home: string;
   agentDir?: string;
   reloadMs: number;
-  idleCheckMs?: number;
   roles?: (context: Context) => Promise<{ roles: readonly Role[] } | undefined>;
 }
 

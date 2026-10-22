@@ -284,3 +284,48 @@ test('memory: after the agent host closes, no memory reload runs', async (t) => 
   });
   assert.equal(later, 0);
 });
+
+test('memory: a cone left idle has its turn extracted into its memory, also when the worker restarts while it waits', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await staged(page, 'the idle extraction', async () => {
+    await window.write(
+      '/home/.pi/agent/settings.json',
+      JSON.stringify({ memory: { idleMinutes: 0.03, extractModel: 'faux/faux-1' } })
+    );
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const extracted = JSON.stringify([
+      { section: 'Preferences', title: 'Colour', body: 'The user likes teal.', tag: 'user' },
+    ]);
+    const params = new URLSearchParams([
+      ['persist', '/.slicc/test-idle'],
+      ['answer', extracted],
+      ['answer', extracted],
+    ]);
+    const owner = await startTracked({
+      worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const first = await owner.connect();
+    const answer = await first.prompt('I like teal.');
+    stage('the restart');
+    await owner.restart();
+    const connection = await owner.connect();
+    const model = createAgentModel(connection, { storage: localStorage });
+    stage('the extracted memory');
+    await when(
+      [changed, every(100)],
+      () => model.memory.list().some((item) => item.id === 'cone/preferences/colour'),
+      'the extracted entry'
+    );
+    const entry = model.memory.list().find((item) => item.id === 'cone/preferences/colour');
+    await owner.release();
+    return { answer, body: entry.body, tag: entry.tag };
+  });
+  assert.match(seen.answer, /The user likes teal/);
+  assert.equal(seen.body, 'The user likes teal.');
+  assert.equal(seen.tag, 'user');
+});

@@ -9,6 +9,7 @@ import {
   type EntryId,
   hook,
   type ModelRef,
+  type TaskId,
 } from '@earendil-works/pi-durable';
 import { deltasOnly } from '../checkpoints.ts';
 import type { MemoryTag } from './format.ts';
@@ -267,43 +268,100 @@ export function settingsReader(ready: Promise<Host>) {
   };
 }
 
+export const IDLE_TASK = 'slicc.memory-idle';
+
+export const IdleDoc = defineDoc<{ tasks: Record<string, number> }>({
+  kind: 'slicc.memory-idle',
+  checkpointWhen: deltasOnly,
+  version: 1,
+  scope: 'session',
+  initial: () => ({ tasks: {} }),
+});
+
+type IdleState = { phase: 'watch'; tail: number; since: number };
+
+export function idleTask(
+  ready: Promise<Host>,
+  schedule: Schedule,
+  settings: (context: Context) => Promise<ExtractSettings>
+) {
+  return defineTask<{ cone: string }, IdleState, null>({
+    name: IDLE_TASK,
+    version: 1,
+    initial: () => ({ phase: 'watch', tail: -1, since: 0 }),
+    phases: {
+      async watch(task, runtime, context) {
+        const host = await ready;
+        const conversation = runtime.conversationId;
+        const key = String(conversation);
+        const who = whoIs(host.agents.state(), conversation);
+        if (who.kind !== 'cone')
+          return runtime.commit(async (tx) => {
+            const doc = await tx.doc(IdleDoc);
+            if (doc.tasks[key] === Number(task.id)) delete doc.tasks[key];
+            return { status: 'terminal', outcome: { status: 'completed', result: null } };
+          }, context);
+        const { extract, idleMinutes } = await settings(context);
+        const on = extract && idleMinutes > 0;
+        const idleMs = (on ? idleMinutes : DEFAULT_IDLE_MINUTES) * 60_000;
+        const now = runtime.now();
+        const view = await runtime.context(conversation, context);
+        const tail = view.entries.at(-1)?.id ?? 0;
+        const seen = task.state.checkpoint;
+        if (tail !== seen.tail)
+          return runtime.sleepUntil(now + idleMs, { phase: 'watch', tail, since: now }, context);
+        const due = seen.since + idleMs;
+        if (now < due) return runtime.sleepUntil(due, seen, context);
+        if (on) await schedule(conversation, tail, context, who.id);
+        return runtime.sleepUntil(now + idleMs, seen, context);
+      },
+    },
+    abort: (task, runtime, context) =>
+      runtime.commit(async (tx) => {
+        const doc = await tx.doc(IdleDoc);
+        const key = String(runtime.conversationId);
+        if (doc.tasks[key] === Number(task.id)) delete doc.tasks[key];
+        return { status: 'terminal', outcome: { status: 'aborted' } };
+      }, context),
+  });
+}
+
 export function idleWatch(
   host: Pick<Host, 'agents' | 'harness'>,
-  schedule: Schedule,
-  settings: (context: Context) => Promise<ExtractSettings>,
-  everyMs: number,
-  context: Context,
-  now: () => number = Date.now
+  task: ReturnType<typeof idleTask>,
+  context: Context
 ): () => void {
-  const seen = new Map<number, { tail: number; since: number }>();
-  const check = async () => {
-    const { idleMinutes, extract } = await settings(context);
-    if (!extract || idleMinutes === 0) return;
-    for (const cone of Object.values(host.agents.state().cones)) {
-      const conversation = await host.harness.conversation(
-        cone.conversation as ConversationId,
-        context
-      );
-      const view = await conversation?.context(context);
-      const tail = view?.entries.at(-1)?.id ?? 0;
-      const last = seen.get(cone.conversation);
-      if (!last || last.tail !== tail) {
-        seen.set(cone.conversation, { tail, since: now() });
-        continue;
-      }
-      if (now() - last.since >= idleMinutes * 60_000)
-        await schedule(cone.conversation, tail, context);
-    }
+  let stopped = false;
+  let line = Promise.resolve();
+  const ensure = () => {
+    line = line
+      .then(async () => {
+        if (stopped) return;
+        await host.harness.commit(async (tx) => {
+          const doc = await tx.doc(IdleDoc);
+          for (const [id, cone] of Object.entries(host.agents.state().cones)) {
+            const key = String(cone.conversation);
+            const known = doc.tasks[key];
+            const record = known === undefined ? undefined : await tx.task(known as TaskId);
+            if (record && record.state.status !== 'terminal') continue;
+            doc.tasks[key] = (await tx.createTask(
+              task,
+              { cone: id },
+              {
+                ownership: { kind: 'conversation' },
+                conversationId: cone.conversation as ConversationId,
+                background: true,
+              }
+            )) as number;
+          }
+        }, context);
+      })
+      .catch(() => undefined);
   };
-  let running = false;
-  const timer = setInterval(() => {
-    if (running) return;
-    running = true;
-    void check()
-      .catch(() => undefined)
-      .finally(() => {
-        running = false;
-      });
-  }, everyMs);
-  return () => clearInterval(timer);
+  const off = host.agents.onChange(ensure);
+  ensure();
+  return () => {
+    stopped = true;
+    off();
+  };
 }
