@@ -68,7 +68,6 @@ export interface CliOptions {
   ) => Promise<Answer>;
   models?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   layout?: Layout;
-  enforced?: boolean;
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
   licks?: Pick<Licks, 'deliver'>;
   webhook?: (name: string, delivery: WebhookDelivery, context: Context) => Promise<boolean>;
@@ -211,18 +210,10 @@ async function attested(
 
 async function tagTaints(
   deps: Deps,
-  request: Request,
   lineage: Lineage | undefined,
   context: Context
 ): Promise<InheritedTaint[]> {
-  if (!lineage) return [];
-  const user = request.user && request.user !== ROOT_USER ? request.user : null;
-  const uid = user ? await uidOf(deps, user, context) : 0;
-  const writers =
-    deps.enforced && uid !== undefined
-      ? lineage.recent.filter((seen) => seen.uids === null || seen.uids.includes(uid))
-      : lineage.recent;
-  const tags = [...lineage.tags, ...writers.map((seen) => seen.tag)];
+  const tags = lineage ? [...lineage.tags, ...lineage.recent] : [];
   return tags.length ? taggedTaints(deps.harness, tags, context) : [];
 }
 
@@ -817,7 +808,7 @@ export function createCli(options: CliOptions): Runner {
         if (unchecked(request))
           return await dispatch(deps, request, anonymous(deps.agents), context);
         const lineage = await attested(deps, request, context);
-        const tagged = await tagTaints(deps, request, lineage, context);
+        const tagged = await tagTaints(deps, lineage, context);
         const argv = expanded(request.argv);
         if (request.as === 'agent' && argv[0] === 'send' && argv.includes('--lick'))
           return await lickSend(deps, { ...request, argv }, lineage, tagged, context);

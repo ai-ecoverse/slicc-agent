@@ -183,18 +183,20 @@ export interface Join {
   refused(code: string): void;
 }
 
+type Started = { process: KernelProcess; tag?: string };
+
 async function tagged(
   client: KernelClient,
   argv: readonly string[],
   options: SpawnOptions
-): Promise<KernelProcess> {
-  if (options.tag === undefined) return client.spawn(argv, options);
+): Promise<Started> {
+  const { tag, ...untagged } = options;
+  if (tag === undefined) return { process: await client.spawn(argv, options) };
   try {
-    return await client.spawn(argv, options);
+    return { process: await client.spawn(argv, options), tag };
   } catch (error) {
     if ((error as { code?: unknown }).code !== 'ENOSYS') throw error;
-    const { tag: _, ...untagged } = options;
-    return client.spawn(argv, untagged);
+    return { process: await client.spawn(argv, untagged) };
   }
 }
 
@@ -203,20 +205,17 @@ async function start(
   argv: readonly string[],
   options: SpawnOptions,
   join: Join | undefined
-): Promise<{ process: KernelProcess; joined: boolean }> {
+): Promise<Started & { joined: boolean }> {
   if (join?.pgid !== undefined) {
     try {
-      return {
-        process: await tagged(client, argv, { ...options, pgid: join.pgid }),
-        joined: true,
-      };
+      return { ...(await tagged(client, argv, { ...options, pgid: join.pgid })), joined: true };
     } catch (error) {
       const code = String((error as { code?: unknown }).code ?? '');
       if (!REFUSED.has(code)) throw error;
       join.refused(code);
     }
   }
-  return { process: await tagged(client, argv, options), joined: false };
+  return { ...(await tagged(client, argv, options)), joined: false };
 }
 
 export async function execute(
@@ -250,10 +249,9 @@ export async function execute(
     };
   const out = sink('stdout', spill, options, context, scrubbed());
   const errors = sink('stderr', spill, options, context, scrubbed());
-  let started: { process: KernelProcess; joined: boolean };
-  let tag: string | undefined;
+  let started: Started & { joined: boolean };
   try {
-    tag = await hooks.tag?.(context);
+    const tag = await hooks.tag?.(context);
     started = await start(
       client,
       argv,
@@ -271,7 +269,7 @@ export async function execute(
     return err(new ExecutionError('spawn_error', message));
   }
   const { process } = started;
-  spawned?.(process, tag);
+  spawned?.(process, started.tag);
   const watch = guard(process, options, context, () =>
     join ? void sweep(client, process) : process.signal('SIGKILL')
   );

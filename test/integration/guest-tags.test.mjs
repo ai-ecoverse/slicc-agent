@@ -8,12 +8,12 @@ after(() => chrome.close());
 const bash = (command) => ({ tool: { name: 'bash', args: { command } } });
 const answer = (text) => ({ answer: text });
 
-async function boot(page, { steps, clock = false }) {
+async function boot(page, { steps, clock = false, sudo = false }) {
   await page.goto('/');
   await staged(
     page,
     'the guest-tags agent with kernel users',
-    async ({ steps, clock }) => {
+    async ({ steps, clock, sudo }) => {
       const start = new Date();
       start.setDate(start.getDate() + 1);
       start.setHours(10, 59, 0, 0);
@@ -22,8 +22,14 @@ async function boot(page, { steps, clock = false }) {
       await import('/dist-test/page.js');
       const kernel = await bootKernel(
         {},
-        clock ? { worker: new URL(`/clock-kernel-worker.js?now=${base}`, location.href) } : {}
+        {
+          ...(clock
+            ? { worker: new URL(`/clock-kernel-worker.js?now=${base}`, location.href) }
+            : {}),
+          ...(sudo ? { approve: async () => 'once' } : {}),
+        }
       );
+      if (sudo) await kernel.users.add({ name: 'cone', groups: ['sudo'] });
       const owner = await startTracked({
         worker: () =>
           new Worker(
@@ -95,7 +101,7 @@ async function boot(page, { steps, clock = false }) {
       r.exists = async (path) => (await r.sh(`test -e ${path}`)).status === 0;
       globalThis.r = r;
     },
-    { steps, clock }
+    { steps, clock, sudo }
   );
 }
 
@@ -222,4 +228,56 @@ test("a guest run's bash can't replay a clean agent call that is running: a requ
   assert.equal(seen.asked[1], prompt.slice(5));
   assert.equal(seen.clean, 0);
   assert.equal(seen.after, 1);
+});
+
+test("a guest run's leftover job can't replay a clean root agent call through sudo: the replayed scoop is asked, and the clean one isn't", async (t) => {
+  const page = await chrome.page(t);
+  const prompt = 'bash touch /tmp/root-replay-$$; while [ ! -e /tmp/release ]; do sleep 0.2; done';
+  const forge = [
+    'pid=$(cat /tmp/root-pid)',
+    'dir=/var/lib/slicc/agent/requests/root',
+    'id=forged-$$',
+    `printf '%s\\0' slicc-agent/2 agent '' / "$pid" '' 2 --prompt '${prompt}' > $dir/in/.tmp-$id`,
+    'mv $dir/in/.tmp-$id $dir/in/$id',
+  ].join('; ');
+  const left = `cat > /tmp/forge.sh <<'X'\n${forge}\nX\n(sleep 3; sudo bash /tmp/forge.sh) > /dev/null 2>&1 &`;
+  await boot(page, { sudo: true, steps: [bash(left), answer('Left.')] });
+  const seen = await staged(
+    page,
+    "a guest run's leftover job can't replay a clean root",
+    async (prompt) => {
+      const { until, pause, open, guest, send, said, asked, decide, sh } = globalThis.r;
+      await open();
+      await until(
+        async () => (await sh('test -d /var/lib/slicc/agent/requests/root/in')).status === 0,
+        'the root control directory'
+      );
+      const clean = sh(`echo $$ > /tmp/root-pid; USER=root exec agent --prompt '${prompt}'`);
+      const started = async () =>
+        Number((await sh('set -- /tmp/root-replay-*; [ -e "$1" ] && echo $# || echo 0')).stdout);
+      await until(async () => (await started()) === 1, 'the clean scoop');
+      const out = { cleanAsked: asked().length };
+      const anna = await guest();
+      await send(anna, 'Leave a job behind.');
+      out.asked = [await decide('once')];
+      await until(() => said().includes('Left.'), 'the guest run to end');
+      await until(
+        async () =>
+          asked().some((item) => item.summary === prompt.slice(5)) || (await started()) > 1,
+        'the replayed scoop'
+      );
+      await pause(500);
+      out.starts = await started();
+      if (out.starts === 1) out.asked.push(await decide('deny', 'A replay.'));
+      await sh('touch /tmp/release');
+      out.clean = (await clean).status;
+      await anna.close();
+      return out;
+    },
+    prompt
+  );
+  assert.equal(seen.cleanAsked, 0);
+  assert.equal(seen.starts, 1);
+  assert.deepEqual(seen.asked.slice(1), [prompt.slice(5)]);
+  assert.equal(seen.clean, 0);
 });

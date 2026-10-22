@@ -1,6 +1,6 @@
 import type { KernelClient, KernelProcess } from './client.ts';
 import { boundedPs, PS_MS } from './jobs.ts';
-import { type Recent, sightings, tagsOf } from './sightings.ts';
+import { sightings, tagsOf } from './sightings.ts';
 
 export interface Lineage {
   agent: number | null;
@@ -8,7 +8,7 @@ export interface Lineage {
   argv: readonly string[];
   uid?: number;
   tags: string[];
-  recent: Recent[];
+  recent: string[];
 }
 
 export interface Spawns {
@@ -51,7 +51,7 @@ export function spawns(
       found.spawned = true;
     if (owner !== undefined && found.agent === null) found.agent = owner;
   };
-  const walk = (rows: readonly Row[], pid: number): Lineage | undefined => {
+  const walk = (rows: readonly Row[], pid: number, at: number): Lineage | undefined => {
     for (const pgid of [...groups]) if (!rows.some((row) => row.pgid === pgid)) groups.delete(pgid);
     const byPid = indexed(rows);
     const visited = new Set<number>();
@@ -63,7 +63,7 @@ export function spawns(
       argv: row.argv ?? [],
       ...(row.uid === undefined ? {} : { uid: row.uid }),
       tags: tagsOf(row),
-      recent: tagged.recent(pid, rows),
+      recent: tagged.recent(pid, rows, at),
     };
     for (; row && !visited.has(row.pid); row = parentOf(byPid, row)) {
       visited.add(row.pid);
@@ -81,10 +81,11 @@ export function spawns(
     },
     async lineage(pid) {
       if (pid === null) return undefined;
+      const at = tagged.mark();
       const rows = await boundedPs(client, warn, bound);
       if (!rows) return undefined;
-      await tagged.observe(rows);
-      return walk(rows, pid);
+      await tagged.observe(rows, at);
+      return walk(rows, pid, at);
     },
   };
 }

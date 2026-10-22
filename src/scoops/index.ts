@@ -349,7 +349,6 @@ export function setupScoops(
         ...(options.freezer ? { freezer: options.freezer } : {}),
         ...(options.models ? { models: options.models } : {}),
         layout,
-        enforced: options.enforced === true,
         ...(options.panel ? { panel: options.panel } : {}),
         ...(options.webhook ? { webhook: options.webhook } : {}),
         workflow: cliCommand(workflows.workflows, layout, env, agents),
