@@ -66,7 +66,8 @@ async function prompt(root: Conversation, text: string, context: Context): Promi
   return answerText(entry?.model?.[0]?.content);
 }
 
-const IDENTITY = { attribution: null };
+export const SLICC_ATTRIBUTION = { name: 'SLICC', url: 'https://www.sliccy.com' };
+const IDENTITY = { attribution: SLICC_ATTRIBUTION };
 const RESTARTS = { restartLimit: Number.POSITIVE_INFINITY };
 
 function withRestarts(settings: HarnessOptions['settings']): HarnessOptions['settings'] {

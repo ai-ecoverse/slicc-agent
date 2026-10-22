@@ -157,11 +157,9 @@ test('an API-key provider is offered, added with its key in the vault, answers a
       (entry) => entry.authorization === 'Bearer nvapi-key-0001'
     )
   );
-  assert.ok(
-    sent('integrate.api.nvidia.com').every(
-      (entry) => !entry.names.includes('x-billing-invoke-origin')
-    )
-  );
+  for (const entry of sent('integrate.api.nvidia.com'))
+    assert.deepEqual(entry.attribution, { 'x-billing-invoke-origin': 'SLICC' });
+  for (const entry of sent('api.groq.com')) assert.deepEqual(entry.attribution, {});
   assert.deepEqual(
     seen.registered.filter((entry) => typeof entry === 'object' && entry.provider !== 'adobe'),
     []
@@ -446,4 +444,48 @@ test('Xiaomi offers MiMo V2.6 Pro as its default, the model pi-coding-agent 1.4.
   }, QUERY);
   assert.deepEqual(seen.defaults, ['xiaomi/mimo-v2.6-pro']);
   assert.notEqual(seen.first, 'xiaomi/mimo-v2.6-pro');
+});
+
+test('OpenRouter and OpenCode requests are attributed to SLICC', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await page.evaluate(async (query) => {
+    const { owner, settings, agent, put, log } = await window.openRegistry(query);
+    await window.until(() => settings.providers().length > 0);
+    const replies = {};
+    for (const [id, modelId] of [
+      ['openrouter', 'openrouter/moonshotai/kimi-k2.6'],
+      ['opencode', 'opencode/kimi-k2.6'],
+    ]) {
+      const option = settings.providers().find((entry) => entry.id === id);
+      await put({
+        kind: 'model',
+        name: option.vaultName,
+        provider: id,
+        placeholder: `fnox_proxy_${id}`,
+        value: `sk-${id}-key-0001`,
+      });
+      await settings.connect(id);
+      await window.until(
+        () => settings.accounts().find((entry) => entry.id === id)?.status === 'connected'
+      );
+      replies[id] = await window.reply(agent, modelId, `Hello ${id}.`);
+    }
+    const { upstream } = await log();
+    await owner.release();
+    return { replies, upstream };
+  }, QUERY);
+  assert.equal(seen.replies.openrouter, 'From openrouter.ai.');
+  assert.equal(seen.replies.opencode, 'From opencode.ai.');
+  const sent = (host) => seen.upstream.filter((entry) => new URL(entry.url).host === host);
+  assert.ok(sent('openrouter.ai').length > 0);
+  for (const entry of sent('openrouter.ai'))
+    assert.deepEqual(entry.attribution, {
+      'http-referer': 'https://www.sliccy.com',
+      'x-openrouter-title': 'SLICC',
+    });
+  assert.ok(sent('opencode.ai').length > 0);
+  for (const entry of sent('opencode.ai'))
+    assert.deepEqual(entry.attribution, { 'x-opencode-client': 'SLICC' });
 });

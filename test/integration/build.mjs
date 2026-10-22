@@ -13,8 +13,6 @@ await build({
     'test/integration/page/adobe-worker.js',
     'test/integration/page/other-owner.js',
     'test/integration/page/agent-5.js',
-    'test/integration/page/agent-6-worker.js',
-    'test/integration/page/upgrade-worker.js',
   ],
   outdir: 'dist-test',
   bundle: true,
