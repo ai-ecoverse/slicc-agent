@@ -6,6 +6,7 @@ import {
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { defineDoc, type Harness, type JsonObject } from '@earendil-works/pi-durable';
+import { deltasOnly } from '../checkpoints.ts';
 import {
   changedGuests,
   DEFAULT_GUEST_POLICY,
@@ -33,6 +34,7 @@ type Overrides = Partial<Record<keyof ApprovalPolicy, JsonObject>>;
 
 export const ApprovalPolicyDoc = defineDoc<{ overrides: Overrides }>({
   kind: 'slicc.approval-policy',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'session',
   initial: () => ({ overrides: {} }),

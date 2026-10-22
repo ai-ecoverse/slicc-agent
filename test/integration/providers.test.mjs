@@ -157,6 +157,9 @@ test('an API-key provider is offered, added with its key in the vault, answers a
       (entry) => entry.authorization === 'Bearer nvapi-key-0001'
     )
   );
+  for (const entry of sent('integrate.api.nvidia.com'))
+    assert.deepEqual(entry.attribution, { 'x-billing-invoke-origin': 'SLICC' });
+  for (const entry of sent('api.groq.com')) assert.deepEqual(entry.attribution, {});
   assert.deepEqual(
     seen.registered.filter((entry) => typeof entry === 'object' && entry.provider !== 'adobe'),
     []
@@ -412,4 +415,77 @@ test('a cors-free provider is shown but blocked without a CORS-free route, unblo
     models: 0,
     option: 'cors-free-transport',
   });
+});
+
+test('Xiaomi offers MiMo V2.6 Pro as its default, the model pi-coding-agent 1.4.0 picks', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await page.evaluate(async (query) => {
+    const { owner, settings, put } = await window.openRegistry(query);
+    await window.until(() => settings.providers().length > 0);
+    const option = settings.providers().find((entry) => entry.id === 'xiaomi');
+    await put({
+      kind: 'model',
+      name: option.vaultName,
+      provider: option.id,
+      placeholder: 'fnox_proxy_xiaomi',
+      value: 'sk-xiaomi-key-0001',
+    });
+    await settings.connect(option.id);
+    const xiaomi = () => settings.models().filter((entry) => entry.id.startsWith('xiaomi/'));
+    await window.until(() => xiaomi().length > 0);
+    const defaults = xiaomi()
+      .filter((entry) => entry.default)
+      .map((entry) => entry.id);
+    const first = xiaomi()[0]?.id;
+    await owner.release();
+    return { defaults, first };
+  }, QUERY);
+  assert.deepEqual(seen.defaults, ['xiaomi/mimo-v2.6-pro']);
+  assert.notEqual(seen.first, 'xiaomi/mimo-v2.6-pro');
+});
+
+test('OpenRouter and OpenCode requests are attributed to SLICC', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await page.evaluate(async (query) => {
+    const { owner, settings, agent, put, log } = await window.openRegistry(query);
+    await window.until(() => settings.providers().length > 0);
+    const replies = {};
+    for (const [id, modelId] of [
+      ['openrouter', 'openrouter/moonshotai/kimi-k2.6'],
+      ['opencode', 'opencode/kimi-k2.6'],
+    ]) {
+      const option = settings.providers().find((entry) => entry.id === id);
+      await put({
+        kind: 'model',
+        name: option.vaultName,
+        provider: id,
+        placeholder: `fnox_proxy_${id}`,
+        value: `sk-${id}-key-0001`,
+      });
+      await settings.connect(id);
+      await window.until(
+        () => settings.accounts().find((entry) => entry.id === id)?.status === 'connected'
+      );
+      replies[id] = await window.reply(agent, modelId, `Hello ${id}.`);
+    }
+    const { upstream } = await log();
+    await owner.release();
+    return { replies, upstream };
+  }, QUERY);
+  assert.equal(seen.replies.openrouter, 'From openrouter.ai.');
+  assert.equal(seen.replies.opencode, 'From opencode.ai.');
+  const sent = (host) => seen.upstream.filter((entry) => new URL(entry.url).host === host);
+  assert.ok(sent('openrouter.ai').length > 0);
+  for (const entry of sent('openrouter.ai'))
+    assert.deepEqual(entry.attribution, {
+      'http-referer': 'https://www.sliccy.com',
+      'x-openrouter-title': 'SLICC',
+    });
+  assert.ok(sent('opencode.ai').length > 0);
+  for (const entry of sent('opencode.ai'))
+    assert.deepEqual(entry.attribution, { 'x-opencode-client': 'SLICC' });
 });

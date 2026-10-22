@@ -10,6 +10,7 @@ import {
   hook,
   type ModelRef,
 } from '@earendil-works/pi-durable';
+import { deltasOnly } from '../checkpoints.ts';
 import type { MemoryTag } from './format.ts';
 import { MAX_BYTES, parseMemory, redactSecrets, serializeMemory } from './format.ts';
 import { type Host, whoIs } from './prompt.ts';
@@ -26,6 +27,7 @@ export type ExtractState = {
 
 export const ExtractDoc = defineDoc<ExtractState>({
   kind: 'slicc.memory-extract',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'session',
   initial: () => ({ cursors: {}, pending: {} }),

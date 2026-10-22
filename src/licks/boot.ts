@@ -5,6 +5,7 @@ import {
   type EntryRecord,
   type Harness,
 } from '@earendil-works/pi-durable';
+import { deltasOnly } from '../checkpoints.ts';
 import { type Job, type Jobs, shortCommand } from '../kernel/jobs.ts';
 import type { Deliver } from './fswatch.ts';
 import type { LickChannel } from './lick.ts';
@@ -21,6 +22,7 @@ type HostState = {
 
 export const LicksHostDoc = defineDoc<HostState>({
   kind: 'slicc.licks.host',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'session',
   initial: () => ({ cron: {}, agent: null, boot: null, mark: 0, upgrades: 0 }),
