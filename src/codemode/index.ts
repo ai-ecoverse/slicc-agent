@@ -26,7 +26,7 @@ import {
   type ToolExecutionApi,
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import { scrubItems } from '../secrets/scrub.ts';
 
 export const CODEMODE = 'codemode';
@@ -36,7 +36,7 @@ const CHARS_PER_TOKEN = 4;
 
 export const CodemodeDoc = defineDoc<{ store: Record<string, JsonValue> }>({
   kind: 'slicc.codemode',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'conversation',
   history: 'rewindable',

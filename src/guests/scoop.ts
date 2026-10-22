@@ -18,7 +18,7 @@ import { type AgentsState, live, type ScoopRecord } from '../agents.ts';
 import type { Approval, Approvals, ApprovalsState } from '../approvals/index.ts';
 import { judgeState, type OwnerIntent } from '../approvals/judge.ts';
 import { ApprovalsDoc, REASONS, scoopTier } from '../approvals/record.ts';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas } from '../checkpoints.ts';
 import { taintsOf } from './guard.ts';
 import { GuestsDoc } from './seats.ts';
 
@@ -31,7 +31,7 @@ export type ScoopReview = { approval: string; scoop: string; name: string };
 
 export const ScoopReviewDoc = defineDoc<ScoopReview>({
   kind: 'slicc.scoop-review',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -41,7 +41,7 @@ export const ScoopReviewDoc = defineDoc<ScoopReview>({
 
 export const ScoopRoutesDoc = defineDoc<{ routes: Record<string, number> }>({
   kind: 'slicc.scoop-approvals',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ routes: {} }),
