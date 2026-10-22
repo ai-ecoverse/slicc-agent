@@ -489,8 +489,9 @@ function billing(request) {
   const signedIn = /^Bearer xai-access-SECRET\d+VALUE$/.test(authorization);
   upstream.push({ url: request.url, billing: signedIn ? 'signed-in' : 'refused' });
   if (!signedIn) return reply(401, { error: 'invalid_token' });
-  if (params.get('grok-billing') === 'huge') return json({ pad: 'x'.repeat(70 * 1024) });
+  const pad = params.get('grok-billing') === 'huge' ? { pad: 'x'.repeat(70 * 1024) } : {};
   return json({
+    ...pad,
     config: {
       currentPeriod: {
         type: 'USAGE_PERIOD_TYPE_WEEKLY',

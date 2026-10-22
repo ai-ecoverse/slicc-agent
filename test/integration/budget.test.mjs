@@ -77,6 +77,7 @@ const helpers = () => {
       card,
       leaks,
       tray,
+      monitor,
       state: () => connection.settings.state.value,
       log: () => post({}, 'upstream'),
       vaultUrls: () => post({}, 'vaultUrls'),
@@ -191,6 +192,28 @@ test('while the vault doesn’t fill the xAI token at the billing endpoint, noth
   assert.deepEqual(seen.budgets, ['adobe']);
   assert.equal(seen.reached, 0);
   assert.deepEqual(seen.leaks, []);
+});
+
+test('a SuperGrok budget nearly used up raises a Monitor alert named for SuperGrok', async (t) => {
+  const page = await opened(t);
+  const seen = await staged(
+    page,
+    'the SuperGrok alert',
+    async (query) => {
+      const it = await window.openBudgets(query);
+      await it.pick('xai/grok-4.7');
+      const off = it.monitor.on('snapshot', () => {});
+      const alert = await it.until(
+        () => it.monitor.snapshot().alerts.find((entry) => entry.id === 'budget'),
+        'the budget alert'
+      );
+      off();
+      await it.owner.release();
+      return { title: alert.title, severity: alert.severity };
+    },
+    queryOf('grok-billing', 'grok-percent=96')
+  );
+  assert.deepEqual(seen, { title: 'SuperGrok budget 96% used', severity: 'error' });
 });
 
 test('a billing answer larger than 64 KiB shows no SuperGrok budget', async (t) => {
