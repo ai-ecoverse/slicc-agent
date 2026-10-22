@@ -202,12 +202,17 @@ test('a generation waiting out a retry backoff shows in the monitor as a sleepin
       const sleeping = await when(
         [connection.monitor, heard(model.monitor, 'snapshot')],
         () => {
-          const task = connection.monitor.value?.tasks?.find((row) => row.status === 'sleeping');
-          const row = model.monitor
-            .snapshot()
-            .sections.find((section) => section.id === 'tasks')
-            ?.rows.find((entry) => entry.id === task?.id);
-          return task && row && { task, row };
+          const task = connection.monitor.value?.tasks?.find(
+            (row) => row.kind === 'pi.generation' && row.status === 'sleeping'
+          );
+          const watcher = connection.monitor.value?.tasks?.find(
+            (row) => row.kind === 'slicc.memory-idle'
+          );
+          const rows =
+            model.monitor.snapshot().sections.find((section) => section.id === 'tasks')?.rows ?? [];
+          const row = rows.find((entry) => entry.id === task?.id);
+          const idle = rows.find((entry) => entry.id === watcher?.id);
+          return task && row && idle && { task, row, idle };
         },
         'the sleeping generation'
       );
@@ -223,6 +228,8 @@ test('a generation waiting out a retry backoff shows in the monitor as a sleepin
   assert.equal(seen.task.blocked, null);
   assert.ok(seen.row.badges?.some((badge) => /^sleeps \d+s$/.test(badge)));
   assert.equal(seen.row.status, 'idle');
+  assert.equal(seen.idle.name, 'memory idle watch');
+  assert.ok(seen.idle.badges?.some((badge) => /^sleeps \d+m$/.test(badge)));
   assert.equal(seen.answer, 'Recovered.');
 });
 
