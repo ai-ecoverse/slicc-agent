@@ -70,13 +70,6 @@ async function prompt(root: Conversation, text: string, context: Context): Promi
 
 export const SLICC_ATTRIBUTION = { name: 'SLICC', url: 'https://www.sliccy.com' };
 const IDENTITY = { attribution: SLICC_ATTRIBUTION };
-const RESTARTS = { restartLimit: Number.POSITIVE_INFINITY };
-
-function withRestarts(settings: HarnessOptions['settings']): HarnessOptions['settings'] {
-  if (typeof settings === 'function') return () => ({ ...RESTARTS, ...settings() });
-  return { ...RESTARTS, ...settings };
-}
-
 export async function openAgent(options: AgentOptions): Promise<Agent> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const registry = options.registry ?? createRegistry();
@@ -94,7 +87,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
       models: options.models,
       registry,
       identity: IDENTITY,
-      settings: withRestarts(options.settings),
+      ...(options.settings ? { settings: options.settings } : {}),
       onReport: (error, info) => reports.record(error, info),
       ...(options.env ? { env: options.env } : {}),
       ...(options.conversationCreated ? { conversationCreated: options.conversationCreated } : {}),

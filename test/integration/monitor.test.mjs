@@ -272,3 +272,104 @@ test('a failure pi durable reports without failing the turn shows in the monitor
   assert.equal(seen.row.meta, 'notes are unreadable');
   assert.equal(seen.row.status, 'warn');
 });
+
+test('a turn cut off by five restarts in a row is parked, the monitor says how to run it again, and agent retry does', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'the parked turn', async () => {
+    await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
+    const kernel = await bootKernel();
+    const query = new URLSearchParams([
+      ['persist', '/.slicc/test-parked'],
+      ['step', JSON.stringify({ hold: true })],
+    ]);
+    const owner = await startAgent({
+      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const watched = async () => {
+      const connection = await owner.connect();
+      const model = createAgentModel(connection);
+      const off = model.monitor.on('snapshot', () => {});
+      const sources = [connection.monitor, heard(model.monitor, 'snapshot')];
+      return { connection, model, off, sources };
+    };
+    stage('the held turn');
+    let current = await watched();
+    void current.connection.prompt('Work on it.').catch(() => undefined);
+    const running = () =>
+      current.connection.monitor.value?.tasks?.find(
+        (task) => task.kind === 'pi.generation' && task.status === 'running'
+      );
+    await when(current.sources, running, 'the running generation');
+    const parkedNow = () => {
+      const task = current.connection.monitor.value?.tasks?.find(
+        (row) => row.blocked === 'restart_limit'
+      );
+      const alert = current.model.monitor
+        .snapshot()
+        .alerts.find((entry) => entry.id === `parked-${task?.id}`);
+      return task && alert && { task, alert };
+    };
+    let parked;
+    let restarts = 0;
+    while (!parked && restarts < 8) {
+      restarts += 1;
+      stage(`restart ${restarts}`);
+      current.off();
+      await owner.restart();
+      current = await watched();
+      parked = await when(current.sources, () => running() || parkedNow(), `restart ${restarts}`);
+      if (parked.alert) break;
+      parked = undefined;
+    }
+    stage('agent retry');
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const terminal = await attachKernel(await kernel.connect());
+    const run = async (command) => {
+      const decoder = new TextDecoder();
+      let out = '';
+      const process = await terminal.spawn(['bash', '-c', command], {
+        cwd: '/home',
+        onStdout: (bytes) => {
+          out += decoder.decode(bytes);
+        },
+        onStderr: (bytes) => {
+          out += decoder.decode(bytes);
+        },
+      });
+      return { code: await process.exited, out };
+    };
+    await when(
+      [files(kernel, ['/usr/local/bin'])],
+      () => terminal.fs.exists('/usr/local/bin/agent'),
+      'the agent command'
+    );
+    const retried = await run(parked.alert.command);
+    const again = await run(parked.alert.command);
+    const resumed = await when(
+      current.sources,
+      () => {
+        const task = current.connection.monitor.value?.tasks?.find(
+          (row) => row.id === parked.task.id
+        );
+        return task && task.blocked === null && task.status === 'running' && task;
+      },
+      'the generation running again'
+    );
+    current.off();
+    await owner.release();
+    return { parked, restarts, retried, again, resumed };
+  });
+  assert.ok(seen.restarts >= 5 && seen.restarts <= 6, `parked after ${seen.restarts} restarts`);
+  assert.equal(seen.parked.task.kind, 'pi.generation');
+  assert.equal(seen.parked.alert.command, `agent retry ${seen.parked.task.id}`);
+  assert.equal(seen.parked.alert.commandLabel, 'To run it again, run');
+  assert.equal(seen.parked.alert.severity, 'error');
+  assert.deepEqual(seen.retried, { code: 0, out: `task ${seen.parked.task.id} runs again\n` });
+  assert.equal(seen.again.code, 1);
+  assert.match(seen.again.out, /isn't parked/);
+  assert.equal(seen.resumed.status, 'running');
+});

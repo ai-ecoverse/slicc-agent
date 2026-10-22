@@ -503,6 +503,17 @@ function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): Agen
         severity: 'error',
       });
   for (const task of feed.tasks)
+    if (task.blocked === 'restart_limit')
+      out.push({
+        id: `parked-${task.id}`,
+        title: `${taskLabel(task)} of ${nameOf(task.agentId)} is parked`,
+        detail:
+          'It was cut off by 5 restarts in a row without getting further, so it no longer starts by itself.',
+        severity: 'error',
+        command: `agent retry ${task.id}`,
+        commandLabel: 'To run it again, run',
+      });
+  for (const task of feed.tasks)
     if (task.aborting !== null && input.now - task.aborting > ABORT_MS)
       out.push({
         id: `abort-${task.id}`,
