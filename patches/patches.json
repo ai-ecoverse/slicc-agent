@@ -2,7 +2,7 @@
   "pi-codemode-worker-threads": {
     "kind": "environment",
     "package": "@earendil-works/pi-codemode",
-    "patchedVersion": "1.3.0",
+    "patchedVersion": "1.4.0",
     "marker": {
       "file": "dist/runtime/host.js",
       "includes": "import { Worker } from \"node:worker_threads\""
@@ -14,7 +14,7 @@
   "pi-ai-google-genai-lazy": {
     "kind": "environment",
     "package": "@earendil-works/pi-ai",
-    "patchedVersion": "1.3.0",
+    "patchedVersion": "1.4.0",
     "marker": {
       "file": "dist/api/google-generative-ai.lazy.js",
       "includes": "import(\"./google-generative-ai.js\")"
@@ -26,7 +26,7 @@
   "pi-ai-google-vertex-lazy": {
     "kind": "environment",
     "package": "@earendil-works/pi-ai",
-    "patchedVersion": "1.3.0",
+    "patchedVersion": "1.4.0",
     "marker": {
       "file": "dist/api/google-vertex.lazy.js",
       "includes": "import(\"./google-vertex.js\")"
@@ -38,7 +38,7 @@
   "pi-mcp-stdio-node-only": {
     "kind": "environment",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.3.0",
+    "patchedVersion": "1.4.0",
     "marker": {
       "file": "dist/index.js",
       "includes": "export { StdioTransport } from \"./transports/stdio.js\""
@@ -50,7 +50,7 @@
   "pi-mcp-sse-buffer": {
     "kind": "monkeypatch",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.3.0",
+    "patchedVersion": "1.4.0",
     "marker": {
       "file": "dist/transports/streamable-http.js",
       "includes": "Buffer.byteLength(value)"
@@ -62,7 +62,7 @@
   "pi-mcp-oauth-browser": {
     "kind": "environment",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.3.0",
+    "patchedVersion": "1.4.0",
     "marker": {
       "file": "dist/oauth/flow.js",
       "includes": "Buffer.from(bytes).toString(\"base64url\")"

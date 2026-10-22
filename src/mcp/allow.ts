@@ -1,5 +1,6 @@
 import type { CodemodeTool } from '@earendil-works/pi-codemode';
 import { defineDoc } from '@earendil-works/pi-durable';
+import { deltasOnly } from '../checkpoints.ts';
 import { mcpNamespace, nameMatcher } from './config.ts';
 
 export const RESOURCE_NAMES: ReadonlySet<string> = new Set([
@@ -10,6 +11,7 @@ export const RESOURCE_NAMES: ReadonlySet<string> = new Set([
 
 export const McpAllowDoc = defineDoc<{ allow: string[] | null }>({
   kind: 'slicc.mcp',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'conversation',
   history: 'rewindable',

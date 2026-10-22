@@ -14,6 +14,8 @@ import {
 import type { Agents } from '../agents.ts';
 import type { Approval, Approvals, ApprovalsState } from '../approvals/index.ts';
 import { ApprovalsDoc } from '../approvals/record.ts';
+import { deltasOnly } from '../checkpoints.ts';
+import { pauseUntil } from '../pause.ts';
 import {
   GUEST_INPUT_KIND,
   type GuestInput,
@@ -59,6 +61,7 @@ export type ReviewsState = { next: number; reviews: Record<string, Review> };
 
 export const GuestReviewsDoc = defineDoc<ReviewsState>({
   kind: 'slicc.guest-reviews',
+  checkpointWhen: deltasOnly,
   version: 1,
   scope: 'session',
   initial: () => ({ next: 1, reviews: {} }),
@@ -210,7 +213,7 @@ async function settledOrDue(
   try {
     const now = itemIn(watch?.value, id);
     if (now?.state !== 'pending' || now.expiresAt <= runtime.now()) return { item: now };
-    const slept = runtime.sleep(now.expiresAt, using);
+    const slept = pauseUntil(runtime, now.expiresAt, using);
     slept.catch(() => undefined);
     const changed = new Promise<void>((resolve) => {
       watch?.start(async (value) => {
