@@ -56,7 +56,9 @@ const helpers = () => {
     };
     const card = () => {
       const vital = monitor.snapshot().vitals.find((entry) => entry.id === 'budget');
-      return vital ? { label: vital.label, value: vital.value } : null;
+      return vital
+        ? { label: vital.label, value: vital.value, provider: vital.provider, window: vital.window }
+        : null;
     };
     const leaks = async () => {
       const seen = JSON.stringify({
@@ -141,11 +143,16 @@ test('signed in to SuperGrok, the tray and the Monitor show the selected modelâ€
   );
   assert.deepEqual(seen.grok, {
     tray: { percent: 23, window: 'weekly', resets: '2026-10-27T19:03:46.999Z', provider: 'xai' },
-    card: { label: 'SuperGrok budget (weekly)', value: '23%' },
+    card: { label: 'SuperGrok budget (weekly)', value: '23%', provider: 'xai', window: 'weekly' },
   });
   assert.equal(seen.adobe.tray.provider, 'adobe');
   assert.equal(seen.adobe.tray.percent, 40);
-  assert.deepEqual(seen.adobe.card, { label: 'Adobe budget (weekly)', value: '40%' });
+  assert.deepEqual(seen.adobe.card, {
+    label: 'Adobe budget (weekly)',
+    value: '40%',
+    provider: 'adobe',
+    window: 'weekly',
+  });
   assert.deepEqual(seen.budgets, [
     { provider: 'adobe', percent: 40 },
     { provider: 'xai', percent: 23 },

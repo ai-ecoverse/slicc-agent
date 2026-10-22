@@ -268,8 +268,10 @@ function resetsIn(at: number, now: number): string {
 
 function budgetVital(budget: BudgetState, now: number): MonitorVital {
   const resets = new Date(budget.resets);
-  return {
+  const vital = {
     id: 'budget',
+    provider: budget.provider,
+    window: budget.window,
     label: `${budgetName(budget.provider)} budget (${budget.window})`,
     value: `${budget.percent}%`,
     ...(Number.isNaN(resets.getTime())
@@ -280,6 +282,7 @@ function budgetVital(budget: BudgetState, now: number): MonitorVital {
         }),
     ratio: Math.min(1, Math.max(0, budget.percent / 100)),
   };
+  return vital;
 }
 
 function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
