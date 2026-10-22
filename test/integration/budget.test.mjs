@@ -143,12 +143,12 @@ test('signed in to SuperGrok, the tray and the Monitor show the selected model�
   );
   assert.deepEqual(seen.grok, {
     tray: { percent: 23, window: 'weekly', resets: '2026-10-27T19:03:46.999Z', provider: 'xai' },
-    card: { label: 'SuperGrok budget (weekly)', value: '23%', provider: 'xai', window: 'weekly' },
+    card: { label: 'Budget (weekly)', value: '23%', provider: 'xai', window: 'weekly' },
   });
   assert.equal(seen.adobe.tray.provider, 'adobe');
   assert.equal(seen.adobe.tray.percent, 40);
   assert.deepEqual(seen.adobe.card, {
-    label: 'Adobe budget (weekly)',
+    label: 'Budget (weekly)',
     value: '40%',
     provider: 'adobe',
     window: 'weekly',
@@ -176,7 +176,7 @@ test('while the vault doesn’t fill the xAI token at the billing endpoint, noth
       const { upstream } = await it.log();
       const result = {
         tray: it.tray.status().budget.provider,
-        card: it.card()?.label,
+        card: it.card()?.provider,
         budgets: it.state().budgets.map(({ provider }) => provider),
         reached: upstream.filter((entry) => entry.billing).length,
         leaks: await it.leaks(),
@@ -187,7 +187,7 @@ test('while the vault doesn’t fill the xAI token at the billing endpoint, noth
     queryOf()
   );
   assert.equal(seen.tray, 'adobe');
-  assert.equal(seen.card, 'Adobe budget (weekly)');
+  assert.equal(seen.card, 'adobe');
   assert.deepEqual(seen.budgets, ['adobe']);
   assert.equal(seen.reached, 0);
   assert.deepEqual(seen.leaks, []);

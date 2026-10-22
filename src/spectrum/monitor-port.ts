@@ -272,7 +272,7 @@ function budgetVital(budget: BudgetState, now: number): MonitorVital {
     id: 'budget',
     provider: budget.provider,
     window: budget.window,
-    label: `${budgetName(budget.provider)} budget (${budget.window})`,
+    label: `Budget (${budget.window})`,
     value: `${budget.percent}%`,
     ...(Number.isNaN(resets.getTime())
       ? {}
