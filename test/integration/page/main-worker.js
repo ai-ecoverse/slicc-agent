@@ -717,9 +717,13 @@ const running = runAgentWorker(self, {
     ...(params.has('bedrock') ? [amazonBedrockProvider()] : []),
     ...registry,
   ],
-  storage: params.has('persist')
-    ? () => openOpfsSqliteStorage({ directory: params.get('persist') })
-    : async () => new MemoryStorage(),
+  ...(params.has('default-storage')
+    ? {}
+    : {
+        storage: params.has('persist')
+          ? () => openOpfsSqliteStorage({ directory: params.get('persist') })
+          : async () => new MemoryStorage(),
+      }),
   codemodeWorker: new URL('./codemode-worker.js', import.meta.url),
   ...(params.get('catalog')
     ? { catalog: new URL(params.get('catalog'), self.location.href).href }

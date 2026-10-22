@@ -86,3 +86,47 @@ export async function settlePool(directory: string, access: PoolAccess = {}): Pr
   }
   throw new Error(`SQLite pool ${directory} is still in use by another worker`);
 }
+
+export interface Profile {
+  durableSchema: number;
+  agent: string;
+}
+
+export function profilePath(directory: string): string {
+  return `${directory.replace(/\/+$/, '')}-profile.json`;
+}
+
+async function readProfile(file: FileSystemFileHandle): Promise<Partial<Profile>> {
+  try {
+    const parsed: unknown = JSON.parse(await (await file.getFile()).text());
+    return parsed && typeof parsed === 'object' ? (parsed as Partial<Profile>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function writeProfile(
+  directory: string,
+  durableSchema: number,
+  agent: string,
+  access: PoolAccess = {}
+): Promise<Profile> {
+  const path = profilePath(directory);
+  const at = path.lastIndexOf('/');
+  let dir = await (access.root ?? opfsRoot)();
+  for (const part of path.slice(0, at).split('/').filter(Boolean))
+    dir = await dir.getDirectoryHandle(part, { create: true });
+  const file = await dir.getFileHandle(path.slice(at + 1), { create: true });
+  const known = (await readProfile(file)).durableSchema;
+  const profile = {
+    durableSchema:
+      typeof known === 'number' && Number.isFinite(known) && known > durableSchema
+        ? known
+        : durableSchema,
+    agent,
+  };
+  const writable = await file.createWritable();
+  await writable.write(`${JSON.stringify(profile)}\n`);
+  await writable.close();
+  return profile;
+}
