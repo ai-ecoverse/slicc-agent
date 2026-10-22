@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { launch } from './chrome.mjs';
+import { launch, staged } from './chrome.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -88,4 +88,76 @@ test('keeps two directories apart in one worker', async (t) => {
   assert.equal(data.error, undefined);
   assert.ok(data.first.kinds.includes('pi.assistant'));
   assert.ok(!data.second.kinds.includes('pi.assistant'));
+});
+
+const profile = (path) =>
+  navigator.storage
+    .getDirectory()
+    .then(async (root) => {
+      const parts = path.split('/').filter(Boolean);
+      let dir = root;
+      for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part);
+      return (await dir.getFileHandle(parts.at(-1))).getFile();
+    })
+    .then((file) => file.text())
+    .then(JSON.parse, () => null);
+
+test('the booted agent leaves its pi durable schema and version next to the session database', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(
+    page,
+    'the profile marker',
+    async (read) => {
+      await import('/dist-test/page.js');
+      stage('the kernel');
+      const { bootKernel } = await import('/kernel.js');
+      const kernel = await bootKernel();
+      stage('the agent');
+      const owner = await startAgent({
+        worker: () =>
+          new Worker('/dist-test/main-worker.js?default-storage&version=7.9.9&answer=Hi.', {
+            type: 'module',
+          }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const connection = await owner.connect();
+      const answer = await connection.prompt('Hello.');
+      const marker = await new Function(`return (${read})`)()('/.slicc/agent-profile.json');
+      await owner.release();
+      return { answer, marker };
+    },
+    profile.toString()
+  );
+  assert.equal(seen.answer, 'Hi.');
+  assert.deepEqual(seen.marker, { durableSchema: 2, agent: '7.9.9' });
+});
+
+test('a later open keeps a higher durableSchema someone else recorded, and names its own version', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const marker = await page.evaluate(async (read) => {
+    const root = await navigator.storage.getDirectory();
+    const slicc = await root.getDirectoryHandle('.slicc', { create: true });
+    const file = await slicc.getFileHandle('test-f-profile.json', { create: true });
+    const writable = await file.createWritable();
+    await writable.write('{"durableSchema":3,"agent":"8.0.0"}');
+    await writable.close();
+    const data = await new Promise((resolve) => {
+      const worker = new Worker(
+        '/dist-test/storage-worker.js?directory=/.slicc/test-f&prompt=Hi&answer=Hello.&agent=7.1.0',
+        { type: 'module' }
+      );
+      worker.onmessage = (event) => {
+        worker.terminate();
+        resolve(event.data);
+      };
+    });
+    return {
+      data,
+      marker: await new Function(`return (${read})`)()('/.slicc/test-f-profile.json'),
+    };
+  }, profile.toString());
+  assert.equal(marker.data.error, undefined);
+  assert.deepEqual(marker.marker, { durableSchema: 3, agent: '7.1.0' });
 });

@@ -11,7 +11,10 @@ faux.setResponses(params.getAll('answer').map((answer) => fauxAssistantMessage(a
 const model = { provider: 'faux', modelId: 'faux-1' };
 
 async function session(directory, prompt) {
-  const storage = await openOpfsSqliteStorage({ directory });
+  const storage = await openOpfsSqliteStorage({
+    directory,
+    ...(params.has('agent') ? { agent: params.get('agent') } : {}),
+  });
   const agent = await openAgent({ models, model, storage });
   const answer = prompt ? await agent.prompt(prompt) : null;
   const page = await agent.root.entries({}, 50, undefined, BACKGROUND_CONTEXT);
