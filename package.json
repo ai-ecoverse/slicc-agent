@@ -13,7 +13,7 @@
   },
   "fledgling": {
     "provider": "github",
-    "workflow": "release.yml",
+    "workflow": "ci.yml",
     "repo": "ai-ecoverse/slicc-agent",
     "publish": true
   },
@@ -65,10 +65,10 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.145.0",
+    "@ai-ecoverse/slicc-kernel": "1.146.1",
     "@ai-ecoverse/slicc-scrub": "1.0.0",
-    "@ai-ecoverse/slicc-shared-web": "1.30.8",
-    "@ai-ecoverse/slicc-spectrum": "1.105.0",
+    "@ai-ecoverse/slicc-shared-web": "2.8.5",
+    "@ai-ecoverse/slicc-spectrum": "1.106.0",
     "@ai-ecoverse/wasi-fnox": "1.39.0-6",
     "@ai-ecoverse/wasm-bash": "5.3.0-23",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-15",
@@ -85,7 +85,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@ai-ecoverse/slicc-browsers": "1.18.6",
+    "@ai-ecoverse/slicc-browsers": "1.18.7",
     "@ai-ecoverse/slicc-vault": "1.15.5",
     "@aws-sdk/middleware-websocket": "^3.972.54",
     "@earendil-works/chord": "1.4.0",
