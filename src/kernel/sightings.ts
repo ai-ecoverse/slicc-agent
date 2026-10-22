@@ -57,12 +57,13 @@ export async function cronHeld(client: Client): Promise<Map<string, number | nul
   const text = await client.fs.readText(CRON_TAGS).catch(() => '');
   if (!text.includes(TAINT_TAG)) return held;
   const tables = parsed(text);
-  if (!tables) {
+  if (!tables || (tables.v !== undefined && tables.v !== 1)) {
     for (const tag of text.match(TAGGED) ?? []) held.set(tag, null);
     return held;
   }
   const byName = await uids(client);
   for (const [path, table] of Object.entries(tables)) {
+    if (path === 'v') continue;
     const uid = byName.get(path.slice(path.lastIndexOf('/') + 1));
     for (const tag of JSON.stringify(table).match(TAGGED) ?? [])
       held.set(tag, held.has(tag) || uid === undefined ? null : uid);
