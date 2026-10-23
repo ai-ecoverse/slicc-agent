@@ -29,17 +29,30 @@ export interface TimingSink extends Timings {
 
 const text = (value: unknown, fallback: string) => (typeof value === 'string' ? value : fallback);
 
-export function createTimings(
-  clock: () => number = () => performance.now(),
-  wall: () => number = Date.now,
-  max = TIMINGS_MAX
-): TimingSink {
+export interface TimingsOptions {
+  clock?: () => number;
+  wall?: () => number;
+  max?: number;
+  onError?: (error: unknown) => void;
+}
+
+export function createTimings({
+  clock = () => performance.now(),
+  wall = Date.now,
+  max = TIMINGS_MAX,
+  onError = () => undefined,
+}: TimingsOptions = {}): TimingSink {
   const kept: ModelTiming[] = [];
   const listeners = new Set<(timing: ModelTiming) => void>();
   const record = (timing: ModelTiming) => {
     kept.unshift(timing);
     kept.length = Math.min(kept.length, max);
-    for (const listener of listeners) listener(timing);
+    for (const listener of listeners)
+      try {
+        listener(timing);
+      } catch (error) {
+        onError(error);
+      }
   };
   const start = async <T>(
     options: SpanOptions,

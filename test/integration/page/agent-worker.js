@@ -63,6 +63,12 @@ const fakeClock = (start) => {
 const clock = params.has('fake-clock') ? fakeClock(Date.now()) : undefined;
 const port = kernelPort(self);
 let commits = 0;
+const rejections = [];
+self.addEventListener('unhandledrejection', (event) => {
+  rejections.push(String(event.reason?.message ?? event.reason));
+});
+const heard = [];
+let opened;
 
 const crash = params.get('crash');
 const delivery = (writes) =>
@@ -110,6 +116,13 @@ async function start() {
     env,
     ...(clock ? { clock } : {}),
   });
+  opened = agent;
+  if (params.has('throwing-timings')) {
+    agent.timings.subscribe(() => {
+      throw new Error(params.get('throwing-timings'));
+    });
+    agent.timings.subscribe((timing) => heard.push(timing));
+  }
   const harness = {
     commit(...args) {
       commits += 1;
@@ -151,6 +164,14 @@ self.addEventListener('message', ({ data }) => {
     data.advanced.postMessage(clock ? clock.now() : null);
   }
   if (data?.seen) data.seen.postMessage(seen);
+  if (data?.timings)
+    void host.then(() =>
+      data.timings.postMessage({
+        heard,
+        rejections,
+        reports: opened.reports.list().map(({ type, message }) => ({ type, message })),
+      })
+    );
   if (data?.reviews)
     void host.then((ready) => data.reviews.postMessage(ready.guests.reviews.value ?? null));
   if (data?.seat)

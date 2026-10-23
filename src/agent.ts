@@ -92,7 +92,9 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   const scooped = scoopReviews();
   registry.install(scooped.extension);
   const reports = createReports();
-  const timings = createTimings();
+  const timings = createTimings({
+    onError: (error) => reports.record(error, { type: 'listener_error' }),
+  });
   const harness = await Harness.open(
     options.storage ?? new MemoryStorage(),
     {
