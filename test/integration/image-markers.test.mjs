@@ -128,7 +128,7 @@ test('a bash line <img:/path> shows the image on the tool card and to the model,
   assert.match(many.text, /\n3000\n\/tmp\/dot\.png \(image\/png, 70 bytes\)\n/);
   assert.match(
     many.text,
-    /\/tmp\/dot\.png was not shown: a command shows at most 4 images\.\n<harness>\n\[info\] Full output: [^\n]+\n\[warn\] Output truncated to its end: 1010 lines, \d+ bytes dropped\n<\/harness>$/
+    /\n1 more image line was not shown: a command shows at most 4 images\.\n<harness>\n\[info\] Full output: [^\n]+\n\[warn\] Output truncated to its end: 1010 lines, \d+ bytes dropped\n<\/harness>$/
   );
   assert.doesNotMatch(many.text, /<img:/);
   assert.equal(seen.cards[3].image, `data:image/png;base64,${DOT}`);

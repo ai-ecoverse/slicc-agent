@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context, JsonValue } from '@earendil-works/chord';
 import { awaitWithContext, BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import {
   type ConversationId,
@@ -25,6 +25,7 @@ export const GUEST_GUARD = 'slicc-guest-guard';
 export const GUEST_REQUEST = 'guest:';
 export const LICK_REQUEST = 'lick:';
 export const GUEST_TOOL_MEMO = 'slicc.guest-tool';
+export const GUEST_GATED_MEMO = 'slicc.guest-gated';
 export const SUMMARY_LENGTH = 2000;
 
 export const GATE_REASONS = {
@@ -152,6 +153,13 @@ export function reasonOf(item: Approval): string {
   if (item.reason === REASONS.unknownTier) return GATE_REASONS.unknown;
   if (item.reason === REASONS.unroutable) return GATE_REASONS.unroutable;
   return GATE_REASONS.unanswered;
+}
+
+export async function gatedRun(
+  api: { memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined> },
+  context: Context
+): Promise<boolean> {
+  return (await api.memo<boolean>(GUEST_GATED_MEMO, context)) === true;
 }
 
 export type InheritedTaint = { seat: string | null; tier: string };
@@ -373,7 +381,9 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
             const found = inputs.length ? await taintsOf(inputs, seats, held, context) : [];
             const licks = (await api.snapshot(LickTaintDoc, context))?.licks ?? {};
             const licked = await lickTaints(inputs, licks, held, context);
-            for (const taint of [...found, ...inheritedTaints([...inherited, ...licked], seats)]) {
+            const taints = [...found, ...inheritedTaints([...inherited, ...licked], seats)];
+            if (taints.length) await api.memo(GUEST_GATED_MEMO, true, context);
+            for (const taint of taints) {
               const block = await review(taint, call, api, context);
               if (block) return { block };
             }

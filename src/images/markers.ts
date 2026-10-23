@@ -3,10 +3,12 @@ import { boundOutput, OutputBuffer, type OutputLimits } from '@earendil-works/ch
 import { type ToolRegistration, type Wrap, wrapTool } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, ShellExecOptions } from '@earendil-works/pi-durable/env';
 
+import { gatedRun } from '../guests/guard.ts';
 import { fitted, MAX_BASE64, MAX_WIDTH, mimeOf, type Shrink } from './fit.ts';
 
 export const MAX_IMAGES = 4;
 export const MAX_MARKER = 4096;
+export const DEFAULT_MAX_BYTES = 51200;
 
 type Api = Parameters<ToolRegistration['execute']>[1];
 type Result = Awaited<ReturnType<ToolRegistration['execute']>>;
@@ -14,11 +16,29 @@ type Image = { type: 'image'; data: string; mimeType: string };
 type Shown = { text: string; image?: Image };
 
 const MARKER = /^<img:(.+)>$/;
+const LATER_REASON = `a command shows at most ${MAX_IMAGES} images.`;
+const LATER = `was not shown: ${LATER_REASON}`;
+
+export type Marker = { at: number; line: string };
 
 export class Markers {
-  readonly found: string[] = [];
+  readonly first: Marker[] = [];
+  count = 0;
+  #recent: Marker[] = [];
+  #head = 0;
+  #bytes = 0;
   #line = '';
   #over = false;
+
+  readonly budget: number;
+
+  constructor(budget: number) {
+    this.budget = budget;
+  }
+
+  get recent(): readonly Marker[] {
+    return this.#recent.slice(this.#head);
+  }
 
   push(text: string): void {
     let start = 0;
@@ -47,9 +67,24 @@ export class Markers {
 
   #close(): void {
     const line = this.#line.replace(/\r$/, '');
-    if (!this.#over && MARKER.test(line)) this.found.push(line);
+    if (!this.#over && MARKER.test(line)) this.#keep(line);
     this.#line = '';
     this.#over = false;
+  }
+
+  #keep(line: string): void {
+    const at = this.count++;
+    if (at < MAX_IMAGES) this.first.push({ at, line });
+    this.#recent.push({ at, line });
+    this.#bytes += line.length + 1;
+    while (this.#bytes > this.budget) {
+      this.#bytes -= (this.#recent[this.#head] as Marker).line.length + 1;
+      this.#head++;
+    }
+    if (this.#head * 2 > this.#recent.length) {
+      this.#recent = this.#recent.slice(this.#head);
+      this.#head = 0;
+    }
   }
 }
 
@@ -98,31 +133,49 @@ export async function shown(
   };
 }
 
-export function placed(text: string, found: readonly string[], lines: readonly string[]): string {
+export function placed(
+  text: string,
+  markers: Pick<Markers, 'count' | 'first' | 'recent'>,
+  lineOf: (marker: Marker) => string
+): string {
   const rows = text.split('\n');
-  let next = found.length - 1;
+  const { recent } = markers;
+  const done = new Set<number>();
+  let next = recent.length - 1;
   for (let row = rows.length - 1; row >= 0 && next >= 0; row--) {
-    if ((rows[row] as string).replace(/\r$/, '') !== found[next]) continue;
-    rows[row] = lines[next] as string;
+    const marker = recent[next] as Marker;
+    if ((rows[row] as string).replace(/\r$/, '') !== marker.line) continue;
+    rows[row] = lineOf(marker);
+    done.add(marker.at);
     next--;
   }
+  const missing = markers.first.filter((marker) => !done.has(marker.at)).map(lineOf);
+  const shownLater = [...done].filter((at) => at >= MAX_IMAGES).length;
+  const omitted = Math.max(0, markers.count - MAX_IMAGES) - shownLater;
+  if (omitted > 0)
+    missing.push(
+      `${omitted} more image ${omitted === 1 ? 'line was' : 'lines were'} not shown: ${LATER_REASON}`
+    );
   const body = rows.join('\n');
-  if (next < 0) return body;
+  if (!missing.length) return body;
   const gap = body === '' || body.endsWith('\n') ? '' : '\n';
-  return `${body}${gap}${lines.slice(0, next + 1).join('\n')}\n`;
+  return `${body}${gap}${missing.join('\n')}\n`;
 }
 
-async function images(api: Api, found: readonly string[], fit: Shrink, context: Context) {
+async function images(api: Api, first: readonly Marker[], fit: Shrink, context: Context) {
   const all: Shown[] = [];
-  for (const [at, marker] of found.entries()) {
-    const path = pathOf(marker);
-    all.push(
-      at < MAX_IMAGES
-        ? await shown(api.env as ExecutionEnv, path, fit, context)
-        : { text: `${path} was not shown: a command shows at most ${MAX_IMAGES} images.` }
-    );
-  }
+  for (const marker of first)
+    all.push(await shown(api.env as ExecutionEnv, pathOf(marker.line), fit, context));
   return all;
+}
+
+const GUESTED = 'was not read: a run a guest started shows no images from command output.';
+
+function lineOf(all: readonly Shown[], gated: boolean) {
+  return (marker: Marker) => {
+    if (gated) return `${pathOf(marker.line)} ${GUESTED}`;
+    return (all[marker.at] as Shown | undefined)?.text ?? `${pathOf(marker.line)} ${LATER}`;
+  };
 }
 
 type Shadow = { buffer: OutputBuffer; limits: OutputLimits };
@@ -152,8 +205,8 @@ export function imageMarkers(bash: ToolRegistration, fit: Shrink): Wrap {
     ...inner,
     async execute(args, api, context: Context) {
       if (!api.env) return inner.execute(args, api, context);
-      const markers = new Markers();
       const window = api.outputWindow;
+      const markers = new Markers(window?.maxBytes ?? DEFAULT_MAX_BYTES);
       const limits: OutputLimits | undefined = window && {
         maxBytes: window.maxBytes,
         maxLines: window.maxLines,
@@ -168,14 +221,11 @@ export function imageMarkers(bash: ToolRegistration, fit: Shrink): Wrap {
       const wrapped = Object.create(api, { env: { value: env }, output: { value: output } });
       const result = await inner.execute(args, wrapped, context);
       markers.end();
-      if (!markers.found.length) return result;
-      const all = await images(api, markers.found, fit, context);
+      if (!markers.count) return result;
+      const gated = await gatedRun(api, context);
+      const all = gated ? [] : await images(api, markers.first, fit, context);
       const { text, diagnostics } = bounded(
-        placed(
-          api.retainedOutput().text,
-          markers.found,
-          all.map((one) => one.text)
-        ),
+        placed(api.retainedOutput().text, markers, lineOf(all, gated)),
         shadow
       );
       const structured = result.structuredOutput;
