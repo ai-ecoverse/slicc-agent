@@ -220,6 +220,16 @@ export interface MonitorFeed {
   kernel: 'checking' | 'ok' | 'unreachable';
   problems: MonitorProblem[];
   paused: boolean;
+  latency?: MonitorLatency | null;
+}
+
+export interface MonitorLatency {
+  requests: number;
+  medianMs: number;
+  firstChunkMedianMs: number | null;
+  errors: number;
+  series: number[];
+  models: { model: string; requests: number; medianMs: number }[];
 }
 
 export interface MemoryDraft {
