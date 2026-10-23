@@ -329,3 +329,77 @@ test('memory: a cone left idle has its turn extracted into its memory, also when
   assert.equal(seen.body, 'The user likes teal.');
   assert.equal(seen.tag, 'user');
 });
+
+test('memory: a turn that ends while the idle watch sleeps is extracted one idle interval after that turn, also when a skipped lick follows it', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await staged(page, 'the turn during the idle sleep', async () => {
+    const MINUTE = 60_000;
+    await window.write(
+      '/home/.pi/agent/settings.json',
+      JSON.stringify({ memory: { idleMinutes: 30, extractModel: 'faux/faux-1' } })
+    );
+    await window.write(
+      '/home/.slicc/webhooks/quiet.json',
+      '{"message":"Quiet event","triage":"only releases"}'
+    );
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const extracted = JSON.stringify([
+      { section: 'Preferences', title: 'Colour', body: 'The user likes teal.', tag: 'user' },
+    ]);
+    const params = new URLSearchParams([
+      ['triage', 'ignore'],
+      ['answer', extracted],
+      ['answer', extracted],
+      ['answer', extracted],
+    ]);
+    const owner = await startTracked({
+      worker: () => new Worker(`/dist-test/clock-main-worker.js?${params}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const model = createAgentModel(connection, { storage: localStorage });
+    const off = model.monitor.on('snapshot', () => {});
+    const watching = () =>
+      connection.monitor.value?.tasks?.some(
+        (row) => row.kind === 'slicc.memory-idle' && row.status === 'sleeping'
+      );
+    await when([connection.monitor, heard(model.monitor, 'snapshot')], watching, 'the idle sleep');
+    const base = Date.now();
+    const clock = new BroadcastChannel('slicc-test-clock');
+    clock.postMessage({ now: base + 2 * MINUTE });
+    stage('the turn');
+    const answer = await connection.prompt('I like teal.');
+    stage('the skipped lick');
+    await when(
+      [files(kernel, ['/var/lib/slicc/agent/requests'])],
+      async () =>
+        (await kernel.run(['bash', '-c', 'test -d /var/lib/slicc/agent/requests/in'])).status === 0,
+      'the control directory'
+    );
+    const sent = await kernel.run([
+      'bash',
+      '-c',
+      'agent send cone --lick=webhook --source quiet "a push to a branch"',
+    ]);
+    await when(
+      [connection.transcript, every(100)],
+      () => (connection.transcript.value?.entries ?? []).at(-1)?.kind === 'slicc.lick-triage',
+      'the triage entry'
+    );
+    const listed = () => model.memory.list().some((item) => item.id === 'cone/preferences/colour');
+    const early = listed();
+    clock.postMessage({ now: base + 32 * MINUTE + 10_000 });
+    stage('the extracted memory');
+    await when([changed, every(100)], listed, 'the extracted entry');
+    off();
+    await owner.release();
+    return { answer, sent: sent.status, early };
+  });
+  assert.match(seen.answer, /The user likes teal/);
+  assert.equal(seen.sent, 0);
+  assert.equal(seen.early, false);
+});

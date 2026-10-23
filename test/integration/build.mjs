@@ -9,6 +9,7 @@ await build({
     'test/integration/page/legacy-worker.js',
     'test/integration/page/page.js',
     'test/integration/page/main-worker.js',
+    'test/integration/page/clock-main-worker.js',
     'test/integration/page/codemode-worker.js',
     'test/integration/page/adobe-worker.js',
     'test/integration/page/other-owner.js',
