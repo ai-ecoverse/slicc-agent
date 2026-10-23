@@ -5,8 +5,9 @@ import {
   type ToolRegistration,
   wrapTool,
 } from '@earendil-works/pi-durable';
-
-import { base64, MAX_BASE64, MAX_WIDTH, mimeOf, type Shrink, shrink } from './fit.ts';
+import { CodingTools } from '@earendil-works/pi-durable/tools';
+import { fitted, MAX_BASE64, MAX_WIDTH, mimeOf, type Shrink, shrink } from './fit.ts';
+import { imageMarkers } from './markers.ts';
 
 export { base64, type Image, MAX_BASE64, MAX_WIDTH, mimeOf, type Shrink, shrink } from './fit.ts';
 
@@ -21,6 +22,10 @@ function refuse(text: string): Result {
   return { output: [{ type: 'text', text }], isError: true } as Result;
 }
 
+const bash = (CodingTools.tools as readonly ToolRegistration[]).find(
+  (tool) => tool.name === 'bash'
+) as ToolRegistration;
+
 export function imageReads(read: ToolRegistration, fit: Shrink = shrink): Extension {
   return defineExtension({
     name: 'slicc-images',
@@ -34,11 +39,7 @@ export function imageReads(read: ToolRegistration, fit: Shrink = shrink): Extens
           const read = await api.env.readBinaryFile(path, context);
           const mimeType = read.ok ? mimeOf(read.value) : undefined;
           if (!read.ok || !mimeType) return result;
-          const image = await fit({ bytes: read.value, mimeType }).catch(() => ({
-            bytes: read.value,
-            mimeType,
-          }));
-          const data = base64(image.bytes);
+          const { image, data } = await fitted({ bytes: read.value, mimeType }, fit);
           if (data.length > MAX_BASE64)
             return refuse(
               `${path} is too large to read as an image (${image.bytes.length} bytes after fitting it to ${MAX_WIDTH} px). Take a smaller screenshot, for example with --max-width ${MAX_WIDTH}.`
@@ -51,6 +52,7 @@ export function imageReads(read: ToolRegistration, fit: Shrink = shrink): Extens
           } as Result;
         },
       })),
+      imageMarkers(bash, fit),
     ],
   });
 }

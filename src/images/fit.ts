@@ -61,3 +61,8 @@ export const shrink: Shrink = async (image) => {
       : png;
   return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
 };
+
+export async function fitted(image: Image, fit: Shrink): Promise<{ image: Image; data: string }> {
+  const shown = await fit(image).catch(() => image);
+  return { image: shown, data: base64(shown.bytes) };
+}

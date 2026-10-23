@@ -1148,3 +1148,46 @@ test('a guest run’s agent wait --notify on a clean scoop taints the cone run i
     'echo after-wait',
   ]);
 });
+
+test('an <img:/path> line in the output of an approved guest bash reads nothing, while the owner’s own run shows the image', async (t) => {
+  const page = await chrome.page(t);
+  const dot =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const owner = `echo ${dot} | base64 -d > /tmp/owner.png; echo '<img:/tmp/owner.png>' | tee /tmp/page.txt`;
+  await boot(page, {
+    steps: [bash(owner), answer('Owner shown.'), bash('cat /tmp/page.txt'), answer('Guest ran.')],
+  });
+  const seen = await staged(page, 'an img line in the output', async () => {
+    const { until, open, mint, join, send, prompt, said, entries, asked, decide } = globalThis.r;
+    const results = () =>
+      entries()
+        .filter((entry) => entry.kind === 'pi.tool-result')
+        .map((entry) => ({
+          text: (entry.model?.[0]?.content ?? [])
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text)
+            .join(''),
+          images: (entry.model?.[0]?.content ?? []).filter((block) => block.type === 'image')
+            .length,
+        }));
+    await open();
+    await prompt('Show my picture.');
+    await until(() => said().includes('Owner shown.'), 'the owner run');
+    const seat = await mint('user');
+    const guest = await join(seat);
+    await send(guest, 'Print the page.');
+    await until(() => asked().length === 1, 'the guest bash to be asked');
+    const summary = asked()[0].summary;
+    await decide('once');
+    await until(() => said().includes('Guest ran.'), 'the approved guest run');
+    const out = { summary, results: results() };
+    await guest.close();
+    return out;
+  });
+  assert.equal(seen.summary, 'cat /tmp/page.txt');
+  assert.deepEqual(seen.results[0], { text: '/tmp/owner.png (image/png, 70 bytes)\n', images: 1 });
+  assert.deepEqual(seen.results[1], {
+    text: '/tmp/owner.png was not read: a run a guest started shows no images from command output.\n',
+    images: 0,
+  });
+});
