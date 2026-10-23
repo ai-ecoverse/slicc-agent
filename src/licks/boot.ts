@@ -6,6 +6,7 @@ import {
   type Harness,
 } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
+import { GONE } from '../kernel/exec.ts';
 import { type Job, type Jobs, shortCommand } from '../kernel/jobs.ts';
 import type { Deliver } from './fswatch.ts';
 import type { LickChannel } from './lick.ts';
@@ -75,10 +76,15 @@ function ended(entries: readonly EntryRecord[]): Set<string> {
   for (const entry of entries) {
     if (entry.kind !== 'pi.tool-result') continue;
     const id = (entry.model?.[0] as { toolCallId?: unknown } | undefined)?.toolCallId;
-    const codes = (
-      (entry.data as { diagnostics?: { code?: unknown }[] } | undefined)?.diagnostics ?? []
-    ).map((diagnostic) => diagnostic.code);
-    if (typeof id === 'string' && !codes.includes('interrupted')) done.add(id);
+    const diagnostics =
+      (entry.data as { diagnostics?: { code?: unknown; message?: unknown }[] } | undefined)
+        ?.diagnostics ?? [];
+    const cut = diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === 'interrupted' ||
+        (diagnostic.code === 'tool_error' && diagnostic.message === GONE)
+    );
+    if (typeof id === 'string' && !cut) done.add(id);
   }
   return done;
 }
