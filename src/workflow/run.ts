@@ -14,7 +14,7 @@ import {
   type TaskRuntime,
   type Tx,
 } from '@earendil-works/pi-durable';
-import { deltasOnly } from '../checkpoints.ts';
+import { boundedDeltas, deltasOnly } from '../checkpoints.ts';
 import type { InheritedTaint } from '../guests/guard.ts';
 import type { Spawned } from '../scoops/service.ts';
 import { MAX_AGENTS } from './script.ts';
@@ -58,7 +58,7 @@ export type RunRecord = {
 
 export const WorkflowsDoc = defineDoc<{ runs: Record<string, RunRecord> }>({
   kind: 'slicc.workflows',
-  checkpointWhen: deltasOnly,
+  checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
   initial: () => ({ runs: {} }),
