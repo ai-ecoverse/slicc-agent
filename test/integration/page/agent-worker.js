@@ -40,6 +40,27 @@ faux.setResponses(
   ].map(recorded)
 );
 const kernel = params.has('kernel');
+const fakeClock = (start) => {
+  let offset = 0;
+  const timers = new Set();
+  return {
+    now: () => start + offset,
+    setTimer(callback, delayMs) {
+      const timer = { at: start + offset + delayMs, callback };
+      timers.add(timer);
+      return () => timers.delete(timer);
+    },
+    advance(ms) {
+      offset += ms;
+      for (const timer of [...timers])
+        if (timer.at <= start + offset) {
+          timers.delete(timer);
+          timer.callback();
+        }
+    },
+  };
+};
+const clock = params.has('fake-clock') ? fakeClock(Date.now()) : undefined;
 const port = kernelPort(self);
 let commits = 0;
 
@@ -87,6 +108,7 @@ async function start() {
     storage,
     registry,
     env,
+    ...(clock ? { clock } : {}),
   });
   const harness = {
     commit(...args) {
@@ -95,7 +117,10 @@ async function start() {
     },
     documentState: (...args) => agent.harness.documentState(...args),
   };
-  const ttlMs = params.has('ttl') ? { ttlMs: Number(params.get('ttl')) } : {};
+  const ttlMs = {
+    ...(params.has('ttl') ? { ttlMs: Number(params.get('ttl')) } : {}),
+    ...(clock ? { now: clock.now, setTimer: clock.setTimer } : {}),
+  };
   if (params.has('native')) return hostAgent(agent);
   return hostAgent(agent, { approvals: await attachApprovals({ harness, ...ttlMs }) });
 }
@@ -121,6 +146,10 @@ self.addEventListener('message', ({ data }) => {
   }
   if (data?.guestLinks) void collect().then((seen) => data.guestLinks.postMessage(seen));
   if (data?.commits) data.commits.postMessage(commits);
+  if (data?.advance) {
+    clock?.advance(data.advance);
+    data.advanced.postMessage(clock ? clock.now() : null);
+  }
   if (data?.seen) data.seen.postMessage(seen);
   if (data?.reviews)
     void host.then((ready) => data.reviews.postMessage(ready.guests.reviews.value ?? null));

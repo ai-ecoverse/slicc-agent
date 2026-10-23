@@ -14,6 +14,7 @@ import {
   type Storage,
 } from '@earendil-works/pi-durable';
 import { type Agents, openAgents } from './agents.ts';
+import type { Clock } from './clock.ts';
 import type { Cones } from './cone.ts';
 import { type GuestToolGate, guestToolGate } from './guests/guard.ts';
 import { type GuestReviews, guestReviews } from './guests/review.ts';
@@ -31,6 +32,7 @@ export interface AgentOptions {
   conversationCreated?: HarnessOptions['conversationCreated'];
   context?: Context;
   beforeResume?: (harness: Harness, context: Context) => Promise<unknown>;
+  clock?: Clock;
 }
 
 export interface Agent extends Cones {
@@ -72,6 +74,13 @@ async function prompt(root: Conversation, text: string, context: Context): Promi
 
 export const SLICC_ATTRIBUTION = { name: 'SLICC', url: 'https://www.sliccy.com' };
 const IDENTITY = { attribution: SLICC_ATTRIBUTION };
+function clocked(clock: Clock): Pick<HarnessOptions, 'now' | 'setTimer'> {
+  return {
+    now: () => clock.now(),
+    setTimer: (callback, delayMs) => clock.setTimer(callback, delayMs),
+  };
+}
+
 export async function openAgent(options: AgentOptions): Promise<Agent> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const registry = options.registry ?? createRegistry();
@@ -93,6 +102,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
       ...(options.settings ? { settings: options.settings } : {}),
       onReport: (error, info) => reports.record(error, info),
       telemetry: timings.telemetry,
+      ...(options.clock ? clocked(options.clock) : {}),
       ...(options.env ? { env: options.env } : {}),
       ...(options.conversationCreated ? { conversationCreated: options.conversationCreated } : {}),
     },

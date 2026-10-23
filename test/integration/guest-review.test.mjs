@@ -176,6 +176,7 @@ async function boot(page, { query = '', crash = null, judge = false, files = {} 
         crashing,
         record: (seat) => ask({ seat }, 'reply'),
         judged: () => ask({}, 'judged'),
+        advance: (ms) => ask({ advance: ms }, 'advanced'),
         table: (judgeTable) => worker.postMessage({ judgeTable }),
       };
     },
@@ -559,4 +560,28 @@ test('an Always answer on a guest message lets that seat send without asking aga
     'guest(Anna): And again',
     'agent: Second.',
   ]);
+});
+
+test('on a fake clock, a review waits out its whole time however long the test takes, and expires once the clock passes it', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { query: 'fake-clock&ttl=600000&answer=Got the second.' });
+  const seen = await staged(page, 'a review on a fake clock', async () => {
+    const { join, until, pause, notices, listed, open, advance } = globalThis.r;
+    const { model, seat } = await open();
+    const guest = await join(seat);
+    await guest.model.agent.send('cone', 'Nobody looks at this');
+    await guest.model.agent.send('cone', 'But this one');
+    await until(() => listed(model).length === 1, 'the first to be asked');
+    await pause(1500);
+    await advance(599_000);
+    await pause(500);
+    const before = { listed: listed(model), notices: notices(guest) };
+    stage('the expiry');
+    await advance(2_000);
+    await until(() => listed(model)[0] === 'But this one', 'the second after the expiry');
+    await until(() => notices(guest).length === 1, "the guest's notice");
+    return { before, notices: notices(guest) };
+  });
+  assert.deepEqual(seen.before, { listed: ['Nobody looks at this'], notices: [] });
+  assert.deepEqual(seen.notices, ['Nobody approved this in time. Nobody looks at this']);
 });
