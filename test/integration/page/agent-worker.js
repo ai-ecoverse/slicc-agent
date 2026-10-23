@@ -68,6 +68,7 @@ self.addEventListener('unhandledrejection', (event) => {
   rejections.push(String(event.reason?.message ?? event.reason));
 });
 const heard = [];
+const reported = [];
 let opened;
 
 const crash = params.get('crash');
@@ -117,6 +118,12 @@ async function start() {
     ...(clock ? { clock } : {}),
   });
   opened = agent;
+  if (params.has('throwing-reports')) {
+    agent.reports.subscribe(() => {
+      throw new Error(params.get('throwing-reports'));
+    });
+    agent.reports.subscribe(({ type, message }) => reported.push({ type, message }));
+  }
   if (params.has('throwing-timings')) {
     agent.timings.subscribe(() => {
       throw new Error(params.get('throwing-timings'));
@@ -168,6 +175,7 @@ self.addEventListener('message', ({ data }) => {
     void host.then(() =>
       data.timings.postMessage({
         heard,
+        reported,
         rejections,
         reports: opened.reports.list().map(({ type, message }) => ({ type, message })),
       })

@@ -58,7 +58,12 @@ export function createReports(now: () => number = Date.now, max = REPORTS_MAX): 
       };
       kept.unshift(report);
       kept.length = Math.min(kept.length, max);
-      for (const listener of listeners) listener(report);
+      for (const listener of listeners)
+        try {
+          listener(report);
+        } catch (error) {
+          console.warn(error);
+        }
     },
     list: () => [...kept],
     subscribe(listener) {
