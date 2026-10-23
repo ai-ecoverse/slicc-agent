@@ -1,6 +1,7 @@
 import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { DocumentState, Harness } from '@earendil-works/pi-durable';
+import type { Clock } from '../clock.ts';
 import type { ApprovalJudge, Judgement } from './judge.ts';
 import {
   APPROVAL_MS,
@@ -62,6 +63,7 @@ export interface ScoopRouter {
 export interface ApprovalsAttach {
   harness: Pick<Harness, 'commit' | 'documentState'>;
   now?: () => number;
+  setTimer?: Clock['setTimer'];
   ttlMs?: number;
   judge?: ApprovalJudge;
   scoops?: ScoopRouter;
@@ -179,6 +181,11 @@ function settledIn(
   });
 }
 
+const systemTimer: Clock['setTimer'] = (callback, delayMs) => {
+  const timer = setTimeout(callback, delayMs);
+  return () => clearTimeout(timer);
+};
+
 export async function attachApprovals(
   options: ApprovalsAttach,
   context: Context = BACKGROUND_CONTEXT
@@ -186,7 +193,8 @@ export async function attachApprovals(
   const { harness } = options;
   const now = options.now ?? Date.now;
   const ttl = options.ttlMs ?? APPROVAL_MS;
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const setTimer = options.setTimer ?? systemTimer;
+  const timers = new Map<string, () => void>();
   let line: Promise<unknown> = Promise.resolve();
   let closed = false;
   const settle = (item: Approval, how: Settle) => mark(item, how, now());
@@ -247,12 +255,12 @@ export async function attachApprovals(
       if (timers.has(item.id) || closed) continue;
       timers.set(
         item.id,
-        setTimeout(() => expire(item.id), Math.min(MAX_DELAY, Math.max(0, item.expiresAt - now())))
+        setTimer(() => expire(item.id), Math.min(MAX_DELAY, Math.max(0, item.expiresAt - now())))
       );
     }
     for (const [id, timer] of timers)
       if (!pending.has(id)) {
-        clearTimeout(timer);
+        timer();
         timers.delete(id);
       }
   }
@@ -355,7 +363,7 @@ export async function attachApprovals(
     },
     close() {
       closed = true;
-      for (const timer of timers.values()) clearTimeout(timer);
+      for (const timer of timers.values()) timer();
       timers.clear();
     },
   };

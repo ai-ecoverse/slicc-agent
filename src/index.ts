@@ -70,6 +70,7 @@ export {
   userParts,
 } from './attachments.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
+export type { Clock } from './clock.ts';
 export { createAgentControl } from './control.ts';
 export {
   connectGuest,
