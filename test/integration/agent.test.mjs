@@ -111,3 +111,40 @@ test('a throwing timings listener neither breaks the answer nor starves the next
   assert.equal(result.heard[0].provider, 'faux');
   assert.deepEqual(result.reports, [{ type: 'listener_error', message: 'boom' }]);
 });
+
+test('a throwing reports listener neither breaks the answer nor starves the next listener', async (t) => {
+  const page = await chrome.page(t);
+  await open(page);
+  const result = await page.evaluate(async () => {
+    let worker;
+    const owner = await startAgent({
+      worker: () => {
+        worker = new Worker(
+          '/dist-test/agent-worker.js?throwing-reports=loud&throwing-timings=boom&answer=Paris.',
+          { type: 'module' }
+        );
+        return worker;
+      },
+    });
+    const connection = await owner.connect();
+    const text = await connection.prompt('Capital of France?').catch((error) => `failed: ${error}`);
+    const ask = () =>
+      new Promise((resolve) => {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = ({ data }) => resolve(data);
+        worker.postMessage({ timings: port2 }, [port2]);
+      });
+    let seen = await ask();
+    for (let i = 0; i < 50 && !(seen.heard.length && seen.reported.length); i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      seen = await ask();
+    }
+    await owner.release();
+    return { text, ...seen };
+  });
+  assert.equal(result.text, 'Paris.');
+  assert.deepEqual(result.rejections, []);
+  assert.equal(result.heard.length, 1);
+  assert.deepEqual(result.reported, [{ type: 'listener_error', message: 'boom' }]);
+  assert.deepEqual(result.reports, [{ type: 'listener_error', message: 'boom' }]);
+});
