@@ -16,6 +16,7 @@ import { resolve } from './paths.ts';
 export const SHELL = ['bash', '-c'] as const;
 export const HELD_LIMIT = 32 * 1024 * 1024;
 export const HELD = 'output held: waiting for the vault';
+export const GONE = 'the kernel went away mid-run, so the command may have partly run';
 
 export interface ExecHooks {
   scrub?: () => ScrubStream;
@@ -275,7 +276,12 @@ export async function execute(
   );
   over = () => watch.stop('held');
   if (overflowed) over();
-  const exitCode = await process.exited.finally(() => watch.release());
+  const exitCode = await process.exited.finally(() => watch.release()).catch(() => undefined);
+  if (exitCode === undefined) {
+    out.drop();
+    errors.drop();
+    return err(new ExecutionError('unknown', GONE));
+  }
   const ended = watch.ending ?? (await drained([out, errors], context));
   if (ended) {
     out.drop();

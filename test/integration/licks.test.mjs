@@ -459,7 +459,7 @@ test('after a page reload, the session-reload lick lists the background jobs tha
   assert.doesNotMatch(lick.body, /reload-note|reload-done/);
 });
 
-test('after a page reload during a long foreground sleep, the session-reload lick lists it as interrupted', async (t) => {
+async function interruptedSleep(t, before) {
   const page = await chrome.page(t);
   const persist = `/.slicc/interrupted-${Date.now()}`;
   const step = (spec) => `step=${encodeURIComponent(JSON.stringify(spec))}`;
@@ -505,6 +505,7 @@ test('after a page reload during a long foreground sleep, the session-reload lic
     when([every(100)], async () => (await window.running('sleep 900')) === 1, 'the sleep')
   );
   assert.equal(await page.evaluate(() => window.licks().length), 0);
+  await before(page);
   await page.within(5000, (at) => Date.now() >= Math.floor(at / 1000) * 1000 + 1000, booted);
   await page.reload();
   await open(`persist=${persist}&answer=Noted.&answer=Noted.&answer=Noted.`);
@@ -516,7 +517,24 @@ test('after a page reload during a long foreground sleep, the session-reload lic
   );
   assert.equal(lick.title, 'The kernel restarted');
   assert.equal(lick.body, 'Commands that were interrupted mid-run:\nsleep 900 …');
-});
+}
+
+test('after a page reload during a long foreground sleep, the session-reload lick lists it as interrupted', (t) =>
+  interruptedSleep(t, async () => undefined));
+
+test('a foreground sleep whose kernel went away before the page reloaded is listed as interrupted', (t) =>
+  interruptedSleep(t, (page) =>
+    staged(page, 'the sleep ended by the kernel going away', async () => {
+      window.kernel.terminate();
+      await window.agentWait(
+        () =>
+          (window.connection.transcript.value?.entries ?? []).some(
+            (entry) => entry.kind === 'pi.tool-result'
+          ),
+        'the sleep call recorded as ended'
+      );
+    })
+  ));
 
 test('a bash call returns its result while the kernel never answers the process-table read', async (t) => {
   const page = await chrome.page(t);
