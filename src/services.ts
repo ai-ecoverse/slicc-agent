@@ -208,6 +208,7 @@ export interface MonitorProblem {
   kind: 'task' | 'retry' | 'turn' | 'report';
   message: string;
   report?: { type: string; source: string | null };
+  taskId?: string;
 }
 
 export interface MonitorFeed {

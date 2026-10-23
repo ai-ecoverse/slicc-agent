@@ -522,6 +522,7 @@ function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): Agen
     else if (
       problem.kind === 'report' &&
       SERIOUS.has(problem.report?.type ?? '') &&
+      !(problem.report?.type === 'task_parked' && problem.taskId !== undefined) &&
       input.now - problem.at < FAILED_MS
     )
       out.push({

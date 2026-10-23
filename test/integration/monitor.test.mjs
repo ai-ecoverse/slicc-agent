@@ -280,7 +280,7 @@ test('a failure pi durable reports without failing the turn shows in the monitor
   assert.equal(seen.row.status, 'warn');
 });
 
-test('a turn cut off by five restarts in a row is parked, the monitor says how to run it again, and agent retry does', async (t) => {
+test('a turn cut off by five restarts in a row is parked, the monitor raises one alert saying how to run it again, and agent retry does and clears it', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await staged(page, 'the parked turn', async () => {
@@ -320,6 +320,13 @@ test('a turn cut off by five restarts in a row is parked, the monitor says how t
         .alerts.find((entry) => entry.id === `parked-${task?.id}`);
       return task && alert && { task, alert };
     };
+    const about = (task) =>
+      current.model.monitor
+        .snapshot()
+        .alerts.filter(
+          (entry) => entry.id === `parked-${task.id}` || /task parked/.test(entry.title)
+        )
+        .map((entry) => entry.id);
     let parked;
     let restarts = 0;
     while (!parked && restarts < 8) {
@@ -332,6 +339,16 @@ test('a turn cut off by five restarts in a row is parked, the monitor says how t
       if (parked.alert) break;
       parked = undefined;
     }
+    stage('the parked report');
+    await when(
+      current.sources,
+      () =>
+        current.connection.monitor.value?.problems?.some(
+          (problem) => problem.report?.type === 'task_parked'
+        ),
+      'the parked report'
+    );
+    const parkedAlerts = about(parked.task);
     stage('agent retry');
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
     const terminal = await attachKernel(await kernel.connect());
@@ -366,9 +383,10 @@ test('a turn cut off by five restarts in a row is parked, the monitor says how t
       },
       'the generation running again'
     );
+    const retriedAlerts = about(parked.task);
     current.off();
     await owner.release();
-    return { parked, restarts, retried, again, resumed };
+    return { parked, restarts, retried, again, resumed, parkedAlerts, retriedAlerts };
   });
   assert.ok(seen.restarts >= 5 && seen.restarts <= 6, `parked after ${seen.restarts} restarts`);
   assert.equal(seen.parked.task.kind, 'pi.generation');
@@ -379,6 +397,8 @@ test('a turn cut off by five restarts in a row is parked, the monitor says how t
   assert.equal(seen.again.code, 1);
   assert.match(seen.again.out, /isn't parked/);
   assert.equal(seen.resumed.status, 'running');
+  assert.deepEqual(seen.parkedAlerts, [`parked-${seen.parked.task.id}`]);
+  assert.deepEqual(seen.retriedAlerts, []);
 });
 
 test('the monitor shows the model latency and first-chunk time of the agent’s requests, and nothing they said', async (t) => {
