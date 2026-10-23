@@ -65,7 +65,7 @@
     "release": "semantic-release"
   },
   "devDependencies": {
-    "@ai-ecoverse/slicc-kernel": "1.154.0",
+    "@ai-ecoverse/slicc-kernel": "1.154.1",
     "@ai-ecoverse/slicc-scrub": "1.1.0",
     "@ai-ecoverse/slicc-shared-web": "2.12.0",
     "@ai-ecoverse/slicc-spectrum": "1.107.1",
