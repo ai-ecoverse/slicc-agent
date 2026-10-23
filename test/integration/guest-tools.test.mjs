@@ -1148,3 +1148,52 @@ test('a guest run’s agent wait --notify on a clean scoop taints the cone run i
     'echo after-wait',
   ]);
 });
+
+test('an <img:/path> line in a guest run reads nothing until the owner approves the bash, then reads it as the owner’s own run would, and a denied one reads nothing', async (t) => {
+  const page = await chrome.page(t);
+  const dot =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const shown = `echo ${dot} | base64 -d > /tmp/guest.png; echo '<img:/tmp/guest.png>'`;
+  await boot(page, {
+    steps: [bash(shown), answer('Shown.'), bash("echo '<img:/tmp/guest.png>'"), answer('Denied.')],
+  });
+  const seen = await staged(page, 'an img line in a guest run', async () => {
+    const { until, pause, open, mint, join, send, said, entries, asked, decide } = globalThis.r;
+    const images = () =>
+      entries()
+        .filter((entry) => entry.kind === 'pi.tool-result')
+        .map((entry) => ({
+          text: (entry.model?.[0]?.content ?? [])
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text)
+            .join(''),
+          images: (entry.model?.[0]?.content ?? [])
+            .filter((block) => block.type === 'image')
+            .map((block) => block.data),
+        }));
+    await open();
+    const seat = await mint('user');
+    const guest = await join(seat);
+    await send(guest, 'Show the picture.');
+    await until(() => asked().length === 1, 'the guest bash to be asked');
+    await pause(300);
+    const waiting = { asked: asked().map(({ summary }) => summary), results: images().length };
+    await decide('once');
+    await until(() => said().includes('Shown.'), 'the approved run');
+    await send(guest, 'Show it again.');
+    await decide('deny', 'No.');
+    await until(() => said().includes('Denied.'), 'the denied run');
+    await guest.close();
+    return { waiting, results: images() };
+  });
+  assert.deepEqual(seen.waiting, { asked: [shown], results: 0 });
+  assert.deepEqual(seen.results[0], {
+    text: '/tmp/guest.png (image/png, 70 bytes)\n',
+    images: [dot],
+  });
+  assert.deepEqual(seen.results[1].images, []);
+  assert.equal(
+    seen.results[1].text,
+    refused('The owner declined this tool call in a run a guest started. No.')
+  );
+});
