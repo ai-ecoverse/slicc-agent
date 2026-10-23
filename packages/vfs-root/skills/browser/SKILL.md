@@ -62,7 +62,7 @@ Record a tab's network traffic to find the backend requests a page makes (then c
 (while sleep 5; do echo || break; done) | playwright-cli -s har har-start --tab <id> --url-filter '**/api/**' /tmp/traffic.har > /tmp/har.log 2>&1 &
 ```
 
-Wait until `/tmp/har.log` has a line with `"event":"ready"` before you use the tab: earlier traffic isn't recorded. Then stop it from a later call, with the same `-s` and from the same directory:
+Wait until `/tmp/har.log` has a line with `"event":"ready"` before you use the tab: earlier traffic isn't recorded. Then stop it from a later call, with the same `-s` and from the same directory. Always stop it when you're done, even if the task failed:
 
 ```bash
 playwright-cli -s har har-stop
