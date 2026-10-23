@@ -380,3 +380,50 @@ test('a turn cut off by five restarts in a row is parked, the monitor says how t
   assert.match(seen.again.out, /isn't parked/);
   assert.equal(seen.resumed.status, 'running');
 });
+
+test('the monitor shows the model latency and first-chunk time of the agent’s requests, and nothing they said', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'the model latency', async () => {
+    await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
+    const kernel = await bootKernel();
+    stage('the agent');
+    const owner = await startAgent({
+      worker: () =>
+        new Worker('/dist-test/main-worker.js?answer=Purple%20elephants.&answer=Again.', {
+          type: 'module',
+        }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    await connection.prompt('Tell me a secret word.');
+    await connection.prompt('Once more.');
+    const model = createAgentModel(connection);
+    const off = model.monitor.on('snapshot', () => {});
+    const vital = await when(
+      [connection.monitor, heard(model.monitor, 'snapshot')],
+      () => {
+        const found = model.monitor.snapshot().vitals.find((entry) => entry.id === 'latency');
+        return found && connection.monitor.value?.latency?.requests >= 2 && found;
+      },
+      'the latency vital'
+    );
+    const latency = connection.monitor.value.latency;
+    off();
+    await owner.release();
+    return { vital, latency };
+  });
+  assert.equal(seen.vital.label, 'Model latency');
+  assert.match(seen.vital.value, /^\d+ ms$|^\d+\.\d s$/);
+  assert.match(seen.vital.unit, /^first chunk (\d+ ms|\d+\.\d s)$/);
+  assert.match(seen.vital.hint, /^faux\/faux-1: /);
+  assert.equal(seen.latency.errors, 0);
+  assert.deepEqual(
+    seen.latency.models.map((entry) => entry.model),
+    ['faux/faux-1']
+  );
+  const shown = JSON.stringify(seen);
+  assert.ok(!shown.includes('Purple') && !shown.includes('secret word'));
+});

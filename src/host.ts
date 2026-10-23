@@ -264,6 +264,7 @@ export async function hostAgent(
     agents: agent.agents,
     views: mounted.views,
     reports: agent.reports,
+    timings: agent.timings,
     context,
   });
   const guests = await guestsOf(agent, approvals, policy, context);

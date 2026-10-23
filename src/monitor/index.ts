@@ -21,11 +21,13 @@ import type { Report, Reports } from '../reports.ts';
 import type {
   MonitorAgent,
   MonitorFeed,
+  MonitorLatency,
   MonitorLease,
   MonitorProblem,
   MonitorProcess,
   MonitorTask,
 } from '../services.ts';
+import type { ModelTiming, Timings } from '../timings.ts';
 import { commandLine, program, redacted } from './redact.ts';
 
 export interface PsEntry {
@@ -96,6 +98,7 @@ export interface MonitorOptions {
   agents: { state(): Readonly<AgentsState>; onChange(listener: () => void): () => void };
   views: ReplicatedState<Record<string, ConversationView>>;
   reports?: Reports;
+  timings?: Timings;
   kernel?: { ps?(): Promise<readonly PsEntry[]> };
   groups?: { owned(owner: number): number[] };
   users?: () => Promise<readonly { name: string; uid: number }[]>;
@@ -268,6 +271,7 @@ class Session {
       options.agents.onChange(() => this.schedule()),
       options.views.subscribe(() => this.schedule())
     );
+    if (options.timings) this.#off.push(options.timings.subscribe(() => this.schedule()));
     if (options.reports) {
       for (const report of [...options.reports.list()].reverse()) this.#reported(report);
       this.#off.push(
@@ -565,12 +569,44 @@ class Session {
       kernel: this.#kernel,
       problems: [...this.#problems],
       paused: this.#paused,
+      latency: latencyOf(this.#options.timings?.list() ?? []),
     };
     const key = JSON.stringify({ ...feed, at: 0 });
     if (key === this.#last) return;
     this.#last = key;
     this.#publish(feed, narrowed(feed, programs));
   }
+}
+
+export const LATENCY_WINDOW = 20;
+
+const median = (values: readonly number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? (sorted[middle] as number)
+    : ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2;
+};
+
+export function latencyOf(timings: readonly ModelTiming[]): MonitorLatency | null {
+  const recent = timings.slice(0, LATENCY_WINDOW);
+  if (!recent.length) return null;
+  const firsts = recent
+    .map((timing) => timing.firstChunkMs)
+    .filter((value): value is number => value !== null);
+  const byModel = Map.groupBy(recent, (timing) => `${timing.provider}/${timing.model}`);
+  return {
+    requests: recent.length,
+    medianMs: Math.round(median(recent.map((timing) => timing.durationMs))),
+    firstChunkMedianMs: firsts.length ? Math.round(median(firsts)) : null,
+    errors: recent.filter((timing) => timing.stop === 'error').length,
+    series: recent.map((timing) => Math.round(timing.durationMs)).reverse(),
+    models: [...byModel].map(([model, list]) => ({
+      model,
+      requests: list.length,
+      medianMs: Math.round(median(list.map((timing) => timing.durationMs))),
+    })),
+  };
 }
 
 export function createMonitor(options: MonitorOptions): Monitor {

@@ -19,6 +19,7 @@ import { type GuestToolGate, guestToolGate } from './guests/guard.ts';
 import { type GuestReviews, guestReviews } from './guests/review.ts';
 import { type ScoopReviews, scoopReviews } from './guests/scoop.ts';
 import { createReports, type Reports } from './reports.ts';
+import { createTimings, type Timings } from './timings.ts';
 
 export interface AgentOptions {
   models: Models;
@@ -40,6 +41,7 @@ export interface Agent extends Cones {
   readonly gate: GuestToolGate;
   readonly scoopReviews: ScoopReviews;
   readonly reports: Reports;
+  readonly timings: Timings;
   onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
   prompt(text: string): Promise<string>;
   close(): Promise<void>;
@@ -81,6 +83,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   const scooped = scoopReviews();
   registry.install(scooped.extension);
   const reports = createReports();
+  const timings = createTimings();
   const harness = await Harness.open(
     options.storage ?? new MemoryStorage(),
     {
@@ -89,6 +92,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
       identity: IDENTITY,
       ...(options.settings ? { settings: options.settings } : {}),
       onReport: (error, info) => reports.record(error, info),
+      telemetry: timings.telemetry,
       ...(options.env ? { env: options.env } : {}),
       ...(options.conversationCreated ? { conversationCreated: options.conversationCreated } : {}),
     },
@@ -107,6 +111,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     gate,
     scoopReviews: scooped,
     reports,
+    timings,
     cone: () => agents.cone(),
     switchCone: (conversation, switching) => agents.switchCone(conversation, switching),
     onCone: (listener) => agents.onCone(listener),

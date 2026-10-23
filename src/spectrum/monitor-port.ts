@@ -286,6 +286,32 @@ function budgetVital(budget: BudgetState, now: number): MonitorVital {
   };
 }
 
+export function seconds(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+function latencyVital(feed: MonitorFeed): MonitorVital[] {
+  const latency = feed.latency;
+  if (!latency) return [];
+  const first =
+    latency.firstChunkMedianMs === null
+      ? null
+      : `first chunk ${seconds(latency.firstChunkMedianMs)}`;
+  const failed = latency.errors ? `${latency.errors} failed` : null;
+  return [
+    {
+      id: 'latency',
+      label: 'Model latency',
+      value: seconds(latency.medianMs),
+      unit: [first, failed].filter(Boolean).join(' · ') || `${latency.requests} requests`,
+      hint: latency.models
+        .map((entry) => `${entry.model}: ${seconds(entry.medianMs)} (${entry.requests})`)
+        .join(', '),
+      ...trend(latency.series),
+    },
+  ];
+}
+
 function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
   const out: MonitorVital[] = [];
   if (feed.usage) {
@@ -332,6 +358,7 @@ function vitals(input: MonitorInput, feed: MonitorFeed): MonitorVital[] {
         ? { id: 'processes', label: 'Processes', value: '…', unit: 'checking' }
         : { id: 'processes', label: 'Processes', value: '—', unit: 'kernel not reachable' }
   );
+  out.push(...latencyVital(feed));
   out.push(...memoryVital(feed.processes ?? [], input.memory));
   out.push(...cpuVital(feed, input.cpu ?? []));
   const ratios = feed.agents
