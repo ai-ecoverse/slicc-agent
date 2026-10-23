@@ -280,6 +280,22 @@ export const IdleDoc = defineDoc<{ tasks: Record<string, number> }>({
 
 type IdleState = { phase: 'watch'; tail: number; since: number };
 
+function changedAt(
+  entries: readonly { id: number; model?: readonly { timestamp?: unknown }[] }[],
+  seen: IdleState,
+  now: number
+): number {
+  let newest = Number.NEGATIVE_INFINITY;
+  for (const entry of entries) {
+    if (entry.id <= seen.tail) continue;
+    for (const message of entry.model ?? [])
+      if (typeof message.timestamp === 'number')
+        newest = Math.max(newest, Math.min(message.timestamp, now));
+  }
+  if (newest === Number.NEGATIVE_INFINITY) return seen.tail < 0 ? now : seen.since;
+  return Math.max(seen.since, newest);
+}
+
 export function idleTask(
   ready: Promise<Host>,
   schedule: Schedule,
@@ -306,18 +322,14 @@ export function idleTask(
         const idleMs = (on ? idleMinutes : DEFAULT_IDLE_MINUTES) * 60_000;
         const now = runtime.now();
         const view = await runtime.context(conversation, context);
-        const last = view.entries.at(-1);
-        const tail = last?.id ?? 0;
+        const tail = view.entries.at(-1)?.id ?? 0;
         const seen = task.state.checkpoint;
-        if (tail !== seen.tail) {
-          const stamp = last?.model?.at(-1)?.timestamp;
-          const since = typeof stamp === 'number' && stamp <= now ? stamp : now;
-          return runtime.sleepUntil(since + idleMs, { phase: 'watch', tail, since }, context);
-        }
-        const due = seen.since + idleMs;
-        if (now < due) return runtime.sleepUntil(due, seen, context);
+        const since = tail === seen.tail ? seen.since : changedAt(view.entries, seen, now);
+        const next: IdleState = { phase: 'watch', tail, since };
+        const due = since + idleMs;
+        if (now < due) return runtime.sleepUntil(due, next, context);
         if (on) await schedule(conversation, tail, context, who.id);
-        return runtime.sleepUntil(now + idleMs, seen, context);
+        return runtime.sleepUntil(now + idleMs, next, context);
       },
     },
     abort: (task, runtime, context) =>
