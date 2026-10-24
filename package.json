@@ -95,7 +95,7 @@
     "@earendil-works/pi-mcp": "1.4.0",
     "@earendil-works/pi-telemetry": "1.4.0",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
-    "typebox": "1.4.1"
+    "typebox": "1.4.2"
   },
   "peerDependencies": {
     "@ai-ecoverse/slicc-kernel": ">=1.110.0 <2",
