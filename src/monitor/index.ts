@@ -406,6 +406,7 @@ class Session {
       kind: report.id.startsWith('task:') ? 'task' : 'report',
       message: redacted(report.message),
       report: { type: report.type, source: report.source },
+      ...(report.taskId === null ? {} : { taskId: String(report.taskId) }),
     });
   }
 
