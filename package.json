@@ -17,6 +17,13 @@
     "repo": "ai-ecoverse/slicc-agent",
     "publish": true
   },
+  "slicc": {
+    "unitSources": [
+      "src",
+      "scripts",
+      "evals"
+    ]
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true

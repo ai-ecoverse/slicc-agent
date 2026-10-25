@@ -869,7 +869,7 @@ npm test
 npm run lint
 ```
 
-`npm test` builds `dist/`, bundles a test worker that runs the agent on pi's faux provider, and runs the integration tests in Chromium through the [slicc-shared-web harness](https://github.com/ai-ecoverse/slicc-shared-web#integration-test-harness). Unit tests live in `test/unit/`, which stays out of git; the pre-commit hook requires every changed line in `src/` to be covered. No test calls a real model.
+`npm test` builds `dist/`, bundles a test worker that runs the agent on pi's faux provider, and runs the integration tests in Chromium through the [slicc-shared-web harness](https://github.com/ai-ecoverse/slicc-shared-web#integration-test-harness). Unit tests live in `test/unit/`, which stays out of git; the pre-commit hook requires every changed line in `src/`, `scripts/` and `evals/` to be covered. No test calls a real model.
 
 Locally the harness runs Chrome headless; with `CI` set it runs headed, as on the pipeline's runners, and `SLICC_HEADLESS=1` or `0` overrides either way.
 
