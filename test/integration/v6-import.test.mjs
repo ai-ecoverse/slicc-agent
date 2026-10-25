@@ -264,7 +264,7 @@ const refusals = [
               : entry
           ),
       }),
-    /files\/home-user\/todo\.txt doesn't match its sha256/,
+    /files\/home-user\/todo\.txt looks damaged \(its checksum doesn't match\)/,
   ],
   [
     'a broken transcript',
@@ -1275,7 +1275,7 @@ const formRefusals = [
     (form) => {
       form.moved['/slicc-fs/home/user/todo.txt'] = 'Water the plantz\n';
     },
-    /files\/home-user\/todo\.txt doesn't match its sha256/,
+    /files\/home-user\/todo\.txt looks damaged \(its checksum doesn't match\)/,
   ],
   [
     'a missing file left in place',

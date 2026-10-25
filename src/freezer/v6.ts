@@ -552,7 +552,7 @@ async function verify(opened: Opened, writer: Writer, stage: string | null, show
     writer.check();
     const bytes = await opened.read(file.path);
     if ((await sha256(bytes)) !== file.sha256.toLowerCase())
-      throw new ImportError(`${file.path} doesn't match its sha256`);
+      throw new ImportError(`${file.path} looks damaged (its checksum doesn't match)`);
     const where = whereOf(opened.manifest, file.path);
     if (where.kind === 'data') data.set(file.path, bytes);
     else if (where.kind !== 'skip' && stage && !opened.dir)
