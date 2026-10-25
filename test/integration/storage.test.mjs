@@ -9,6 +9,10 @@ const start = (query) =>
   new Promise((resolve) => {
     const worker = new Worker(`/dist-test/storage-worker.js?${query}`, { type: 'module' });
     worker.onmessage = ({ data }) => {
+      if (data.made !== undefined) {
+        globalThis.waiting = `${data.made} cones`;
+        return;
+      }
       worker.terminate();
       resolve(data);
     };
@@ -165,7 +169,12 @@ test('a later open keeps a higher durableSchema someone else recorded, and names
 test('a session document changed well over a hundred times reads the same after the worker restarts', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const first = await page.evaluate(start, 'directory=/.slicc/test-g&cones=150');
+  const first = await staged(
+    page,
+    'creating 150 cones',
+    start,
+    'directory=/.slicc/test-g&cones=150'
+  );
   assert.equal(first.error, undefined);
   assert.equal(first.cones.length, 151);
   const second = await page.evaluate(start, 'directory=/.slicc/test-g');
