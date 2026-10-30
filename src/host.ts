@@ -98,7 +98,11 @@ export interface AgentHost {
   close(): Promise<void>;
 }
 
-const NO_SERVERS = { ok: false as const, reason: 'this agent has no MCP servers' };
+const NO_SERVERS = {
+  ok: false as const,
+  code: 'invalid' as const,
+  reason: 'this agent has no MCP servers',
+};
 
 export const noSettings: AgentSettings = {
   state: replicatedState({ models: [], accounts: [] }),
@@ -112,6 +116,7 @@ export const noSettings: AgentSettings = {
   dismissMoved: async () => {},
   addServer: async () => NO_SERVERS,
   removeServer: async () => NO_SERVERS,
+  refusals: async () => ({}),
 };
 
 async function follow(

@@ -1,7 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { quote } from '../kernel/env.ts';
-import type { McpEdit } from '../services.ts';
+import type { McpEdit, McpRefusal, McpRefusalCode } from '../services.ts';
 import {
   isRecord,
   type McpServerConfig,
@@ -25,26 +25,27 @@ interface McpDocument {
   text: string;
 }
 
-const refused = (reason: string) => ({ ok: false as const, reason });
+const refused = ({ code, reason }: McpRefusal) => ({ ok: false as const, code, reason });
+const refusal = (code: McpRefusalCode, reason: string): McpRefusal => ({ code, reason });
 
 export function tokenName(server: string): string {
   return `MCP_${server.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_TOKEN`;
 }
 
-function entryOf(name: string, given: unknown): McpServerConfig | { reason: string } {
-  if (!isRecord(given)) return { reason: 'must be an object' };
+function entryOf(name: string, given: unknown): McpServerConfig | McpRefusal {
+  if (!isRecord(given)) return refusal('not-object', 'must be an object');
   const { token, ...entry } = given;
   if (token !== undefined && typeof token !== 'boolean')
-    return { reason: 'token must be true or false' };
+    return refusal('bad-token', 'token must be true or false');
   const checked = validateServer(name, entry);
-  if ('message' in checked) return { reason: checked.message };
+  if ('message' in checked) return refusal(checked.code, checked.message);
   if (!token) return checked;
   if (!usesOAuth(checked))
-    return { reason: 'a token and an Authorization header exclude each other' };
+    return refusal('token-conflict', 'a token and an Authorization header exclude each other');
   const authorization = `Bearer \${${tokenName(name)}}`;
   const headers = { ...checked.headers, Authorization: authorization };
   const signed = validateServer(name, { ...checked, headers });
-  return 'message' in signed ? { reason: signed.message } : signed;
+  return 'message' in signed ? refusal('token-conflict', signed.message) : signed;
 }
 
 function rendered(root: Record<string, unknown>, servers: Record<string, unknown>): string {
@@ -74,49 +75,54 @@ async function replace(
 
 export function mcpFile(env: ExecutionEnv, path: string, home: string, context: Context): McpFile {
   const named = shown(path, home);
-  const unwritten = `Couldn't write ${named}, so it is unchanged.`;
+  const unwritten = refusal('file-unwritable', `Couldn't write ${named}, so it is unchanged.`);
   let queue: Promise<unknown> = Promise.resolve();
   const inTurn = <T>(run: () => Promise<T>): Promise<T> => {
     const next = queue.then(run);
     queue = next.catch(() => undefined);
     return next;
   };
-  const load = async (): Promise<McpDocument | { reason: string }> => {
+  const load = async (): Promise<McpDocument | McpRefusal> => {
     const read = await env.readTextFile(path, context);
     if (!read.ok && read.error.code !== 'not_found')
-      return { reason: `Couldn't read ${named}, so it is unchanged.` };
+      return refusal('file-unreadable', `Couldn't read ${named}, so it is unchanged.`);
     const text = read.ok ? read.value : '';
     if (text.trim() === '') return { root: {}, servers: {}, text };
     let root: unknown;
     try {
       root = JSON.parse(text);
     } catch {
-      return { reason: `${named} isn't valid JSON, so it is unchanged. Fix the file first.` };
+      return refusal(
+        'file-invalid',
+        `${named} isn't valid JSON, so it is unchanged. Fix the file first.`
+      );
     }
     if (!isRecord(root) || (root.mcpServers !== undefined && !isRecord(root.mcpServers)))
-      return { reason: `${named} needs an object of mcpServers, so it is unchanged.` };
+      return refusal('file-invalid', `${named} needs an object of mcpServers, so it is unchanged.`);
     return { root, servers: (root.mcpServers ?? {}) as Record<string, unknown>, text };
   };
   return {
     add: (name, entry) =>
       inTurn(async () => {
         const file = await load();
-        if ('reason' in file) return refused(file.reason);
+        if ('reason' in file) return refused(file);
         if (Object.hasOwn(file.servers, name))
-          return refused(`${named} already has a server called "${name}". Remove it first.`);
+          return refused(
+            refusal('duplicate', `${named} already has a server called "${name}". Remove it first.`)
+          );
         const config = entryOf(name, entry);
-        if ('reason' in config) return refused(config.reason);
+        if ('reason' in config) return refused(config);
         const text = rendered(file.root, { ...file.servers, [name]: config });
-        const clash = parseMcpConfig(text).problems.find((problem) => problem.server === name);
-        if (clash) return refused(clash.message);
+        const clash = parseMcpConfig(text).refused.find((server) => server.name === name);
+        if (clash) return refused(clash);
         return (await replace(env, path, text, context)) ? { ok: true } : refused(unwritten);
       }),
     remove: (name) =>
       inTurn(async () => {
         const file = await load();
-        if ('reason' in file) return refused(file.reason);
+        if ('reason' in file) return refused(file);
         if (!Object.hasOwn(file.servers, name))
-          return refused(`${named} has no server called "${name}".`);
+          return refused(refusal('not-found', `${named} has no server called "${name}".`));
         const removed = parseMcpConfig(file.text).servers.find((entry) => entry.name === name);
         const { [name]: _gone, ...servers } = file.servers;
         const text = rendered(file.root, servers);

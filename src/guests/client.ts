@@ -120,6 +120,7 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     dismissMoved: refuse,
     addServer: refuse,
     removeServer: refuse,
+    refusals: refuse,
   };
   return {
     serverId,

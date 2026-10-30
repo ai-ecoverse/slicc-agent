@@ -126,6 +126,7 @@ export function lastingSettings(
     dismissMoved: (context) => settings.dismissMoved(context),
     addServer: (name, entry, context) => settings.addServer(name, entry, context),
     removeServer: (id, context) => settings.removeServer(id, context),
+    refusals: (context) => settings.refusals(context),
   };
 }
 

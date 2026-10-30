@@ -7,7 +7,14 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { preferredModel } from '../preferred.ts';
-import type { AgentSettings, McpEdit, ProviderOption, SettingsState, SignIn } from '../services.ts';
+import type {
+  AgentSettings,
+  McpEdit,
+  McpRefusals,
+  ProviderOption,
+  SettingsState,
+  SignIn,
+} from '../services.ts';
 import {
   type ConnectOptions,
   DEVICE_SIGN_INS,
@@ -76,6 +83,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   readonly #urls = new Map<string, string>();
   readonly addServer?: (name: string, entry: unknown) => Promise<McpEdit>;
   readonly removeServer?: (id: string) => Promise<McpEdit>;
+  readonly refusals?: () => Promise<McpRefusals>;
 
   constructor(
     settings: AgentSettings,
@@ -93,6 +101,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
         this.cancel(id);
         return settings.removeServer(id, BACKGROUND_CONTEXT);
       };
+      this.refusals = () => settings.refusals(BACKGROUND_CONTEXT);
     }
     this.#mcpLogin = mcp;
     this.#window = popups;

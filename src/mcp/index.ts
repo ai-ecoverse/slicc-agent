@@ -25,7 +25,11 @@ export interface McpSetup {
   attach(options: McpAttach, context: Context): Promise<McpRuntime>;
 }
 
-const NOT_LOADED = { ok: false as const, reason: "the MCP client didn't load: update SLICC" };
+const NOT_LOADED = {
+  ok: false as const,
+  code: 'invalid' as const,
+  reason: "the MCP client didn't load: update SLICC",
+};
 
 const idle: McpRuntime = {
   accounts: async () => [],
@@ -39,6 +43,7 @@ const idle: McpRuntime = {
   serverUrl: async () => null,
   addServer: async () => NOT_LOADED,
   removeServer: async () => NOT_LOADED,
+  refusals: async () => ({}),
   onChange: () => () => undefined,
   status: () => [],
   reload: async () => undefined,

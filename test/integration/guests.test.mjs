@@ -328,6 +328,7 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
         )
       ),
       settings: await refused(() => guest.settings.disconnect('faux', BACKGROUND_CONTEXT)),
+      refusals: await refused(() => guest.settings.refusals(BACKGROUND_CONTEXT)),
       invite: guestModel.guests.unavailable(),
       gated: await guestModel.agent.send('cone', 'Let me in').then(
         () => 'sent',
@@ -345,7 +346,7 @@ test('a guest advertises nothing it can use: asking for Control and Panels still
     return out;
   });
   assert.equal(result.asFollower, 'forbidden');
-  for (const key of ['abort', 'lick', 'configure', 'settings'])
+  for (const key of ['abort', 'lick', 'configure', 'settings', 'refusals'])
     assert.equal(result[key], 'EACCES', key);
   assert.equal(result.mint, 'forbidden', 'the guest policy refuses a guest managing guests');
   assert.equal(result.invite, "Only the owner's devices can invite guests.");
