@@ -764,6 +764,41 @@ for (const [base, path] of [
   });
 }
 
+for (const [name, second, client, registered] of [
+  ['another redirect registers again', 'https://seven.test/7/oauth/mcp-callback', 'client-2', 2],
+  ['the same redirect keeps its client', CALLBACK, 'client-1', 1],
+]) {
+  test(`a stored registration signing in with ${name}`, async (t) => {
+    const docs = await serve(true, { oauth: {} });
+    try {
+      const page = await mcpPage(t, docs, { query: `answer=Noted.&${FIXED}` });
+      const signIn = async () => {
+        await page.evaluate(() => {
+          window.model.settings.connect('mcp:docs').catch(() => undefined);
+        });
+        return new URL(await page.within(30000, authorizing)).searchParams;
+      };
+      assert.equal((await signIn()).get('client_id'), 'client-1');
+      await page.goto('/');
+      await page.within(30000, () => document.readyState === 'complete' && !window.model);
+      const query = `answer=Noted.&redirect=${encodeURIComponent(second)}`;
+      await page.evaluate((query) => window.start(query, true), query);
+      await page.within(60000, () =>
+        window.model.settings.accounts().some((account) => account.id === 'mcp:docs')
+      );
+      const sent = await signIn();
+      assert.equal(sent.get('client_id'), client);
+      assert.equal(sent.get('redirect_uri'), second);
+      assert.equal(docs.fake.state.oauth.clients.length, registered);
+      assert.deepEqual(docs.fake.state.oauth.clients.at(-1).redirect_uris, [
+        registered === 2 ? second : CALLBACK,
+      ]);
+    } finally {
+      docs.close();
+    }
+  });
+}
+
 const SECURE = `answer=Noted.&${FIXED}`;
 
 for (const [name, oauth, config, client, registered] of [

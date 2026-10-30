@@ -96,7 +96,7 @@ import { type KernelPorts, kernelPorts, serveConnections, type WorkerScope } fro
 
 export interface AgentWorkerScope extends WorkerScope {
   fetch: typeof fetch;
-  location: { origin: string; href: string };
+  location: { origin: string; href?: string };
 }
 
 export type KernelAttach = (port: MessagePort) => Promise<KernelClient & { transport: Transport }>;
@@ -182,7 +182,7 @@ export function seesImages(models: Pick<Models, 'getModel'>, ref: ModelRef | und
 export const MCP_CALLBACK = 'oauth/mcp-callback';
 const PACKAGE_ROOT = 'opt/agent/node_modules/';
 
-export function mcpRedirect({ origin, href }: AgentWorkerScope['location']): string {
+export function mcpRedirect({ origin, href = origin }: AgentWorkerScope['location']): string {
   const root = href.indexOf(PACKAGE_ROOT);
   return new URL(MCP_CALLBACK, root < 0 ? origin : href.slice(0, root)).href;
 }

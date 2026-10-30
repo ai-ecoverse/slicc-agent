@@ -248,6 +248,34 @@ export class StoredOAuth implements Provider {
 
 export type { McpSignIn } from '../services.ts';
 
+function registeredElsewhere(client: NonNullable<Client>, redirect: string): boolean {
+  const uris = 'redirect_uris' in client ? client.redirect_uris : [];
+  return uris.length > 0 && !uris.includes(redirect);
+}
+
+async function clientFor(
+  provider: StoredOAuth,
+  info: Awaited<ReturnType<typeof discoverOAuthServerInfo>>,
+  scope: string | undefined,
+  fetch: McpFetch
+): Promise<NonNullable<Client>> {
+  const stored = await provider.clientInformation();
+  if (stored && !registeredElsewhere(stored, provider.redirectUrl)) return stored;
+  if (stored) await provider.invalidateCredentials('client');
+  const metadata = info.authorizationServerMetadata;
+  const document = provider.clientMetadataDocument(metadata);
+  if (document) return { client_id: document.url };
+  if (metadata && !metadata.registration_endpoint) throw new Error(NO_CLIENT);
+  const client = await registerClient(info.authorizationServerUrl, {
+    ...(metadata ? { metadata } : {}),
+    clientMetadata: provider.clientMetadata,
+    ...(scope ? { scope } : {}),
+    fetch,
+  });
+  await provider.saveClientInformation(client);
+  return client;
+}
+
 export async function beginSignIn(
   provider: StoredOAuth,
   server: OAuthServer,
@@ -270,19 +298,7 @@ export async function beginSignIn(
     throw new Error("The authorization server doesn't support PKCE S256.");
   const scope =
     server.config.oauth?.scope || info.resourceMetadata?.scopes_supported?.join(' ') || undefined;
-  const document = provider.clientMetadataDocument(metadata);
-  let client = await provider.clientInformation();
-  if (!client && document) client = { client_id: document.url };
-  if (!client) {
-    if (metadata && !metadata.registration_endpoint) throw new Error(NO_CLIENT);
-    client = await registerClient(info.authorizationServerUrl, {
-      ...(metadata ? { metadata } : {}),
-      clientMetadata: provider.clientMetadata,
-      ...(scope ? { scope } : {}),
-      fetch: options.fetch,
-    });
-    await provider.saveClientInformation(client);
-  }
+  const client = await clientFor(provider, info, scope, options.fetch);
   await options.register(
     new URL(metadata?.token_endpoint ?? new URL('/token', info.authorizationServerUrl)).href
   );
