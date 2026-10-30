@@ -4,6 +4,8 @@ import { VIEW_ONLY } from './view-only.ts';
 
 export { VIEW_ONLY };
 
+export const NOT_OWNER = "Only the owner's page can change MCP servers.";
+
 type Answer = (...args: unknown[]) => Promise<unknown>;
 
 const refuse: Answer = () =>
@@ -19,7 +21,11 @@ const sends = new Set(['send', 'compact', 'compactAgent']);
 
 export const controlAnswer = (name: string): Answer => (sends.has(name) ? refused : refuse);
 
-export const settingsAnswer = (): Answer => refuse;
+const notOwner: Answer = () =>
+  Promise.reject(Object.assign(new Error(NOT_OWNER), { code: 'EACCES' }));
+
+export const settingsAnswer = (name: string): Answer =>
+  name === 'addServer' || name === 'removeServer' ? notOwner : refuse;
 
 export const remoteAnswer = (name: string): Answer =>
   name === 'prompt' ? async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY }) : refuse;

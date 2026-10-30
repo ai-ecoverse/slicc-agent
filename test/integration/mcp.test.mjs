@@ -167,6 +167,44 @@ test('on the page route a server with CORS works and one without CORS is reporte
   }
 });
 
+test('a server added in Settings without a token that answers 401 offers the OAuth sign-in, and its connected lick names the host only', async (t) => {
+  const docs = await serve(true, { oauth: {} });
+  const open = await serve(true);
+  try {
+    const page = await chrome.page(t);
+    await page.init(helpers);
+    await page.goto('/');
+    await staged(page, 'the agent', (q) => window.start(q, true), 'answer=Ready.');
+    const added = await page.evaluate(
+      (url) => window.model.settings.addServer('docs', { url }),
+      docs.url
+    );
+    assert.deepEqual(added, { ok: true });
+    await page.within(60000, () =>
+      window.model.settings
+        .accounts()
+        .some(
+          ({ id, auth, status, state }) =>
+            id === 'mcp:docs' &&
+            auth === 'oauth' &&
+            status === 'disconnected' &&
+            state === 'needs-auth'
+        )
+    );
+    await page.evaluate((url) => window.model.settings.addServer('open', { url }), open.url);
+    await page.within(60000, () =>
+      window.licks().some((lick) => lick.title === 'MCP server "open" connected')
+    );
+    const lick = await page.evaluate(
+      () => window.licks().find((item) => item.title === 'MCP server "open" connected').text
+    );
+    assert.match(lick, new RegExp(`^${new URL(open.url).host} offers \\d+ tools\\.$`));
+  } finally {
+    docs.close();
+    open.close();
+  }
+});
+
 test('an OAuth MCP server signs in through a popup and the callback page, and without a vault no token is ever exchanged', async (t) => {
   const docs = await serve(true, { oauth: {} });
   try {

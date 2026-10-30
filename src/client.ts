@@ -32,10 +32,10 @@ import {
   type GuestProposal,
   type GuestShown,
   type MonitorFeed,
+  OWNER_SETTINGS_METHODS,
   PAGE_METHODS,
   type PrivateRevision,
   REMOTE_METHODS,
-  SETTINGS_METHODS,
   type SendMode,
   type SettingsState,
   TRANSCRIPT_STATES,
@@ -111,7 +111,7 @@ export function lasting<T>(state: ReplicatedState<T>): Lasting<T> {
   };
 }
 
-function lastingSettings(
+export function lastingSettings(
   settings: AgentSettings,
   hold: <T>(state: ReplicatedState<T>) => ReplicatedState<T>
 ): AgentSettings {
@@ -124,6 +124,8 @@ function lastingSettings(
     serverUrl: (providerId, context) => settings.serverUrl(providerId, context),
     signIn: (providerId, context) => settings.signIn(providerId, context),
     dismissMoved: (context) => settings.dismissMoved(context),
+    addServer: (name, entry, context) => settings.addServer(name, entry, context),
+    removeServer: (id, context) => settings.removeServer(id, context),
   };
 }
 
@@ -208,7 +210,12 @@ export async function connectAgent(
   ) as Record<(typeof TRANSCRIPT_STATES)[number], Readable<unknown>>;
   const settingsState = settingsHandle.state as Readable<SettingsState>;
   const settings: AgentSettings = {
-    ...bound<Omit<AgentSettings, 'state'>>(settingsHandle, root, SETTINGS_METHODS, settingsAnswer),
+    ...bound<Omit<AgentSettings, 'state'>>(
+      settingsHandle,
+      root,
+      OWNER_SETTINGS_METHODS,
+      settingsAnswer
+    ),
     state: replicated(settingsState),
   };
   const remote = bound<AgentRemote>(remoteHandle, root, REMOTE_METHODS, remoteAnswer);
