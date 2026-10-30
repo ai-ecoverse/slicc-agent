@@ -177,11 +177,15 @@ export function agentUsers(
     async gelatiere(root) {
       const first = `${CONE_PREFIX}${FIRST_CONE}`;
       const files = await this.envOfAgent(first);
+      if (!files)
+        console.warn(
+          `slicc-agent: can't resolve the environment of ${FIRST_CONE}, so gelatiere won't write its procedure`
+        );
       return {
         home: homeOf(FIRST_CONE),
         profile: SHARED_DIR,
         shared: SHARED_DIR,
-        ...(files ? { files } : {}),
+        files: files ?? null,
         as: async (caller) => {
           if (!caller) return { env: root, home: ROOT_HOME };
           const env = await this.envOfAgent(caller);
@@ -199,7 +203,12 @@ export function agentUsers(
       const out: LickDir[] = [{ dir: `${ROOT_HOME}/.slicc`, home: ROOT_HOME, cone: null }];
       for (const entry of cones) {
         const home = homeOf(entry.spec.name);
-        const env = await envOf(entry.agentId, home).catch(() => undefined);
+        const env = await envOf(entry.agentId, home).catch(() => {
+          console.warn(
+            `slicc-agent: can't resolve the environment of ${entry.spec.name}, so its watches don't run`
+          );
+          return undefined;
+        });
         out.push({ dir: `${home}/.slicc`, home, cone: entry.spec.name, ...(env ? { env } : {}) });
       }
       return out;

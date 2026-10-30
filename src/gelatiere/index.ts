@@ -53,7 +53,7 @@ export interface GelatiereAttach {
   fetch?: Fetcher;
   catalog?: string;
   skills?: () => readonly { name: string }[];
-  files?: ExecutionEnv;
+  files?: ExecutionEnv | null;
   profile?: string;
   shared?: string;
   as?: (caller: string | null, context: Context) => Promise<Caller | undefined>;
@@ -108,7 +108,7 @@ type G = {
   pending: string;
   load: (context: Context) => Promise<Suggestion[]>;
   mark: (id: string, field: 'dismissedAt' | 'takenAt', context: Context) => Promise<boolean>;
-  files: ExecutionEnv;
+  files: ExecutionEnv | null;
   caller: string | null;
   store: string;
   catalog: string;
@@ -161,7 +161,7 @@ async function seed(g: G, context: Context, create: boolean): Promise<Seeded> {
   const { assets } = g.options;
   const env = g.files;
   const text = assets ? await assets(PROCEDURE).catch(() => undefined) : undefined;
-  if (text === undefined) return 'none';
+  if (text === undefined || !env) return 'none';
   const bundled = await sha256(text);
   const marker = `${g.procedure}.sha256`;
   const must = (result: { ok: boolean; error?: { message: string } }) => {
@@ -185,6 +185,7 @@ async function seed(g: G, context: Context, create: boolean): Promise<Seeded> {
 
 async function init(g: G, context: Context): Promise<Answer> {
   const { options } = g;
+  if (!g.files) return fail(`can't find the environment that owns ${g.procedure}, so nothing ran`);
   await seed(g, context, true);
   let handle = handleOf(options.agents);
   if (!handle) {
@@ -497,12 +498,12 @@ async function status(g: G, context: Context): Promise<Answer> {
   const counts = store
     ? `${open(store).length} open, ${store.filter((item) => item.takenAt).length} taken, ${store.filter((item) => item.dismissedAt).length} dismissed`
     : 'none yet';
-  const pending = await g.files.readTextFile(g.pending, context);
+  const pending = await g.files?.readTextFile(g.pending, context);
   const lines = [
     `scoop: ${handle ?? 'none (gelatiere init)'}`,
     `schedule: ${scheduled ?? 'none'}`,
     `store: ${counts}`,
-    ...(pending.ok
+    ...(pending?.ok
       ? [
           `procedure: ${g.procedure} has your edits, so it was kept; the new built-in one is ${g.pending}`,
         ]
@@ -547,7 +548,7 @@ export function attachGelatiere(options: GelatiereAttach): GelatiereRuntime {
     now,
     procedure: `${home}/.pi/agent/GELATIERE.md`,
     pending: `${home}/.pi/agent/GELATIERE.new.md`,
-    files: options.files ?? env,
+    files: options.files === undefined ? env : options.files,
     caller: null,
     store: storeFile,
     catalog: options.shared ? `${options.shared}/.gelatiere/catalog` : CATALOG_DIR,
