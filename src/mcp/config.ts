@@ -61,7 +61,8 @@ const OAUTH_REFUSED: Record<string, string> = {
   clientSecret: 'a client secret would have to live in mcp.json; SLICC signs in as a public client',
   callbackPort: 'SLICC signs in through its own page, not a loopback port',
   callbackUrl: 'SLICC signs in through its own page, not a loopback URL',
-  clientRegistration: 'SLICC registers dynamically or uses oauth.clientId',
+  clientRegistration:
+    'SLICC registers dynamically, sends a client metadata document or uses oauth.clientId',
 };
 const SECRET_HEADER = /authorization|cookie|token|key|secret|password|session/i;
 const SECRET_PARAM = /token|key|secret|password|signature|sig|auth|code/i;

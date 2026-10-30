@@ -123,14 +123,21 @@ function createAuthorizer(state, settings, cors) {
           issuer: origin,
           authorization_endpoint: `${settings.authorize ?? origin}/authorize`,
           token_endpoint: `${origin}/token`,
-          registration_endpoint: `${origin}/register`,
+          registration_endpoint: settings.registers === false ? null : `${origin}/register`,
           response_types_supported: ['code'],
           code_challenge_methods_supported: ['S256'],
           token_endpoint_auth_methods_supported: ['none'],
+          ...(settings.document
+            ? {
+                client_id_metadata_document_supported: true,
+                authorization_response_iss_parameter_supported: true,
+              }
+            : {}),
         });
       if (url.pathname.startsWith('/.well-known/'))
         return new Response('missing', { status: 404, headers: cors });
       if (url.pathname === '/register' && request.method === 'POST') {
+        if (settings.registers === false) return json({ error: 'not_found' }, 404);
         const body = await request.json();
         auth.clients.push(body);
         return json({ ...body, client_id: `client-${auth.clients.length}` }, 201);
@@ -158,6 +165,10 @@ function createAuthorizer(state, settings, cors) {
         if (!granted) return json({ error: 'invalid_grant' }, 400);
         if ((await challengeOf(form.get('code_verifier') ?? '')) !== granted.code_challenge)
           return json({ error: 'invalid_grant', error_description: 'PKCE mismatch' }, 400);
+        if (form.get('client_id') !== granted.client_id)
+          return json({ error: 'invalid_grant', error_description: 'client mismatch' }, 400);
+        if (form.get('redirect_uri') !== granted.redirect_uri)
+          return json({ error: 'invalid_grant', error_description: 'redirect mismatch' }, 400);
         auth.codes.delete(form.get('code'));
         return json(issue());
       }

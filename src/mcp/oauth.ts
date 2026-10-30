@@ -1,5 +1,6 @@
 import type { AuthProvider, McpFetch, UnauthorizedContext } from '@earendil-works/pi-mcp';
 import {
+  type AuthorizationServerMetadata,
   authorizeMcp,
   discoverOAuthServerInfo,
   McpOAuthAuthorizationRequiredError,
@@ -21,6 +22,8 @@ type Client = Awaited<ReturnType<Provider['clientInformation']>>;
 type Discovery = NonNullable<McpOAuthState['discovery']>;
 
 export const CLIENT_NAME = 'SLICC';
+export const NO_CLIENT =
+  "SLICC can't register with this authorization server: it offers no dynamic client registration and no client metadata document SLICC can use. Set oauth.clientId in mcp.json.";
 
 export function sentence(text: string): string {
   const trimmed = text.trim();
@@ -171,6 +174,13 @@ export class StoredOAuth implements Provider {
     return configured ? { client_id: configured } : (await this.load()).clientInformation;
   }
 
+  clientMetadataDocument(metadata: AuthorizationServerMetadata | undefined) {
+    if (!metadata?.client_id_metadata_document_supported || metadata.registration_endpoint)
+      return undefined;
+    const url = new URL('client.json', this.redirectUrl);
+    return url.protocol === 'https:' ? { url: url.href, redirectUrl: this.redirectUrl } : undefined;
+  }
+
   async saveClientInformation(information: NonNullable<Client>): Promise<void> {
     if (this.#server.config.oauth?.clientId) return;
     await this.update((state) => ({ ...state, clientInformation: information }));
@@ -238,6 +248,34 @@ export class StoredOAuth implements Provider {
 
 export type { McpSignIn } from '../services.ts';
 
+function registeredElsewhere(client: NonNullable<Client>, redirect: string): boolean {
+  const uris = 'redirect_uris' in client ? client.redirect_uris : [];
+  return uris.length > 0 && !uris.includes(redirect);
+}
+
+async function clientFor(
+  provider: StoredOAuth,
+  info: Awaited<ReturnType<typeof discoverOAuthServerInfo>>,
+  scope: string | undefined,
+  fetch: McpFetch
+): Promise<NonNullable<Client>> {
+  const stored = await provider.clientInformation();
+  if (stored && !registeredElsewhere(stored, provider.redirectUrl)) return stored;
+  if (stored) await provider.invalidateCredentials('client');
+  const metadata = info.authorizationServerMetadata;
+  const document = provider.clientMetadataDocument(metadata);
+  if (document) return { client_id: document.url };
+  if (metadata && !metadata.registration_endpoint) throw new Error(NO_CLIENT);
+  const client = await registerClient(info.authorizationServerUrl, {
+    ...(metadata ? { metadata } : {}),
+    clientMetadata: provider.clientMetadata,
+    ...(scope ? { scope } : {}),
+    fetch,
+  });
+  await provider.saveClientInformation(client);
+  return client;
+}
+
 export async function beginSignIn(
   provider: StoredOAuth,
   server: OAuthServer,
@@ -260,16 +298,7 @@ export async function beginSignIn(
     throw new Error("The authorization server doesn't support PKCE S256.");
   const scope =
     server.config.oauth?.scope || info.resourceMetadata?.scopes_supported?.join(' ') || undefined;
-  let client = await provider.clientInformation();
-  if (!client) {
-    client = await registerClient(info.authorizationServerUrl, {
-      ...(metadata ? { metadata } : {}),
-      clientMetadata: provider.clientMetadata,
-      ...(scope ? { scope } : {}),
-      fetch: options.fetch,
-    });
-    await provider.saveClientInformation(client);
-  }
+  const client = await clientFor(provider, info, scope, options.fetch);
   await options.register(
     new URL(metadata?.token_endpoint ?? new URL('/token', info.authorizationServerUrl)).href
   );

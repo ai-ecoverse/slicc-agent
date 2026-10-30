@@ -26,7 +26,7 @@ const helpers = () => {
     await writable.write(text);
     await writable.close();
   };
-  window.start = async (query, page) => {
+  window.start = async (query, page, base = '/dist-test/') => {
     const { bootKernel } = await import('/kernel.js');
     const { fetchTransport } = await import(
       '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
@@ -34,7 +34,8 @@ const helpers = () => {
     await import('/dist-test/page.js');
     const kernel = await bootKernel({}, page ? { network: { transport: fetchTransport() } } : {});
     const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+      worker: () =>
+        (window.worker = new Worker(`${base}main-worker.js?${query}`, { type: 'module' })),
       kernel: { connect: () => kernel.connect() },
     });
     window.model = createAgentModel(await owner.connect(), { storage: localStorage });
@@ -361,20 +362,21 @@ const fakePopups = () => {
   };
 };
 
-async function mcpPage(t, docs) {
+async function mcpPage(t, docs, { query = 'answer=Noted.', config, base = '/dist-test/' } = {}) {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.init(fakePopups);
   await page.goto('/');
   await page.evaluate(
-    (url) =>
+    (url, config) =>
       window.write(
         '/home/.pi/agent/mcp.json',
-        JSON.stringify({ mcpServers: { docs: { url, exposure: 'direct' } } })
+        JSON.stringify({ mcpServers: { docs: { url, exposure: 'direct', ...config } } })
       ),
-    docs.url
+    docs.url,
+    config
   );
-  await page.evaluate(() => window.start('answer=Noted.', true));
+  await page.evaluate((query, base) => window.start(query, true, base), query, base);
   await page.within(60000, () =>
     window.model.settings
       .accounts()
@@ -582,6 +584,276 @@ test('a retry right after a cancelled MCP sign-in keeps its own state, even when
     docs.close();
   }
 });
+
+const CALLBACK = 'https://seven.test/oauth/mcp-callback';
+const DOCUMENT = 'https://seven.test/oauth/client.json';
+const FIXED = `redirect=${encodeURIComponent(CALLBACK)}`;
+
+const relayed = async (t, query) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.init(fakePopups);
+  await page.goto('/');
+  await page.evaluate(() =>
+    window.write(
+      '/home/.pi/agent/mcp.json',
+      JSON.stringify({
+        mcpServers: { docs: { url: 'https://mcp.test/mcp', exposure: 'direct' } },
+      })
+    )
+  );
+  await staged(
+    page,
+    'the agent',
+    (q) => window.start(q),
+    [
+      'relay=mcp.test',
+      'vault',
+      `oauth=${encodeURIComponent(JSON.stringify({ document: true, registers: false }))}`,
+      ...query,
+    ].join('&')
+  );
+  await page.within(
+    60000,
+    () =>
+      window.model.settings
+        .accounts()
+        .find((account) => account.id === 'mcp:docs' && account.auth === 'oauth')?.status ===
+      'disconnected'
+  );
+  await page.evaluate(() => {
+    window.signing = window.model.settings.connect('mcp:docs').then(
+      () => 'ok',
+      (error) => error.message
+    );
+    window.authorize = () => {
+      const { port1, port2 } = new MessageChannel();
+      const url = window.opens.at(-1).location.href;
+      const answered = new Promise((resolve) => {
+        port1.onmessage = ({ data }) => resolve({ ...data, url });
+      });
+      window.worker.postMessage({ authorize: { url, port: port2 } }, [port2]);
+      return answered;
+    };
+    window.answer = async (iss) => {
+      const { location, url } = await window.authorize();
+      const back = new URL(location).searchParams;
+      new BroadcastChannel('slicc-mcp-oauth').postMessage({
+        code: back.get('code'),
+        state: back.get('state'),
+        iss: iss ?? back.get('iss'),
+      });
+      return { url, result: await window.signing };
+    };
+  });
+  await page.within(30000, () => window.opens.at(-1).location.href.includes('/authorize'));
+  return page;
+};
+
+test('a server that only takes Client ID Metadata Documents shows Sign in, signs in through Settings with the client_id next to the redirect, connects and its tools work', async (t) => {
+  const steps = [
+    { answer: 'Noted.' },
+    { tool: { name: 'mcp__docs__echo', args: { text: 'by document' } } },
+    { answer: 'Done.' },
+  ].map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`);
+  const page = await relayed(t, [FIXED, ...steps]);
+  const { url, result } = await page.evaluate(() => window.answer());
+  assert.equal(result, 'ok');
+  const sent = Object.fromEntries(new URL(url).searchParams);
+  assert.equal(sent.client_id, DOCUMENT);
+  assert.equal(new URL('client.json', sent.redirect_uri).href, sent.client_id);
+  assert.equal(sent.redirect_uri, CALLBACK);
+  assert.equal(sent.response_type, 'code');
+  assert.equal(sent.code_challenge_method, 'S256');
+  assert.equal(sent.scope, 'docs.read');
+  assert.equal(sent.resource, 'https://mcp.test/mcp');
+  assert.match(sent.state, /^[0-9a-f]{64}$/);
+  await page.within(
+    60000,
+    () =>
+      window.model.settings.accounts().find((account) => account.id === 'mcp:docs').status ===
+      'connected'
+  );
+  await page.within(60000, () => !window.agent.busy(window.agent.active()));
+  await page.evaluate(() => window.agent.send(window.agent.active(), 'Call it.'));
+  await page.within(60000, () =>
+    window.tools().some((tool) => tool.status === 'done' || tool.status === 'error')
+  );
+  const seen = await page.evaluate(async () => {
+    const { port1, port2 } = new MessageChannel();
+    const log = new Promise((resolve) => {
+      port1.onmessage = ({ data }) => resolve(data.vault);
+    });
+    window.worker.postMessage({ upstream: port2 }, [port2]);
+    return {
+      tools: window.tools().map(({ name, output }) => ({ name, output })),
+      grants: (await log).filter((entry) => entry.op === 'grant').map((entry) => entry.oauth),
+      state: await window.authorize(),
+    };
+  });
+  assert.deepEqual(seen.tools, [{ name: 'mcp__docs__echo', output: 'echo: by document' }]);
+  assert.deepEqual(seen.grants, [
+    {
+      tokenUrl: 'https://mcp.test/token',
+      clientId: DOCUMENT,
+      resource: 'https://mcp.test/mcp',
+    },
+  ]);
+  assert.deepEqual(seen.state.clients, []);
+  assert.equal(seen.state.issued, 1);
+});
+
+test('a Client ID Metadata Document sign-in answered by another issuer exchanges no code', async (t) => {
+  const page = await relayed(t, [FIXED, 'answer=Noted.']);
+  const { result } = await page.evaluate(() => window.answer('https://other.test'));
+  assert.notEqual(result, 'ok');
+  const { issued } = await page.evaluate(() => window.authorize());
+  assert.equal(issued, 0);
+});
+
+const authorizing = () => {
+  const { href } = window.opens.at(-1).location;
+  return href.includes('/authorize') && href;
+};
+
+const WORKER = 'opt/agent/node_modules/@ai-ecoverse/slicc-agent/dist/agent-worker.js';
+
+for (const [at, redirect, client] of [
+  [
+    `https://www.sliccy.ai/7/${WORKER}`,
+    'https://www.sliccy.ai/7/oauth/mcp-callback',
+    'https://www.sliccy.ai/7/oauth/client.json',
+  ],
+  [
+    `https://seven.sliccy.ai/${WORKER}`,
+    'https://seven.sliccy.ai/oauth/mcp-callback',
+    'https://seven.sliccy.ai/oauth/client.json',
+  ],
+  [
+    'https://seven.sliccy.ai/7/agent-worker.js',
+    'https://seven.sliccy.ai/oauth/mcp-callback',
+    'https://seven.sliccy.ai/oauth/client.json',
+  ],
+]) {
+  test(`a worker at ${at} signs in with its own redirect and the client_id next to it`, async (t) => {
+    const page = await relayed(t, [`at=${encodeURIComponent(at)}`, 'answer=Noted.']);
+    const sent = new URL(await page.evaluate(() => window.opens.at(-1).location.href)).searchParams;
+    assert.equal(sent.get('redirect_uri'), redirect);
+    assert.equal(sent.get('client_id'), client);
+  });
+}
+
+for (const [base, path] of [
+  ['/7/opt/agent/node_modules/@ai-ecoverse/slicc-agent/dist-test/', '/7/oauth/mcp-callback'],
+  ['/dist-test/', '/oauth/mcp-callback'],
+]) {
+  test(`a worker served from ${base} registers dynamically with the redirect ${path}`, async (t) => {
+    const docs = await serve(true, { oauth: {} });
+    try {
+      const page = await mcpPage(t, docs, { base });
+      const origin = await page.evaluate(() => {
+        window.model.settings.connect('mcp:docs').catch(() => undefined);
+        return location.origin;
+      });
+      const sent = new URL(await page.within(30000, authorizing)).searchParams;
+      assert.deepEqual(docs.fake.state.oauth.clients[0].redirect_uris, [`${origin}${path}`]);
+      assert.equal(sent.get('redirect_uri'), `${origin}${path}`);
+    } finally {
+      docs.close();
+    }
+  });
+}
+
+for (const [name, second, client, registered] of [
+  ['another redirect registers again', 'https://seven.test/7/oauth/mcp-callback', 'client-2', 2],
+  ['the same redirect keeps its client', CALLBACK, 'client-1', 1],
+]) {
+  test(`a stored registration signing in with ${name}`, async (t) => {
+    const docs = await serve(true, { oauth: {} });
+    try {
+      const page = await mcpPage(t, docs, { query: `answer=Noted.&${FIXED}` });
+      const signIn = async () => {
+        await page.evaluate(() => {
+          window.model.settings.connect('mcp:docs').catch(() => undefined);
+        });
+        return new URL(await page.within(30000, authorizing)).searchParams;
+      };
+      assert.equal((await signIn()).get('client_id'), 'client-1');
+      await page.goto('/');
+      await page.within(30000, () => document.readyState === 'complete' && !window.model);
+      const query = `answer=Noted.&redirect=${encodeURIComponent(second)}`;
+      await page.evaluate((query) => window.start(query, true), query);
+      await page.within(60000, () =>
+        window.model.settings.accounts().some((account) => account.id === 'mcp:docs')
+      );
+      const sent = await signIn();
+      assert.equal(sent.get('client_id'), client);
+      assert.equal(sent.get('redirect_uri'), second);
+      assert.equal(docs.fake.state.oauth.clients.length, registered);
+      assert.deepEqual(docs.fake.state.oauth.clients.at(-1).redirect_uris, [
+        registered === 2 ? second : CALLBACK,
+      ]);
+    } finally {
+      docs.close();
+    }
+  });
+}
+
+const SECURE = `answer=Noted.&${FIXED}`;
+
+for (const [name, oauth, config, client, registered] of [
+  ['a registration endpoint registers dynamically', { document: true }, undefined, 'client-1', 1],
+  [
+    'oauth.clientId comes first',
+    { document: true, registers: false },
+    { oauth: { clientId: 'fixed' } },
+    'fixed',
+    0,
+  ],
+]) {
+  test(`an authorization server that takes metadata documents: ${name}`, async (t) => {
+    const docs = await serve(true, { oauth });
+    try {
+      const page = await mcpPage(t, docs, { query: SECURE, config });
+      await page.evaluate(() => {
+        window.model.settings.connect('mcp:docs').catch(() => undefined);
+      });
+      const sent = new URL(await page.within(30000, authorizing)).searchParams;
+      assert.equal(sent.get('client_id'), client);
+      assert.equal(docs.fake.state.oauth.clients.length, registered);
+    } finally {
+      docs.close();
+    }
+  });
+}
+
+for (const [name, oauth, query] of [
+  ['offers no way to get a client', { registers: false }, SECURE],
+  ['takes metadata documents, from a page without https', { document: true, registers: false }],
+]) {
+  test(`an MCP server whose authorization server ${name} is refused clearly before any window opens on it`, async (t) => {
+    const docs = await serve(true, { oauth });
+    try {
+      const page = await mcpPage(t, docs, { query });
+      const seen = await page.evaluate(async () => ({
+        result: await window.model.settings.connect('mcp:docs').then(
+          () => 'ok',
+          (error) => error.message
+        ),
+        href: window.opens.at(-1).location.href,
+        status: window.model.settings.accounts().find((account) => account.id === 'mcp:docs')
+          .status,
+      }));
+      assert.match(seen.result, /no dynamic client registration.*oauth\.clientId/);
+      assert.match(seen.href, /^about:blank/);
+      assert.equal(seen.status, 'disconnected');
+      assert.deepEqual(docs.fake.state.oauth.authorizations, []);
+      assert.deepEqual(docs.fake.state.oauth.clients, []);
+    } finally {
+      docs.close();
+    }
+  });
+}
 
 test('an MCP account carries its server URL without the query or fragment, for the page to register with the vault', async (t) => {
   const page = await chrome.page(t);

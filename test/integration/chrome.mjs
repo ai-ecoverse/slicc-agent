@@ -5,6 +5,7 @@ import { serve, launch as start } from '@ai-ecoverse/slicc-shared-web/harness';
 const options = {
   roots: [
     ['/dist-test/', 'dist-test/'],
+    ['/7/opt/agent/node_modules/@ai-ecoverse/slicc-agent/dist-test/', 'dist-test/'],
     ['/dist/', 'dist/'],
     ['/bin/', 'bin/'],
     ['/packages/', 'packages/'],
