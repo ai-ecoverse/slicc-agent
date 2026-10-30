@@ -5,6 +5,7 @@ import { VIEW_ONLY } from './view-only.ts';
 export { VIEW_ONLY };
 
 export const NOT_OWNER = "Only the owner's page can change MCP servers.";
+export const REFUSALS_OWNER = "Only the owner's page can see why MCP servers were refused.";
 
 type Answer = (...args: unknown[]) => Promise<unknown>;
 
@@ -21,11 +22,18 @@ const sends = new Set(['send', 'compact', 'compactAgent']);
 
 export const controlAnswer = (name: string): Answer => (sends.has(name) ? refused : refuse);
 
-const notOwner: Answer = () =>
-  Promise.reject(Object.assign(new Error(NOT_OWNER), { code: 'EACCES' }));
+const notOwner: Answer = async () => ({ ok: false, code: 'not-owner', reason: NOT_OWNER });
 
-export const settingsAnswer = (name: string): Answer =>
-  name === 'addServer' || name === 'removeServer' ? notOwner : refuse;
+const noRefusals: Answer = () =>
+  Promise.reject(Object.assign(new Error(REFUSALS_OWNER), { code: 'EACCES' }));
+
+const settingsAnswers: Record<string, Answer> = {
+  addServer: notOwner,
+  removeServer: notOwner,
+  refusals: noRefusals,
+};
+
+export const settingsAnswer = (name: string): Answer => settingsAnswers[name] ?? refuse;
 
 export const remoteAnswer = (name: string): Answer =>
   name === 'prompt' ? async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY }) : refuse;

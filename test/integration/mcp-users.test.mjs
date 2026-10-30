@@ -9,10 +9,13 @@ const server = (name) =>
   JSON.stringify({ mcpServers: { [name]: { url: 'https://mcp.test/mcp' } } });
 
 const helpers = () => {
-  window.boot = async (query) => {
+  window.boot = async (query, worker) => {
     const { bootKernel } = await import('/kernel.js');
     await import('/dist-test/page.js');
-    const kernel = await bootKernel({}, { users: 'enforce' });
+    const kernel = await bootKernel(
+      {},
+      { users: 'enforce', ...(worker ? { worker: new URL(worker, location.href) } : {}) }
+    );
     window.sh = (command, user) => kernel.run(['bash', '-c', command], user ? { user } : {});
     window.owner = await startTracked({
       worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
@@ -90,11 +93,11 @@ test('with kernel users a server in /etc/slicc/agent/mcp.json connects, and one 
   );
 });
 
-const booted = async (t, query = 'relay=mcp.test&answer=Ready.') => {
+const booted = async (t, query = 'relay=mcp.test&answer=Ready.', worker = '') => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  await staged(page, 'the agent', (q) => window.boot(q), query);
+  await staged(page, 'the agent', ([q, w]) => window.boot(q, w), [query, worker]);
   await page.within(
     60000,
     async () => (await window.sh('test -d /var/lib/slicc/agent/requests/cone/in')).status === 0
@@ -312,7 +315,7 @@ test('Settings lists no-auth, disabled and refused servers with their state and 
   assert.doesNotMatch(seen.replicated, /path|abc123|https:/);
 });
 
-test('only the owner can add or remove a server: a view-only seat and a control seat are refused, and a model on them offers neither', async (t) => {
+test('only the owner can add or remove a server or read why one was refused: a view-only seat and a control seat are told so, and a model on them offers none of it', async (t) => {
   const page = await booted(t);
   const seen = await page.evaluate(async (file) => {
     const attempt = (run) =>
@@ -328,22 +331,182 @@ test('only the owner can add or remove a server: a view-only seat and a control 
           connection.settings.addServer('sneaky', { url: 'https://mcp.test/mcp' })
         ),
         remove: await attempt(() => connection.settings.removeServer('mcp:sneaky')),
-        offered: typeof model.settings.addServer,
+        refusals: await attempt(() => connection.settings.refusals()),
+        offered: [
+          typeof model.settings.addServer,
+          typeof model.settings.removeServer,
+          typeof model.settings.refusals,
+        ],
       };
     };
     return {
       view: await seat({ readOnly: true, pages: false }),
       control: await seat({ pages: false }),
-      owner: typeof window.model.settings.addServer,
+      owner: [typeof window.model.settings.addServer, typeof window.model.settings.refusals],
       file: (await window.sh(`ls ${file}`)).status,
     };
   }, FILE);
   for (const seat of [seen.view, seen.control]) {
-    assert.equal(seat.add.code, 'EACCES');
-    assert.equal(seat.remove.code, 'EACCES');
-    assert.match(seat.add.message, /Only the owner/);
-    assert.equal(seat.offered, 'undefined');
+    for (const edit of [seat.add, seat.remove]) {
+      assert.equal(edit.value.ok, false);
+      assert.equal(edit.value.code, 'not-owner');
+      assert.match(edit.value.reason, /Only the owner/);
+    }
+    assert.equal(seat.refusals.code, 'EACCES');
+    assert.match(seat.refusals.message, /Only the owner/);
+    assert.deepEqual(seat.offered, ['undefined', 'undefined', 'undefined']);
   }
-  assert.equal(seen.owner, 'function');
+  assert.deepEqual(seen.owner, ['function', 'function']);
   assert.notEqual(seen.file, 0);
+});
+
+const NO_LEAK = /abc123|hunter2|:\/\/|mcp\.test/;
+const URL_OK = 'https://mcp.test/mcp';
+
+const REFUSED = [
+  ['bad name!', { url: URL_OK }, 'bad-name'],
+  ['my-docs', { url: URL_OK }, 'duplicate'],
+  ['my_docs', { url: URL_OK }, 'duplicate'],
+  ['plain', URL_OK, 'not-object'],
+  ['tok', { url: URL_OK, token: 'abc123' }, 'bad-token'],
+  [
+    'tok',
+    { url: URL_OK, token: true, headers: { Authorization: 'Bearer ${A}' } },
+    'token-conflict',
+  ],
+  ['tok', { url: URL_OK, token: true, oauth: { clientId: 'abc123' } }, 'token-conflict'],
+  ['pass', { url: 'https://user:hunter2@mcp.test/mcp' }, 'url-secret'],
+  ['key', { url: 'https://mcp.test/mcp?api_key=abc123' }, 'url-secret'],
+  ['head', { url: URL_OK, headers: { 'X-Api-Key': 'abc123' } }, 'header-secret'],
+  ['local', { command: 'npx', args: ['abc123'] }, 'stdio'],
+  ['old', { type: 'sse', url: URL_OK }, 'sse'],
+  ['nourl', {}, 'bad-url'],
+  ['broken', { url: 'abc123 is no url' }, 'bad-url'],
+  ['ftp', { url: 'ftp://mcp.test/mcp' }, 'bad-url'],
+  ['meta', { url: URL_OK, oauth: { authServerMetadataUrl: 'abc123' } }, 'bad-url'],
+  ['meta', { url: URL_OK, oauth: { authServerMetadataUrl: 'http://mcp.test/m' } }, 'insecure-url'],
+  ['slow', { url: URL_OK, timeout: -1 }, 'invalid'],
+  ['auth', { url: URL_OK, auth: 'abc123' }, 'invalid'],
+];
+
+const refusedWith = (edit, code, label) => {
+  assert.equal(edit.ok, false, label);
+  assert.equal(edit.code, code, label);
+  assert.ok(edit.reason, label);
+  assert.doesNotMatch(JSON.stringify(edit), NO_LEAK, label);
+};
+
+test('every refused edit carries a stable code beside its reason, and no reply holds a URL, a host or a secret', async (t) => {
+  const page = await booted(t);
+  const seen = await page.evaluate(
+    async ({ file, entries, url }) => {
+      const { settings } = window.model;
+      const write = (text) => window.sh(`printf '%s' '${text}' > ${file}`);
+      const added = await settings.addServer('my-docs', { url });
+      const refused = [];
+      for (const [name, entry] of entries) refused.push(await settings.addServer(name, entry));
+      const missing = await settings.removeServer('mcp:ghost');
+      const model = await settings.removeServer('faux');
+      await write('{ "mcpServers": { oops');
+      const unparsed = await settings.addServer('later', { url });
+      const unparsedRemove = await settings.removeServer('mcp:my-docs');
+      await write('{"mcpServers":[]}');
+      const shape = await settings.addServer('later', { url });
+      await window.sh(`rm -f ${file} && mkdir ${file}`);
+      const unreadable = await settings.addServer('later', { url });
+      const unreadableRemove = await settings.removeServer('mcp:later');
+      return {
+        added,
+        refused,
+        missing,
+        model,
+        unparsed,
+        unparsedRemove,
+        shape,
+        unreadable,
+        unreadableRemove,
+      };
+    },
+    { file: FILE, entries: REFUSED, url: URL_OK }
+  );
+  assert.deepEqual(seen.added, { ok: true });
+  REFUSED.forEach(([name, , code], index) => {
+    refusedWith(seen.refused[index], code, `${name} ${code}`);
+  });
+  refusedWith(seen.missing, 'not-found', 'missing');
+  refusedWith(seen.model, 'not-found', 'a model account');
+  refusedWith(seen.unparsed, 'file-invalid', 'broken JSON');
+  refusedWith(seen.unparsedRemove, 'file-invalid', 'broken JSON, remove');
+  refusedWith(seen.shape, 'file-invalid', 'the wrong shape');
+  refusedWith(seen.unreadable, 'file-unreadable', 'a directory');
+  refusedWith(seen.unreadableRemove, 'file-unreadable', 'a directory, remove');
+});
+
+test('a write that fails answers file-unwritable and leaves the file as it was', async (t) => {
+  const page = await booted(t, undefined, '/fail-mcp-write-kernel-worker.js');
+  const seen = await page.evaluate(async (file) => {
+    const { settings } = window.model;
+    await window.sh(`printf '{"mcpServers":{}}' > ${file}`);
+    const edit = await settings.addServer('docs', { url: 'https://mcp.test/mcp' });
+    return { edit, text: (await window.sh(`cat ${file}`)).stdout };
+  }, FILE);
+  refusedWith(seen.edit, 'file-unwritable', 'the write');
+  assert.equal(seen.text, '{"mcpServers":{}}');
+});
+
+test('refusals gives the owner the code and the warn lick sentence of each refused entry, with no URL or secret, and forgets an entry once it is gone', async (t) => {
+  const page = await booted(t);
+  await page.evaluate(({ file, text }) => window.sh(`printf '%s' '${text}' > ${file}`), {
+    file: FILE,
+    text: JSON.stringify({
+      mcpServers: {
+        open: { url: URL_OK },
+        local: { command: 'npx', args: ['abc123'] },
+        leaky: { url: 'https://mcp.test/leak-path/mcp?token=abc123' },
+        pass: { url: 'https://user:hunter2@mcp.test/mcp' },
+        head: { url: URL_OK, headers: { Authorization: 'Bearer abc123' } },
+        old: { type: 'sse', url: URL_OK },
+        'my-twin': { url: URL_OK },
+        my_twin: { url: 'https://mcp.test/abc123' },
+      },
+    }),
+  });
+  await page.within(60000, () =>
+    window.model.settings
+      .accounts()
+      .some(({ id, state }) => id === 'mcp:open' && state === 'connected')
+  );
+  await page.within(60000, () =>
+    window.licks().some((title) => title.startsWith('MCP config problem'))
+  );
+  const seen = await page.evaluate(async () => ({
+    refusals: await window.model.settings.refusals(),
+    licks: window.agent
+      .messages()
+      .filter((message) => message.role === 'lick')
+      .map(({ title, text }) => ({ title, text })),
+  }));
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(seen.refusals).map(([name, { code }]) => [name, code])),
+    {
+      local: 'stdio',
+      leaky: 'url-secret',
+      pass: 'url-secret',
+      head: 'header-secret',
+      old: 'sse',
+      my_twin: 'duplicate',
+    }
+  );
+  const warned = seen.licks.filter(({ title }) => title.startsWith('MCP config problem'));
+  assert.ok(warned.length);
+  for (const { title, text } of warned) {
+    const name = /server "([^"]+)"/.exec(title)[1];
+    assert.equal(seen.refusals[name].reason, text, name);
+  }
+  assert.doesNotMatch(JSON.stringify(seen.refusals), NO_LEAK);
+  const removed = await page.evaluate(() => window.model.settings.removeServer('mcp:leaky'));
+  assert.deepEqual(removed, { ok: true });
+  await page.within(60000, async () => !('leaky' in (await window.model.settings.refusals())));
+  const left = await page.evaluate(() => window.model.settings.refusals());
+  assert.deepEqual(Object.keys(left).sort(), ['head', 'local', 'my_twin', 'old', 'pass']);
 });

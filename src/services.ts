@@ -517,7 +517,33 @@ export type McpServerState =
   | 'disabled'
   | 'refused';
 
-export type McpEdit = { ok: true } | { ok: false; reason: string };
+export type McpRefusalCode =
+  | 'bad-name'
+  | 'duplicate'
+  | 'not-found'
+  | 'not-object'
+  | 'bad-token'
+  | 'token-conflict'
+  | 'url-secret'
+  | 'header-secret'
+  | 'stdio'
+  | 'sse'
+  | 'bad-url'
+  | 'insecure-url'
+  | 'file-invalid'
+  | 'file-unreadable'
+  | 'file-unwritable'
+  | 'not-owner'
+  | 'invalid';
+
+export interface McpRefusal {
+  code: McpRefusalCode;
+  reason: string;
+}
+
+export type McpRefusals = Record<string, McpRefusal>;
+
+export type McpEdit = { ok: true } | ({ ok: false } & McpRefusal);
 
 export interface AccountField {
   name: string;
@@ -586,9 +612,12 @@ export interface AgentSettings {
   dismissMoved(context: Context): Promise<void>;
   addServer(name: string, entry: unknown, context: Context): Promise<McpEdit>;
   removeServer(id: string, context: Context): Promise<McpEdit>;
+  refusals(context: Context): Promise<McpRefusals>;
 }
 
-export const SETTINGS_METHODS = keys<Omit<AgentSettings, 'state' | 'addServer' | 'removeServer'>>({
+export const SETTINGS_METHODS = keys<
+  Omit<AgentSettings, 'state' | 'addServer' | 'removeServer' | 'refusals'>
+>({
   connect: true,
   disconnect: true,
   remove: true,
@@ -601,6 +630,7 @@ export const OWNER_SETTINGS_METHODS: readonly (keyof Omit<AgentSettings, 'state'
   ...SETTINGS_METHODS,
   'addServer',
   'removeServer',
+  'refusals',
 ];
 
 export const AgentSettings: RemoteContract = contract('slicc.agent.settings', {

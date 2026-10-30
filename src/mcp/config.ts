@@ -1,4 +1,5 @@
 import { hash } from '../licks/sources.ts';
+import type { McpRefusal, McpRefusalCode } from '../services.ts';
 
 export type McpExposure = 'codemode' | 'deferred' | 'direct' | 'hidden';
 
@@ -29,9 +30,10 @@ export interface McpConfigProblem {
   server?: string;
   field?: string;
   message: string;
+  code?: McpRefusalCode;
 }
 
-export interface McpRefusedServer {
+export interface McpRefusedServer extends McpRefusal {
   name: string;
   host: string;
 }
@@ -97,26 +99,29 @@ function urlSecret(url: URL): string | undefined {
   return undefined;
 }
 
-type Checked = McpServerConfig | McpConfigProblem;
+type Failed = McpConfigProblem & { code: McpRefusalCode };
+type Checked = McpServerConfig | Failed;
 
-function fail(server: string, message: string, field?: string): McpConfigProblem {
-  return { server, ...(field ? { field } : {}), message };
+function fail(server: string, code: McpRefusalCode, message: string, field?: string): Failed {
+  return { server, ...(field ? { field } : {}), message, code };
 }
 
-function checkHeaders(name: string, headers: unknown): McpConfigProblem | undefined {
+function checkHeaders(name: string, headers: unknown): Failed | undefined {
   if (headers === undefined) return undefined;
   if (!isRecord(headers) || !Object.values(headers).every((value) => typeof value === 'string'))
-    return fail(name, 'headers must map names to strings', 'headers');
+    return fail(name, 'invalid', 'headers must map names to strings', 'headers');
   for (const [header, value] of Object.entries(headers as Record<string, string>)) {
     if (value.trim().startsWith('!'))
       return fail(
         name,
+        'invalid',
         `headers.${header} runs a command, which SLICC can't do`,
         `headers.${header}`
       );
     if (literalSecret(header, value))
       return fail(
         name,
+        'header-secret',
         `headers.${header} holds a literal secret. mcp.json takes no secrets: write \${NAME} instead, and add the value in Settings › MCP servers`,
         `headers.${header}`
       );
@@ -124,19 +129,20 @@ function checkHeaders(name: string, headers: unknown): McpConfigProblem | undefi
   return undefined;
 }
 
-function checkOAuth(name: string, value: Record<string, unknown>): McpConfigProblem | undefined {
+function checkOAuth(name: string, value: Record<string, unknown>): Failed | undefined {
   const { oauth } = value;
   if (oauth === undefined) return undefined;
-  if (!isRecord(oauth)) return fail(name, 'oauth must be an object', 'oauth');
+  if (!isRecord(oauth)) return fail(name, 'invalid', 'oauth must be an object', 'oauth');
   if (Object.keys(value.headers ?? {}).some((header) => header.toLowerCase() === 'authorization'))
-    return fail(name, 'oauth and an Authorization header exclude each other', 'oauth');
+    return fail(name, 'invalid', 'oauth and an Authorization header exclude each other', 'oauth');
   for (const [key, entry] of Object.entries(oauth)) {
     const refused = OAUTH_REFUSED[key];
-    if (refused) return fail(name, `oauth.${key} is not supported: ${refused}`, `oauth.${key}`);
+    if (refused)
+      return fail(name, 'invalid', `oauth.${key} is not supported: ${refused}`, `oauth.${key}`);
     if (!OAUTH_STRINGS.includes(key))
-      return fail(name, `oauth.${key} is not a known field`, `oauth.${key}`);
+      return fail(name, 'invalid', `oauth.${key} is not a known field`, `oauth.${key}`);
     if (typeof entry !== 'string' || !entry.trim())
-      return fail(name, `oauth.${key} must be a non-empty string`, `oauth.${key}`);
+      return fail(name, 'invalid', `oauth.${key} must be a non-empty string`, `oauth.${key}`);
   }
   const metadata = oauth.authServerMetadataUrl as string | undefined;
   if (
@@ -145,6 +151,7 @@ function checkOAuth(name: string, value: Record<string, unknown>): McpConfigProb
   )
     return fail(
       name,
+      URL.canParse(metadata) ? 'insecure-url' : 'bad-url',
       'oauth.authServerMetadataUrl must be an https URL',
       'oauth.authServerMetadataUrl'
     );
@@ -157,53 +164,60 @@ export function usesOAuth(config: McpServerConfig): boolean {
   );
 }
 
-function checkExposures(
-  name: string,
-  value: Record<string, unknown>
-): McpConfigProblem | undefined {
+function checkExposures(name: string, value: Record<string, unknown>): Failed | undefined {
   const allowed = EXPOSURES.map((item) => `"${item}"`).join(', ');
   if (value.exposure !== undefined && !isExposure(value.exposure))
-    return fail(name, `exposure must be one of ${allowed}`, 'exposure');
+    return fail(name, 'invalid', `exposure must be one of ${allowed}`, 'exposure');
   if (value.toolExposure === undefined) return undefined;
   if (!isRecord(value.toolExposure))
-    return fail(name, 'toolExposure must map tool names to exposures', 'toolExposure');
+    return fail(name, 'invalid', 'toolExposure must map tool names to exposures', 'toolExposure');
   for (const [tool, exposure] of Object.entries(value.toolExposure))
     if (!isExposure(exposure))
-      return fail(name, `toolExposure "${tool}" must be one of ${allowed}`, `toolExposure.${tool}`);
+      return fail(
+        name,
+        'invalid',
+        `toolExposure "${tool}" must be one of ${allowed}`,
+        `toolExposure.${tool}`
+      );
   return undefined;
 }
 
-function checkFields(name: string, value: Record<string, unknown>): McpConfigProblem | undefined {
+function checkFields(name: string, value: Record<string, unknown>): Failed | undefined {
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean')
-    return fail(name, 'enabled must be a boolean', 'enabled');
+    return fail(name, 'invalid', 'enabled must be a boolean', 'enabled');
   if (value.description !== undefined && typeof value.description !== 'string')
-    return fail(name, 'description must be a string', 'description');
+    return fail(name, 'invalid', 'description must be a string', 'description');
   if (value.timeout !== undefined && (typeof value.timeout !== 'number' || !(value.timeout > 0)))
-    return fail(name, 'timeout must be a positive number of seconds', 'timeout');
+    return fail(name, 'invalid', 'timeout must be a positive number of seconds', 'timeout');
   return undefined;
 }
 
-function checkTransport(
-  name: string,
-  value: Record<string, unknown>
-): McpConfigProblem | undefined {
+function checkTransport(name: string, value: Record<string, unknown>): Failed | undefined {
   if (value.command !== undefined || value.type === 'stdio')
-    return fail(name, 'stdio servers need slicc-kernel#68, so this one is skipped', 'command');
+    return fail(
+      name,
+      'stdio',
+      'stdio servers need slicc-kernel#68, so this one is skipped',
+      'command'
+    );
   if (value.type === 'sse')
     return fail(
       name,
+      'sse',
       'the legacy SSE transport is not supported; use the streamable HTTP URL',
       'type'
     );
   if (value.type !== undefined && value.type !== 'http' && value.type !== 'streamable-http')
-    return fail(name, 'type must be "http" or "streamable-http"', 'type');
-  if (typeof value.url !== 'string') return fail(name, 'needs a "url" (streamable HTTP)', 'url');
+    return fail(name, 'invalid', 'type must be "http" or "streamable-http"', 'type');
+  if (typeof value.url !== 'string')
+    return fail(name, 'bad-url', 'needs a "url" (streamable HTTP)', 'url');
   if (!URL.canParse(value.url) || !/^https?:$/.test(new URL(value.url).protocol))
-    return fail(name, 'url must be an http or https URL', 'url');
+    return fail(name, 'bad-url', 'url must be an http or https URL', 'url');
   const secret = urlSecret(new URL(value.url));
   if (secret)
     return fail(
       name,
+      'url-secret',
       `${secret} holds a literal secret. Put it in a header as \${NAME} and add the value in Settings › MCP servers`,
       'url'
     );
@@ -212,15 +226,20 @@ function checkTransport(
 
 export function validateServer(name: string, raw: unknown): Checked {
   if (!SERVER_NAME.test(name))
-    return fail(name, `invalid server name "${name}" (use letters, digits, "_" and "-")`);
-  if (!isRecord(raw)) return fail(name, 'must be an object');
+    return fail(
+      name,
+      'bad-name',
+      `invalid server name "${name}" (use letters, digits, "_" and "-")`
+    );
+  if (!isRecord(raw)) return fail(name, 'not-object', 'must be an object');
   const value: Record<string, unknown> = { ...raw, exposure: alias(raw.exposure) };
   if (raw.exposure === undefined) delete value.exposure;
   if (isRecord(raw.toolExposure))
     value.toolExposure = Object.fromEntries(
       Object.entries(raw.toolExposure).map(([tool, exposure]) => [tool, alias(exposure)])
     );
-  if (value.auth !== undefined) return fail(name, 'auth is not supported in SLICC yet', 'auth');
+  if (value.auth !== undefined)
+    return fail(name, 'invalid', 'auth is not supported in SLICC yet', 'auth');
   const problem =
     checkTransport(name, value) ??
     checkHeaders(name, value.headers) ??
@@ -261,16 +280,19 @@ export function parseMcpConfig(text: string | undefined): McpConfig {
   const problems: McpConfigProblem[] = [];
   const refused: McpRefusedServer[] = [];
   const seen = new Set<string>();
+  const refuse = (name: string, raw: unknown, problem: Failed) => {
+    problems.push(problem);
+    refused.push({ name, host: hostOf(raw), code: problem.code, reason: problem.message });
+  };
   for (const [name, raw] of Object.entries((parsed.mcpServers ?? {}) as Record<string, unknown>)) {
     const checked = validateServer(name, raw);
     if ('message' in checked) {
-      problems.push(checked);
-      refused.push({ name, host: hostOf(raw) });
+      refuse(name, raw, checked);
       continue;
     }
     if (seen.has(canonical(name))) {
-      problems.push(fail(name, 'names that differ only in "-" and "_" count as the same server'));
-      refused.push({ name, host: hostOf(raw) });
+      const twin = 'names that differ only in "-" and "_" count as the same server';
+      refuse(name, raw, fail(name, 'duplicate', twin));
       continue;
     }
     seen.add(canonical(name));

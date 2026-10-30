@@ -1,7 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { McpFetch } from '@earendil-works/pi-mcp';
-import type { AccountState, McpEdit, McpServerState } from '../services.ts';
+import type { AccountState, McpEdit, McpRefusals, McpServerState } from '../services.ts';
 import type { McpCatalog } from './catalog.ts';
 import type { McpConfig, McpServerEntry } from './config.ts';
 import type { McpServerConnection } from './connection.ts';
@@ -20,6 +20,7 @@ export interface McpAccounts {
   serverUrl(id: string): Promise<string | null>;
   addServer(name: string, entry: unknown): Promise<McpEdit>;
   removeServer(id: string): Promise<McpEdit>;
+  refusals(): Promise<McpRefusals>;
   onChange(listener: () => void): () => void;
 }
 
@@ -169,10 +170,15 @@ export function mcpAccounts(
     },
     addServer: (name, entry) => sources.file.add(name, entry),
     async removeServer(id) {
-      if (!id.startsWith(MCP_ACCOUNT)) return { ok: false, reason: `${id} is not an MCP server` };
+      if (!id.startsWith(MCP_ACCOUNT))
+        return { ok: false, code: 'not-found', reason: `${id} is not an MCP server` };
       const { removed, ...edit } = await sources.file.remove(id.slice(MCP_ACCOUNT.length));
       if (removed) await sources.oauth(removed).forget();
       return edit as McpEdit;
+    },
+    async refusals() {
+      const { refused } = sources.listed();
+      return Object.fromEntries(refused.map(({ name, code, reason }) => [name, { code, reason }]));
     },
     onChange(listener) {
       listeners.add(listener);
