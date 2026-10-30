@@ -214,3 +214,104 @@ test('the welcome profile ranks a fake www.sliccy.com catalog through the produc
   assert.equal(seen.missing, 0);
   assert.ok(chrome.requests.includes('/fake-catalog/use-cases.json'));
 });
+
+const usersBoot = () => {
+  window.boot = async (query, blocked) => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel({}, { users: 'enforce' });
+    window.sh = (command, user) => kernel.run(['bash', '-c', command], user ? { user } : {});
+    window.owner = await startTracked({
+      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+      kernel: {
+        connect: (options) =>
+          options?.user?.startsWith(blocked)
+            ? Promise.reject(Object.assign(new Error('refused'), { code: 'EIO' }))
+            : kernel.connect(options?.user ? { user: options.user } : undefined),
+        users: kernel.users,
+      },
+    });
+    await createAgentModel(await window.owner.connect(), { storage: localStorage }).agent.ready();
+  };
+};
+
+const STORE = '/var/lib/slicc/agent/shared/.gelatiere/suggestions.json';
+const UPSKILL = `#!/bin/bash
+id -un >> /tmp/upskill-ran
+mkdir -p "$HOME/.pi/agent/skills/picked"
+printf -- '---\\nname: picked\\ndescription: Picked\\n---\\n' > "$HOME/.pi/agent/skills/picked/SKILL.md"
+`;
+const PICKED = [
+  {
+    id: 'picked',
+    kind: 'skill',
+    title: 'Picked',
+    body: 'Picked',
+    skill: 'picked',
+    repo: 'example/skills',
+  },
+];
+
+test('gelatiere fails closed when the agent environment cannot be resolved', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(usersBoot);
+  await page.goto('/');
+  await staged(
+    page,
+    'gelatiere fails closed',
+    (query, blocked) => window.boot(query, blocked),
+    'answer=Done.',
+    'scoop-'
+  );
+  await page.within(
+    60000,
+    async () => (await window.sh('test -d /var/lib/slicc/agent/requests/cone/in')).status === 0
+  );
+  const spawned = await page.evaluate(() =>
+    window.sh('agent --async --name helper --prompt "Help"', 'cone')
+  );
+  assert.equal(spawned.status, 0, spawned.stderr);
+  const user = `scoop-${spawned.stdout.trim()}`;
+  await page.within(
+    60000,
+    async (user) =>
+      (await window.sh(`test -d /var/lib/slicc/agent/requests/${user}/in`)).status === 0,
+    user
+  );
+  const seen = await staged(
+    page,
+    'gelatiere fails closed',
+    async (user, store, upskill, picked) => {
+      const put = (path, text) =>
+        window.sh(`cat > ${path} <<'EOF'\n${text}\nEOF\nchmod 755 ${path}`);
+      await window.sh(`mkdir -p ${store.slice(0, store.lastIndexOf('/'))}`);
+      await put(store, picked);
+      await put('/usr/local/bin/upskill', upskill);
+      await window.sh(`echo '[]' > /tmp/mine.json && chmod 644 /tmp/mine.json`);
+      const asked = [];
+      for (const command of [
+        'gelatiere install picked',
+        'gelatiere suggest /tmp/mine.json',
+        'gelatiere catalog',
+      ])
+        asked.push(await window.sh(command, user));
+      const before = await window.sh('cat /tmp/upskill-ran');
+      const host = await window.sh('gelatiere install picked');
+      return {
+        asked: asked.map(({ status, stdout, stderr }) => ({ status, text: stdout + stderr })),
+        before: before.stdout,
+        host: { status: host.status, text: host.stdout + host.stderr },
+      };
+    },
+    user,
+    STORE,
+    UPSKILL,
+    JSON.stringify(PICKED)
+  );
+  for (const answer of seen.asked) {
+    assert.equal(answer.status, 1, answer.text);
+    assert.match(answer.text, /can't find the environment of scoop:/);
+  }
+  assert.equal(seen.before, '');
+  assert.equal(seen.host.status, 0, seen.host.text);
+});
