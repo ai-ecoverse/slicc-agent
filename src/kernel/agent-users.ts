@@ -183,9 +183,10 @@ export function agentUsers(
         shared: SHARED_DIR,
         ...(files ? { files } : {}),
         as: async (caller) => {
-          const env = caller ? await this.envOfAgent(caller) : undefined;
-          const home = caller ? accounts.home(caller) : undefined;
-          return env && home ? { env, home } : { env: root, home: ROOT_HOME };
+          if (!caller) return { env: root, home: ROOT_HOME };
+          const env = await this.envOfAgent(caller);
+          const home = accounts.home(caller);
+          return env && home ? { env, home } : undefined;
         },
         cronUser: async (folder) => {
           await this.envOfAgent(`scoop:${folder}`);

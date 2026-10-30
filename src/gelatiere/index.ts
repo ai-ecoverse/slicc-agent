@@ -114,11 +114,15 @@ type G = {
   catalog: string;
 };
 
-async function callerOf(g: G, context: Context): Promise<Caller> {
-  return (await g.options.as?.(g.caller, context)) ?? { env: g.options.env, home: g.options.home };
+async function callerOf(g: G, context: Context): Promise<Caller | undefined> {
+  const { as, env, home } = g.options;
+  return as ? as(g.caller, context) : { env, home };
 }
 
 const fail = (out: string): Answer => ({ code: 1, out: `gelatiere: ${out}\n` });
+
+const unresolved = (g: G): Answer =>
+  fail(`can't find the environment of ${g.caller}, so nothing ran`);
 
 async function cronUserOf(g: G, handle: string): Promise<string> {
   return (await g.options.cronUser?.(handle)) ?? ROOT_USER;
@@ -231,7 +235,9 @@ async function run(g: G, context: Context): Promise<Answer> {
 
 async function suggest(g: G, path: string | undefined, context: Context): Promise<Answer> {
   if (!path) return { code: 2, out: USAGE };
-  const read = await (await callerOf(g, context)).env.readTextFile(path, context);
+  const mine = await callerOf(g, context);
+  if (!mine) return unresolved(g);
+  const read = await mine.env.readTextFile(path, context);
   if (!read.ok) return fail(`can't read ${path}`);
   let parsed: unknown;
   try {
@@ -324,7 +330,9 @@ async function skillsIn(
 }
 
 async function install(g: G, id: string, context: Context): Promise<Answer> {
-  const { env, home } = await callerOf(g, context);
+  const mine = await callerOf(g, context);
+  if (!mine) return unresolved(g);
+  const { env, home } = mine;
   const item = (await g.load(context)).find((entry) => entry.id === id && entry.kind === 'skill');
   const checked = item ? validate(item) : `there is no skill suggestion ${id}`;
   if (typeof checked === 'string') return fail(checked);
@@ -395,6 +403,7 @@ async function catalog(g: G, argv: readonly string[], context: Context): Promise
   const { env } = g.options;
   const home = g.options.profile ?? g.options.home;
   const mine = await callerOf(g, context);
+  if (!mine) return unresolved(g);
   const base = g.options.catalog ?? CATALOG_BASE;
   const fetcher: Fetcher = g.options.fetch ?? ((url, init) => globalThis.fetch(url, init));
   const options = { env, fetcher, now: g.now(), refresh: argv.includes('--refresh') };
