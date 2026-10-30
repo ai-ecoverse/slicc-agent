@@ -202,11 +202,12 @@ self.addEventListener('message', ({ data }) => {
   data?.upstream?.postMessage({
     upstream,
     vault:
-      self.fakeVault?.log.map(({ op, provider, server, model }) => ({
+      self.fakeVault?.log.map(({ op, provider, server, model, oauth }) => ({
         op,
         provider,
         server,
         ...(model ? { model } : {}),
+        ...(oauth ? { oauth } : {}),
       })) ?? [],
   });
   if (data?.unseal && self.fakeVault) {
@@ -352,9 +353,21 @@ const fake = relayed
       instructions: 'Fake docs.',
       sse: params.has('sse'),
       getStream: true,
+      ...(params.has('oauth') ? { oauth: JSON.parse(params.get('oauth')) } : {}),
     })
   : undefined;
 self.mcpRequests = () => fake?.state.requests ?? [];
+self.addEventListener('message', async ({ data }) => {
+  if (!data?.authorize) return;
+  const { headers } = await fake.fetch(data.authorize.url);
+  const { authorizations, clients, issued } = fake.state.oauth;
+  data.authorize.port.postMessage({
+    location: headers.get('location'),
+    authorizations,
+    clients,
+    issued,
+  });
+});
 async function* chunks(body) {
   if (!body) return;
   const reader = body.getReader();
@@ -731,6 +744,7 @@ if (version) {
       ? Promise.resolve(Response.json({ version }))
       : fetched(input, init);
 }
+if (params.has('at')) Object.defineProperty(self, 'location', { value: new URL(params.get('at')) });
 const running = runAgentWorker(self, {
   ...(attach ? { attach } : {}),
   ...(params.has('redirect')
