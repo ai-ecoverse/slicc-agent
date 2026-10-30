@@ -94,7 +94,7 @@ With users, each cone and each scoop is a kernel user, and works as that user:
   - So a cone reads its scoops' work, and a scoop reads only what its cone shares with `chmod g+r` (and `g+x` on the folders on the way).
   - The worker adds every user at boot, and on every change to `slicc.agents`. Stopping, dropping or removing a scoop removes its user and its home; scoops go before their cone.
 - **Clients:** a conversation's bash, file tools and codemode, and its background tasks, use its agent's bound client. Its cwd defaults to its home, and the kernel sets `HOME`, `USER` and `PATH`. The client carries the page's tag for its agentId, so a `sudo` prompt names the agent.
-- **The `agent` command:** each user has its own request spool, `/var/lib/slicc/agent/requests/<user>/` (`0700`). The spool's owner is the caller, so a `SLICC_AGENT` that names someone else is refused. `--file` and `--system-prompt-file` are read as the caller, and a caller whose environment can't be resolved is refused.
+- **The `agent` command:** each user has its own request spool, `/var/lib/slicc/agent/requests/<user>/` (`0700`). The spool's owner is the caller, so a `SLICC_AGENT` that names someone else is refused. `--file` and `--system-prompt-file` are read as the caller.
 - **Sharing in a sync run:** when the caller's cwd, or a `--read-only` path, is inside the caller's home, the run first shares it with the scoop: `chmod -R g+rX` on it and `g+x` on the folders above it. The v6 form's working folder gets `g+rwX`, plus `g+s` on its folders. The modes stay afterwards.
 - **Where things are:**
 
