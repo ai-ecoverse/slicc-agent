@@ -56,6 +56,8 @@ export const ACCOUNT_FIELDS: Readonly<Record<string, readonly AccountField[]>> =
     .filter((id) => specs(id).length)
     .map((id) => [id, specs(id).map(({ env: _env, ...field }) => field)])
 );
+const NO_SERVERS = { ok: false as const, reason: 'this agent has no MCP servers' };
+
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
 export const KEY_NEEDS_VAULT = "API keys are kept in seven's vault: update seven";
 
@@ -541,6 +543,8 @@ export async function createAgentSettings(
     async serverUrl(providerId) {
       return (await routed(providerId)?.serverUrl(providerId)) ?? null;
     },
+    addServer: async (name, entry) => (await mcp?.addServer(name, entry)) ?? NO_SERVERS,
+    removeServer: async (id) => (await mcp?.removeServer(id)) ?? NO_SERVERS,
     async remove(providerId, context) {
       flows.stop(providerId);
       const server = routed(providerId);

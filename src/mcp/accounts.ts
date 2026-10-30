@@ -1,11 +1,12 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { McpFetch } from '@earendil-works/pi-mcp';
-import type { AccountState } from '../services.ts';
+import type { AccountState, McpEdit, McpServerState } from '../services.ts';
 import type { McpCatalog } from './catalog.ts';
-import type { McpServerEntry } from './config.ts';
+import type { McpConfig, McpServerEntry } from './config.ts';
 import type { McpServerConnection } from './connection.ts';
 import { heldRecords, type McpRecords, resolveHeaders, secretNames } from './credentials.ts';
+import type { McpFile } from './file.ts';
 import { MCP_ACCOUNT } from './label.ts';
 import { beginSignIn, finishSignIn, type McpSignIn, type StoredOAuth } from './oauth.ts';
 
@@ -17,6 +18,8 @@ export interface McpAccounts {
   connect(id: string, secret: string | null): Promise<void>;
   disconnect(id: string): Promise<void>;
   serverUrl(id: string): Promise<string | null>;
+  addServer(name: string, entry: unknown): Promise<McpEdit>;
+  removeServer(id: string): Promise<McpEdit>;
   onChange(listener: () => void): () => void;
 }
 
@@ -26,6 +29,8 @@ export interface AccountSources {
   fetch: (server: string) => McpFetch;
   grant: (server: string) => McpFetch;
   register: (server: string, tokenUrl: string) => Promise<void>;
+  listed: () => McpConfig;
+  file: McpFile;
 }
 
 type Kind = 'token' | 'oauth';
@@ -65,6 +70,20 @@ function row(
     group: 'mcp',
     store: 'vault',
     ...(kind === 'token' ? { secret: 'token' as const } : {}),
+    state: connection.state as McpServerState,
+  };
+}
+
+function plainRow(name: string, host: string, live: boolean, state: McpServerState): AccountState {
+  return {
+    id: `${MCP_ACCOUNT}${name}`,
+    provider: name,
+    identity: host,
+    status: live ? 'connected' : 'disconnected',
+    auth: 'local',
+    needs: null,
+    group: 'mcp',
+    state,
   };
 }
 
@@ -90,18 +109,30 @@ export function mcpAccounts(
   return {
     async accounts() {
       const rows: AccountState[] = [];
-      for (const connection of catalog.connections.values()) {
+      const { servers, refused } = sources.listed();
+      for (const { name, config } of servers) {
+        const connection = catalog.connections.get(name);
+        const host = new URL(config.url).host;
+        if (!connection) {
+          rows.push(plainRow(name, host, false, 'disabled'));
+          continue;
+        }
         const kind = kindOf(connection);
         const stored =
           kind === 'token'
             ? resolveHeaders(connection.name, connection.entry.config, records).ok
             : await sources.oauth(connection.entry).signedIn();
-        if (kind === 'oauth' && !stored && connection.state !== 'needs-auth') continue;
+        if (kind === 'oauth' && !stored && connection.state !== 'needs-auth') {
+          const state = connection.state as McpServerState;
+          rows.push(plainRow(name, host, connection.live, state));
+          continue;
+        }
         const expired = heldRecords(connection.name, connection.entry.config, records).some(
           (record) => record?.state === 'expired'
         );
         rows.push(row(connection, kind, stored, expired));
       }
+      for (const { name, host } of refused) rows.push(plainRow(name, host, false, 'refused'));
       return rows;
     },
     async signIn(id) {
@@ -132,8 +163,16 @@ export function mcpAccounts(
       restart(connection);
     },
     async serverUrl(id) {
-      const { connection } = find(id);
-      return serverUrl(connection.entry.config.url);
+      const name = id.slice(MCP_ACCOUNT.length);
+      const entry = sources.listed().servers.find((server) => server.name === name);
+      return entry ? serverUrl(entry.config.url) : null;
+    },
+    addServer: (name, entry) => sources.file.add(name, entry),
+    async removeServer(id) {
+      if (!id.startsWith(MCP_ACCOUNT)) return { ok: false, reason: `${id} is not an MCP server` };
+      const { removed, ...edit } = await sources.file.remove(id.slice(MCP_ACCOUNT.length));
+      if (removed) await sources.oauth(removed).forget();
+      return edit as McpEdit;
     },
     onChange(listener) {
       listeners.add(listener);

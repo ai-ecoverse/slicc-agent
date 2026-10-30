@@ -7,7 +7,7 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { preferredModel } from '../preferred.ts';
-import type { AgentSettings, ProviderOption, SettingsState, SignIn } from '../services.ts';
+import type { AgentSettings, McpEdit, ProviderOption, SettingsState, SignIn } from '../services.ts';
 import {
   type ConnectOptions,
   DEVICE_SIGN_INS,
@@ -44,6 +44,8 @@ export type Login = (
 
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
 export const UNFINISHED = SIGN_IN_UNFINISHED;
+export const NOTHING_TO_CONNECT =
+  "This MCP server has no sign-in to connect: it needs none, or it's off in mcp.json.";
 
 const signInWindow: SignInWindow = {
   open: (url) => globalThis.open?.(url, 'slicc-sign-in', 'popup,width=520,height=720') ?? null,
@@ -72,6 +74,8 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   #local: Local;
   #offered = '';
   readonly #urls = new Map<string, string>();
+  readonly addServer?: (name: string, entry: unknown) => Promise<McpEdit>;
+  readonly removeServer?: (id: string) => Promise<McpEdit>;
 
   constructor(
     settings: AgentSettings,
@@ -79,9 +83,17 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     storage: Pick<Storage, 'getItem' | 'setItem'> | null,
     login: Login | null = null,
     mcp: Login = mcpLogin() as Login,
-    popups: SignInWindow = signInWindow
+    popups: SignInWindow = signInWindow,
+    owner = false
   ) {
     super();
+    if (owner) {
+      this.addServer = (name, entry) => settings.addServer(name, entry, BACKGROUND_CONTEXT);
+      this.removeServer = (id) => {
+        this.cancel(id);
+        return settings.removeServer(id, BACKGROUND_CONTEXT);
+      };
+    }
     this.#mcpLogin = mcp;
     this.#window = popups;
     this.#settings = settings;
@@ -212,6 +224,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
     const account =
       this.#state().accounts.find((candidate) => candidate.id === id) ?? this.#offer(id);
     const mcp = account?.group === 'mcp';
+    if (mcp && account?.auth === 'local') throw new Error(NOTHING_TO_CONNECT);
     const given = fields ? { ...fields } : null;
     const keyed = options?.method === 'key';
     if (account?.auth === 'oauth' && DEVICE_SIGN_INS.has(id) && secret === undefined && !keyed)

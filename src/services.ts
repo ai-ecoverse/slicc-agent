@@ -495,7 +495,7 @@ export interface AccountState {
   provider: string;
   identity: string;
   status: 'connected' | 'disconnected' | 'expired';
-  auth: 'api-key' | 'oauth';
+  auth: 'api-key' | 'oauth' | 'local';
   needs: 'cors-free-transport' | null;
   blocked?: 'cors-free-transport';
   group?: 'providers' | 'mcp';
@@ -505,7 +505,19 @@ export interface AccountState {
   description?: string;
   keyUrl?: string;
   vaultName?: string;
+  state?: McpServerState;
 }
+
+export type McpServerState =
+  | 'connecting'
+  | 'connected'
+  | 'needs-secret'
+  | 'needs-auth'
+  | 'failed'
+  | 'disabled'
+  | 'refused';
+
+export type McpEdit = { ok: true } | { ok: false; reason: string };
 
 export interface AccountField {
   name: string;
@@ -572,9 +584,11 @@ export interface AgentSettings {
   serverUrl(providerId: string, context: Context): Promise<string | null>;
   signIn(providerId: string, context: Context): Promise<SignIn | McpSignIn | DeviceSignIn | null>;
   dismissMoved(context: Context): Promise<void>;
+  addServer(name: string, entry: unknown, context: Context): Promise<McpEdit>;
+  removeServer(id: string, context: Context): Promise<McpEdit>;
 }
 
-export const SETTINGS_METHODS = keys<Omit<AgentSettings, 'state'>>({
+export const SETTINGS_METHODS = keys<Omit<AgentSettings, 'state' | 'addServer' | 'removeServer'>>({
   connect: true,
   disconnect: true,
   remove: true,
@@ -583,7 +597,14 @@ export const SETTINGS_METHODS = keys<Omit<AgentSettings, 'state'>>({
   dismissMoved: true,
 });
 
+export const OWNER_SETTINGS_METHODS: readonly (keyof Omit<AgentSettings, 'state'> & string)[] = [
+  ...SETTINGS_METHODS,
+  'addServer',
+  'removeServer',
+];
+
 export const AgentSettings: RemoteContract = contract('slicc.agent.settings', {
+  owner: { state: ['state'], methods: OWNER_SETTINGS_METHODS },
   settings: { state: ['state'], methods: SETTINGS_METHODS },
   view: { state: ['state'] },
 });

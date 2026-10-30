@@ -52,6 +52,7 @@ import {
   type Command,
   GUEST_METHODS,
   OWNER_DEVICE_METHODS,
+  OWNER_SETTINGS_METHODS,
   PAGE_METHODS,
   type PrivateRevision,
   REMOTE_METHODS,
@@ -97,7 +98,9 @@ export interface AgentHost {
   close(): Promise<void>;
 }
 
-const noSettings: AgentSettings = {
+const NO_SERVERS = { ok: false as const, reason: 'this agent has no MCP servers' };
+
+export const noSettings: AgentSettings = {
   state: replicatedState({ models: [], accounts: [] }),
   connect: async () => {
     throw new Error('this agent has no accounts');
@@ -107,6 +110,8 @@ const noSettings: AgentSettings = {
   serverUrl: async () => null,
   signIn: async () => null,
   dismissMoved: async () => {},
+  addServer: async () => NO_SERVERS,
+  removeServer: async () => NO_SERVERS,
 };
 
 async function follow(
@@ -469,6 +474,19 @@ const seated = (serving: Served, principal: AgentPrincipal): AgentControl => ({
 
 const VIEW_METHODS = [...CONTROL_READS, ...OWNER_DEVICE_METHODS];
 
+export function settingsFor(serving: Pick<Served, 'settings'>) {
+  return (_input: unknown, principal: AgentPrincipal) => {
+    const state = readable(serving.settings.state);
+    if (principal.seat === 'view') return { variant: 'view' as const, state };
+    const owner = principal.seat === 'owner';
+    return {
+      variant: owner ? ('owner' as const) : ('settings' as const),
+      state,
+      ...served(() => serving.settings, owner ? OWNER_SETTINGS_METHODS : SETTINGS_METHODS),
+    };
+  };
+}
+
 export function serveAgent(serving: Served): Host<AgentPrincipal> {
   const host = closedToGuests(
     createHost<AgentPrincipal>({ name: AGENT_HOST, self: SELF, principalKey })
@@ -484,15 +502,7 @@ export function serveAgent(serving: Served): Host<AgentPrincipal> {
     variant: 'transcript',
     ...readablesOf(principal.seat === 'view' ? viewing : serving.transcript),
   }));
-  host.serve(AgentSettings, (_input, principal) =>
-    principal.seat === 'view'
-      ? { variant: 'view', state: readable(serving.settings.state) }
-      : {
-          variant: 'settings',
-          state: readable(serving.settings.state),
-          ...served(() => serving.settings, SETTINGS_METHODS),
-        }
-  );
+  host.serve(AgentSettings, settingsFor(serving));
   host.serve(AgentRemoteService, (_input, principal) => {
     if (principal.seat !== 'view')
       return { variant: 'remote', ...served(() => serving.remote, REMOTE_METHODS) };

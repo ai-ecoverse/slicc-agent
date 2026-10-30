@@ -3,12 +3,14 @@ import type { Registry } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { StreamableHttpTransport } from '@earendil-works/pi-mcp';
 import type { LickEvent, Licks } from '../licks/licks.ts';
+import { hash } from '../licks/sources.ts';
 import type { McpServerSource } from '../secrets/endpoints.ts';
 import { scrubText } from '../secrets/scrub.ts';
 import type { PlainStore } from '../secrets/store.ts';
 import { type McpAccounts, mcpAccounts } from './accounts.ts';
 import { McpCatalog } from './catalog.ts';
 import {
+  type McpConfig,
   type McpConfigProblem,
   type McpServerEntry,
   parseMcpConfig,
@@ -17,6 +19,7 @@ import {
 } from './config.ts';
 import { McpServerConnection } from './connection.ts';
 import { type McpRecords, resolveHeaders, secretNames } from './credentials.ts';
+import { mcpFile } from './file.ts';
 import { authProvider as oauthAuth, StoredOAuth } from './oauth.ts';
 import { configPath, logPath, shown } from './paths.ts';
 import { patchSse } from './sse.ts';
@@ -121,13 +124,14 @@ export function stateLick(connection: McpServerConnection, cors: boolean): LickE
 
 export function connectedLick(connection: McpServerConnection): LickEvent {
   const count = connection.tools.length;
+  const { url } = connection.entry.config;
   return {
     channel: 'fswatch',
     source: `mcp:${connection.name}`,
     title: `MCP server "${connection.name}" connected`,
-    text: `${connection.entry.config.url} offers ${count} tool${count === 1 ? '' : 's'}.`,
+    text: `${new URL(url).host} offers ${count} tool${count === 1 ? '' : 's'}.`,
     target: 'cone',
-    eventId: `${connection.name}\nconnected\n${connection.entry.config.url}`,
+    eventId: `${connection.name}\nconnected\n${hash(url)}`,
   };
 }
 
@@ -179,6 +183,7 @@ export async function attachMcp(
   };
   let initial: Set<string> = new Set();
   let first = true;
+  let listed: McpConfig = { servers: [], problems: [], refused: [] };
   const log = serverLog(options, context);
   const { vault } = options;
   const base = (input: string | URL | Request, init?: RequestInit) => options.fetch(input, init);
@@ -231,6 +236,7 @@ export async function attachMcp(
     const parsed = parseMcpConfig(read.ok ? read.value : undefined);
     for (const problem of parsed.problems)
       await report(problemLick(problem, home, options.agentDir), using);
+    listed = parsed;
     const wanted = new Map(
       parsed.servers
         .filter((entry) => entry.config.enabled !== false)
@@ -282,6 +288,8 @@ export async function attachMcp(
         fetch: fetcher,
         grant: (server) => vault.grant(server, fetcher(server)),
         register: (server, url) => vault.token(server, url),
+        listed: () => listed,
+        file: mcpFile(env, configPath(home, options.agentDir), home, context),
       },
       restart,
       listeners

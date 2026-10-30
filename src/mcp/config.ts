@@ -31,9 +31,15 @@ export interface McpConfigProblem {
   message: string;
 }
 
+export interface McpRefusedServer {
+  name: string;
+  host: string;
+}
+
 export interface McpConfig {
   servers: McpServerEntry[];
   problems: McpConfigProblem[];
+  refused: McpRefusedServer[];
 }
 
 const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
@@ -64,7 +70,7 @@ const SCHEME = /^\s*(?:bearer|basic|token|apikey|api-key)\s+/i;
 const MAX_TOOL_NAME = 64;
 export const DEFAULT_TIMEOUT_SECONDS = 60;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -111,7 +117,7 @@ function checkHeaders(name: string, headers: unknown): McpConfigProblem | undefi
     if (literalSecret(header, value))
       return fail(
         name,
-        `headers.${header} holds a literal secret. mcp.json is readable by every agent: write \${NAME} instead, and add the value in Settings › MCP servers`,
+        `headers.${header} holds a literal secret. mcp.json takes no secrets: write \${NAME} instead, and add the value in Settings › MCP servers`,
         `headers.${header}`
       );
   }
@@ -232,33 +238,45 @@ function canonical(name: string): string {
   return name.replace(/-/g, '_');
 }
 
+function hostOf(raw: unknown): string {
+  const url = isRecord(raw) ? raw.url : undefined;
+  return typeof url === 'string' && URL.canParse(url) ? new URL(url).host : '';
+}
+
 export function parseMcpConfig(text: string | undefined): McpConfig {
-  if (text === undefined || text.trim() === '') return { servers: [], problems: [] };
+  if (text === undefined || text.trim() === '') return { servers: [], problems: [], refused: [] };
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (error) {
-    return { servers: [], problems: [{ message: `not valid JSON: ${(error as Error).message}` }] };
+    return {
+      servers: [],
+      problems: [{ message: `not valid JSON: ${(error as Error).message}` }],
+      refused: [],
+    };
   }
   if (!isRecord(parsed) || (parsed.mcpServers !== undefined && !isRecord(parsed.mcpServers)))
-    return { servers: [], problems: [{ message: 'mcpServers must be an object' }] };
+    return { servers: [], problems: [{ message: 'mcpServers must be an object' }], refused: [] };
   const servers: McpServerEntry[] = [];
   const problems: McpConfigProblem[] = [];
+  const refused: McpRefusedServer[] = [];
   const seen = new Set<string>();
   for (const [name, raw] of Object.entries((parsed.mcpServers ?? {}) as Record<string, unknown>)) {
     const checked = validateServer(name, raw);
     if ('message' in checked) {
       problems.push(checked);
+      refused.push({ name, host: hostOf(raw) });
       continue;
     }
     if (seen.has(canonical(name))) {
       problems.push(fail(name, 'names that differ only in "-" and "_" count as the same server'));
+      refused.push({ name, host: hostOf(raw) });
       continue;
     }
     seen.add(canonical(name));
     servers.push({ name, config: checked });
   }
-  return { servers, problems };
+  return { servers, problems, refused };
 }
 
 function patternRegExp(pattern: string): RegExp {

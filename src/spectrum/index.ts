@@ -118,7 +118,10 @@ export function createAgentModel(
       connection.settings,
       agent,
       options.storage ?? null,
-      options.login ?? null
+      options.login ?? null,
+      undefined,
+      undefined,
+      connection.owner
     ),
     tray: new TrayAdapter(connection.settings, selected),
     sprinkles: new SprinkleAdapter(connection, report),

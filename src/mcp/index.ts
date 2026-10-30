@@ -25,6 +25,8 @@ export interface McpSetup {
   attach(options: McpAttach, context: Context): Promise<McpRuntime>;
 }
 
+const NOT_LOADED = { ok: false as const, reason: "the MCP client didn't load: update SLICC" };
+
 const idle: McpRuntime = {
   accounts: async () => [],
   signIn: async (id) => {
@@ -35,6 +37,8 @@ const idle: McpRuntime = {
   },
   disconnect: async () => undefined,
   serverUrl: async () => null,
+  addServer: async () => NOT_LOADED,
+  removeServer: async () => NOT_LOADED,
   onChange: () => () => undefined,
   status: () => [],
   reload: async () => undefined,
