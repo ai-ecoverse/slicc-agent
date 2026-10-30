@@ -48,6 +48,8 @@ export function scopedTarget(target: LickTarget, cone: string | null): LickTarge
   return cone && target === 'cone' ? (`cone:${cone}` as LickTarget) : target;
 }
 
+const watched = (place: LickDir) => place.cone === null || place.env !== undefined;
+
 export function scopedName(name: string, cone: string | null): string {
   return cone ? `${cone}:${name}` : name;
 }
@@ -209,7 +211,8 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     const hooks = new Map<string, WebhookEntry>();
     for (const place of places) {
       const crontab = [...(await relick(place, context)), ...(await migrate(place, context))];
-      const watchErrors = await watchesOf(place).reconcile(`${place.dir}/watches`, context);
+      const watches = watched(place) ? watchesOf(place) : undefined;
+      const watchErrors = (await watches?.reconcile(`${place.dir}/watches`, context)) ?? [];
       const found = await webhooksIn(files, `${place.dir}/webhooks`, context);
       for (const entry of found.entries.values()) {
         const named = scoped(entry, place.cone);
@@ -219,7 +222,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
         errors.push({ error, place });
     }
     for (const [dir, watches] of [...watching])
-      if (!places.some((place) => place.dir === dir)) {
+      if (!places.some((place) => place.dir === dir && watched(place))) {
         watching.delete(dir);
         await watches.close(context);
       }

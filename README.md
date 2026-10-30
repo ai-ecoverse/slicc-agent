@@ -94,7 +94,7 @@ With users, each cone and each scoop is a kernel user, and works as that user:
   - So a cone reads its scoops' work, and a scoop reads only what its cone shares with `chmod g+r` (and `g+x` on the folders on the way).
   - The worker adds every user at boot, and on every change to `slicc.agents`. Stopping, dropping or removing a scoop removes its user and its home; scoops go before their cone.
 - **Clients:** a conversation's bash, file tools and codemode, and its background tasks, use its agent's bound client. Its cwd defaults to its home, and the kernel sets `HOME`, `USER` and `PATH`. The client carries the page's tag for its agentId, so a `sudo` prompt names the agent.
-- **The `agent` command:** each user has its own request spool, `/var/lib/slicc/agent/requests/<user>/` (`0700`). The spool's owner is the caller, so a `SLICC_AGENT` that names someone else is refused. `--file` and `--system-prompt-file` are read as the caller.
+- **The `agent` command:** each user has its own request spool, `/var/lib/slicc/agent/requests/<user>/` (`0700`). The spool's owner is the caller, so a `SLICC_AGENT` that names someone else is refused. `--file` and `--system-prompt-file` are read as the caller, and a caller whose environment can't be resolved is refused.
 - **Sharing in a sync run:** when the caller's cwd, or a `--read-only` path, is inside the caller's home, the run first shares it with the scoop: `chmod -R g+rX` on it and `g+x` on the folders above it. The v6 form's working folder gets `g+rwX`, plus `g+s` on its folders. The modes stay afterwards.
 - **Where things are:**
 
@@ -104,9 +104,9 @@ With users, each cone and each scoop is a kernel user, and works as that user:
   | skills for every agent | `/usr/share/skills/` (root, `0755`), as without users |
   | an agent's own skills | `~/.pi/agent/skills` and `~/.agents/skills` in its home; only that agent sees them |
   | memory | `/root/.pi/agent/memory/` and `/root/.pi/agent/agent-memory/` (root; agents use `memory_write` and `memory`) |
-  | licks | each cone's `~/.slicc`, whose `cone` target is that cone; root's `/root/.slicc`, whose `cone` is the active cone. Schedules are each user's kernel crontab: a cone's, a scoop's own, and root's |
+  | licks | each cone's `~/.slicc`, whose `cone` target is that cone; root's `/root/.slicc`, whose `cone` is the active cone. A cone's watches run as that cone, and not at all while its environment can't be resolved. Schedules are each user's kernel crontab: a cone's, a scoop's own, and root's |
   | sprinkles | each cone's `~/sprinkles`, every cone's in the rail, with the id `<cone>/<name>` (the cone's id, such as `cone-2`) and the cone as `agentId`; `panel open sprinkle:<cone>/<name>` opens one, and spectrum scopes the rest by cone. welcome and suggestions keep their plain ids. spectrum ≥ 1.56.0 groups the rail by cone, with the selected cone first; an older spectrum lists them ungrouped. A sprinkle's files are read as its owner, inside the owner's home |
-  | the gelatiere | its procedure in the first cone's home, written as that cone, and its nightly line in the gelatiere scoop's own crontab; `gelatiere install`, `suggest` and `catalog` run as the caller, and are refused when the caller's environment can't be resolved |
+  | the gelatiere | its procedure in the first cone's home, written as that cone (`gelatiere init` is refused when that cone's environment can't be resolved), and its nightly line in the gelatiere scoop's own crontab; `gelatiere install`, `suggest` and `catalog` run as the caller, and are refused when the caller's environment can't be resolved |
   | scoop reports | the cone's `~/.slicc/reports/<handle>/` |
   | sync transcripts | `/tmp/agent-sessions/<user>/` (`0700`), or `~/sessions/` with `--persist-session` |
   | the suggestions store and catalog cache, the welcome flag and profile | `/var/lib/slicc/agent/shared/` (root, `0700`). The built-in welcome and suggestions sprinkles read it as `/shared/…`, through the worker and only inside that folder; a user's sprinkle reads `/shared/…` as its owner's home |

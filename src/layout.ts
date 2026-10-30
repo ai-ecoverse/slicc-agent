@@ -72,7 +72,8 @@ export function usersLayout(
     async envFor(user) {
       if (!user || user === ROOT_USER) return undefined;
       const agentId = agentOfUser(state(), user);
-      return agentId ? envOf(agentId, homeOf(user)) : undefined;
+      if (!agentId) throw new Error(`can't resolve the environment of ${user}`);
+      return envOf(agentId, homeOf(user));
     },
   };
 }
