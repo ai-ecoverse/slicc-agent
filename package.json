@@ -80,7 +80,7 @@
     "@ai-ecoverse/wasm-bash": "5.3.0-23",
     "@ai-ecoverse/wasm-coreutils": "9.12.0-15",
     "@ai-ecoverse/wasm-git": "2.55.0-22",
-    "@biomejs/biome": "2.6.2",
+    "@biomejs/biome": "2.6.3",
     "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "fake-indexeddb": "6.2.6",
