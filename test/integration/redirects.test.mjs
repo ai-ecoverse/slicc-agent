@@ -117,7 +117,10 @@ for (const [what, header, config, across] of [
       `vault-mcp=${encodeURIComponent(JSON.stringify([{ server: 'docs', url, names: ['DOCS_KEY'] }]))}`,
     ].join('&');
     await staged(page, 'the agent', (q) => window.start(q, true), query);
-    await page.within(60000, () => ['failed', 'connected'].includes(window.docs()?.state));
+    await page.within(60000, () => window.said().length > 0);
+    assert.match((await page.evaluate(() => window.said())).join('\n'), NOTICE);
+    const first = server.heard.find((entry) => entry.path === '/mcp');
+    assert.ok(first.headers[header].includes(VALUE));
     assert.deepEqual(
       [...target.heard, ...server.heard].filter((entry) => entry.path === '/collect'),
       []
