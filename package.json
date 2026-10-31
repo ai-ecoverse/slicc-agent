@@ -93,7 +93,7 @@
   },
   "dependencies": {
     "@ai-ecoverse/slicc-browsers": "1.18.21",
-    "@ai-ecoverse/slicc-vault": "1.18.2",
+    "@ai-ecoverse/slicc-vault": "1.19.0",
     "@aws-sdk/middleware-websocket": "^3.972.54",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
