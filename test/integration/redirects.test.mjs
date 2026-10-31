@@ -302,3 +302,27 @@ test('an opaque redirect from the transport is refused', async (t) => {
   assert.match((await page.evaluate(() => window.said())).join('\n'), NOTICE);
   assert.equal((await page.evaluate(() => window.seen())).length, 1);
 });
+
+test('with no transport a filled request is refused and nothing is sent', async (t) => {
+  const server = await origin(() => ({ status: 200, headers: {} }));
+  t.after(() => server.close());
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const url = `${server.url}/mcp`;
+  await page.evaluate(
+    (text) => window.write('/home/.pi/agent/mcp.json', text),
+    JSON.stringify({ mcpServers: { docs: { url, headers: AUTH, exposure: 'direct' } } })
+  );
+  const query = [
+    'vault',
+    recorded,
+    `vault-mcp=${encodeURIComponent(JSON.stringify([{ server: 'docs', url, names: ['DOCS_KEY'] }]))}`,
+  ].join('&');
+  await staged(page, 'the agent', (q) => window.start(q), query);
+  await page.within(60000, () => window.said().length > 0);
+  const said = (await page.evaluate(() => window.said())).join('\n');
+  assert.match(said, /can't show it won't follow a redirect/);
+  assert.ok(!said.includes(VALUE));
+  assert.deepEqual(server.heard, []);
+});

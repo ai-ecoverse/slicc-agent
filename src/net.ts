@@ -96,6 +96,7 @@ const UNPROVEN =
   "this route can't show it won't follow a redirect, so a request that holds a credential isn't sent";
 
 function honorsManual(traits: Transport['traits']): boolean {
+  if (traits?.unavailable) return false;
   return !!traits?.redirectPolicy || (!!traits?.manualRedirects && !traits.redirectHops);
 }
 
@@ -180,9 +181,10 @@ export function transportFetch(
     const port = kernelPort(request.url);
     if (loopback && port) return loopback(request, { port, signal: request.signal });
     if (
-      new URL(request.url).origin === origin ||
-      transport.traits?.unavailable ||
-      request.credentials === 'include'
+      request.redirect !== 'manual' &&
+      (new URL(request.url).origin === origin ||
+        transport.traits?.unavailable ||
+        request.credentials === 'include')
     ) {
       return native(request);
     }
