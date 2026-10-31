@@ -552,12 +552,15 @@ const moved = (request) => {
   upstream.push({
     url: request.url,
     method: request.method,
+    redirect: request.redirect ?? null,
     headers: Object.fromEntries(
       request.headers.map(([name, value]) => [name.toLowerCase(), value])
     ),
     body: request.body ? new TextDecoder().decode(request.body) : null,
   });
   const move = moves[url.pathname];
+  if (move?.opaque)
+    return { status: 0, headers: [], opaqueRedirect: true, body: (async function* () {})() };
   return move
     ? {
         status: move.status,
@@ -566,8 +569,9 @@ const moved = (request) => {
       }
     : undefined;
 };
+const proven = params.has('vault') && !params.has('unproven') ? { redirectPolicy: true } : {};
 const relay = {
-  traits: { crossOrigin: 'any' },
+  traits: { crossOrigin: 'any', ...proven },
   async fetch(request) {
     const answer = params.has('moved') ? moved(request) : undefined;
     if (answer) return answer;
@@ -603,10 +607,10 @@ const relay = {
   },
 };
 const routes = new Set();
-if (params.has('route')) relay.traits = { crossOrigin: params.get('route') };
+if (params.has('route')) relay.traits = { crossOrigin: params.get('route'), ...proven };
 self.addEventListener('message', ({ data }) => {
   if (!data?.traits) return;
-  relay.traits = data.traits;
+  relay.traits = { ...data.traits, ...proven };
   for (const listener of routes) listener(data.traits);
   data.routed?.postMessage(true);
 });

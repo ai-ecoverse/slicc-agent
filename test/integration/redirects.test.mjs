@@ -118,8 +118,6 @@ for (const [what, header, config, across] of [
     ].join('&');
     await staged(page, 'the agent', (q) => window.start(q, true), query);
     await page.within(60000, () => ['failed', 'connected'].includes(window.docs()?.state));
-    const first = server.heard.find((entry) => entry.path === '/mcp');
-    assert.ok(first.headers[header].includes(VALUE));
     assert.deepEqual(
       [...target.heard, ...server.heard].filter((entry) => entry.path === '/collect'),
       []
@@ -127,7 +125,7 @@ for (const [what, header, config, across] of [
   });
 }
 
-const opened = async (t, url, headers, moved) => {
+const opened = async (t, url, headers, moved, ...more) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
@@ -140,6 +138,7 @@ const opened = async (t, url, headers, moved) => {
     'vault',
     recorded,
     `moved=${encodeURIComponent(JSON.stringify(moved))}`,
+    ...more,
   ].join('&');
   await staged(page, 'the agent', (q) => window.start(q), query);
   return page;
@@ -161,6 +160,7 @@ test("a redirect to the server's own URL is prepared by the vault again and the 
   const requests = await page.evaluate(() => window.seen());
   const [first, second] = requests;
   assert.equal(first.url, 'https://mcp.test/api');
+  assert.equal(first.redirect, 'manual');
   assert.equal(second.url, 'https://mcp.test/api/v2');
   assert.equal(second.method, 'POST');
   assert.equal(second.body, first.body);
@@ -278,4 +278,27 @@ test('a model request that is redirected to another origin is refused', async (t
     requests.filter((item) => item.url?.includes('other.test')),
     []
   );
+});
+
+for (const [what, headers] of [
+  ['a filled x-api-key', { 'x-api-key': '${DOCS_KEY}' }],
+  ['a filled Authorization', AUTH],
+]) {
+  test(`a route that doesn't show it won't follow sends nothing for ${what}`, async (t) => {
+    const page = await opened(t, 'https://mcp.test/api', headers, {}, 'unproven');
+    await page.within(60000, () => window.said().length > 0);
+    const said = (await page.evaluate(() => window.said())).join('\n');
+    assert.match(said, /can't show it won't follow a redirect/);
+    assert.ok(!said.includes(VALUE));
+    assert.deepEqual(await page.evaluate(() => window.seen()), []);
+  });
+}
+
+test('an opaque redirect from the transport is refused', async (t) => {
+  const page = await opened(t, 'https://mcp.test/api', AUTH, {
+    '/api': { opaque: true },
+  });
+  await page.within(60000, () => window.said().length > 0);
+  assert.match((await page.evaluate(() => window.said())).join('\n'), NOTICE);
+  assert.equal((await page.evaluate(() => window.seen())).length, 1);
 });
