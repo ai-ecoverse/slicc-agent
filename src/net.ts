@@ -97,7 +97,9 @@ const UNPROVEN =
 
 function honorsManual(traits: Transport['traits']): boolean {
   if (traits?.unavailable) return false;
-  return !!traits?.redirectPolicy || (!!traits?.manualRedirects && !traits.redirectHops);
+  if (traits?.redirectPolicy === true) return true;
+  const hops = traits?.redirectHops;
+  return traits?.manualRedirects === true && (hops === undefined || hops === false);
 }
 
 function refused(): Response {
@@ -140,7 +142,8 @@ function untracked(request: Request): Request {
 async function carried(transport: Transport, request: Request): Promise<Response> {
   const manual = request.redirect === 'manual';
   if (manual && !honorsManual(transport.traits)) return refused();
-  const told = manual || (request.redirect === 'error' && transport.traits?.redirectPolicy);
+  const told =
+    manual || (request.redirect === 'error' && transport.traits?.redirectPolicy === true);
   const body = ['GET', 'HEAD'].includes(request.method)
     ? undefined
     : new Uint8Array(await request.arrayBuffer());

@@ -326,3 +326,17 @@ test('with no transport a filled request is refused and nothing is sent', async 
   assert.ok(!said.includes(VALUE));
   assert.deepEqual(server.heard, []);
 });
+
+test('traits that only look proven send nothing', async (t) => {
+  const malformed = { redirectPolicy: 'true', manualRedirects: 1 };
+  const page = await opened(
+    t,
+    'https://mcp.test/api',
+    AUTH,
+    {},
+    `unproven=${encodeURIComponent(JSON.stringify(malformed))}`
+  );
+  await page.within(60000, () => window.said().length > 0);
+  assert.match((await page.evaluate(() => window.said())).join('\n'), /can't show it won't follow/);
+  assert.deepEqual(await page.evaluate(() => window.seen()), []);
+});

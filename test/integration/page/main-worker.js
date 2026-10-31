@@ -569,7 +569,10 @@ const moved = (request) => {
       }
     : undefined;
 };
-const proven = params.has('vault') && !params.has('unproven') ? { redirectPolicy: true } : {};
+const proven =
+  params.has('vault') && !params.has('unproven')
+    ? { redirectPolicy: true }
+    : JSON.parse(params.get('unproven') || '{}');
 const relay = {
   traits: { crossOrigin: 'any', ...proven },
   async fetch(request) {
