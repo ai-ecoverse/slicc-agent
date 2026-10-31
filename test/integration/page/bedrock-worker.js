@@ -34,7 +34,7 @@ const happy = [
 
 const seen = [];
 const transport = {
-  traits: { crossOrigin: 'any' },
+  traits: { crossOrigin: 'any', redirectPolicy: true },
   async fetch(request) {
     const authorization = request.headers.find(
       ([name]) => name.toLowerCase() === 'authorization'

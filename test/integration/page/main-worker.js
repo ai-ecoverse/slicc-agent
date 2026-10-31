@@ -546,9 +546,38 @@ const completions = (request) => {
     })(),
   };
 };
+const moves = JSON.parse(params.get('moved') ?? '{}');
+const moved = (request) => {
+  const url = new URL(request.url);
+  upstream.push({
+    url: request.url,
+    method: request.method,
+    redirect: request.redirect ?? null,
+    headers: Object.fromEntries(
+      request.headers.map(([name, value]) => [name.toLowerCase(), value])
+    ),
+    body: request.body ? new TextDecoder().decode(request.body) : null,
+  });
+  const move = moves[url.pathname];
+  if (move?.opaque)
+    return { status: 0, headers: [], opaqueRedirect: true, body: (async function* () {})() };
+  return move
+    ? {
+        status: move.status,
+        headers: [['location', move.location]],
+        body: (async function* () {})(),
+      }
+    : undefined;
+};
+const proven =
+  params.has('vault') && !params.has('unproven')
+    ? { redirectPolicy: true }
+    : JSON.parse(params.get('unproven') || '{}');
 const relay = {
-  traits: { crossOrigin: 'any' },
+  traits: { crossOrigin: 'any', ...proven },
   async fetch(request) {
+    const answer = params.has('moved') ? moved(request) : undefined;
+    if (answer) return answer;
     if (AUTH_HOSTS.has(new URL(request.url).host)) return signIn(request);
     if (new URL(request.url).host === GROK_HOST) return billing(request);
     if (new URL(request.url).host === 'chatgpt.com') return codexTurn(request);
@@ -581,10 +610,10 @@ const relay = {
   },
 };
 const routes = new Set();
-if (params.has('route')) relay.traits = { crossOrigin: params.get('route') };
+if (params.has('route')) relay.traits = { crossOrigin: params.get('route'), ...proven };
 self.addEventListener('message', ({ data }) => {
   if (!data?.traits) return;
-  relay.traits = data.traits;
+  relay.traits = { ...data.traits, ...proven };
   for (const listener of routes) listener(data.traits);
   data.routed?.postMessage(true);
 });
@@ -790,6 +819,7 @@ if (params.has('vault')) {
   const fake = fakeVault(params.has('scrub') ? seeded(vectors).values : [], 1, {
     records,
     models,
+    ...(params.has('vault-mcp') ? { mcp: JSON.parse(params.get('vault-mcp')) } : {}),
   });
   self.fakeVault = fake;
   self.dispatchEvent(new MessageEvent('message', { data: { vault: fake.port, scrub: fake.pair } }));

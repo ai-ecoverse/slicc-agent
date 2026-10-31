@@ -8,7 +8,7 @@ import { adobeProxyAnswer } from '../fixtures/adobe-proxy.mjs';
 const encoder = new TextEncoder();
 const seen = [];
 const transport = {
-  traits: { crossOrigin: 'any' },
+  traits: { crossOrigin: 'any', redirectPolicy: true },
   async fetch(request) {
     const headers = new Headers(request.headers);
     seen.push({

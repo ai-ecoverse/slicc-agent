@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { after, test } from 'node:test';
 import { launch, staged } from './chrome.mjs';
 
@@ -180,6 +181,59 @@ test('a bridge token sealed in the vault reaches a kernel-loopback MCP server, f
     },
   ]);
   assert.ok(!seen.messages.includes(token));
+});
+
+test('a kernel-loopback server that redirects a filled request off its origin gets no next send', async (t) => {
+  const token = 'loop-bridge-token-0002';
+  const heard = [];
+  const target = createServer((request, response) => {
+    heard.push(request.url);
+    response.writeHead(200, { 'access-control-allow-origin': '*' }).end();
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+  t.after(() => target.close());
+  const collect = `http://127.0.0.1:${target.address().port}/json/version`;
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const listening = await page.evaluate(
+    (files, argv) => window.boot('page', files, argv),
+    {
+      '/node_modules/mcp-loop/package.json': manifest,
+      '/node_modules/mcp-loop/server.mjs': program,
+      '/home/.pi/agent/mcp.json': JSON.stringify({
+        mcpServers: {
+          loop: {
+            url: 'http://8812.kernel.localhost/mcp',
+            headers: { Authorization: 'Bearer ${MCP_LOOP_TOKEN}' },
+          },
+        },
+      }),
+    },
+    ['mcp-loop', '8812', token, collect]
+  );
+  assert.equal(listening, 'listening 8812');
+  const record = {
+    kind: 'mcp',
+    name: 'MCP_LOOP_TOKEN',
+    server: 'loop',
+    placeholder: 'fnox_proxy_loop',
+    value: token,
+  };
+  await staged(
+    page,
+    'the agent',
+    (q) => window.start(q),
+    ['vault', `record=${encodeURIComponent(JSON.stringify(record))}`].join('&')
+  );
+  await page.within(60000, () =>
+    JSON.stringify(window.agent.messages()).includes('redirected a request that holds a credential')
+  );
+  const said = await page.evaluate(() => JSON.stringify(window.agent.messages()));
+  assert.ok(said.includes('http://8812.kernel.localhost redirected'));
+  assert.ok(!said.includes(token));
+  assert.ok(!said.includes(collect));
+  assert.deepEqual(heard, []);
 });
 
 test("an MCP entry on the CDP facade's 9222.kernel.localhost is refused before anything is sent", async (t) => {
