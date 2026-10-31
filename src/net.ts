@@ -107,10 +107,12 @@ export function transportFetch(
     const request = untracked(new Request(input, init));
     const port = kernelPort(request.url);
     if (loopback && port) return loopback(request, { port, signal: request.signal });
+    const manual = request.redirect === 'manual';
     if (
       new URL(request.url).origin === origin ||
       transport.traits?.unavailable ||
-      request.credentials === 'include'
+      request.credentials === 'include' ||
+      (manual && pageOnly(transport))
     ) {
       return native(request);
     }
@@ -124,11 +126,11 @@ export function transportFetch(
       ...(body ? { body } : {}),
       signal: request.signal,
     });
+    const followed =
+      response.redirected || (response.url && bare(response.url) !== bare(request.url));
     const redirected =
-      response.redirected ||
-      (response.url && bare(response.url) !== bare(request.url)) ||
-      (transport.traits?.manualRedirects && redirects.has(response.status));
-    if (request.redirect === 'error' && redirected) {
+      followed || (transport.traits?.manualRedirects && redirects.has(response.status));
+    if ((request.redirect === 'error' && redirected) || (manual && followed)) {
       await stream(response.body)
         .cancel()
         .catch(() => undefined);

@@ -14,6 +14,14 @@ interface Op {
 
 const BODYLESS = new Set(['GET', 'HEAD']);
 const MIN_PART = 8;
+const HOPS = 5;
+const MOVED = new Set([301, 302, 303, 307, 308]);
+const BODY_HEADERS = new Set([
+  'content-encoding',
+  'content-language',
+  'content-location',
+  'content-type',
+]);
 
 export function absent(vault: Pick<Vault, 'connected' | 'needed'>): boolean {
   return !vault.connected && !vault.needed;
@@ -50,9 +58,13 @@ async function prepared(op: Op, request: OutgoingRequest): Promise<OutgoingReque
   }
 }
 
-function filled(original: OutgoingRequest, ready: OutgoingRequest): string[] {
+function added(original: OutgoingRequest, ready: OutgoingRequest): string[] {
   const sent = new Set(original.headers.map(([, value]) => value));
-  const values = ready.headers.map(([, value]) => value).filter((value) => !sent.has(value));
+  return ready.headers.map(([, value]) => value).filter((value) => !sent.has(value));
+}
+
+function filled(original: OutgoingRequest, ready: OutgoingRequest): string[] {
+  const values = added(original, ready);
   if (ready.url !== original.url) values.push(ready.url, decodeURIComponent(ready.url));
   return values.flatMap((value) => [
     value,
@@ -76,13 +88,14 @@ async function sent(
   inner: Fetch,
   request: Request,
   original: OutgoingRequest,
-  ready: OutgoingRequest
+  ready: OutgoingRequest,
+  redirect: RequestRedirect
 ) {
   const init: RequestInit = {
     method: ready.method,
     headers: ready.headers,
     signal: request.signal,
-    redirect: request.redirect,
+    redirect,
     credentials: request.credentials,
     ...(ready.body === undefined ? {} : { body: ready.body as BodyInit }),
   };
@@ -93,17 +106,60 @@ async function sent(
   }
 }
 
+function moved(response: Response): boolean {
+  return (
+    response.type === 'opaqueredirect' ||
+    (MOVED.has(response.status) && response.headers.has('location'))
+  );
+}
+
+function followed(current: OutgoingRequest, response: Response): OutgoingRequest | undefined {
+  if (response.type === 'opaqueredirect') return undefined;
+  const target = URL.parse(response.headers.get('location') as string, current.url);
+  if (target?.origin !== new URL(current.url).origin || target.username || target.password)
+    return undefined;
+  const { body, ...head } = current;
+  const toGet =
+    response.status === 303
+      ? !BODYLESS.has(current.method)
+      : response.status < 303 && current.method === 'POST';
+  if (!toGet) return { ...current, url: target.href };
+  const headers = current.headers.filter(([name]) => !BODY_HEADERS.has(name.toLowerCase()));
+  return { ...head, method: 'GET', url: target.href, headers };
+}
+
+function unfollowed(url: string): Response {
+  const { origin } = new URL(url);
+  return refusal(
+    new VaultRefusal(
+      'EACCES',
+      `${origin} redirected a request that holds a credential, so it wasn't followed`
+    )
+  );
+}
+
 async function through(op: Op, inner: Fetch, request: Request): Promise<Response> {
-  const original = await outgoing(request);
+  let current = await outgoing(request);
   let refreshed = false;
+  let hops = 0;
   for (;;) {
     let ready: OutgoingRequest;
     try {
-      ready = await prepared(op, original);
+      ready = await prepared(op, current);
     } catch (error) {
       return refusal(error);
     }
-    const response = await sent(inner, request, original, ready);
+    const held =
+      request.redirect === 'manual' || ready.url !== current.url || !!added(current, ready).length;
+    const response = await sent(inner, request, current, ready, held ? 'manual' : request.redirect);
+    if (held && moved(response)) {
+      await response.body?.cancel().catch(() => undefined);
+      const next = hops < HOPS ? followed(current, response) : undefined;
+      if (!next) return unfollowed(current.url);
+      current = next;
+      hops += 1;
+      continue;
+    }
     if (response.status !== 401 || refreshed || !op.refresh) return response;
     refreshed = true;
     if (
@@ -177,7 +233,7 @@ export function grantFetch(vault: Port, server: string, base: Fetch): Fetch {
       request.method === 'POST' ? new URLSearchParams(await request.clone().text()) : undefined;
     if (params?.get('grant_type') !== 'authorization_code') return base(request);
     if (absent(vault)) throw new Error(NO_VAULT_SIGN_IN);
-    const response = await base(request);
+    const response = await base(new Request(request, { redirect: 'manual' }));
     if (!response.ok) return response;
     const raw = new Uint8Array(await response.arrayBuffer());
     try {

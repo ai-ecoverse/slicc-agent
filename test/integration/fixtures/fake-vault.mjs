@@ -49,7 +49,7 @@ export function serveVault(port, values, version = 1, options = {}) {
     current += 1;
     scrubber = compile(secretsOf(), { version: current });
   };
-  const registered = { model: [], mcp: [] };
+  const registered = { model: [], mcp: [...(options.mcp ?? [])] };
   const streams = new Map();
   const log = [];
   const queue = [];
@@ -125,7 +125,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       (record) =>
         record.kind === 'mcp' && (record.server === message.server || names.has(record.name)),
       Boolean(entry),
-      Boolean(entry) && loopback(url) && loopback(new URL(entry.url))
+      Boolean(entry) && (Boolean(options.mcp) || (loopback(url) && loopback(new URL(entry.url))))
     );
   };
   const SIGN_INS = ['xai', 'kimi-coding', 'openai-codex'];
