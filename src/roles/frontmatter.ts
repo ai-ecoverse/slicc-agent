@@ -94,6 +94,47 @@ function tolerantSource(source: string): string {
   return lines.join('\n');
 }
 
+function salvageSource(
+  source: string,
+  issues: readonly { pos: [number, number]; message: string; code: string }[],
+  counter: LineCounter
+) {
+  const lines = source.split('\n');
+  const owners: number[] = [];
+  const ends = new Map<number, number>();
+  let owner = 0;
+  for (let index = 0; index < lines.length; index++) {
+    if (/^[^\s#]/.test(lines[index] as string)) {
+      ends.set(owner, index);
+      owner = index;
+    }
+    owners.push(owner);
+  }
+  ends.set(owner, lines.length);
+  const dropped = new Map<number, { end: number; message: string }>();
+  for (const issue of issues) {
+    if (issue.code === 'MISSING_CHAR') return undefined;
+    const index = counter.linePos(issue.pos[0]).line - 1;
+    const line = lines[index];
+    if (!line?.trim() || index === 0) return undefined;
+    const start = owners[index] as number;
+    const stray = start === index && !/^[^:]+:(?:\s|$)/.test(line);
+    dropped.set(stray ? index : start, {
+      end: stray ? index + 1 : (ends.get(start) as number),
+      message: issue.message,
+    });
+  }
+  const removed = new Set<number>();
+  for (const [start, { end }] of dropped)
+    for (let index = start; index < end; index++) removed.add(index);
+  const kept = lines.map((_, index) => index).filter((index) => !removed.has(index));
+  return {
+    source: kept.map((index) => lines[index]).join('\n'),
+    lines: kept,
+    problems: [...dropped.values()].map(({ message }) => message),
+  };
+}
+
 export function parseFrontmatter(text: string, mappings: readonly string[] = []): Frontmatter {
   const normalized = text.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized);
@@ -110,12 +151,29 @@ export function parseFrontmatter(text: string, mappings: readonly string[] = [])
   };
   const source = `---\n${match[1]}\n`;
   let document = parseDocument(source, { ...options, lineCounter });
-  if (document.errors.length) {
+  if (document.errors.length || document.warnings.length) {
     lineCounter = new LineCounter();
     document = parseDocument(tolerantSource(source), { ...options, lineCounter });
   }
-  const problems = [...document.errors, ...document.warnings].map((error) => error.message);
-  if (problems.length) return { fields: {}, body, problems };
+  let issues = [...document.errors, ...document.warnings];
+  const problems: string[] = [];
+  let sourceLines: number[] | undefined;
+  if (issues.length) {
+    const salvaged = salvageSource(source, issues, lineCounter);
+    if (!salvaged) return { fields: {}, body, problems: issues.map((issue) => issue.message) };
+    problems.push(...salvaged.problems);
+    sourceLines = salvaged.lines;
+    lineCounter = new LineCounter();
+    document = parseDocument(tolerantSource(salvaged.source), { ...options, lineCounter });
+    issues = [...document.errors, ...document.warnings];
+    if (issues.length) {
+      for (const issue of issues) {
+        const line = (sourceLines[lineCounter.linePos(issue.pos[0]).line - 1] as number) + 1;
+        problems.push(`${issue.message.split(' at line ')[0]} at line ${line}`);
+      }
+      return { fields: {}, body, problems };
+    }
+  }
   let aliasOffset = 0;
   visit(document, (_, node) => {
     if (!isAlias(node)) return;
@@ -126,8 +184,13 @@ export function parseFrontmatter(text: string, mappings: readonly string[] = [])
   try {
     parsed = document.toJS({ mapAsMap: true, maxAliasCount: 0 });
   } catch (error) {
-    const { line } = lineCounter.linePos(aliasOffset);
-    return { fields: {}, body, problems: [`${(error as Error).message} at line ${line}`] };
+    const position = lineCounter.linePos(aliasOffset).line;
+    const line = sourceLines ? (sourceLines[position - 1] as number) + 1 : position;
+    return {
+      fields: {},
+      body,
+      problems: [...problems, `${(error as Error).message} at line ${line}`],
+    };
   }
   return { fields: fieldsFrom(parsed, mappings, problems), body, problems };
 }
