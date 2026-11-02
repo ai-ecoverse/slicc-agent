@@ -19,12 +19,12 @@ export interface BusyState {
   why: string[];
 }
 
-type Work = {
+export type Work = {
   feeds: Record<string, { scoop: string }>;
   waits: Record<string, { cone: string }>;
 };
 
-type Outbox = {
+export type Outbox = {
   queues: Record<string, { pending: { lick: { channel: string } } | null }>;
 };
 
@@ -47,6 +47,22 @@ function waiting(value: unknown): boolean {
 function mark(set: Set<number>, id: number, on: boolean): void {
   if (on) set.add(id);
   else set.delete(id);
+}
+
+export function landsOn(
+  state: Readonly<AgentsState> | undefined,
+  key: string,
+  channel: string
+): number | undefined {
+  if (!state) return undefined;
+  const target = key.split('|')[0] as string;
+  const active = state.cones[state.active]?.conversation;
+  if (target === 'cone') return active;
+  if (target.startsWith('cone:'))
+    return state.cones[target.slice('cone:'.length)]?.conversation ?? active;
+  if (channel === 'webhook') return active;
+  const scoop = state.scoops[target];
+  return scoop && live(scoop) ? scoop.conversation : active;
 }
 
 export function snapshotBusy(snapshot: SnapshotEvent): boolean {
@@ -126,25 +142,13 @@ export class BusyTracker {
     return this.#running.has(id) || this.#waiting.has(id);
   }
 
-  #lands(target: string, channel: string): number | undefined {
-    const state = this.#agents;
-    if (!state) return undefined;
-    const active = state.cones[state.active]?.conversation;
-    if (target === 'cone') return active;
-    if (target.startsWith('cone:'))
-      return state.cones[target.slice('cone:'.length)]?.conversation ?? active;
-    if (channel === 'webhook') return active;
-    const scoop = state.scoops[target];
-    return scoop && live(scoop) ? scoop.conversation : active;
-  }
-
   #pending(ours: Set<number>): boolean {
     const cone = this.#cone;
     if (cone !== undefined && Object.values(this.#work?.waits ?? {}).some((w) => w.cone === cone))
       return true;
     return Object.entries(this.#outbox?.queues ?? {}).some(([key, queue]) => {
       if (!queue.pending) return false;
-      const lands = this.#lands(key.split('|')[0] as string, queue.pending.lick.channel);
+      const lands = landsOn(this.#agents, key, queue.pending.lick.channel);
       return lands !== undefined && ours.has(lands);
     });
   }

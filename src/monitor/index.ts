@@ -173,7 +173,7 @@ function phaseOf(node: TaskGraphNode): string {
   return 'phase' in node.state ? node.state.phase : node.state.outcome;
 }
 
-function lastAssistant(view: ConversationView | undefined) {
+export function lastAssistant(view: ConversationView | undefined) {
   const entries = view?.entries ?? [];
   for (let at = entries.length - 1; at >= 0; at--) {
     const entry = entries[at] as (typeof entries)[number];

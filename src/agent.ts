@@ -37,6 +37,7 @@ export interface AgentOptions {
 
 export interface Agent extends Cones {
   readonly harness: Harness;
+  readonly models: Models;
   readonly root: Conversation;
   readonly agents: Agents;
   readonly reviews: GuestReviews;
@@ -117,6 +118,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   harness.resume();
   return {
     harness,
+    models: options.models,
     root,
     agents,
     reviews,

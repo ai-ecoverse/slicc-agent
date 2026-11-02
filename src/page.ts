@@ -31,4 +31,9 @@ export {
   type RemoteOptions,
   remoteControl,
 } from './remote/client.ts';
+export type {
+  InventoryAgent,
+  InventorySnapshot,
+  InventoryStatus,
+} from './services.ts';
 export { VIEW_ONLY } from './view-only.ts';
