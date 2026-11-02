@@ -1,4 +1,4 @@
-import { isAlias, isCollection, isMap, isScalar, LineCounter, parseDocument, visit } from 'yaml';
+import { isAlias, isCollection, isScalar, LineCounter, parseDocument, visit } from 'yaml';
 
 export type FrontmatterValue = string | number | boolean | string[];
 
@@ -53,11 +53,11 @@ function retryValue(raw: string, source: string): string | undefined {
   return typed ? raw : JSON.stringify(raw);
 }
 
-function tolerantSource(source: string): string {
+function tolerantSource(source: string, protectedKeys: readonly string[]): string {
   const lines = source.split('\n');
   for (let index = 0; index < lines.length; index++) {
     const found = /^([A-Za-z][\w-]*):[ \t]+(.*)$/.exec(lines[index] as string);
-    if (!found) continue;
+    if (!found || protectedKeys.includes(found[1] as string)) continue;
     const value = (found[2] as string).replace(/[ \t]+#.*$/, '').trim();
     if (
       !value ||
@@ -134,6 +134,8 @@ function salvageSource(
   issues: readonly { pos: [number, number]; message: string; code: string }[],
   counter: LineCounter
 ) {
+  const lower = source.toLowerCase();
+  if (protectedKeys.some((key) => lower.includes(key.toLowerCase()))) return undefined;
   const boundaries = entryBoundaries(source);
   if (!boundaries) return undefined;
   const { lines, owners, ends } = boundaries;
@@ -145,14 +147,6 @@ function salvageSource(
     if (!line?.trim() || index === 0) return undefined;
     const start = owners[index] as number;
     if (dropped.has(start)) continue;
-    const entry = parseDocument(lines[start] as string, {
-      schema: 'core',
-      customTags: [],
-      resolveKnownTags: false,
-      stringKeys: true,
-    });
-    const key = isMap(entry.contents) ? entry.contents.items[0]?.key : undefined;
-    if (isScalar(key) && protectedKeys.includes(String(key.value))) return undefined;
     dropped.set(start, {
       end: ends.get(start) as number,
       message: issue.message,
@@ -215,7 +209,7 @@ export function parseFrontmatter(
         body,
         problems: [...document.errors, ...document.warnings].map((issue) => issue.message),
       };
-    retried = tolerantSource(source);
+    retried = tolerantSource(source, protectedKeys);
     lineCounter = new LineCounter();
     document = parseDocument(retried, { ...options, lineCounter });
   }

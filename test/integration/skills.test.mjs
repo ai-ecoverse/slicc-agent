@@ -207,6 +207,8 @@ test('boot salvages a skill with a stray line and preserves another full descrip
 for (const [shape, restriction] of [
   ['tools list', 'tools:\n  - read\n  - !x grep'],
   ['explicit key', '? tools: [read, grep]'],
+  ['compact tools', 'tools:[read, grep]\nlicense: MIT'],
+  ['tagged tools', 'tools: [read, mcp__*, !x]'],
 ]) {
   test(`a malformed role ${shape} cannot launch a scoop with default tools`, async (t) => {
     const page = await chrome.page(t);
