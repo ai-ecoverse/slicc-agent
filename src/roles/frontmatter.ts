@@ -58,11 +58,13 @@ type State = {
   nested: Map<string, string[]>;
   list: string | undefined;
   block: Block | undefined;
+  plain: { key: string; raw: string; breaks: number } | undefined;
 };
 
 function pair(state: State, line: string): void {
   const found = /^([A-Za-z][\w-]*):(?:\s+(.*))?$/.exec(line);
   state.list = undefined;
+  state.plain = undefined;
   if (!found) {
     state.problems.push(`can't read the line "${line.trim()}"`);
     return;
@@ -74,7 +76,10 @@ function pair(state: State, line: string): void {
   else if (value === '') {
     state.fields[key] = [];
     state.list = key;
-  } else state.fields[key] = scalar(value);
+  } else {
+    state.fields[key] = scalar(value);
+    state.plain = { key, raw: value, breaks: 0 };
+  }
 }
 
 function line(state: State, text: string): void {
@@ -85,7 +90,18 @@ function line(state: State, text: string): void {
   }
   if (block) state.fields[block.key] = blockValue(block);
   state.block = undefined;
-  if (!text.trim() || text.trimStart().startsWith('#')) return;
+  if (!text.trim()) {
+    if (state.plain) state.plain.breaks++;
+    return;
+  }
+  if (text.trimStart().startsWith('#')) return;
+  if (state.plain && /^\s/.test(text)) {
+    const plain = state.plain;
+    plain.raw += `${plain.breaks ? '\n'.repeat(plain.breaks) : ' '}${text.trim()}`;
+    plain.breaks = 0;
+    state.fields[plain.key] = scalar(plain.raw);
+    return;
+  }
   const item = /^\s+-\s+(.*)$/.exec(text);
   if (item && list) (state.fields[list] as string[]).push(unquote((item[1] as string).trim()));
   else if (/^\s/.test(text) && list)
@@ -104,6 +120,7 @@ export function parseFrontmatter(text: string, mappings: readonly string[] = [])
     nested: new Map(),
     list: undefined,
     block: undefined,
+    plain: undefined,
   };
   for (const text of (match[1] as string).split('\n')) line(state, text);
   if (state.block) state.fields[state.block.key] = blockValue(state.block);
