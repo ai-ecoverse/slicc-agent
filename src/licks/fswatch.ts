@@ -1,5 +1,5 @@
 import type { Context } from '@earendil-works/chord';
-import type { ExecutionEnv, FileWatcher, WatchChange } from '@earendil-works/pi-durable/env';
+import type { ExecutionEnv, FileChange, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Activity } from '../kernel/activity.ts';
 import { type ConfigError, parseWatch, type WatchEntry } from './config.ts';
 import { glob } from './glob.ts';
@@ -111,12 +111,12 @@ export class Watches {
     }, watch.entry.debounce);
   }
 
-  #changed(watch: Watching, change: WatchChange, context: Context): void {
-    if ('paths' in change) {
+  #changed(watch: Watching, change: FileChange, context: Context): void {
+    if (change.kind === 'paths') {
       this.#paths(watch, change.paths, context);
       return;
     }
-    const stopped = 'error' in change;
+    const stopped = change.kind === 'failed';
     const text = stopped
       ? `The watch stopped: ${change.error.message}. Save its file again to restart it.`
       : 'Changes may have been missed for a while; look at the watched files again.';
@@ -124,7 +124,7 @@ export class Watches {
     if (stopped && this.#watching.get(entry.name) === watch) {
       this.#watching.delete(entry.name);
       clearTimeout(watch.timer);
-      void watch.watcher?.close(context).catch(() => undefined);
+      void watch.watcher?.stop(context).catch(() => undefined);
     }
     void this.#deliver(
       {
@@ -157,7 +157,7 @@ export class Watches {
     if (!watch) return;
     this.#watching.delete(name);
     clearTimeout(watch.timer);
-    await watch.watcher?.close(context);
+    await watch.watcher?.stop(context);
   }
 
   async reconcile(dir: string, context: Context): Promise<ConfigError[]> {

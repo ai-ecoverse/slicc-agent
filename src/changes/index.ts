@@ -356,7 +356,7 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     async close(context) {
       clearTimeout(timer);
       stop();
-      await watcher?.close(context);
+      await watcher?.stop(context);
     },
   };
 }

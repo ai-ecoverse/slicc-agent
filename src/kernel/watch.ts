@@ -1,5 +1,5 @@
 import type { Context } from '@earendil-works/chord';
-import type { FileWatcher, WatchChange, WatchTarget } from '@earendil-works/pi-durable/env';
+import type { FileChange, FileWatcher, WatchTarget } from '@earendil-works/pi-durable/env';
 import type { KernelFs } from './client.ts';
 import { dirname, resolve } from './paths.ts';
 
@@ -96,7 +96,7 @@ export async function pollWatch(
   fs: KernelFs,
   cwd: string,
   targets: readonly WatchTarget[],
-  onChange: (change: WatchChange) => void,
+  onChange: (change: FileChange) => void,
   options: PollOptions = {}
 ): Promise<PolledWatcher> {
   let current = await snapshot(fs, cwd, targets);
@@ -108,7 +108,7 @@ export async function pollWatch(
     const next = await snapshot(fs, cwd, targets);
     const paths = differences(current, next);
     current = next;
-    if (open && paths.length > 0) onChange({ paths });
+    if (open && paths.length > 0) onChange({ kind: 'paths', paths });
   };
   const timer = setInterval(() => {
     running = running.then(tick);
@@ -118,7 +118,7 @@ export async function pollWatch(
     absorb(paths) {
       running = running.then(() => refresh(paths));
     },
-    async close(_context: Context) {
+    async stop(_context: Context) {
       open = false;
       clearInterval(timer);
       await running;
@@ -158,7 +158,7 @@ export async function nativeWatch(
   fs: KernelFs,
   cwd: string,
   targets: readonly WatchTarget[],
-  onChange: (change: WatchChange) => void
+  onChange: (change: FileChange) => void
 ): Promise<FileWatcher | undefined> {
   const watch = fs.watch?.bind(fs);
   if (!watch) return undefined;
@@ -176,11 +176,11 @@ export async function nativeWatch(
   const report = (change: { paths: string[] } | { overflow: true }) => {
     if (!open) return;
     if (!('paths' in change)) {
-      onChange({ overflow: true });
+      onChange({ kind: 'overflow' });
       return;
     }
     const paths = [...new Set(change.paths.flatMap((path) => mapChange(resolved, path)))];
-    if (paths.length) onChange({ paths });
+    if (paths.length) onChange({ kind: 'paths', paths });
   };
   try {
     for (const target of resolved) {
@@ -195,7 +195,7 @@ export async function nativeWatch(
   }
   return {
     mode: 'native',
-    async close(_context: Context) {
+    async stop(_context: Context) {
       open = false;
       await closeAll();
     },

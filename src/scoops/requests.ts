@@ -223,7 +223,7 @@ export function controlPlane(
     sweep,
     async close(context) {
       clearInterval(timer);
-      await watcher?.close(context);
+      await watcher?.stop(context);
       await lock;
     },
   };

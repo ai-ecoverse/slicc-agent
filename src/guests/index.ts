@@ -1,6 +1,6 @@
 import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { type DocumentState, type Harness, InboxDoc } from '@earendil-works/pi-durable';
+import { type Harness, InboxDoc } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
 import type { Approvals } from '../approvals/index.ts';
 import type { ApprovalPolicies } from '../approvals/policy.ts';
@@ -67,7 +67,7 @@ export interface Guests {
 }
 
 export interface GuestsOptions {
-  harness: Pick<Harness, 'commit' | 'abortSubmission' | 'documentState'>;
+  harness: Pick<Harness, 'commit' | 'abortSubmission' | 'watchDoc'>;
   agents: Pick<Agents, 'state' | 'conversation'>;
   approvals?: Pick<Approvals, 'state' | 'request' | 'withdrawSeat' | 'expire' | 'withdraw'>;
   policy?: Pick<ApprovalPolicies, 'current'>;
@@ -250,8 +250,16 @@ function keyedLine() {
   };
 }
 
+function replaceSeats(records: Record<string, SeatRecord>, seats: GuestsState['seats']) {
+  for (const id of Object.keys(records)) delete records[id];
+  Object.assign(records, copy(seats));
+}
+
 const pendingIn =
-  (approvals: GuestsOptions['approvals'], reviews: DocumentState<ReviewsState>) =>
+  (
+    approvals: GuestsOptions['approvals'],
+    reviews: { readonly value: ReviewsState | null | undefined }
+  ) =>
   (id: string): number =>
     (approvals?.state.value ?? []).filter((item) => item.seat === id && item.state === 'pending')
       .length + liveReviews(reviews.value, id).filter((review) => review.state === 'queued').length;
@@ -299,11 +307,11 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const guestPolicy = () => options.policy?.current().guests ?? DEFAULT_GUEST_POLICY;
   const records = await openedSeats(harness, context);
-  const seatsDoc = (await harness.documentState(GuestsDoc, context)) as DocumentState<GuestsState>;
-  const reviews = (await harness.documentState(
-    GuestReviewsDoc,
-    context
-  )) as DocumentState<ReviewsState>;
+  const seatsWatch = await harness.watchDoc(GuestsDoc, context);
+  if (!seatsWatch) throw new Error('guests document is missing');
+  const reviewsWatch = await harness.watchDoc(GuestReviewsDoc, context);
+  if (!reviewsWatch) throw new Error('guest reviews document is missing');
+  const reviews = replicatedState(copy(reviewsWatch.value));
   const links = new Map<string, number>();
   const ended = new Set<(id: string) => void>();
   const gone = new Map<string, Promise<void>>();
@@ -347,10 +355,11 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
     if (Number.isFinite(next))
       timer = setTimeout(publish, Math.min(Math.max(0, next - at), LONGEST_TIMER));
   };
+  replaceSeats(records, seatsWatch.value.seats);
   publish();
-  const offSeats = seatsDoc.subscribe((value) => {
-    for (const id of Object.keys(records)) delete records[id];
-    Object.assign(records, copy((value as GuestsState).seats));
+  seatsWatch.start(async (call) => {
+    if (call.kind !== 'value') return;
+    replaceSeats(records, call.value.seats);
     publish();
   });
   const write = (change: (seats: Record<string, SeatRecord>) => SeatRecord | undefined) =>
@@ -362,6 +371,9 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
   const recount = () => seats.replace(context, shown());
   const offPending = options.approvals?.state.subscribe(recount);
   const offReviews = reviews.subscribe(recount);
+  reviewsWatch.start(async (call) => {
+    if (call.kind === 'value') reviews.replace(context, copy(call.value));
+  });
   options.reviews?.bind({
     approvals: options.approvals as NonNullable<GuestsOptions['approvals']>,
     agents,
@@ -456,9 +468,8 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       if (timer) clearTimeout(timer);
       offPending?.();
       offReviews();
-      offSeats();
-      seatsDoc.dispose();
-      reviews.dispose();
+      void seatsWatch.stop();
+      void reviewsWatch.stop();
       ended.clear();
     },
   };

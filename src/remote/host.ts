@@ -1,20 +1,31 @@
 import type { Context, ReplicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context';
 import {
-  type AgentEvent,
-  type AgentEventStream,
   type Conversation,
+  ConversationTranscript,
+  type ConversationView,
   type EntryRecord,
   type Harness,
-  type SnapshotEvent,
+  InboxDoc,
+  LiveDoc,
+  type LiveRun,
+  type LiveState,
   type SubmissionId,
-  watchEvents,
+  type SubmissionRecord,
 } from '@earendil-works/pi-durable';
 import type { SendAttachment } from '../attachments.ts';
 import { holdText, type VaultState } from '../secrets/vault.ts';
 import type { Delivered, SendMode, SendRequest, SendResponse } from '../services.ts';
 import { watchBusy } from './busy.ts';
-import { type EndReason, idOf, Mapper, type RemoteEvent, replayOf } from './events.ts';
+import {
+  arrange,
+  clip,
+  type EndReason,
+  idOf,
+  Mapper,
+  type RemoteEvent,
+  replayOf,
+} from './events.ts';
 
 export const VAULT_BACK = 'the vault is answering again';
 
@@ -153,55 +164,137 @@ function headOf(events: readonly RemoteEvent[]): string | null {
   return null;
 }
 
-export function followed(mapper: Mapper, event: AgentEvent): RemoteEvent[] {
-  return event.type === 'snapshot' ? resync(mapper, event) : mapper.event(event);
+const LIVE = LiveDoc.definition.kind;
+const INBOX = InboxDoc.definition.kind;
+const PAGES = 40;
+
+function liveOf(view: ConversationView): LiveState | undefined {
+  return view.docs[LIVE] as LiveState | undefined;
 }
 
-export function resync(mapper: Mapper, snapshot: SnapshotEvent): RemoteEvent[] {
-  const last = mapper.last();
-  return [
-    ...snapshot.entries.filter((entry) => entry.id > last).flatMap((entry) => mapper.entry(entry)),
-    ...mapper.partial(snapshot.generation?.message as never),
-  ];
+function inboxOf(view: ConversationView): readonly { mode?: string }[] {
+  const inbox = view.docs[INBOX] as { items?: readonly { mode?: string }[] } | undefined;
+  return inbox?.items ?? [];
 }
 
-function placedEntry(value: unknown): number | undefined {
-  const entry = (value as { entry?: unknown } | undefined)?.entry;
-  return typeof entry === 'number' ? entry : undefined;
+function entryId(record: SubmissionRecord | undefined): number | undefined {
+  if (record && 'entry' in record && typeof record.entry === 'number') return record.entry;
+  return undefined;
+}
+
+function abandoned(record: SubmissionRecord | undefined): boolean {
+  return record !== undefined && record.status !== 'queued' && record.status !== 'placed';
+}
+
+function settled(record: SubmissionRecord | undefined, user: number | undefined): boolean {
+  if (!record || user === undefined) return false;
+  return record.status === 'done' || record.status === 'unanswered';
+}
+
+function endReason(record: SubmissionRecord | undefined, mapper: Mapper): EndReason {
+  if (record?.status === 'unanswered') return record.reason === 'aborted' ? 'aborted' : 'error';
+  return mapper.reason;
+}
+
+function endMessage(
+  record: SubmissionRecord | undefined,
+  mapper: Mapper,
+  reason: EndReason
+): string | undefined {
+  if (reason !== 'error') return undefined;
+  if (mapper.error) return mapper.error;
+  if (record?.status !== 'unanswered') return 'error';
+  const detail = record.detail;
+  return clip(typeof detail === 'string' && detail ? detail : record.reason, 1000);
+}
+
+async function submissionOf(
+  harness: Harness,
+  id: SubmissionId,
+  context: Context
+): Promise<SubmissionRecord | undefined> {
+  const submission = await harness.submission(id, context);
+  return submission?.status(context);
+}
+
+async function caughtUp(
+  transcript: ConversationTranscript,
+  view: ConversationView,
+  context: Context
+): Promise<EntryRecord[]> {
+  let merged = transcript.merge(view);
+  for (let page = 0; page < PAGES; page++) {
+    const gap = merged.items.find((item) => item.kind === 'gap');
+    if (gap?.kind !== 'gap') break;
+    merged = await transcript.fillGap(gap, context);
+  }
+  return merged.items.flatMap((item) => (item.kind === 'entry' ? [item.entry] : []));
+}
+
+async function recall(
+  transcript: ConversationTranscript,
+  view: ConversationView,
+  since: string | null,
+  thinking: boolean,
+  context: Context
+): Promise<{ entries: EntryRecord[]; events: RemoteEvent[]; gap: boolean }> {
+  let merged = transcript.merge(view);
+  const partial = liveOf(view)?.generation?.message as never;
+  const pack = () => {
+    const entries = merged.items.flatMap((item) => (item.kind === 'entry' ? [item.entry] : []));
+    return { entries, events: replayOf(entries, partial, thinking) };
+  };
+  let packed = pack();
+  const has = () => since !== null && packed.events.some((event) => idOf(event) === since);
+  for (let page = 0; page < PAGES && since !== null && !has(); page++) {
+    const gap = merged.items.find((item) => item.kind === 'gap');
+    if (gap?.kind === 'gap') merged = await transcript.fillGap(gap, context);
+    else if (merged.items[0]?.kind === 'earlier') merged = await transcript.loadEarlier(context);
+    else break;
+    packed = pack();
+  }
+  return { ...packed, gap: since !== null && !has() };
+}
+
+function sealFolded(
+  events: RemoteEvent[],
+  announced: boolean,
+  submission: number,
+  record: SubmissionRecord | undefined,
+  mapper: Mapper
+): { reason: EndReason; message: string | undefined } {
+  const reason = endReason(record, mapper);
+  const message = endMessage(record, mapper, reason);
+  if (!announced && !events.some((event) => event.t === 'run' && event.state === 'start')) {
+    const at = events.findIndex((event) => event.t !== 'user');
+    const start: RemoteEvent = { t: 'run', state: 'start' };
+    if (at < 0) events.push(start);
+    else events.splice(at, 0, start);
+  }
+  if (reason === 'error' && message && !events.some((event) => event.t === 'error'))
+    events.push({ t: 'error', id: `run-${submission}`, message });
+  events.push({ t: 'run', state: 'end', reason });
+  return { reason, message };
 }
 
 export class Follower {
   readonly #mapper: Mapper;
-  readonly #entries: Map<number, EntryRecord>;
-  readonly #submission: SubmissionId;
+  readonly #submission: number;
   readonly #delivered: Delivered;
   readonly #out: RemoteEvent[] = [];
   #user: number | undefined;
   #started = false;
+  #announced = false;
+  #oursFirst: string | undefined;
 
-  constructor(
-    mapper: Mapper,
-    entries: readonly EntryRecord[],
-    submission: SubmissionId,
-    delivered: Delivered,
-    record: unknown
-  ) {
+  constructor(mapper: Mapper, submission: SubmissionId, delivered: Delivered) {
     this.#mapper = mapper;
-    this.#entries = new Map(entries.map((entry) => [entry.id, entry]));
-    this.#submission = submission;
+    this.#submission = Number(submission);
     this.#delivered = delivered;
-    this.#user = placedEntry(record);
   }
 
   drain(): RemoteEvent[] {
     return this.#out.splice(0);
-  }
-
-  #begin(): void {
-    const entry = this.#user === undefined ? undefined : this.#entries.get(this.#user);
-    if (!entry) return;
-    this.#started = true;
-    this.#out.push(...this.#mapper.entry(entry, this.#delivered));
   }
 
   #end(reason: EndReason, message?: string): true {
@@ -209,27 +302,131 @@ export class Follower {
     return true;
   }
 
-  #ours(event: AgentEvent): boolean {
-    if (event.type !== 'submission' || event.record.id !== this.#submission) return false;
-    this.#user = placedEntry(event.record) ?? this.#user;
-    return this.#user === undefined && !['queued', 'placed'].includes(event.record.status);
+  #claim(run: LiveRun | undefined): void {
+    if (!run || this.#user === undefined) return;
+    const task = String(run.taskId);
+    const first = run.first === undefined ? undefined : String(run.first);
+    const key = first ?? `task:${task}`;
+    if (this.#oursFirst === `task:${task}`) {
+      this.#oursFirst = key;
+      return;
+    }
+    if (this.#oursFirst !== undefined) return;
+    const owns = run.inputs.some((id) => Number(id) === this.#submission);
+    if (owns || first === String(this.#user)) this.#oursFirst = key;
   }
 
-  take(batch: readonly AgentEvent[]): boolean {
-    for (const event of batch) {
-      if (event.type === 'message_end') this.#entries.set(event.entry.id, event.entry);
-      if (this.#ours(event)) return this.#end('aborted');
-      if (!this.#started) {
-        this.#begin();
-        continue;
-      }
-      const mapped = this.#mapper.event(event).filter((item) => item.t !== 'user');
-      this.#out.push(...mapped);
-      if (mapped.some((item) => item.t === 'run' && item.state === 'end'))
-        return this.#end(this.#mapper.reason, this.#mapper.error);
+  take(
+    entries: readonly EntryRecord[],
+    live: LiveState | undefined,
+    record: SubmissionRecord | undefined
+  ): boolean {
+    const placed = entryId(record);
+    if (placed !== undefined) this.#user = placed;
+    if (this.#user === undefined && abandoned(record)) return this.#end('aborted');
+    if (this.#user !== undefined) this.#mapper.deliverAs(this.#user, this.#delivered);
+    this.#claim(live?.run);
+    const mapped = this.#mapper.apply(entries, live);
+    const done = settled(record, this.#user);
+    const endedOurs = this.#oursFirst !== undefined && this.#mapper.endedFirst === this.#oursFirst;
+    let events = arrange(
+      mapped.entryEvents,
+      mapped.liveEvents,
+      this.#user === undefined ? undefined : String(this.#user)
+    );
+    if (!(endedOurs || done))
+      events = events.filter((event) => event.t !== 'run' || event.state !== 'end');
+    if (!this.#started) {
+      if (this.#user === undefined || !entries.some((entry) => entry.id === this.#user))
+        return false;
+      this.#started = true;
     }
+    if (events.some((event) => event.t === 'run' && event.state === 'start'))
+      this.#announced = true;
+    const hasEnd = events.some((event) => event.t === 'run' && event.state === 'end');
+    if (this.#started && done && live?.run === undefined && !hasEnd) {
+      const sealed = sealFolded(events, this.#announced, this.#submission, record, this.#mapper);
+      this.#out.push(...events);
+      return this.#end(sealed.reason, sealed.message);
+    }
+    this.#out.push(...events);
+    if (hasEnd && (endedOurs || (done && live?.run === undefined)))
+      return this.#end(this.#mapper.endedReason, this.#mapper.endedError);
     return false;
   }
+}
+
+type Watched = {
+  conversation: Conversation;
+  view: ConversationView;
+  transcript: ConversationTranscript;
+  open(
+    onView: (view: ConversationView, context: Context) => Promise<void>,
+    ended?: () => void
+  ): { id: string; stream: Stream };
+  stop(): Promise<void>;
+};
+
+async function attachWatch(
+  host: RemoteHost,
+  agentId: string | null,
+  context: Context,
+  now: number,
+  track: (stream: Stream) => string
+): Promise<Watched> {
+  const conversation = await host.conversation(agentId, context);
+  const cancel = withCancel(BACKGROUND_CONTEXT);
+  let watch: Awaited<ReturnType<Conversation['watch']>>;
+  try {
+    watch = await conversation.watch(cancel.context);
+  } catch (error) {
+    cancel.cancel();
+    throw error;
+  }
+  const view = watch.value;
+  const transcript = new ConversationTranscript((query, limit, ctx) =>
+    conversation.entries(query, limit, undefined, ctx)
+  );
+  const open = (
+    onView: (next: ConversationView, frame: Context) => Promise<void>,
+    ended?: () => void
+  ) => {
+    let off = () => undefined as void;
+    const stream = new Stream<RemoteEvent>(
+      async () => {
+        off();
+        ended?.();
+        await watch.stop();
+        cancel.cancel();
+      },
+      now,
+      host.limit ?? MAX_QUEUED,
+      [{ t: 'end', reason: 'error', message: 'the stream fell too far behind' }]
+    );
+    const id = track(stream);
+    off = vaultNotices(host.vault, (notices) => stream.push(notices));
+    watch.start(async (call, frame) => {
+      if (call.kind !== 'value') return;
+      try {
+        await onView(call.value, frame);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'the stream failed';
+        stream.push([{ t: 'end', reason: 'error', message: clip(message, 1000) }]);
+        await stream.finish();
+      }
+    });
+    return { id, stream };
+  };
+  return {
+    conversation,
+    view,
+    transcript,
+    open,
+    stop: async () => {
+      await watch.stop();
+      cancel.cancel();
+    },
+  };
 }
 
 export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promise<void> } {
@@ -248,44 +445,20 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
       timer = undefined;
     }
   };
-  const track = (id: string, stream: Stream) => {
+  const track = (stream: Stream) => {
+    const id = `s${++serial}-${crypto.randomUUID()}`;
     streams.set(id, stream);
     timer ??= setInterval(sweep, host.sweepMs ?? IDLE_MS / 4);
+    return id;
   };
-  const watching = async (agentId: string | null, context: Context) => {
-    const conversation = await host.conversation(agentId, context);
-    const cancel = withCancel(BACKGROUND_CONTEXT);
-    const events: AgentEventStream = await watchEvents(
-      host.harness,
-      conversation.id,
-      cancel.context
-    );
-    const open = (onEvents: (batch: readonly AgentEvent[]) => void, ended?: () => void) => {
-      let off = () => undefined as void;
-      const stream = new Stream<RemoteEvent>(
-        async () => {
-          off();
-          ended?.();
-          await events.stop();
-          cancel.cancel();
-        },
-        now(),
-        host.limit ?? MAX_QUEUED,
-        [{ t: 'end', reason: 'error', message: 'the stream fell too far behind' }]
-      );
-      const id = `s${++serial}-${crypto.randomUUID()}`;
-      track(id, stream);
-      off = vaultNotices(host.vault, (notices) => stream.push(notices));
-      events.start(async (batch) => onEvents(batch));
-      return { id, stream };
-    };
-    return { conversation, snapshot: events.snapshot, open, stop: () => events.stop() };
-  };
+  const watching = (agentId: string | null, context: Context) =>
+    attachWatch(host, agentId, context, now(), track);
   return {
     async prompt(request, context) {
       sweep();
       const watched = await watching(request.agentId, context);
-      const busy = Boolean(watched.snapshot.run);
+      const live = liveOf(watched.view);
+      const busy = Boolean(live?.run);
       const response = await host.send(
         {
           text: request.text,
@@ -305,54 +478,82 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
         };
       }
       const submission = Number(response.submissionId) as SubmissionId;
-      const record = await (await host.harness.submission(submission, context))?.status(context);
+      const record = await submissionOf(host.harness, submission, context);
       const delivered = deliveredOf(record, request.whenBusy, busy);
-      const follower = new Follower(
-        new Mapper(request.thinking),
-        watched.snapshot.entries,
-        submission,
-        delivered,
-        record
-      );
-      const { id, stream } = watched.open((batch) => {
-        const ended = follower.take(batch);
+      const mapper = new Mapper(request.thinking);
+      watched.transcript.merge(watched.view);
+      for (const entry of watched.view.entries) mapper.entry(entry);
+      mapper.see(live);
+      mapper.holdUsers = true;
+      const follower = new Follower(mapper, submission, delivered);
+      const { id, stream } = watched.open(async (view, frame) => {
+        const status = await submissionOf(host.harness, submission, frame);
+        const entries = await caughtUp(watched.transcript, view, frame);
+        const ended = follower.take(entries, liveOf(view), status);
         stream.push(follower.drain());
-        if (ended) void stream.finish();
+        if (ended) await stream.finish();
       });
       return { ok: true, stream: id, delivered, head: null, gap: false };
     },
     async watch(request, context) {
       sweep();
       const watched = await watching(request.agentId, context);
-      const partial = watched.snapshot.generation?.message as never;
-      const all = replayOf(watched.snapshot.entries, partial, request.thinking);
-      const head = headOf(all);
-      const at = request.since === null ? -1 : all.findIndex((e) => idOf(e) === request.since);
-      const gap = request.since !== null && at < 0;
+      const recalled = await recall(
+        watched.transcript,
+        watched.view,
+        request.since,
+        request.thinking,
+        context
+      );
+      const head = headOf(recalled.events);
+      const at =
+        request.since === null
+          ? -1
+          : recalled.events.findIndex((event) => idOf(event) === request.since);
       const mapper = new Mapper(request.thinking);
-      for (const entry of watched.snapshot.entries) mapper.entry(entry);
-      mapper.partial(partial);
+      for (const entry of recalled.entries) mapper.entry(entry);
+      mapper.see(liveOf(watched.view));
+      let sink: Stream<RemoteEvent> | undefined;
       const busy = request.busy
-        ? await watchBusy(host.harness, watched, (events) => stream.push(events), context)
+        ? await watchBusy(
+            host.harness,
+            {
+              conversation: watched.conversation,
+              snapshot: { run: liveOf(watched.view)?.run, inbox: inboxOf(watched.view) },
+              stop: () => watched.stop(),
+            },
+            (events) => sink?.push(events),
+            context
+          ).catch(async (error) => {
+            await watched.stop();
+            throw error;
+          })
         : undefined;
-      const { id, stream } = watched.open((batch) => {
-        const mapped = batch.flatMap((event) => followed(mapper, event));
-        stream.push(busy ? busy.gate.before(mapped) : mapped);
+      const { id, stream } = watched.open(async (view, frame) => {
+        const entries = await caughtUp(watched.transcript, view, frame);
+        const mapped = mapper.apply(entries, liveOf(view));
+        const events = arrange(mapped.entryEvents, mapped.liveEvents);
+        stream.push(busy ? busy.gate.before(events) : events);
       }, busy?.stop);
+      sink = stream;
       if (at >= 0) {
-        const own = all[at] as RemoteEvent;
+        const own = recalled.events[at] as RemoteEvent;
         const sinceId = idOf(own);
         let last = at;
-        while (last + 1 < all.length && idOf(all[last + 1] as RemoteEvent) === sinceId) last++;
+        while (
+          last + 1 < recalled.events.length &&
+          idOf(recalled.events[last + 1] as RemoteEvent) === sinceId
+        )
+          last++;
         const replay = own.t === 'text' || own.t === 'thinking' ? [own] : [];
-        stream.push([...replay, ...all.slice(last + 1)]);
+        stream.push([...replay, ...recalled.events.slice(last + 1)]);
       }
       return {
         ok: true,
         stream: id,
         delivered: null,
         head,
-        gap,
+        gap: recalled.gap,
         ...(busy ? { busy: busy.opened } : {}),
       };
     },
@@ -374,10 +575,13 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
     },
     async abort(agentId, context) {
       const conversation = await host.conversation(agentId, context);
-      const watched = await watchEvents(host.harness, conversation.id, context);
-      const busy = Boolean(watched.snapshot.run);
-      await watched.stop();
-      if (busy) await conversation.abort(context);
+      const watched = await conversation.watch(context);
+      const busy = Boolean(liveOf(watched.value)?.run);
+      try {
+        if (busy) await conversation.abort(context);
+      } finally {
+        await watched.stop();
+      }
       return { aborted: busy };
     },
     async dispose() {

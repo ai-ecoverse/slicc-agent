@@ -1,11 +1,11 @@
-import type { ReportInfo } from '@earendil-works/pi-durable';
+import type { Report as HarnessReport, ReportInfo } from '@earendil-works/pi-durable';
 
 export const REPORTS_MAX = 50;
 
 export interface Report {
   id: string;
   at: number;
-  type: ReportInfo['type'];
+  type: ReportInfo['kind'];
   message: string;
   conversationId: number | null;
   taskId: number | null;
@@ -18,7 +18,7 @@ export interface Reports {
 }
 
 export interface ReportSink extends Reports {
-  record(error: unknown, info: ReportInfo): void;
+  record(report: HarnessReport): void;
 }
 
 function messageOf(error: unknown): string {
@@ -28,13 +28,13 @@ function messageOf(error: unknown): string {
 
 function sourceOf(info: ReportInfo): string | null {
   if ('extension' in info && info.extension) return info.extension;
-  if (info.type === 'host_error') return info.callback;
+  if (info.kind === 'host_error') return info.callback;
   return null;
 }
 
 function conversationOf(info: ReportInfo): number | null {
   if ('task' in info && info.task) return Number(info.task.conversationId);
-  if (info.type === 'extension_error' && info.conversationId !== undefined)
+  if (info.kind === 'extension_error' && info.conversationId !== undefined)
     return Number(info.conversationId);
   return null;
 }
@@ -44,17 +44,19 @@ export function createReports(now: () => number = Date.now, max = REPORTS_MAX): 
   const listeners = new Set<(report: Report) => void>();
   let next = 0;
   return {
-    record(error, info) {
-      const task = 'task' in info && info.task ? Number(info.task.id) : null;
+    record(incoming) {
+      const task = 'task' in incoming && incoming.task ? Number(incoming.task.id) : null;
       const report: Report = {
         id:
-          info.type === 'task_faulted' && task !== null ? `task:${task}` : `report:${(next += 1)}`,
+          incoming.kind === 'task_faulted' && task !== null
+            ? `task:${task}`
+            : `report:${(next += 1)}`,
         at: now(),
-        type: info.type,
-        message: messageOf(error),
-        conversationId: conversationOf(info),
+        type: incoming.kind,
+        message: messageOf(incoming.error),
+        conversationId: conversationOf(incoming),
         taskId: task,
-        source: sourceOf(info),
+        source: sourceOf(incoming),
       };
       kept.unshift(report);
       kept.length = Math.min(kept.length, max);

@@ -94,7 +94,7 @@ export interface Timers {
 }
 
 export interface MonitorOptions {
-  harness: Pick<Harness, 'watchTaskGraph' | 'usage' | 'subscribeCommits' | 'inspect'>;
+  harness: Pick<Harness, 'watchTaskGraph' | 'usage' | 'observeCommits' | 'inspect'>;
   agents: { state(): Readonly<AgentsState>; onChange(listener: () => void): () => void };
   views: ReplicatedState<Record<string, ConversationView>>;
   reports?: Reports;
@@ -266,8 +266,12 @@ class Session {
 
   start(): void {
     const options = this.#options;
+    const commits = options.harness.observeCommits({
+      advance: (publication) => this.#commit(publication),
+      end() {},
+    });
     this.#off.push(
-      options.harness.subscribeCommits((publication) => this.#commit(publication)),
+      () => commits.detach(),
       options.agents.onChange(() => this.schedule()),
       options.views.subscribe(() => this.schedule())
     );
@@ -343,8 +347,9 @@ class Session {
     this.#watch = watch;
     this.#graph = watch.value;
     this.schedule();
-    watch.start(async (graph) => {
-      this.#graph = graph;
+    watch.start(async (call) => {
+      if (call.kind !== 'value') return;
+      this.#graph = call.value;
       this.schedule();
     });
   }
@@ -388,7 +393,11 @@ class Session {
     let changed = false;
     for (const change of publication.changes) {
       if (change.type === 'task') changed = this.#failed(change.value) || changed;
-      else if (change.type === 'document' && change.record.kind === 'pi.usage')
+      else if (
+        change.type === 'document' &&
+        (change.kind === 'change' || change.kind === 'retire') &&
+        change.record.kind === 'pi.usage'
+      )
         this.#usageChanged();
     }
     if (changed) this.schedule();

@@ -1,5 +1,5 @@
-import { type AttachedReplicatedState, type Context, replicatedState } from '@earendil-works/chord';
-import type { ConversationView } from '@earendil-works/pi-durable';
+import { type Context, replicatedState } from '@earendil-works/chord';
+import type { ConversationView, ConversationWatch } from '@earendil-works/pi-durable';
 import type { Agent } from './agent.ts';
 import { type AgentsState, live } from './agents.ts';
 import type { AgentsSummary } from './services.ts';
@@ -34,7 +34,7 @@ function wanted(state: Readonly<AgentsState>): Map<string, number> {
 
 interface Mounted {
   conversation: number;
-  attached: AttachedReplicatedState<ConversationView>;
+  watch: ConversationWatch;
   put: (value: ConversationView) => void;
   off: () => void;
 }
@@ -57,7 +57,6 @@ export async function agentViews(
         for (const [id, entry] of [...mounted]) {
           if (target.get(id) === entry.conversation) continue;
           entry.off();
-          entry.attached.dispose();
           mounted.delete(id);
           if (!target.has(id))
             views.change(context, (draft) => {
@@ -68,17 +67,23 @@ export async function agentViews(
           if (mounted.has(id)) continue;
           const handle = await agent.agents.conversation(id, context);
           if (!handle) continue;
-          const attached = await handle.viewState(context);
+          const watch = await handle.watch(context);
           const put = (value: ConversationView) =>
             views.change(context, (draft) => {
               (draft as Record<string, unknown>)[id] = slim(value);
             });
-          put(attached.value);
+          put(watch.value);
           mounted.set(id, {
             conversation,
-            attached,
+            watch,
             put,
-            off: attached.subscribe((value) => put(value)),
+            off: () => {
+              void watch.stop();
+            },
+          });
+          watch.start(async (call) => {
+            if (call.kind !== 'value') return;
+            put(call.value);
           });
         }
       })
@@ -95,15 +100,12 @@ export async function agentViews(
     views,
     sync,
     refresh() {
-      for (const entry of mounted.values()) entry.put(entry.attached.value);
+      for (const entry of mounted.values()) entry.put(entry.watch.value);
     },
     dispose() {
       offChange();
       offCone();
-      for (const entry of mounted.values()) {
-        entry.off();
-        entry.attached.dispose();
-      }
+      for (const entry of mounted.values()) entry.off();
       mounted.clear();
     },
   };

@@ -7,7 +7,6 @@ import {
   type InboxState,
   LiveDoc,
   type LiveState,
-  type SnapshotEvent,
 } from '@earendil-works/pi-durable';
 import { AgentsDoc, type AgentsState, live } from '../agents.ts';
 import { LicksOutbox } from '../licks/licks.ts';
@@ -65,7 +64,12 @@ export function landsOn(
   return scoop && live(scoop) ? scoop.conversation : active;
 }
 
-export function snapshotBusy(snapshot: SnapshotEvent): boolean {
+type BusySnapshot = {
+  run?: unknown;
+  inbox: readonly { mode?: string }[];
+};
+
+export function snapshotBusy(snapshot: BusySnapshot): boolean {
   return Boolean(snapshot.run) || snapshot.inbox.some((item) => item.mode !== 'write');
 }
 
@@ -113,17 +117,17 @@ export class BusyTracker {
     let touched = false;
     for (const change of publication.changes) {
       if (change.type !== 'document' || change.record.key !== undefined) continue;
+      if (change.kind !== 'change' && change.kind !== 'retire') continue;
       const { kind } = change.record;
       const id = change.conversationId;
-      if (kind === KINDS.live && id !== undefined) mark(this.#running, id, running(change.value));
-      else if (kind === KINDS.inbox && id !== undefined)
-        mark(this.#waiting, id, waiting(change.value));
+      const value = change.kind === 'change' ? change.value : undefined;
+      if (kind === KINDS.live && id !== undefined) mark(this.#running, id, running(value));
+      else if (kind === KINDS.inbox && id !== undefined) mark(this.#waiting, id, waiting(value));
       else if (kind === KINDS.agents && id === undefined)
-        this.#agents = (change.value ?? undefined) as AgentsState | undefined;
-      else if (kind === KINDS.work && id === undefined)
-        this.#work = (change.value ?? undefined) as Work | undefined;
+        this.#agents = value as AgentsState | undefined;
+      else if (kind === KINDS.work && id === undefined) this.#work = value as Work | undefined;
       else if (kind === KINDS.outbox && id === undefined)
-        this.#outbox = (change.value ?? undefined) as Outbox | undefined;
+        this.#outbox = value as Outbox | undefined;
       else continue;
       touched = true;
     }
@@ -176,10 +180,14 @@ export async function trackBusy(
   const buffer: CommitPublication[] = [];
   let ready = false;
   let listener: () => void = () => undefined;
-  const stop = harness.subscribeCommits((publication) => {
-    if (!ready) buffer.push(publication);
-    else if (tracker.apply(publication)) listener();
+  const commits = harness.observeCommits({
+    advance(publication) {
+      if (!ready) buffer.push(publication);
+      else if (tracker.apply(publication)) listener();
+    },
+    end() {},
   });
+  const stop = () => commits.detach();
   try {
     const [agents, work, outbox] = await Promise.all([
       harness.snapshot(AgentsDoc, context),
@@ -255,7 +263,7 @@ export class BusyGate {
 
 export async function watchBusy(
   harness: Harness,
-  watched: { conversation: { id: number }; snapshot: SnapshotEvent; stop(): Promise<unknown> },
+  watched: { conversation: { id: number }; snapshot: BusySnapshot; stop(): Promise<unknown> },
   push: (events: RemoteEvent[]) => void,
   context: Context
 ): Promise<{ opened: boolean; gate: BusyGate; stop(): void }> {

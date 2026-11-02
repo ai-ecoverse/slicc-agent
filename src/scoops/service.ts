@@ -196,10 +196,13 @@ async function coneOfId(core: Core, coneId: string, context: Context): Promise<C
 async function isBusy(core: Core, conversation: number, context: Context): Promise<boolean> {
   const { harness } = await core.host;
   const handle = await harness.conversation(conversation as ConversationId, context);
-  const view = await handle?.viewState(context);
-  const run = (view?.value.docs['pi.live'] as { run?: unknown } | undefined)?.run;
-  view?.dispose();
-  return Boolean(run);
+  if (!handle) return false;
+  const watch = await handle.watch(context);
+  try {
+    return Boolean((watch.value.docs['pi.live'] as { run?: unknown } | undefined)?.run);
+  } finally {
+    await watch.stop();
+  }
 }
 
 async function answered(

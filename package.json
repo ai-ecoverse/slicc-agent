@@ -93,16 +93,16 @@
   },
   "dependencies": {
     "@ai-ecoverse/slicc-browsers": "1.18.21",
-    "@ai-ecoverse/slicc-vault": "1.21.1",
+    "@ai-ecoverse/slicc-vault": "1.21.2",
     "@aws-sdk/middleware-websocket": "^3.972.54",
-    "@earendil-works/chord": "1.4.0",
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-codemode": "1.4.0",
-    "@earendil-works/pi-durable": "1.4.0",
-    "@earendil-works/pi-mcp": "1.4.0",
-    "@earendil-works/pi-telemetry": "1.4.0",
-    "@sqlite.org/sqlite-wasm": "3.53.4-build2",
-    "typebox": "1.4.3"
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-codemode": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@earendil-works/pi-mcp": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
+    "@earendil-works/pi-telemetry": "1.5.0",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build2"
   },
   "peerDependencies": {
     "@ai-ecoverse/slicc-kernel": ">=1.171.0 <2",

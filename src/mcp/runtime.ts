@@ -50,6 +50,7 @@ export interface McpAttach {
   version: string;
   reloadMs: number;
   codemode: boolean;
+  toolSearch: boolean;
   cors: boolean;
   redirect: string;
 }
@@ -171,6 +172,7 @@ export async function attachMcp(
 ): Promise<McpRuntime> {
   const { env, home } = options;
   catalog.codemodeOn = options.codemode;
+  catalog.toolSearchOn = options.toolSearch;
   const reported = new Set<string>();
   const report = async (lick: LickEvent | undefined, using: Context) => {
     if (!lick?.eventId || reported.has(lick.eventId)) return;
@@ -305,7 +307,7 @@ export async function attachMcp(
     async close(using) {
       clearTimeout(timer);
       stopRecords();
-      await watcher?.close(using);
+      await watcher?.stop(using);
       const all = [...catalog.connections.values()];
       catalog.connections.clear();
       await Promise.all(all.map((connection) => connection.close()));

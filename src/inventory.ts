@@ -16,7 +16,7 @@ export interface InventoryModels {
 export interface InventoryOptions {
   agents: { state(): Readonly<AgentsState>; onChange(listener: () => void): () => void };
   views: ReplicatedState<Record<string, ConversationView>>;
-  harness: Pick<Harness, 'subscribeCommits' | 'snapshot'>;
+  harness: Pick<Harness, 'observeCommits' | 'snapshot'>;
   models?: InventoryModels;
   now?: () => number;
   context: Context;
@@ -133,18 +133,22 @@ export function createInventory(options: InventoryOptions): Inventory {
     const seq = (state.value?.seq ?? 0) + 1;
     state.replace(context, { seq, changedAt: at, active: registry.active, agents });
   };
-  const offCommits = harness.subscribeCommits((publication) => {
-    let touched = false;
-    for (const change of publication.changes) {
-      if (change.type !== 'document' || change.record.key !== undefined) continue;
-      if (change.conversationId !== undefined) continue;
-      if (change.record.kind === WORK) signals.work = (change.value ?? undefined) as Work;
-      else if (change.record.kind === OUTBOX)
-        signals.outbox = (change.value ?? undefined) as Outbox;
-      else continue;
-      touched = true;
-    }
-    if (touched) build();
+  const commits = harness.observeCommits({
+    advance(publication) {
+      let touched = false;
+      for (const change of publication.changes) {
+        if (change.type !== 'document' || change.record.key !== undefined) continue;
+        if (change.conversationId !== undefined) continue;
+        if (change.kind !== 'change' && change.kind !== 'retire') continue;
+        const value = change.kind === 'change' ? change.value : undefined;
+        if (change.record.kind === WORK) signals.work = value as Work | undefined;
+        else if (change.record.kind === OUTBOX) signals.outbox = value as Outbox | undefined;
+        else continue;
+        touched = true;
+      }
+      if (touched) build();
+    },
+    end() {},
   });
   void Promise.all([
     harness.snapshot(ScoopWorkDoc, context),
@@ -156,7 +160,11 @@ export function createInventory(options: InventoryOptions): Inventory {
       build();
     })
     .catch(() => undefined);
-  const offs = [offCommits, options.agents.onChange(build), options.views.subscribe(build)];
+  const offs = [
+    () => commits.detach(),
+    options.agents.onChange(build),
+    options.views.subscribe(build),
+  ];
   build();
   return {
     state,

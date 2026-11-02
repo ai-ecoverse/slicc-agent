@@ -8,6 +8,10 @@ import {
   type Storage,
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
+import {
+  createToolSearchExtension,
+  TOOL_SEARCH_TOOL_NAME,
+} from '@earendil-works/pi-durable/tool-search';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { type Agent, type AgentOptions, openAgent } from './agent.ts';
 import {
@@ -155,23 +159,27 @@ function privateStore(env: SliccKernelEnv): Promise<unknown> {
   return env.exec(`mkdir -p ${STORE_DIR} && chmod 700 ${STORE_DIR}`, undefined, BACKGROUND_CONTEXT);
 }
 
-async function codemodeTools(
+export async function codemodeTools(
   client: KernelClient,
   options: AgentWorkerOptions,
   native: typeof fetch,
   extra: Parameters<typeof codemodeTool>[0]['extra'],
   dir = `${HOME}/.pi/agent`
-) {
+): Promise<{ tools: ToolRegistration[]; toolSearch: boolean }> {
   const settings = await client.fs.readFile(`${dir}/settings.json`).catch(() => undefined);
-  if (disabledBySettings(settings === undefined ? undefined : new TextDecoder().decode(settings)))
-    return [];
+  const text = settings === undefined ? undefined : new TextDecoder().decode(settings);
+  const toolSearch = !disabledBySettings(text, TOOL_SEARCH_TOOL_NAME);
+  if (disabledBySettings(text)) return { tools: [], toolSearch };
   const sandbox = sandboxFactory(
     options.codemodeWasm ?? (() => locateWasm(native, new URL(import.meta.url))),
     options.codemodeWorker
   );
-  return [
-    codemodeTool({ declared: CodingTools.tools as readonly ToolRegistration[], sandbox, extra }),
-  ];
+  return {
+    tools: [
+      codemodeTool({ declared: CodingTools.tools as readonly ToolRegistration[], sandbox, extra }),
+    ],
+    toolSearch,
+  };
 }
 
 export function seesImages(models: Pick<Models, 'getModel'>, ref: ModelRef | undefined): boolean {
@@ -456,7 +464,7 @@ function kernelParts(client: KernelClient) {
   return [createActivity(), processGroups(client), backgroundJobs(client)] as const;
 }
 
-async function start(
+export async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
   options: AgentWorkerOptions,
@@ -468,8 +476,10 @@ async function start(
   const memory = setupMemory(registry);
   const coding = CodingTools.tools as readonly ToolRegistration[];
   const mcp = setupMcp(registry);
-  const codemode = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
+  const chosen = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
+  const codemode = chosen.tools;
   registry.install(codemodeExtension(codemode));
+  if (chosen.toolSearch) registry.install(createToolSearchExtension());
   const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
@@ -526,6 +536,7 @@ async function start(
       version: facts.version,
       reloadMs: RELOAD_MS,
       codemode: codemode.length > 0,
+      toolSearch: chosen.toolSearch,
       cors: pageOnly(client.transport),
       redirect: options.mcpRedirect ?? mcpRedirect(scope.location),
     },

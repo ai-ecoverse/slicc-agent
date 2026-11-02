@@ -1,6 +1,5 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context';
-import { Type } from '@earendil-works/pi-ai';
 import {
   type ConversationId,
   configure,
@@ -14,6 +13,7 @@ import {
   type NextTaskState,
   type TaskRuntime,
 } from '@earendil-works/pi-durable';
+import { lit, obj, str, union } from '@earendil-works/pi-schema';
 import { type AgentsState, live, type ScoopRecord } from '../agents.ts';
 import type { Approval, Approvals, ApprovalsState } from '../approvals/index.ts';
 import { judgeState, type OwnerIntent } from '../approvals/judge.ts';
@@ -151,8 +151,8 @@ async function ended(runtime: Runtime, id: string, context: Context): Promise<vo
       context.abortSignal?.addEventListener('abort', () => reject(context.abortSignal?.reason), {
         once: true,
       });
-      watch?.start(async (value) => {
-        if (itemIn(value, id)?.state !== 'pending') resolve();
+      watch?.start(async (call) => {
+        if (call.kind === 'value' && itemIn(call.value, id)?.state !== 'pending') resolve();
       });
     });
   } finally {
@@ -268,9 +268,9 @@ function decideTool(lookup: () => Promise<ScoopReviewHost>) {
     name: SCOOP_DECIDE,
     description:
       'Answer the approval request you were asked to review in this turn: approve or deny it, with a one-sentence reason.',
-    parameters: Type.Object({
-      decision: Type.Union([Type.Literal('approve'), Type.Literal('deny')]),
-      reason: Type.String({ description: 'One sentence on why.' }),
+    parameters: obj({
+      decision: union([lit('approve'), lit('deny')]),
+      reason: str({ description: 'One sentence on why.' }),
     }),
     deferred: true,
     callers: ['model'],

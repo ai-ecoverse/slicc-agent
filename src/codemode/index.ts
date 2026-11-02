@@ -1,6 +1,5 @@
 import type { Context, JsonValue } from '@earendil-works/chord';
 import { withAbortSignal } from '@earendil-works/chord/context';
-import { Type } from '@earendil-works/pi-ai';
 import {
   type CodemodeError,
   type CodemodeJsonSchema,
@@ -26,6 +25,7 @@ import {
   type ToolExecutionApi,
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
+import { obj, str } from '@earendil-works/pi-schema';
 import { boundedDeltas } from '../checkpoints.ts';
 import { scrubItems } from '../secrets/scrub.ts';
 
@@ -257,7 +257,7 @@ export function codemodeTool(options: CodemodeOptions): ToolRegistration {
   return defineTool({
     name: CODEMODE,
     description: codemodeDescription(options.declared, options.extra !== undefined),
-    parameters: Type.Object({ code: Type.String({ description: 'Raw JavaScript source.' }) }),
+    parameters: obj({ code: str({ description: 'Raw JavaScript source.' }) }),
     replay: 'unsafe',
     callers: ['model'],
     async execute({ code }, api, context) {
@@ -321,11 +321,11 @@ export function codemodeExtension(tools: readonly ToolRegistration[]): Extension
   return defineExtension({ name: 'slicc-codemode', tools });
 }
 
-export function disabledBySettings(text: string | undefined): boolean {
+export function disabledBySettings(text: string | undefined, tool = CODEMODE): boolean {
   if (!text) return false;
   try {
     const settings = JSON.parse(text) as { defaultTools?: unknown };
-    return Array.isArray(settings.defaultTools) && settings.defaultTools.includes(`-${CODEMODE}`);
+    return Array.isArray(settings.defaultTools) && settings.defaultTools.includes(`-${tool}`);
   } catch {
     return false;
   }

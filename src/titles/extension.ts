@@ -1,14 +1,22 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type {
-  Conversation,
   ConversationId,
+  Cursor,
+  EntryId,
   EntryRecord,
   Extension,
   Harness,
+  TaskId,
+  TaskRuntime,
 } from '@earendil-works/pi-durable';
-import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable';
+import {
+  defineExtension,
+  defineTask,
+  GenerationTask,
+  hook,
+  runEndTask,
+} from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
 import type { Agents, ConeRecord } from '../agents.ts';
 import { scrubTranscript } from './generate.ts';
@@ -89,15 +97,33 @@ export interface TitlesAttach {
   title: () => TitleFn | undefined;
 }
 
-function answered(entries: readonly EntryRecord[], answer: AssistantMessage): EntryRecord[] {
-  const last = entries.at(-1);
-  const stamp = (last?.model?.[0] as { timestamp?: unknown } | undefined)?.timestamp;
-  if (last?.kind === 'pi.assistant' && stamp === answer.timestamp) return [...entries];
-  return [...entries, { kind: 'pi.assistant', model: [answer] } as unknown as EntryRecord];
-}
-
 function modelName(model: { provider: string; modelId: string } | undefined): string {
   return model ? `${model.provider}/${model.modelId}` : '';
+}
+
+const DUE_TASK = 'slicc.title-due';
+const TITLE_TASK = 'slicc.title';
+const PAGE = 100;
+
+type History = Pick<TaskRuntime<unknown, { phase: string }, unknown, object>, 'entries'>;
+
+async function history(runtime: History, max: number | undefined, context: Context) {
+  const entries: EntryRecord[] = [];
+  let cursor: Cursor | undefined;
+  do {
+    const page = await runtime.entries(
+      {
+        ...(max === undefined ? {} : { maxEntryId: max as EntryId }),
+        order: 'ascending',
+      },
+      PAGE,
+      cursor,
+      context
+    );
+    entries.push(...page.items);
+    cursor = page.next;
+  } while (cursor);
+  return entries;
 }
 
 export interface TitlesRuntime {
@@ -106,7 +132,7 @@ export interface TitlesRuntime {
 }
 
 export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
-  const pending = new Map<string, { token: symbol; conversation: number }>();
+  const pending = new Map<string, { token: symbol; conversation: number; taskId: number }>();
 
   const named = (
     entries: readonly EntryRecord[],
@@ -133,41 +159,85 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
       if (title) record.title = title;
     }, BACKGROUND_CONTEXT);
 
+  const done = () =>
+    ({ status: 'terminal', outcome: { status: 'completed', result: null } }) as const;
+  const naming = defineTask<
+    { agentId: string; conversation: number; turns: number },
+    { phase: 'name' },
+    null
+  >({
+    name: TITLE_TASK,
+    version: 1,
+    initial: () => ({ phase: 'name' }),
+    phases: {
+      async name(task, runtime, context) {
+        const { agentId, conversation, turns } = task.input;
+        const finish = () => runtime.commit(async () => done(), context);
+        const agents = deps.agents();
+        const title = deps.title();
+        const token = pending.get(agentId)?.token;
+        if (!agents || !title) return finish();
+        const entries = await history(runtime, undefined, context);
+        const model = modelName((await runtime.agent(context)).model);
+        const label = await named(entries, model, context, title);
+        if (runtime.signal.aborted || pending.get(agentId)?.token !== token) return finish();
+        await write(agents, agentId, { conversation, title: undefined, titled: 0 }, turns, label);
+        if (pending.get(agentId)?.token === token) pending.delete(agentId);
+        return finish();
+      },
+    },
+    abort: (_task, runtime, context) =>
+      runtime.commit(async () => ({ status: 'terminal', outcome: { status: 'aborted' } }), context),
+  });
+  const due = defineTask<{ last: number }, { phase: 'schedule' }, null>({
+    name: DUE_TASK,
+    version: 1,
+    initial: () => ({ phase: 'schedule' }),
+    phases: {
+      async schedule(task, runtime, context) {
+        const finish = () => runtime.commit(async () => done(), context);
+        const agents = deps.agents();
+        if (!agents || !deps.title()) return finish();
+        const found = findAgent(agents, runtime.conversationId);
+        if (!found) return finish();
+        const { id, record } = found;
+        if (pending.get(id)?.conversation === record.conversation) return finish();
+        const entries = await history(runtime, task.input.last, context);
+        const turns = titleDue(record, entries);
+        if (turns === undefined) return finish();
+        const token = Symbol(id);
+        const conversation = record.conversation;
+        let created = 0;
+        await runtime.commit(async (tx) => {
+          created = Number(
+            await tx.createTask(
+              naming,
+              { agentId: id, conversation, turns },
+              { ownership: { kind: 'conversation' }, background: true }
+            )
+          );
+          return done();
+        }, context);
+        pending.set(id, { token, conversation, taskId: created });
+        return undefined;
+      },
+    },
+    abort: (_task, runtime, context) =>
+      runtime.commit(async () => ({ status: 'terminal', outcome: { status: 'aborted' } }), context),
+  });
+
   const extension = defineExtension({
     name: TITLES,
+    tasks: [due, naming],
     hooks: [
       hook(GenerationTask, {
-        onYield(answer, api) {
+        afterRun(run, api) {
           const agents = deps.agents();
-          const harness = deps.harness();
-          const title = deps.title();
-          if (!agents || !harness || !title) return undefined;
+          if (!agents || !deps.harness() || !deps.title()) return undefined;
           const found = findAgent(agents, api.conversationId);
-          if (!found) return undefined;
-          const { id, record } = found;
-          const token = Symbol(id);
-          void (async () => {
-            const conversation = (await harness.conversation(
-              api.conversationId,
-              BACKGROUND_CONTEXT
-            )) as Conversation;
-            const entries = answered(
-              (await conversation.context(BACKGROUND_CONTEXT)).entries,
-              answer
-            );
-            const turns = titleDue(record, entries);
-            if (turns === undefined || pending.get(id)?.conversation === record.conversation)
-              return;
-            pending.set(id, { token, conversation: record.conversation });
-            const model = modelName((await conversation.agent(BACKGROUND_CONTEXT)).model);
-            const label = await named(entries, model, BACKGROUND_CONTEXT, title);
-            if (pending.get(id)?.token === token) await write(agents, id, record, turns, label);
-          })()
-            .catch(() => undefined)
-            .finally(() => {
-              if (pending.get(id)?.token === token) pending.delete(id);
-            });
-          return undefined;
+          const lastTurn = TITLE_TURNS[TITLE_TURNS.length - 1] ?? 0;
+          if (!found || (found.record.titled ?? 0) >= lastTurn) return undefined;
+          return { tasks: [runEndTask(due, { last: Number(run.last) })] };
         },
       }),
     ],
@@ -176,7 +246,11 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
   return {
     extension,
     cancel(agentId: string) {
+      const held = pending.get(agentId);
       pending.delete(agentId);
+      const harness = deps.harness();
+      if (held && harness)
+        void harness.abortTask(held.taskId as TaskId, BACKGROUND_CONTEXT).catch(() => undefined);
     },
   };
 }

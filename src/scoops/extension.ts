@@ -102,19 +102,24 @@ type Noting = {
   ) => Promise<unknown>;
 };
 
-type Commits = Pick<ScoopsHost['harness'], 'subscribeCommits'>;
+type Commits = Pick<ScoopsHost['harness'], 'observeCommits'>;
 
 function submissionChanged(commits: Commits, id: Submission['id'], context: Context) {
   let done = () => {};
   const changed = new Promise<void>((resolve) => {
-    const stop = commits.subscribeCommits((publication) => {
-      if (
-        publication.changes.some((change) => change.type === 'submission' && change.value.id === id)
-      )
-        done();
+    const observation = commits.observeCommits({
+      advance(publication) {
+        if (
+          publication.changes.some(
+            (change) => change.type === 'submission' && change.value.id === id
+          )
+        )
+          done();
+      },
+      end() {},
     });
     done = () => {
-      stop();
+      observation.detach();
       context.abortSignal?.removeEventListener('abort', done);
       resolve();
     };

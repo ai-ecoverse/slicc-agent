@@ -280,15 +280,18 @@ async function turnIn(
   messageId: string | null,
   context: Context
 ): Promise<{ turn: Turn; view: ConversationView } | Rewound> {
-  const attached = await conversation.viewState(context);
-  const view = attached.value;
-  attached.dispose();
-  const pending = (await harness.inspect(context)).submissions.some(
-    (submission) => submission.conversationId === conversation.id
-  );
-  if (pending || busy(view)) return { done: false, text: null, reason: 'busy' };
-  const turn = lastTurn(view, messageId);
-  return turn ? { turn, view } : { done: false, text: null, reason: 'no-turn' };
+  const watch = await conversation.watch(context);
+  try {
+    const view = watch.value;
+    const pending = (await harness.inspect(context)).submissions.some(
+      (submission) => submission.conversationId === conversation.id
+    );
+    if (pending || busy(view)) return { done: false, text: null, reason: 'busy' };
+    const turn = lastTurn(view, messageId);
+    return turn ? { turn, view } : { done: false, text: null, reason: 'no-turn' };
+  } finally {
+    await watch.stop();
+  }
 }
 
 async function forkAt(

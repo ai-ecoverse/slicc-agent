@@ -91,12 +91,17 @@ function failure(error: unknown): never {
   throw new Error(error instanceof Error ? error.message : String(error));
 }
 
-export function directTool(entry: McpToolEntry, readable: () => boolean): ToolRegistration {
+export function directTool(
+  entry: McpToolEntry,
+  readable: () => boolean,
+  deferred = false
+): ToolRegistration {
   return defineTool({
     name: entry.name,
     description: describe(entry),
     parameters: parametersOf(entry.tool.inputSchema) as never,
     replay: 'unsafe',
+    ...(deferred ? { deferred: true as const } : {}),
     async execute(args, api, context) {
       const save = apiSaver(api, '', context);
       const options: McpRequestOptions = {
@@ -307,13 +312,15 @@ export type ServersFor = (
   context: Context
 ) => Promise<readonly ResourceServer[]>;
 
-export function resourceTools(servers: ServersFor): ToolRegistration[] {
+export function resourceTools(servers: ServersFor, deferred: boolean): ToolRegistration[] {
+  const listed = deferred ? { deferred: true as const } : {};
   const listTool = (name: string, key: Key) =>
     defineTool({
       name,
       description: DESCRIPTIONS[name] as string,
       parameters: LIST_PARAMETERS as never,
       replay: 'safe',
+      ...listed,
       async execute(args, api, context) {
         const payload = await listing(await servers(api, context), args, signalOf(context), key);
         const limited = await limitContent(
@@ -331,6 +338,7 @@ export function resourceTools(servers: ServersFor): ToolRegistration[] {
       description: DESCRIPTIONS[READ_MCP_RESOURCE] as string,
       parameters: READ_PARAMETERS as never,
       replay: 'safe',
+      ...listed,
       async execute(args, api, context) {
         const read = await reading(
           await servers(api, context),
