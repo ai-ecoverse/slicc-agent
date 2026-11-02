@@ -1,4 +1,4 @@
-import { isAlias, isCollection, isScalar, LineCounter, parseDocument, visit } from 'yaml';
+import { isAlias, isCollection, isMap, isScalar, LineCounter, parseDocument, visit } from 'yaml';
 
 export type FrontmatterValue = string | number | boolean | string[];
 
@@ -96,6 +96,8 @@ function tolerantSource(source: string): string {
 
 function salvageSource(
   source: string,
+  retried: string,
+  protectedKeys: readonly string[],
   issues: readonly { pos: [number, number]; message: string; code: string }[],
   counter: LineCounter
 ) {
@@ -118,24 +120,37 @@ function salvageSource(
     const line = lines[index];
     if (!line?.trim() || index === 0) return undefined;
     const start = owners[index] as number;
-    const stray = start === index && !/^[^:]+:(?:\s|$)/.test(line);
-    dropped.set(stray ? index : start, {
-      end: stray ? index + 1 : (ends.get(start) as number),
+    if (dropped.has(start)) continue;
+    const entry = parseDocument(lines[start] as string, {
+      schema: 'core',
+      customTags: [],
+      resolveKnownTags: false,
+      stringKeys: true,
+    });
+    const key = isMap(entry.contents) ? entry.contents.items[0]?.key : undefined;
+    if (isScalar(key) && protectedKeys.includes(String(key.value))) return undefined;
+    dropped.set(start, {
+      end: ends.get(start) as number,
       message: issue.message,
     });
   }
   const removed = new Set<number>();
   for (const [start, { end }] of dropped)
     for (let index = start; index < end; index++) removed.add(index);
-  const kept = lines.map((_, index) => index).filter((index) => !removed.has(index));
   return {
-    source: kept.map((index) => lines[index]).join('\n'),
-    lines: kept,
+    source: retried
+      .split('\n')
+      .map((line, index) => (removed.has(index) ? '' : line))
+      .join('\n'),
     problems: [...dropped.values()].map(({ message }) => message),
   };
 }
 
-export function parseFrontmatter(text: string, mappings: readonly string[] = []): Frontmatter {
+export function parseFrontmatter(
+  text: string,
+  mappings: readonly string[] = [],
+  protectedKeys: readonly string[] = []
+): Frontmatter {
   const normalized = text.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized);
   if (!match)
@@ -151,24 +166,47 @@ export function parseFrontmatter(text: string, mappings: readonly string[] = [])
   };
   const source = `---\n${match[1]}\n`;
   let document = parseDocument(source, { ...options, lineCounter });
+  let retried = source;
   if (document.errors.length || document.warnings.length) {
+    let ambiguous = false;
+    visit(document, (_, node) => {
+      if ((!isCollection(node) && !isScalar(node)) || !node.range) return;
+      const [start, end] = node.range;
+      if (
+        (isCollection(node) &&
+          node.flow &&
+          (lineCounter.linePos(start).line !== lineCounter.linePos(end - 1).line ||
+            (source[end - 1] !== '}' && source[end - 1] !== ']'))) ||
+        (isScalar(node) &&
+          (((node.type === 'QUOTE_DOUBLE' || node.type === 'QUOTE_SINGLE') &&
+            lineCounter.linePos(start).line !== lineCounter.linePos(end - 1).line) ||
+            ((node.type === 'BLOCK_LITERAL' || node.type === 'BLOCK_FOLDED') &&
+              /^[|>][^\n]*\+/.test(source.slice(start, end)))))
+      )
+        ambiguous = true;
+    });
+    if (ambiguous)
+      return {
+        fields: {},
+        body,
+        problems: [...document.errors, ...document.warnings].map((issue) => issue.message),
+      };
+    retried = tolerantSource(source);
     lineCounter = new LineCounter();
-    document = parseDocument(tolerantSource(source), { ...options, lineCounter });
+    document = parseDocument(retried, { ...options, lineCounter });
   }
   let issues = [...document.errors, ...document.warnings];
   const problems: string[] = [];
-  let sourceLines: number[] | undefined;
   if (issues.length) {
-    const salvaged = salvageSource(source, issues, lineCounter);
+    const salvaged = salvageSource(source, retried, protectedKeys, issues, lineCounter);
     if (!salvaged) return { fields: {}, body, problems: issues.map((issue) => issue.message) };
     problems.push(...salvaged.problems);
-    sourceLines = salvaged.lines;
     lineCounter = new LineCounter();
-    document = parseDocument(tolerantSource(salvaged.source), { ...options, lineCounter });
+    document = parseDocument(salvaged.source, { ...options, lineCounter });
     issues = [...document.errors, ...document.warnings];
     if (issues.length) {
       for (const issue of issues) {
-        const line = (sourceLines[lineCounter.linePos(issue.pos[0]).line - 1] as number) + 1;
+        const line = lineCounter.linePos(issue.pos[0]).line;
         problems.push(`${issue.message.split(' at line ')[0]} at line ${line}`);
       }
       return { fields: {}, body, problems };
@@ -184,8 +222,7 @@ export function parseFrontmatter(text: string, mappings: readonly string[] = [])
   try {
     parsed = document.toJS({ mapAsMap: true, maxAliasCount: 0 });
   } catch (error) {
-    const position = lineCounter.linePos(aliasOffset).line;
-    const line = sourceLines ? (sourceLines[position - 1] as number) + 1 : position;
+    const line = lineCounter.linePos(aliasOffset).line;
     return {
       fields: {},
       body,
