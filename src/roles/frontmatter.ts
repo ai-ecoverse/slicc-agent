@@ -1,3 +1,5 @@
+import { isAlias, isCollection, isScalar, LineCounter, parseDocument, visit } from 'yaml';
+
 export type FrontmatterValue = string | number | boolean | string[];
 
 export interface Frontmatter {
@@ -6,91 +8,90 @@ export interface Frontmatter {
   problems: string[];
 }
 
-function unquote(value: string): string {
-  const quoted = /^(["'])(.*)\1$/s.exec(value);
-  if (!quoted) return value;
-  return quoted[1] === '"'
-    ? (quoted[2] as string).replace(/\\(["\\])/g, '$1')
-    : (quoted[2] as string).replace(/''/g, "'");
+function primitive(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
-function scalar(raw: string): FrontmatterValue {
-  const value = raw.trim();
-  if (/^\[.*\]$/s.test(value))
-    return value
-      .slice(1, -1)
-      .split(',')
-      .map((item) => unquote(item.trim()))
-      .filter(Boolean);
-  if (value === 'true' || value === 'false') return value === 'true';
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  return unquote(value);
-}
-
-type Block = { key: string; folded: boolean; strip: boolean; lines: string[] };
-
-const BLOCK = /^([|>])([+-]?)$/;
-
-function blockValue(block: Block): string {
-  const indents = block.lines
-    .filter((line) => line.trim())
-    .map((line) => (/^\s*/.exec(line) as RegExpExecArray)[0].length);
-  const indent = indents.length ? Math.min(...indents) : 0;
-  const lines = block.lines.map((line) => line.slice(indent));
-  while (lines.length && !lines.at(-1)?.trim()) lines.pop();
-  const text = block.folded
-    ? lines.reduce(
-        (out, line) =>
-          !line.trim()
-            ? `${out}\n`
-            : out && !out.endsWith('\n')
-              ? `${out} ${line}`
-              : `${out}${line}`,
-        ''
-      )
-    : lines.join('\n');
-  return block.strip || !text ? text : `${text}\n`;
-}
-
-type State = {
-  fields: Record<string, FrontmatterValue>;
-  problems: string[];
-  nested: Map<string, string[]>;
-  list: string | undefined;
-  block: Block | undefined;
-};
-
-function pair(state: State, line: string): void {
-  const found = /^([A-Za-z][\w-]*):(?:\s+(.*))?$/.exec(line);
-  state.list = undefined;
-  if (!found) {
-    state.problems.push(`can't read the line "${line.trim()}"`);
-    return;
+function fieldsFrom(
+  parsed: unknown,
+  mappings: readonly string[],
+  problems: string[]
+): Record<string, FrontmatterValue> {
+  if (parsed === null) return {};
+  if (!(parsed instanceof Map)) {
+    problems.push('frontmatter must be a mapping');
+    return {};
   }
-  const key = found[1] as string;
-  const value = found[2]?.trim() ?? '';
-  const style = BLOCK.exec(value);
-  if (style) state.block = { key, folded: style[1] === '>', strip: style[2] === '-', lines: [] };
-  else if (value === '') {
-    state.fields[key] = [];
-    state.list = key;
-  } else state.fields[key] = scalar(value);
+  const fields = new Map<string, FrontmatterValue>();
+  for (const [key, value] of parsed) {
+    if (primitive(value)) fields.set(key, value);
+    else if (value === null) fields.set(key, []);
+    else if (Array.isArray(value) && value.every((item) => typeof item === 'string'))
+      fields.set(key, value);
+    else if (
+      value instanceof Map &&
+      mappings.includes(key) &&
+      [...value].every(([name, item]) => typeof name === 'string' && primitive(item))
+    )
+      fields.set(key, `{ ${[...value].map(([name, item]) => `${name}: ${item}`).join(', ')} }`);
+    else if (value instanceof Map)
+      problems.push(`"${key}" has nested values, which SLICC doesn't read`);
+    else problems.push(`"${key}" needs a scalar or a list of strings`);
+  }
+  return Object.fromEntries(fields);
 }
 
-function line(state: State, text: string): void {
-  const { block, list } = state;
-  if (block && (!text.trim() || /^\s/.test(text))) {
-    block.lines.push(text);
-    return;
+function retryValue(raw: string, source: string): string | undefined {
+  const scalar = parseDocument(source, {
+    schema: 'core',
+    customTags: [],
+    resolveKnownTags: false,
+  });
+  const clean = !scalar.errors.length && !scalar.warnings.length;
+  if (/^[[{]/.test(raw) && clean && isCollection(scalar.contents)) return undefined;
+  const typed = clean && isScalar(scalar.contents) && typeof scalar.contents.value !== 'string';
+  return typed ? raw : JSON.stringify(raw);
+}
+
+function tolerantSource(source: string): string {
+  const lines = source.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const found = /^([A-Za-z][\w-]*):[ \t]+(.*)$/.exec(lines[index] as string);
+    if (!found) continue;
+    const value = (found[2] as string).replace(/[ \t]+#.*$/, '').trim();
+    if (
+      !value ||
+      value.startsWith('#') ||
+      /^["']/.test(value) ||
+      /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(value)
+    )
+      continue;
+    let raw = value;
+    let blanks = 0;
+    const continuation: string[] = [];
+    for (let next = index + 1; next < lines.length; next++) {
+      const line = lines[next] as string;
+      if (!line.trim()) {
+        continuation.push(line);
+        blanks++;
+        continue;
+      }
+      if (line.trimStart().startsWith('#')) {
+        continuation.push(line);
+        continue;
+      }
+      if (!/^[ \t]/.test(line)) break;
+      continuation.push(line);
+      const continued = line.replace(/[ \t]+#.*$/, '').trim();
+      raw += `${blanks ? '\n'.repeat(blanks) : ' '}${continued}`;
+      blanks = 0;
+    }
+    const quoted = retryValue(raw, [found[2], ...continuation].join('\n'));
+    if (quoted === undefined) continue;
+    for (let offset = 1; offset <= continuation.length; offset++) lines[index + offset] = '';
+    lines[index] = `${found[1]}: ${quoted}`;
   }
-  if (block) state.fields[block.key] = blockValue(block);
-  state.block = undefined;
-  if (!text.trim() || text.trimStart().startsWith('#')) return;
-  const item = /^\s+-\s+(.*)$/.exec(text);
-  if (item && list) (state.fields[list] as string[]).push(unquote((item[1] as string).trim()));
-  else if (/^\s/.test(text) && list)
-    state.nested.set(list, [...(state.nested.get(list) ?? []), text.trim()]);
-  else pair(state, text);
+  return lines.join('\n');
 }
 
 export function parseFrontmatter(text: string, mappings: readonly string[] = []): Frontmatter {
@@ -98,26 +99,35 @@ export function parseFrontmatter(text: string, mappings: readonly string[] = [])
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized);
   if (!match)
     return { fields: {}, body: normalized.trim(), problems: ['no frontmatter between --- lines'] };
-  const state: State = {
-    fields: {},
-    problems: [],
-    nested: new Map(),
-    list: undefined,
-    block: undefined,
+  const body = normalized.slice(match[0].length).trim();
+  let lineCounter = new LineCounter();
+  const options = {
+    schema: 'core',
+    customTags: [],
+    resolveKnownTags: false,
+    stringKeys: true,
+    uniqueKeys: false,
   };
-  for (const text of (match[1] as string).split('\n')) line(state, text);
-  if (state.block) state.fields[state.block.key] = blockValue(state.block);
-  for (const [key, lines] of state.nested) {
-    if (mappings.includes(key)) {
-      state.fields[key] = `{ ${lines.join(', ')} }`;
-      continue;
-    }
-    delete state.fields[key];
-    state.problems.push(`"${key}" has nested values, which SLICC doesn't read`);
+  const source = `---\n${match[1]}\n`;
+  let document = parseDocument(source, { ...options, lineCounter });
+  if (document.errors.length) {
+    lineCounter = new LineCounter();
+    document = parseDocument(tolerantSource(source), { ...options, lineCounter });
   }
-  return {
-    fields: state.fields,
-    body: normalized.slice(match[0].length).trim(),
-    problems: state.problems,
-  };
+  const problems = [...document.errors, ...document.warnings].map((error) => error.message);
+  if (problems.length) return { fields: {}, body, problems };
+  let aliasOffset = 0;
+  visit(document, (_, node) => {
+    if (!isAlias(node)) return;
+    aliasOffset = node.range?.[0] ?? 0;
+    return visit.BREAK;
+  });
+  let parsed: unknown;
+  try {
+    parsed = document.toJS({ mapAsMap: true, maxAliasCount: 0 });
+  } catch (error) {
+    const { line } = lineCounter.linePos(aliasOffset);
+    return { fields: {}, body, problems: [`${(error as Error).message} at line ${line}`] };
+  }
+  return { fields: fieldsFrom(parsed, mappings, problems), body, problems };
 }
