@@ -1,5 +1,4 @@
 import type { Context } from '@earendil-works/chord';
-import { Type } from '@earendil-works/pi-ai';
 import {
   type Conversation,
   type ConversationId,
@@ -7,6 +6,7 @@ import {
   defineTool,
   section,
 } from '@earendil-works/pi-durable';
+import { obj, opt, str } from '@earendil-works/pi-schema';
 import type { LickAction } from './lick.ts';
 import type { Licks } from './licks.ts';
 
@@ -26,11 +26,9 @@ function decisionTool(licks: Licks, action: LickAction, conversation: Conversati
     description: confirm
       ? 'Confirm a lick that waits for a decision (actions="confirm …"), by its id. Runs the lick’s confirm action and marks it confirmed.'
       : 'Dismiss a lick that waits for a decision (actions="… dismiss"), by its id. Runs the lick’s dismiss action and marks it dismissed.',
-    parameters: Type.Object({
-      lick_id: Type.String({ description: 'The id attribute of the <lick> to decide.' }),
-      reason: Type.Optional(
-        Type.String({ description: 'One sentence on why, passed to the action.' })
-      ),
+    parameters: obj({
+      lick_id: str({ description: 'The id attribute of the <lick> to decide.' }),
+      reason: opt(str({ description: 'One sentence on why, passed to the action.' })),
     }),
     replay: 'unsafe',
     async execute(args, api, context) {

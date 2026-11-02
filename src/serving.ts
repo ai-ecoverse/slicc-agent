@@ -11,7 +11,7 @@ import {
 } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from '@earendil-works/chord/context';
 import { diffRevisions } from '@earendil-works/chord/delta';
-import { Type } from 'typebox';
+import { arr, obj, unknown } from '@earendil-works/pi-schema';
 
 export const AGENT_HOST = 'agent';
 
@@ -44,13 +44,13 @@ export interface Members {
   state?: readonly string[];
 }
 
-const Args = Type.Array(Type.Unknown());
-const Value = Type.Unknown();
+const Args = arr(unknown());
+const Value = unknown();
 
 export function contract(name: string, variants: Record<string, Members>): RemoteContract {
   const def: Parameters<typeof remote>[1] = {
     version: 1,
-    input: Type.Object({}),
+    input: obj({}),
     host: hostNamed(AGENT_HOST),
     variants: Object.fromEntries(
       Object.entries(variants).map(([kind, members]) => [

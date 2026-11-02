@@ -1,5 +1,4 @@
 import type { Context, JsonValue } from '@earendil-works/chord';
-import { Type } from '@earendil-works/pi-ai';
 import {
   type AnyTask,
   type ConversationId,
@@ -11,6 +10,7 @@ import {
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { bool, lit, num, obj, opt, str, union, unknown } from '@earendil-works/pi-schema';
 import type { Agents } from '../agents.ts';
 import { MEMORY_LIMIT_BYTES, sharedSandbox } from '../codemode/index.ts';
 import { type InheritedTaint, runTaints } from '../guests/guard.ts';
@@ -416,23 +416,17 @@ action run: give file (a path, or the name of a saved workflow) or script (the s
 budget caps output tokens, concurrency caps agents running at once (default 8). wait: true blocks until the run ends and returns its result; otherwise the run id comes back at once.
 action list | status (run) | stop (run) | save (run, name, force): manage runs; save keeps the source as ~/.slicc/workflows/<name>.workflow.js.`;
 
-const parameters = Type.Object({
-  action: Type.Union([
-    Type.Literal('run'),
-    Type.Literal('list'),
-    Type.Literal('status'),
-    Type.Literal('stop'),
-    Type.Literal('save'),
-  ]),
-  file: Type.Optional(Type.String()),
-  script: Type.Optional(Type.String()),
-  args: Type.Optional(Type.Unknown()),
-  budget: Type.Optional(Type.Number()),
-  concurrency: Type.Optional(Type.Number()),
-  wait: Type.Optional(Type.Boolean()),
-  run: Type.Optional(Type.String()),
-  name: Type.Optional(Type.String()),
-  force: Type.Optional(Type.Boolean()),
+const parameters = obj({
+  action: union([lit('run'), lit('list'), lit('status'), lit('stop'), lit('save')]),
+  file: opt(str()),
+  script: opt(str()),
+  args: opt(unknown()),
+  budget: opt(num()),
+  concurrency: opt(num()),
+  wait: opt(bool()),
+  run: opt(str()),
+  name: opt(str()),
+  force: opt(bool()),
 });
 
 type ToolArgs = {

@@ -237,7 +237,7 @@ export function setupSprinkles() {
         const key = dirs.join('\n');
         if (key === seen) return;
         seen = key;
-        await watcher?.close(using);
+        await watcher?.stop(using);
         const watched = await env.watch(
           [
             ...dirs.map((path) => ({ path, recursive: true })),
@@ -332,7 +332,7 @@ export function setupSprinkles() {
         async close(using) {
           offCone();
           clearTimeout(timer);
-          await watcher?.close(using);
+          await watcher?.stop(using);
         },
       };
     },

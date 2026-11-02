@@ -5,6 +5,7 @@ import {
   type ExecutionEnv,
   type ExecutionError,
   err,
+  type FileChange,
   FileError,
   type FileInfo,
   type FileWatcher,
@@ -13,7 +14,6 @@ import {
   type ShellExecOptions,
   type ShellExecResult,
   type TextLineReader,
-  type WatchChange,
   type WatchTarget,
 } from '@earendil-works/pi-durable/env';
 import { mimeOf } from '../images/index.ts';
@@ -261,13 +261,13 @@ export class SliccKernelEnv implements ExecutionEnv {
 
   watch(
     targets: readonly WatchTarget[],
-    onChange: (change: WatchChange) => void,
+    onChange: (change: FileChange) => void,
     context: Context
   ): FileResult<FileWatcher> {
     return attempt(context, this.cwd, async () => {
       let absorb: (paths: readonly string[]) => void = () => undefined;
-      const reported = (change: WatchChange) => {
-        if ('paths' in change) absorb(change.paths);
+      const reported = (change: FileChange) => {
+        if (change.kind === 'paths') absorb(change.paths);
         onChange(change);
       };
       const native =
@@ -282,18 +282,18 @@ export class SliccKernelEnv implements ExecutionEnv {
       const watcher: FileWatcher = native
         ? {
             mode: 'native',
-            async close(closing: Context) {
-              await native.close(closing);
-              await polled.close(closing);
+            async stop(closing: Context) {
+              await native.stop(closing);
+              await polled.stop(closing);
             },
           }
         : polled;
       this.#watchers.add(watcher);
       return {
         mode: watcher.mode,
-        close: async (closing: Context) => {
+        stop: async (closing: Context) => {
           this.#watchers.delete(watcher);
-          await watcher.close(closing);
+          await watcher.stop(closing);
         },
       };
     });
@@ -423,7 +423,7 @@ export class SliccKernelEnv implements ExecutionEnv {
   }
 
   async cleanup(context: Context): Promise<void> {
-    for (const watcher of [...this.#watchers]) await watcher.close(context);
+    for (const watcher of [...this.#watchers]) await watcher.stop(context);
     this.#watchers.clear();
   }
 }

@@ -1,14 +1,14 @@
 import { createHost, hostNamed, method, remote } from '@earendil-works/chord';
-import { Type } from 'typebox';
+import { obj, unknown } from '@earendil-works/pi-schema';
 import { AGENT_HOST, principalKey, SELF } from '../../../src/serving.ts';
 import { PortLink } from '../../../src/wire.ts';
 
 const later = (name) =>
   remote(name, {
     version: 99,
-    input: Type.Object({}),
+    input: obj({}),
     host: hostNamed(AGENT_HOST),
-    variants: { later: { methods: { ping: method(Type.Unknown(), Type.Unknown()) } } },
+    variants: { later: { methods: { ping: method(unknown(), unknown()) } } },
   });
 
 globalThis.otherOwner = (names) => {

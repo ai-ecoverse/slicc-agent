@@ -1,6 +1,11 @@
-import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import {
+  type Context,
+  type ReplicatedState,
+  replicatedState,
+  type WatchHandle,
+} from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { DocumentState, Harness } from '@earendil-works/pi-durable';
+import type { Harness } from '@earendil-works/pi-durable';
 import type { Clock } from '../clock.ts';
 import type { ApprovalJudge, Judgement } from './judge.ts';
 import {
@@ -61,7 +66,7 @@ export interface ScoopRouter {
 }
 
 export interface ApprovalsAttach {
-  harness: Pick<Harness, 'commit' | 'documentState'>;
+  harness: Pick<Harness, 'commit' | 'watchDoc'>;
   now?: () => number;
   setTimer?: Clock['setTimer'];
   ttlMs?: number;
@@ -139,10 +144,10 @@ const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: 
 };
 
 function following(
-  committed: DocumentState<ApprovalsState>,
+  watch: WatchHandle<Readonly<ApprovalsState>>,
   changed: (using: Context, items: Approval[]) => void
 ) {
-  const items = () => (committed.value as ApprovalsState).items;
+  const items = () => watch.value.items;
   let shown = items();
   return (using: Context) => {
     const now = items();
@@ -219,15 +224,16 @@ export async function attachApprovals(
     }
   }, context);
   const state = replicatedState<Approval[]>(startup.items);
-  const committed = (await harness.documentState(
-    ApprovalsDoc,
-    context
-  )) as DocumentState<ApprovalsState>;
-  const follow = following(committed, (using, items) => {
+  const watch = await harness.watchDoc(ApprovalsDoc, context);
+  if (!watch) throw new Error('approvals document is missing');
+  const follow = following(watch, (using, items) => {
     state.replace(using, items);
     arm(items);
   });
-  committed.subscribe((_value, using) => follow(using));
+  follow(context);
+  watch.start(async (call, using) => {
+    if (call.kind === 'value') follow(using);
+  });
   const serial = <R>(change: (doc: ApprovalsState) => R, using: Context): Promise<R> => {
     const run = line.then(async () => {
       const { result } = await write(change, using);
@@ -365,6 +371,7 @@ export async function attachApprovals(
       closed = true;
       for (const timer of timers.values()) timer();
       timers.clear();
+      void watch.stop();
     },
   };
 }

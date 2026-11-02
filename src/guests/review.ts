@@ -216,8 +216,8 @@ async function settledOrDue(
     const slept = pauseUntil(runtime, now.expiresAt, using);
     slept.catch(() => undefined);
     const changed = new Promise<void>((resolve) => {
-      watch?.start(async (value) => {
-        if (itemIn(value, id)?.state !== 'pending') resolve();
+      watch?.start(async (call) => {
+        if (call.kind === 'value' && itemIn(call.value, id)?.state !== 'pending') resolve();
       });
     });
     await Promise.race([slept, changed]);

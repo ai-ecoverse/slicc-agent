@@ -3,7 +3,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationId, Harness, TaskId } from '@earendil-works/pi-durable';
 import { UsageDoc } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
-import { Check, Errors } from 'typebox/schema';
+import { compile, type JsonSchema } from '@earendil-works/pi-schema';
 import type { Agents } from '../agents.ts';
 import type { Layout } from '../layout.ts';
 import { findRole, type Role, type Roles } from '../roles/roles.ts';
@@ -115,15 +115,10 @@ export function parseAnswer(text: string, schema: object): JsonValue {
   } catch {
     throw new Error(`agent(): the answer is not JSON: ${body.trim().slice(0, 120)}`);
   }
-  if (!Check(schema as never, value)) {
-    const [, errors] = Errors(schema as never, value) as unknown as [
-      boolean,
-      { instancePath: string; message: string }[],
-    ];
-    const detail = errors
-      .slice(0, 1)
-      .map((error) => `: ${error.instancePath || '/'} ${error.message}`)
-      .join('');
+  const validator = compile(schema as JsonSchema);
+  if (!validator.check(value)) {
+    const error = validator.errors(value)[0];
+    const detail = error ? `: ${error.path || '/'} ${error.message}` : '';
     throw new Error(`agent(): the answer does not match the schema${detail}`);
   }
   return value;

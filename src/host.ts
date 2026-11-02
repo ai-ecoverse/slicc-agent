@@ -122,30 +122,34 @@ export const noSettings: AgentSettings = {
   refusals: async () => ({}),
 };
 
-async function follow(
+export async function follow(
   agent: Agent,
   context: Context,
   slim: (view: ConversationView) => ConversationView
 ) {
-  let attached = await agent.cone().viewState(context);
-  const state = replicatedState<ConversationView>(slim(attached.value));
+  let watch = await agent.cone().watch(context);
+  const state = replicatedState<ConversationView>(slim(watch.value));
   const mirror = (value: ConversationView, from: Context) => state.replace(from, slim(value));
-  let off = attached.subscribe(mirror);
+  const listen = (current: typeof watch) => {
+    current.start(async (call, using) => {
+      if (call.kind !== 'value') return;
+      mirror(call.value, using);
+    });
+  };
+  listen(watch);
   const stop = agent.onCone(async (conversation) => {
-    const next = await conversation.viewState(context);
-    off();
-    attached.dispose();
-    attached = next;
+    const next = await conversation.watch(context);
+    await watch.stop();
+    watch = next;
     state.replace(context, slim(next.value));
-    off = next.subscribe(mirror);
+    listen(watch);
   });
   return {
     state,
-    refresh: () => state.replace(context, slim(attached.value)),
+    refresh: () => state.replace(context, slim(watch.value)),
     dispose() {
       stop();
-      off();
-      attached.dispose();
+      void watch.stop();
     },
   };
 }

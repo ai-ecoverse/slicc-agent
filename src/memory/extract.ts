@@ -1,9 +1,9 @@
 import type { Context } from '@earendil-works/chord';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Message } from '@earendil-works/pi-ai';
 import {
   CompactionTask,
   type ConversationId,
+  type Cursor,
   defineDoc,
   defineTask,
   type EntryId,
@@ -164,12 +164,22 @@ export function extractTask(
         if (!(await settings(context)).extract) return done({ saved: 0, skipped: 'turned off' });
         const host = await ready;
         const place = placeOf(host.home, cone);
-        const view = await runtime.context(runtime.conversationId, context, {
-          at: tail as EntryId,
-        });
-        const fresh = view.entries.flatMap((entry, index) =>
-          entry.id > after ? (view.contributions[index] as readonly Message[]) : []
-        );
+        const fresh: Message[] = [];
+        let cursor: Cursor | undefined;
+        do {
+          const page = await runtime.entries(
+            {
+              minEntryId: (after + 1) as EntryId,
+              maxEntryId: tail as EntryId,
+              order: 'ascending',
+            },
+            100,
+            cursor,
+            context
+          );
+          for (const entry of page.items) if (entry.model) fresh.push(...entry.model);
+          cursor = page.next;
+        } while (cursor);
         const transcript = transcriptOf(fresh);
         if (!place || !transcript) return done({ saved: 0, skipped: 'nothing new' });
         const ref = task.input.model ?? (await runtime.agent(context)).model;
@@ -220,9 +230,9 @@ export type Schedule = (
 
 export function compactionHook(schedule: Schedule) {
   return hook(CompactionTask, {
-    beforeCompact(compaction, api) {
+    async beforeCompact(compaction, api, context) {
       const tail = compaction.entries.reduce((max, entry) => Math.max(max, entry.id), 0);
-      void schedule(api.conversationId, tail, BACKGROUND_CONTEXT).catch(() => false);
+      await schedule(api.conversationId, tail, context).catch(() => false);
       return undefined;
     },
   });

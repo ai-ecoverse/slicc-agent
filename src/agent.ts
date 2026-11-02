@@ -94,7 +94,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   registry.install(scooped.extension);
   const reports = createReports();
   const timings = createTimings({
-    onError: (error) => reports.record(error, { type: 'listener_error' }),
+    onError: (error) => reports.record({ kind: 'listener_error', error }),
   });
   const harness = await Harness.open(
     options.storage ?? new MemoryStorage(),
@@ -103,7 +103,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
       registry,
       identity: IDENTITY,
       ...(options.settings ? { settings: options.settings } : {}),
-      onReport: (error, info) => reports.record(error, info),
+      onReport: (report) => reports.record(report),
       telemetry: timings.telemetry,
       ...(options.clock ? clocked(options.clock) : {}),
       ...(options.env ? { env: options.env } : {}),

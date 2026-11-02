@@ -289,7 +289,7 @@ export async function attachMemory(
       offCones();
       clearTimeout(timer);
       life.cancel();
-      await watcher?.close(using);
+      await watcher?.stop(using);
     },
   };
 }

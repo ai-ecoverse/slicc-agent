@@ -1,5 +1,4 @@
 import type { Context } from '@earendil-works/chord';
-import { Type } from '@earendil-works/pi-ai';
 import {
   defineTool,
   type Harness,
@@ -7,6 +6,7 @@ import {
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { bool, lit, obj, opt, str, union } from '@earendil-works/pi-schema';
 import type { Agents, AgentsState, ScoopRecord } from '../agents.ts';
 import { scrubTexts } from '../secrets/scrub.ts';
 import { loadContextFiles, renderContextFiles } from './context.ts';
@@ -180,17 +180,13 @@ export function memoryWriteTool(ready: Promise<Host>): ToolRegistration {
   return defineTool({
     name: MEMORY_WRITE,
     description: DESCRIPTION,
-    parameters: Type.Object({
-      section: Type.String({ description: 'The section, such as "Preferences" or "Projects".' }),
-      title: Type.String({ description: 'A short title for the entry.' }),
-      body: Type.Optional(Type.String({ description: 'The entry, in a few lines of markdown.' })),
-      tag: Type.Optional(
-        Type.Union([Type.Literal('user'), Type.Literal('feedback'), Type.Literal('project')])
-      ),
-      remove: Type.Optional(
-        Type.Boolean({ description: 'Remove the entry instead of saving it.' })
-      ),
-      scope: Type.Optional(Type.Union([Type.Literal('own'), Type.Literal('global')])),
+    parameters: obj({
+      section: str({ description: 'The section, such as "Preferences" or "Projects".' }),
+      title: str({ description: 'A short title for the entry.' }),
+      body: opt(str({ description: 'The entry, in a few lines of markdown.' })),
+      tag: opt(union([lit('user'), lit('feedback'), lit('project')])),
+      remove: opt(bool({ description: 'Remove the entry instead of saving it.' })),
+      scope: opt(union([lit('own'), lit('global')])),
     }),
     replay: 'unsafe',
     async execute(args, api, context) {

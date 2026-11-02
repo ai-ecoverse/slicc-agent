@@ -522,7 +522,6 @@ function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): Agen
     else if (
       problem.kind === 'report' &&
       SERIOUS.has(problem.report?.type ?? '') &&
-      !(problem.report?.type === 'task_parked' && problem.taskId !== undefined) &&
       input.now - problem.at < FAILED_MS
     )
       out.push({
@@ -530,17 +529,6 @@ function taskAlerts(input: MonitorInput, feed: MonitorFeed, nameOf: Names): Agen
         title: `${nameOf(problem.agentId)}: ${problemName(problem)}`,
         detail: problem.message,
         severity: 'error',
-      });
-  for (const task of feed.tasks)
-    if (task.blocked === 'restart_limit')
-      out.push({
-        id: `parked-${task.id}`,
-        title: `${taskLabel(task)} of ${nameOf(task.agentId)} is parked`,
-        detail:
-          'It was cut off by 5 restarts in a row without getting further, so it no longer starts by itself.',
-        severity: 'error',
-        command: `agent retry ${task.id}`,
-        commandLabel: 'To run it again, run',
       });
   for (const task of feed.tasks)
     if (task.aborting !== null && input.now - task.aborting > ABORT_MS)
@@ -641,7 +629,6 @@ const BLOCKED: Record<NonNullable<MonitorTask['blocked']>, string> = {
   missing_task: 'blocked: no definition',
   task_too_old: 'blocked: definition too old',
   migration_failed: 'blocked: migration failed',
-  restart_limit: 'blocked: restart limit',
 };
 
 function taskRow(
@@ -726,9 +713,9 @@ const PROBLEM_KINDS = {
 } as const;
 
 const REPORTED: Record<string, string> = {
-  session_failed: 'session failed',
+  storage_failed: 'session failed',
   task_faulted: 'task failed',
-  task_parked: 'task parked',
+  task_interrupted: 'task interrupted',
   migration_failed: 'migration failed',
   task_outdated: 'task outdated',
   task_error: 'task error',
@@ -737,7 +724,7 @@ const REPORTED: Record<string, string> = {
   listener_error: 'listener error',
 };
 
-const SERIOUS = new Set(['session_failed', 'task_faulted', 'task_parked', 'migration_failed']);
+const SERIOUS = new Set(['storage_failed', 'task_faulted', 'task_interrupted', 'migration_failed']);
 
 function problemName(problem: MonitorProblem): string {
   const report = problem.report;

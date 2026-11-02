@@ -66,6 +66,12 @@ class WasmSqliteExecutor implements SqliteExecutor {
     this.statements.bound(sql, params).stepReset();
   }
 
+  async runCounted(sql: string, ...params: SqliteValue[]): Promise<number> {
+    this.check();
+    this.statements.bound(sql, params).stepReset();
+    return Number(this.db.changes());
+  }
+
   async get<T extends object>(sql: string, ...params: SqliteValue[]): Promise<T | undefined> {
     this.check();
     const statement = this.statements.bound(sql, params);
@@ -109,6 +115,10 @@ export class WasmSqliteDatabase extends WasmSqliteExecutor implements SqliteData
 
   override run(sql: string, ...params: SqliteValue[]): Promise<void> {
     return this.#queue.run(() => super.run(sql, ...params));
+  }
+
+  override runCounted(sql: string, ...params: SqliteValue[]): Promise<number> {
+    return this.#queue.run(() => super.runCounted(sql, ...params));
   }
 
   override get<T extends object>(sql: string, ...params: SqliteValue[]): Promise<T | undefined> {

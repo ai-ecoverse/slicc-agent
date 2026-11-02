@@ -135,7 +135,7 @@ async function start() {
       commits += 1;
       return agent.harness.commit(...args);
     },
-    documentState: (...args) => agent.harness.documentState(...args),
+    watchDoc: (...args) => agent.harness.watchDoc(...args),
   };
   const ttlMs = {
     ...(params.has('ttl') ? { ttlMs: Number(params.get('ttl')) } : {}),

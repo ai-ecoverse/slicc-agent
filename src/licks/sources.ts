@@ -296,7 +296,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     const key = places.map((place) => place.dir).join('\n');
     if (key === controlled || closed) return;
     controlled = key;
-    await control?.close(context);
+    await control?.stop(context);
     const result = await env.watch(
       places.map((place) => ({ path: place.dir, recursive: true })),
       () => scheduleReconcile(context),
@@ -343,7 +343,7 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
       boots.stop();
       clearTimeout(reconcileTimer);
       clearInterval(flushTimer);
-      await control?.close(context);
+      await control?.stop(context);
       for (const watches of watching.values()) await watches.close(context);
     },
   };

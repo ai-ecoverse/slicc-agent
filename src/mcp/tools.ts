@@ -91,12 +91,17 @@ function failure(error: unknown): never {
   throw new Error(error instanceof Error ? error.message : String(error));
 }
 
-export function directTool(entry: McpToolEntry, readable: () => boolean): ToolRegistration {
+export function directTool(
+  entry: McpToolEntry,
+  readable: () => boolean,
+  deferred = false
+): ToolRegistration {
   return defineTool({
     name: entry.name,
     description: describe(entry),
     parameters: parametersOf(entry.tool.inputSchema) as never,
     replay: 'unsafe',
+    ...(deferred ? { deferred: true as const } : {}),
     async execute(args, api, context) {
       const save = apiSaver(api, '', context);
       const options: McpRequestOptions = {

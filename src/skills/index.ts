@@ -281,7 +281,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         const key = JSON.stringify([extra, packageTargets]);
         if (key === seen) return;
         seen = key;
-        await watcher?.close(using);
+        await watcher?.stop(using);
         const watched = await env.watch(
           [
             { path: GLOBAL_DIR, recursive: true },
@@ -318,7 +318,7 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         },
         async close(using) {
           clearTimeout(timer);
-          await watcher?.close(using);
+          await watcher?.stop(using);
         },
       };
     },

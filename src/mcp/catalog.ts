@@ -38,9 +38,16 @@ export const MCP_EXTENSION = 'slicc-mcp';
 export const MCP_SECTION = 'mcp_servers';
 export const DIRECT_WAIT_MS = 10_000;
 
-export function effective(exposure: McpExposure, codemode: boolean): McpExposure {
-  const indirect = exposure === 'deferred' ? 'codemode' : exposure;
-  return indirect === 'codemode' && !codemode ? 'direct' : indirect;
+export function effective(
+  exposure: McpExposure,
+  codemode: boolean,
+  toolSearch = true
+): McpExposure {
+  if (exposure === 'deferred') {
+    if (toolSearch) return 'deferred';
+    return codemode ? 'codemode' : 'direct';
+  }
+  return exposure === 'codemode' && !codemode ? 'direct' : exposure;
 }
 
 export async function allowOf(
@@ -56,6 +63,7 @@ export class McpCatalog {
   readonly connections = new Map<string, McpServerConnection>();
   entries: McpToolEntry[] = [];
   codemodeOn = true;
+  toolSearchOn = true;
   current: Extension;
   readonly #registry: Registry;
   readonly #section = section(MCP_SECTION, async (input, context) =>
@@ -77,16 +85,20 @@ export class McpCatalog {
     this.current = defineExtension({ name: MCP_EXTENSION });
   }
 
+  #effective(exposure: McpExposure): McpExposure {
+    return effective(exposure, this.codemodeOn, this.toolSearchOn);
+  }
+
   connected(): McpServerConnection[] {
     return [...this.connections.values()].filter((connection) => connection.live);
   }
 
   #resourceful(): McpServerConnection[] {
-    return this.connected().filter(
-      (connection) =>
-        connection.hasResources &&
-        effective(connection.entry.config.exposure ?? 'codemode', this.codemodeOn) !== 'hidden'
-    );
+    return this.connected().filter((connection) => {
+      if (!connection.hasResources) return false;
+      const exposure = this.#effective(connection.entry.config.exposure ?? 'codemode');
+      return exposure !== 'hidden';
+    });
   }
 
   resourceServers(allow: readonly string[] | null): ResourceServer[] {
@@ -96,11 +108,13 @@ export class McpCatalog {
   }
 
   resourceExposure(): McpExposure | undefined {
-    const exposures = this.#resourceful().map((connection) =>
-      effective(connection.entry.config.exposure ?? 'codemode', this.codemodeOn)
-    );
+    const exposures = this.#resourceful().map((connection) => {
+      return this.#effective(connection.entry.config.exposure ?? 'codemode');
+    });
     if (!exposures.length) return undefined;
-    return exposures.includes('direct') ? 'direct' : 'codemode';
+    if (exposures.includes('direct')) return 'direct';
+    if (exposures.includes('codemode')) return 'codemode';
+    return exposures.includes('deferred') ? 'deferred' : 'codemode';
   }
 
   listings(allow: readonly string[] | null): Listing[] {
@@ -112,7 +126,7 @@ export class McpCatalog {
           config.exposure ?? 'codemode',
           ...Object.values(config.toolExposure ?? {}),
         ];
-        return exposures.some((exposure) => effective(exposure, this.codemodeOn) === 'codemode');
+        return exposures.some((exposure) => this.#effective(exposure) === 'codemode');
       })
       .map((connection) => ({
         name: connection.name,
@@ -126,8 +140,14 @@ export class McpCatalog {
   install(): void {
     const readable = this.resourceExposure() !== undefined;
     const direct = this.entries
-      .filter((entry) => entry.exposure === 'direct')
-      .map((entry) => directTool(entry, () => readable && entry.connection.hasResources));
+      .filter((entry) => entry.exposure === 'direct' || entry.exposure === 'deferred')
+      .map((entry) =>
+        directTool(
+          entry,
+          () => readable && entry.connection.hasResources,
+          entry.exposure === 'deferred'
+        )
+      );
     const resources =
       this.resourceExposure() === 'direct'
         ? resourceTools(async (api, context) =>
@@ -148,10 +168,7 @@ export class McpCatalog {
     const next: McpToolEntry[] = [];
     for (const connection of this.connected()) {
       for (const tool of connection.tools) {
-        const exposure = effective(
-          toolExposure(connection.entry.config, tool.name),
-          this.codemodeOn
-        );
+        const exposure = this.#effective(toolExposure(connection.entry.config, tool.name));
         if (exposure === 'hidden') continue;
         const name = mcpToolName(connection.name, tool.name, (candidate) => taken.has(candidate));
         taken.add(name);
@@ -210,7 +227,7 @@ export class McpCatalog {
       .map((entry) => scriptTool(entry, signal));
     const save = apiSaver(api, 'r', context);
     const resources =
-      this.resourceExposure() === 'codemode' && this.resourceServers(allow).length
+      this.resourceExposure() !== 'direct' && this.resourceServers(allow).length
         ? resourceScriptTools(() => this.resourceServers(allow), signal, save).filter((tool) =>
             allows(allow, tool.name)
           )

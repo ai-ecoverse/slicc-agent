@@ -1,4 +1,4 @@
-import type { AgentEvent, EntryRecord } from '@earendil-works/pi-durable';
+import type { EntryRecord, LiveState } from '@earendil-works/pi-durable';
 import { entryLick } from '../licks/state.ts';
 import { mcpLabel } from '../mcp/label.ts';
 import { redactSecrets } from '../memory/format.ts';
@@ -84,12 +84,22 @@ export class Mapper {
   readonly #thinking: boolean;
   readonly #emitted = new Map<string, number>();
   readonly #seen = new Set<number>();
+  readonly #compactions = new Set<string>();
+  readonly #orphans = new Set<string>();
   #current: string | undefined;
   #previous: string | undefined;
-  #ending: readonly number[] = [];
+  #deliver: { id: number; delivered: Delivered } | undefined;
+  #runTask: string | undefined;
+  #runFirst: string | undefined;
+  #retryAt: number | undefined;
   readonly #stamps = new Map<number, number[]>();
+  holdUsers = false;
   reason: EndReason = 'stop';
   error: string | undefined;
+  endedRun: string | undefined;
+  endedFirst: string | undefined;
+  endedReason: EndReason = 'stop';
+  endedError: string | undefined;
 
   constructor(thinking: boolean) {
     this.#thinking = thinking;
@@ -146,13 +156,24 @@ export class Mapper {
     return out;
   }
 
+  deliverAs(id: number, delivered: Delivered): void {
+    this.#deliver = { id, delivered };
+  }
+
   #delivered(entry: EntryRecord): Delivered {
+    if (this.#deliver && Number(entry.id) === this.#deliver.id) return this.#deliver.delivered;
     if (entry.byTaskId === undefined) return 'run';
     return this.#previous === 'pi.tool-result' ? 'steer' : 'follow-up';
   }
 
   entry(entry: EntryRecord, delivered: Delivered = this.#delivered(entry)): RemoteEvent[] {
     if (this.#seen.has(entry.id)) return [];
+    if (
+      this.holdUsers &&
+      entry.kind === 'pi.user' &&
+      (this.#deliver === undefined || Number(entry.id) !== this.#deliver.id)
+    )
+      return [];
     this.#seen.add(entry.id);
     this.#previous = entry.kind;
     const id = String(entry.id);
@@ -178,83 +199,155 @@ export class Mapper {
     return [];
   }
 
-  #ended(reason: EndReason): RemoteEvent[] {
-    if (!this.#ending.length) return [];
-    this.#ending = [];
-    this.reason = reason;
-    return [{ t: 'run', state: 'end', reason }];
-  }
-
-  #settled(record: { id: number; status: string; reason?: unknown }): RemoteEvent[] {
-    if (!this.#ending.includes(record.id) || ['queued', 'placed'].includes(record.status))
-      return [];
-    if (record.status !== 'unanswered') return this.#ended(this.reason);
-    if (record.reason === 'aborted') return this.#ended('aborted');
-    this.error ??= clip(String(record.reason ?? 'error'), 1000);
-    return this.#ended('error');
-  }
-
   last(): number {
     return Math.max(0, ...this.#seen);
   }
 
-  event(event: AgentEvent): RemoteEvent[] {
-    switch (event.type) {
-      case 'run_start': {
-        const ended = this.#ended(this.reason);
-        this.reason = 'stop';
-        this.error = undefined;
-        return [...ended, { t: 'run', state: 'start' }];
-      }
-      case 'run_end':
-        this.#ending = event.inputs;
-        return [];
-      case 'submission':
-        return this.#settled(event.record);
-      case 'message_start':
-        if ((event.message as ModelMessage).role === 'assistant')
-          this.#current = this.#key(event.message as ModelMessage);
-        return [];
-      case 'message_update':
-        return event.changes.flatMap((change) => {
-          if (change.type !== 'text_delta' && change.type !== 'thinking_delta') return [];
-          const id = `${this.#current}.${change.contentIndex}`;
-          const t = change.type === 'text_delta' ? 'text' : 'thinking';
-          const done = this.#emitted.get(id) ?? 0;
-          if (t === 'thinking' && !this.#thinking) return [];
-          this.#emitted.set(id, done + change.delta.length);
-          return [{ t, id, delta: change.delta }];
-        });
-      case 'message_end':
-        return this.entry(event.entry);
-      case 'tool_execution_end':
-        return event.entry
-          ? this.entry(event.entry)
-          : [
-              {
-                t: 'tool-result',
-                id: `x${event.toolCallId}`,
-                call: event.toolCallId,
-                ok: false,
-                summary: 'the tool did not finish',
-              },
-            ];
-      case 'auto_retry_start':
-        return [
-          {
-            t: 'notice',
-            id: `retry-${event.at}`,
-            text: clip(`retrying (attempt ${event.attempt}): ${event.errorMessage}`),
-          },
-        ];
-      case 'compaction_start':
-        return [{ t: 'notice', id: `compaction-${event.taskId}`, text: 'compacting' }];
-      case 'task_failed':
-        return [{ t: 'error', id: `task-${event.taskId}`, message: clip(event.message, 1000) }];
-      default:
-        return [];
-    }
+  see(live: LiveState | undefined): void {
+    this.#project(live, false);
+    const message = live?.generation?.message as ModelMessage | undefined;
+    if (message) this.partial(message);
   }
+
+  apply(
+    entries: readonly EntryRecord[],
+    live: LiveState | undefined
+  ): { entryEvents: RemoteEvent[]; liveEvents: RemoteEvent[] } {
+    const entryEvents: RemoteEvent[] = [];
+    for (const entry of entries) entryEvents.push(...this.entry(entry));
+    const liveEvents = this.#project(live, true);
+    const message = live?.generation?.message as ModelMessage | undefined;
+    if (message) liveEvents.push(...this.partial(message));
+    return { entryEvents, liveEvents };
+  }
+
+  #same(nextFirst: string | undefined): boolean {
+    if (this.#runFirst !== undefined && nextFirst === undefined) return false;
+    if (this.#runFirst !== undefined && nextFirst !== undefined)
+      return this.#runFirst === nextFirst;
+    return true;
+  }
+
+  #project(live: LiveState | undefined, emit: boolean): RemoteEvent[] {
+    this.endedRun = undefined;
+    this.endedFirst = undefined;
+    const out: RemoteEvent[] = [];
+    const run = live?.run;
+    const nextTask = run === undefined ? undefined : String(run.taskId);
+    const nextFirst = run?.first === undefined ? undefined : String(run.first);
+    if (this.#runTask !== undefined && (run === undefined || !this.#same(nextFirst))) {
+      this.endedRun = this.#runTask;
+      this.endedFirst = this.#runFirst ?? `task:${this.#runTask}`;
+      if (emit) out.push(...this.#finish(live));
+      this.#runTask = undefined;
+      this.#runFirst = undefined;
+    }
+    if (this.#runTask === undefined && run !== undefined) {
+      this.#runTask = nextTask;
+      this.#runFirst = nextFirst;
+      this.reason = 'stop';
+      this.error = undefined;
+      if (emit) out.push({ t: 'run', state: 'start' });
+    } else if (run !== undefined) {
+      this.#runTask = nextTask;
+      if (nextFirst !== undefined) this.#runFirst = nextFirst;
+    }
+    out.push(
+      ...this.#retries(live, emit),
+      ...this.#compactionsOf(live, emit),
+      ...this.#orphansOf(live, emit)
+    );
+    return out;
+  }
+
+  #finish(live: LiveState | undefined): RemoteEvent[] {
+    const ended = this.endedRun ?? '';
+    const failure = live?.runFailure;
+    const matched = failure !== undefined && String(failure.taskId) === ended;
+    if (matched && failure.reason === 'aborted') {
+      this.reason = 'aborted';
+      this.endedReason = 'aborted';
+      this.endedError = undefined;
+      return [{ t: 'run', state: 'end', reason: 'aborted' }];
+    }
+    if (matched) {
+      this.reason = 'error';
+      this.error = clip(failure.detail ?? failure.reason, 1000);
+      this.endedReason = 'error';
+      this.endedError = this.error;
+      return [
+        { t: 'error', id: `run-${ended}`, message: this.error },
+        { t: 'run', state: 'end', reason: 'error' },
+      ];
+    }
+    this.endedReason = this.reason;
+    this.endedError = this.error;
+    return [{ t: 'run', state: 'end', reason: this.reason }];
+  }
+
+  #retries(live: LiveState | undefined, emit: boolean): RemoteEvent[] {
+    const retry = live?.generation?.retry;
+    if (retry === undefined) {
+      this.#retryAt = undefined;
+      return [];
+    }
+    if (retry.at === this.#retryAt) return [];
+    this.#retryAt = retry.at;
+    if (!emit) return [];
+    const attempt = live?.generation?.attempt ?? 1;
+    return [
+      {
+        t: 'notice',
+        id: `retry-${retry.at}`,
+        text: clip(`retrying (attempt ${attempt}): ${retry.error}`),
+      },
+    ];
+  }
+
+  #compactionsOf(live: LiveState | undefined, emit: boolean): RemoteEvent[] {
+    const out: RemoteEvent[] = [];
+    for (const compaction of live?.compactions ?? []) {
+      const id = String(compaction.taskId);
+      if (this.#compactions.has(id)) continue;
+      this.#compactions.add(id);
+      if (emit) out.push({ t: 'notice', id: `compaction-${id}`, text: 'compacting' });
+    }
+    return out;
+  }
+
+  #orphansOf(live: LiveState | undefined, emit: boolean): RemoteEvent[] {
+    const out: RemoteEvent[] = [];
+    for (const slot of live?.tools ?? []) {
+      if (slot.status !== 'done' || slot.entry !== undefined || this.#orphans.has(slot.callId))
+        continue;
+      this.#orphans.add(slot.callId);
+      if (!emit) continue;
+      out.push({
+        t: 'tool-result',
+        id: `x${slot.callId}`,
+        call: slot.callId,
+        ok: false,
+        summary: 'the tool did not finish',
+      });
+    }
+    return out;
+  }
+}
+
+export function arrange(
+  entryEvents: readonly RemoteEvent[],
+  liveEvents: readonly RemoteEvent[],
+  userId?: string
+): RemoteEvent[] {
+  const own =
+    userId === undefined
+      ? []
+      : entryEvents.filter((event) => event.t === 'user' && event.id === userId);
+  const entries =
+    userId === undefined ? [...entryEvents] : entryEvents.filter((event) => event.t !== 'user');
+  const start = liveEvents.findIndex((event) => event.t === 'run' && event.state === 'start');
+  if (start < 0) return [...own, ...entries, ...liveEvents];
+  return [...own, ...liveEvents.slice(0, start + 1), ...entries, ...liveEvents.slice(start + 1)];
 }
 
 export function replayOf(
