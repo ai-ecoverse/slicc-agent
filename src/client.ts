@@ -203,6 +203,7 @@ export async function connectAgent(
   const link = new PortLink(endpoint);
   const serverId = await link.hello;
   const host = clientHost(link, 'follower');
+  const inventory = optional(host, link, AgentInventoryService);
   const handles = await holding(host, link, [
     AgentControl,
     AgentTranscript,
@@ -210,6 +211,7 @@ export async function connectAgent(
     AgentRemoteService,
     AgentPagesService,
   ]).catch((error: unknown) => {
+    void inventory.then((handle) => handle?.release());
     throw final(error);
   });
   const [controlHandle, transcriptHandle, settingsHandle, remoteHandle, pagesHandle] = handles as [
@@ -219,7 +221,7 @@ export async function connectAgent(
     Remote,
     Remote,
   ];
-  const inventoryHandle = await optional(host, link, AgentInventoryService);
+  const inventoryHandle = await inventory;
   const release = () => {
     for (const handle of handles) handle.release();
     inventoryHandle?.release();

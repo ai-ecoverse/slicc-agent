@@ -284,3 +284,43 @@ test('a failed turn shows as error, a model outside the catalog drops the model,
   for (const secret of [FAILURE, DEPLOYMENT, PROVIDER, 'Fail.'])
     assert.equal(all.includes(secret), false, secret);
 });
+
+test('a connection asks for the inventory alongside the other services, not after them', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const order = await page.evaluate(async () => {
+    await window.setup('');
+    const port = await window.owner.port();
+    const text = (data) =>
+      data instanceof Uint8Array ? new TextDecoder().decode(data) : JSON.stringify(data ?? null);
+    const order = [];
+    const endpoint = {
+      postMessage(message, transfer) {
+        order.push(['out', text(message)]);
+        port.postMessage(message, transfer);
+      },
+      addEventListener(type, listener) {
+        port.addEventListener(type, (event) => {
+          if (type === 'message') order.push(['in', text(event.data)]);
+          listener(event);
+        });
+      },
+      start: () => port.start(),
+      close: () => port.close(),
+    };
+    const connection = await connectAgent(endpoint);
+    const owned = 'inventory' in connection;
+    await connection.close();
+    await window.owner.release();
+    return { owned, order };
+  });
+  assert.equal(order.owned, true);
+  const asked = order.order.findIndex(
+    ([way, body]) => way === 'out' && body.includes('slicc.agent.inventory')
+  );
+  const answered = order.order.findIndex(
+    ([way, body]) => way === 'in' && body.includes('"t":"shape"')
+  );
+  assert.ok(asked >= 0 && answered > asked, JSON.stringify([asked, answered]));
+});
