@@ -148,10 +148,13 @@ export class McpCatalog {
           entry.exposure === 'deferred'
         )
       );
+    const exposure = this.resourceExposure();
     const resources =
-      this.resourceExposure() === 'direct'
-        ? resourceTools(async (api, context) =>
-            this.resourceServers(await allowOf(api, api.conversationId, context))
+      exposure === 'direct' || exposure === 'deferred'
+        ? resourceTools(
+            async (api, context) =>
+              this.resourceServers(await allowOf(api, api.conversationId, context)),
+            exposure === 'deferred'
           )
         : [];
     this.current = defineExtension({

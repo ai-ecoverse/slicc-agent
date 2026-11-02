@@ -312,13 +312,15 @@ export type ServersFor = (
   context: Context
 ) => Promise<readonly ResourceServer[]>;
 
-export function resourceTools(servers: ServersFor): ToolRegistration[] {
+export function resourceTools(servers: ServersFor, deferred: boolean): ToolRegistration[] {
+  const listed = deferred ? { deferred: true as const } : {};
   const listTool = (name: string, key: Key) =>
     defineTool({
       name,
       description: DESCRIPTIONS[name] as string,
       parameters: LIST_PARAMETERS as never,
       replay: 'safe',
+      ...listed,
       async execute(args, api, context) {
         const payload = await listing(await servers(api, context), args, signalOf(context), key);
         const limited = await limitContent(
@@ -336,6 +338,7 @@ export function resourceTools(servers: ServersFor): ToolRegistration[] {
       description: DESCRIPTIONS[READ_MCP_RESOURCE] as string,
       parameters: READ_PARAMETERS as never,
       replay: 'safe',
+      ...listed,
       async execute(args, api, context) {
         const read = await reading(
           await servers(api, context),

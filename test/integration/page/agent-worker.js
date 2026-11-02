@@ -80,9 +80,9 @@ const delivery = (writes) =>
 function crashing(storage) {
   if (!crash) return storage;
   const commit = storage.commit.bind(storage);
-  storage.commit = async (writes, context) => {
-    if (!delivery(writes)) return commit(writes, context);
-    if (crash === 'after') await commit(writes, context);
+  storage.commit = async (batches, receive, context) => {
+    if (!batches.some(delivery)) return commit(batches, receive, context);
+    if (crash === 'after') await commit(batches, receive, context);
     self.postMessage({ crashed: crash });
     return new Promise(() => {});
   };
