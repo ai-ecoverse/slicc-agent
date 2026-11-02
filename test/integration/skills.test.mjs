@@ -73,19 +73,21 @@ test('boot lists the full bundled LinkedIn description without warn licks', asyn
 test('bundled skills, roles, templates and the profile fixture retain their old descriptions', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const fixture = corpus.find((row) => row.file.startsWith('slicc6-profile:'));
+  const fixtures = corpus.filter((row) => !row.file.startsWith('packages/'));
   const seen = await staged(
     page,
     'the frontmatter compatibility corpus',
-    async (text) => {
-      let dir = await navigator.storage.getDirectory();
-      for (const part of ['usr', 'share', 'skills', 'deploy-notes'])
-        dir = await dir.getDirectoryHandle(part, { create: true });
-      const writable = await (
-        await dir.getFileHandle('SKILL.md', { create: true })
-      ).createWritable();
-      await writable.write(text);
-      await writable.close();
+    async (fixtures) => {
+      for (const fixture of fixtures) {
+        let dir = await navigator.storage.getDirectory();
+        for (const part of ['usr', 'share', 'skills', fixture.expected.fields.name])
+          dir = await dir.getDirectoryHandle(part, { create: true });
+        const writable = await (
+          await dir.getFileHandle('SKILL.md', { create: true })
+        ).createWritable();
+        await writable.write(fixture.text);
+        await writable.close();
+      }
       await import('/dist-test/page.js');
       const { bootKernel } = await import('/kernel.js');
       const kernel = await bootKernel();
@@ -117,7 +119,7 @@ test('bundled skills, roles, templates and the profile fixture retain their old 
       await owner.release();
       return result;
     },
-    fixture.text
+    fixtures
   );
   assert.equal(seen.roles.status, 0);
   assert.doesNotMatch(seen.roles.stdout, /warning:/);

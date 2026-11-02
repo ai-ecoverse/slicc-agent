@@ -1,4 +1,4 @@
-import { isAlias, LineCounter, parseDocument, visit } from 'yaml';
+import { isAlias, isScalar, LineCounter, parseDocument, visit } from 'yaml';
 
 export type FrontmatterValue = string | number | boolean | string[];
 
@@ -41,20 +41,71 @@ function fieldsFrom(
   return Object.fromEntries(fields);
 }
 
+function tolerantSource(source: string): string {
+  const lines = source.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const found = /^([A-Za-z][\w-]*):[ \t]+(.*)$/.exec(lines[index] as string);
+    if (!found) continue;
+    const value = (found[2] as string).replace(/[ \t]+#.*$/, '').trim();
+    if (
+      !value ||
+      value.startsWith('#') ||
+      /^["']/.test(value) ||
+      /^\[.*\]$/s.test(value) ||
+      /^\{.*\}$/s.test(value) ||
+      /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(value)
+    )
+      continue;
+    let raw = value;
+    let blanks = 0;
+    for (let next = index + 1; next < lines.length; next++) {
+      const line = lines[next] as string;
+      if (!line.trim()) {
+        blanks++;
+        continue;
+      }
+      if (line.trimStart().startsWith('#')) continue;
+      if (!/^[ \t]/.test(line)) break;
+      const continued = line.replace(/[ \t]+#.*$/, '').trim();
+      raw += `${blanks ? '\n'.repeat(blanks) : ' '}${continued}`;
+      blanks = 0;
+      lines[next] = '';
+    }
+    const scalar = parseDocument(raw, {
+      schema: 'core',
+      customTags: [],
+      resolveKnownTags: false,
+    });
+    const typed =
+      !scalar.errors.length &&
+      !scalar.warnings.length &&
+      isScalar(scalar.contents) &&
+      typeof scalar.contents.value !== 'string';
+    lines[index] = `${found[1]}: ${typed ? raw : JSON.stringify(raw)}`;
+  }
+  return lines.join('\n');
+}
+
 export function parseFrontmatter(text: string, mappings: readonly string[] = []): Frontmatter {
   const normalized = text.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized);
   if (!match)
     return { fields: {}, body: normalized.trim(), problems: ['no frontmatter between --- lines'] };
   const body = normalized.slice(match[0].length).trim();
-  const lineCounter = new LineCounter();
-  const document = parseDocument(`---\n${match[1]}\n`, {
+  let lineCounter = new LineCounter();
+  const options = {
     schema: 'core',
     customTags: [],
     resolveKnownTags: false,
     stringKeys: true,
-    lineCounter,
-  });
+    uniqueKeys: false,
+  };
+  const source = `---\n${match[1]}\n`;
+  let document = parseDocument(source, { ...options, lineCounter });
+  if (document.errors.length) {
+    lineCounter = new LineCounter();
+    document = parseDocument(tolerantSource(source), { ...options, lineCounter });
+  }
   const problems = [...document.errors, ...document.warnings].map((error) => error.message);
   if (problems.length) return { fields: {}, body, problems };
   let aliasOffset = 0;

@@ -234,5 +234,58 @@
       "body": "Run ./deploy.sh from the workspace.",
       "problems": []
     }
+  },
+  {
+    "file": "compatibility:skills/colon/SKILL.md",
+    "text": "---\nname: colon\ndescription: Use when: foo\n---\nBody",
+    "mappings": [],
+    "expected": {
+      "fields": {
+        "name": "colon",
+        "description": "Use when: foo"
+      },
+      "body": "Body",
+      "problems": []
+    }
+  },
+  {
+    "file": "compatibility:skills/duplicates/SKILL.md",
+    "text": "---\nname: duplicates\nname: previous\nname: duplicates\ndescription: Last name wins\n---\nBody",
+    "mappings": [],
+    "expected": {
+      "fields": {
+        "name": "duplicates",
+        "description": "Last name wins"
+      },
+      "body": "Body",
+      "problems": []
+    }
+  },
+  {
+    "file": "compatibility:skills/multiline-colon/SKILL.md",
+    "text": "---\nname: multiline-colon\ndescription: Use when: foo\n  and bar: baz\n\n  then more\nallowed-tools:\n  - bash\n---\nBody",
+    "mappings": [],
+    "expected": {
+      "fields": {
+        "name": "multiline-colon",
+        "description": "Use when: foo and bar: baz\nthen more",
+        "allowed-tools": ["bash"]
+      },
+      "body": "Body",
+      "problems": []
+    }
+  },
+  {
+    "file": "compatibility:skills/reserved/SKILL.md",
+    "text": "---\nname: reserved\ndescription: @someone please\n---\nBody",
+    "mappings": [],
+    "expected": {
+      "fields": {
+        "name": "reserved",
+        "description": "@someone please"
+      },
+      "body": "Body",
+      "problems": []
+    }
   }
 ]
