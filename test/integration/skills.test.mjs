@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { launch, staged } from './chrome.mjs';
+import corpus from './fixtures/frontmatter.json' with { type: 'json' };
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -66,5 +67,77 @@ test('boot lists the full bundled LinkedIn description without warn licks', asyn
     LINKEDIN
   );
   assert.equal(seen.skill.description, DESCRIPTION);
+  assert.deepEqual(seen.warnings, []);
+});
+
+test('bundled skills, roles, templates and the profile fixture retain their old descriptions', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const fixture = corpus.find((row) => row.file.startsWith('slicc6-profile:'));
+  const seen = await staged(
+    page,
+    'the frontmatter compatibility corpus',
+    async (text) => {
+      let dir = await navigator.storage.getDirectory();
+      for (const part of ['usr', 'share', 'skills', 'deploy-notes'])
+        dir = await dir.getDirectoryHandle(part, { create: true });
+      const writable = await (
+        await dir.getFileHandle('SKILL.md', { create: true })
+      ).createWritable();
+      await writable.write(text);
+      await writable.close();
+      await import('/dist-test/page.js');
+      const { bootKernel } = await import('/kernel.js');
+      const kernel = await bootKernel();
+      const owner = await startTracked({
+        worker: () => new Worker('/dist-test/main-worker.js?answer=Done.', { type: 'module' }),
+        kernel: { connect: () => kernel.connect() },
+      });
+      const connection = await owner.connect();
+      const agent = createAgentModel(connection, { storage: localStorage }).agent;
+      await agent.ready();
+      await when(
+        [connection.commands],
+        () => connection.commands.value.some((command) => command.name === 'skill:deploy-notes'),
+        'the profile fixture skill'
+      );
+      await when(
+        [files(kernel, ['/usr/local/bin'])],
+        async () => (await kernel.run(['bash', '-c', 'test -x /usr/local/bin/agent'])).status === 0,
+        'the agent command'
+      );
+      const roles = await kernel.run(['bash', '-c', 'agent list --agents']);
+      const result = {
+        commands: connection.commands.value,
+        roles,
+        warnings: agent
+          .messages()
+          .filter((message) => message.role === 'lick' && message.severity === 'warn'),
+      };
+      await owner.release();
+      return result;
+    },
+    fixture.text
+  );
+  assert.equal(seen.roles.status, 0);
+  assert.doesNotMatch(seen.roles.stdout, /warning:/);
+  for (const row of corpus) {
+    const { fields } = row.expected;
+    if (row.file.includes('/agents/')) {
+      assert.ok(
+        seen.roles.stdout.includes(`${fields.name}\tbuiltin\t${fields.description}`),
+        row.file
+      );
+    } else {
+      const name = row.file.includes('/prompts/')
+        ? row.file.split('/').at(-1).replace(/\.md$/, '')
+        : `skill:${fields.name}`;
+      assert.equal(
+        seen.commands.find((command) => command.name === name)?.description,
+        fields.description,
+        row.file
+      );
+    }
+  }
   assert.deepEqual(seen.warnings, []);
 });
