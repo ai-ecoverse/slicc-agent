@@ -113,10 +113,10 @@ export function createInventory(options: InventoryOptions): Inventory {
   const signals: Signals = { work: undefined, outbox: undefined };
   const since = new Map<string, { status: InventoryStatus; at: number }>();
   let last = '';
-  let ready = false;
+  let disposed = false;
   const state = replicatedState<InventoryState>({ seq: 0, changedAt: 0, active: '', agents: [] });
   const build = () => {
-    if (!ready) return;
+    if (disposed) return;
     const registry = options.agents.state();
     const rows = inventoryRows(registry, options.views.value ?? {}, signals, options.models);
     const key = JSON.stringify({ active: registry.active, rows });
@@ -153,16 +153,15 @@ export function createInventory(options: InventoryOptions): Inventory {
     .then(([work, outbox]) => {
       signals.work ??= work as unknown as Work;
       signals.outbox ??= outbox as unknown as Outbox;
-    })
-    .catch(() => undefined)
-    .finally(() => {
-      ready = true;
       build();
-    });
+    })
+    .catch(() => undefined);
   const offs = [offCommits, options.agents.onChange(build), options.views.subscribe(build)];
+  build();
   return {
     state,
     dispose() {
+      disposed = true;
       for (const off of offs) off();
     },
   };
