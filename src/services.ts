@@ -638,3 +638,51 @@ export const AgentSettings: RemoteContract = contract('slicc.agent.settings', {
   settings: { state: ['state'], methods: SETTINGS_METHODS },
   view: { state: ['state'] },
 });
+
+export type InventoryStatus = 'running' | 'queued' | 'waiting' | 'error' | 'idle';
+
+export const INVENTORY_STATUSES: readonly InventoryStatus[] = [
+  'running',
+  'queued',
+  'waiting',
+  'error',
+  'idle',
+];
+
+export interface InventoryAgent {
+  id: string;
+  kind: 'cone' | 'scoop';
+  parent?: string;
+  status: InventoryStatus;
+  queued: number;
+  provider?: string;
+  model?: string;
+  since: number;
+}
+
+export interface InventoryRow extends InventoryAgent {
+  cone: string;
+}
+
+export interface InventoryState {
+  seq: number;
+  changedAt: number;
+  active: string;
+  agents: InventoryRow[];
+}
+
+export interface InventorySnapshot {
+  seq: number;
+  changedAt: number;
+  counts: Record<InventoryStatus, number>;
+  agents: InventoryAgent[];
+}
+
+export interface AgentInventory {
+  readonly inventory: ReplicatedState<InventoryState>;
+}
+
+export const AgentInventoryService: RemoteContract = contract('slicc.agent.inventory', {
+  owner: { state: ['inventory'] },
+  none: {},
+});

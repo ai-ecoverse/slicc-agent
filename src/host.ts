@@ -28,6 +28,7 @@ import { IDLE, type ImportProgress } from './freezer/v6.ts';
 import { createGuests, type Guests } from './guests/index.ts';
 import type { ScoopReviewHost } from './guests/scoop.ts';
 import { admitGuest, guestOpener } from './guests/serve.ts';
+import { createInventory } from './inventory.ts';
 import type { UserClients } from './kernel/users.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
@@ -42,6 +43,7 @@ import {
   AgentControl,
   type AgentGuest,
   AgentGuestService,
+  AgentInventoryService,
   AgentPagesService,
   AgentRemoteService,
   AgentSettings,
@@ -51,6 +53,7 @@ import {
   CONTROL_READS,
   type Command,
   GUEST_METHODS,
+  type InventoryState,
   OWNER_DEVICE_METHODS,
   OWNER_SETTINGS_METHODS,
   PAGE_METHODS,
@@ -222,6 +225,19 @@ async function guestsOf(
   return guests;
 }
 
+const inventoryOf = (
+  agent: Agent,
+  views: ReplicatedState<Record<string, ConversationView>>,
+  context: Context
+) =>
+  createInventory({
+    agents: agent.agents,
+    views,
+    harness: agent.harness,
+    models: agent.models,
+    context,
+  });
+
 const noRevision = () => replicatedState<PrivateRevision>({ revision: 0 });
 
 export async function hostAgent(
@@ -263,7 +279,8 @@ export async function hostAgent(
     mounted.refresh();
   };
   const touch = () => options.freezer?.touch();
-  const untouch = [state.subscribe(touch), mounted.views.subscribe(touch)];
+  const inventory = inventoryOf(agent, mounted.views, context);
+  const untouch = [state.subscribe(touch), mounted.views.subscribe(touch), inventory.dispose];
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
   const policy = await attachApprovalPolicy(agent.harness, context);
@@ -339,8 +356,7 @@ export async function hostAgent(
     ...(options.licks ? { licks: options.licks.licks } : {}),
   });
   const settings = options.settings ?? noSettings;
-  const gates = gatedControls(control, slims.shown, shownViews, transcriptService.labels);
-  const { trusted, viewed } = gates;
+  const { trusted, viewed } = gatedControls(control, slims.shown, shownViews, labels.state);
   const host = serveAgent({
     trusted,
     viewed,
@@ -350,6 +366,7 @@ export async function hostAgent(
     settings,
     remote,
     pages,
+    inventory: inventory.state,
     guest: guestOpener(guests, agent.agents, mounted.views, context),
     decide: (by) => (id, decision, reason, using) =>
       approvals.decide(id, decision, reason, by, using),
@@ -425,6 +442,7 @@ interface Served {
   settings: AgentSettings;
   remote: AgentRemote;
   pages: Pages;
+  inventory?: ReplicatedState<InventoryState>;
   guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
   decide: (by: Decider) => AgentControl['decide'];
 }
@@ -545,6 +563,11 @@ export function serveAgent(serving: Served): Host<AgentPrincipal> {
       };
     })
   );
+  host.serve(AgentInventoryService, (_input, principal) => {
+    const inventory = serving.inventory;
+    if (principal.seat !== 'owner' || !inventory) return { variant: 'none' };
+    return { variant: 'owner', inventory: readable(inventory) };
+  });
   host.serve(AgentSudoService, (_input, principal, self) => {
     const sudo = serving.sudo;
     if (principal.seat !== 'owner' || !sudo) return { variant: 'none' };

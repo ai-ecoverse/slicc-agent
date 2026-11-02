@@ -1,9 +1,11 @@
+import type { ReplicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { SendAttachment } from '../attachments.ts';
 import type { AgentConnection } from '../client.ts';
-import type { Delivered, SendMode } from '../services.ts';
+import type { Delivered, InventorySnapshot, InventoryState, SendMode } from '../services.ts';
 import type { RemoteEvent } from './events.ts';
 import type { AgentRemote, RemoteOpened } from './host.ts';
+import { narrowInventory } from './inventory.ts';
 
 export type { RemoteEvent } from './events.ts';
 
@@ -26,6 +28,9 @@ export interface RemoteControl {
     busy?: boolean;
   }): Promise<{ head: string; gap?: true; busy?: boolean; events: AsyncIterable<RemoteEvent> }>;
   abort(): Promise<{ aborted: boolean }>;
+  inventory(request?: {
+    watch?: boolean;
+  }): Promise<{ snapshot: InventorySnapshot; events?: AsyncIterable<InventorySnapshot> }>;
 }
 
 function failure(code: string, message: string): Error {
@@ -69,8 +74,65 @@ function events(remote: AgentRemote, stream: string): AsyncIterable<RemoteEvent>
   };
 }
 
+function current(state: ReplicatedState<InventoryState>): Promise<InventoryState> {
+  if (state.value?.seq) return Promise.resolve(state.value);
+  return new Promise((resolve) => {
+    let off: (() => void) | undefined;
+    let done = false;
+    off = state.subscribe((value) => {
+      if (!value?.seq || done) return;
+      done = true;
+      off?.();
+      resolve(value);
+    });
+    if (done) off();
+  });
+}
+
+function snapshots(
+  state: ReplicatedState<InventoryState>,
+  cone: () => string | null,
+  first: InventorySnapshot
+): AsyncIterable<InventorySnapshot> {
+  return {
+    [Symbol.asyncIterator]() {
+      let last = JSON.stringify(first.agents);
+      let latest: InventorySnapshot | undefined;
+      let wake: (() => void) | undefined;
+      let closed = false;
+      const off = state.subscribe((value) => {
+        if (!value?.seq || closed) return;
+        const next = narrowInventory(value, cone());
+        const key = JSON.stringify(next.agents);
+        if (key === last) return;
+        last = key;
+        latest = next;
+        wake?.();
+      });
+      const close = () => {
+        closed = true;
+        off();
+        wake?.();
+      };
+      return {
+        async next(): Promise<IteratorResult<InventorySnapshot>> {
+          while (!latest && !closed) await new Promise<void>((resolve) => (wake = resolve));
+          wake = undefined;
+          const value = latest;
+          latest = undefined;
+          return value ? { value, done: false } : { value: undefined, done: true };
+        },
+        async return(): Promise<IteratorResult<InventorySnapshot>> {
+          close();
+          return { value: undefined, done: true };
+        },
+      };
+    },
+  };
+}
+
 export function remoteControl(
-  connection: Pick<AgentConnection, 'remote'>,
+  connection: Pick<AgentConnection, 'remote'> & Pick<Partial<AgentConnection>, 'inventory'>,
   options: RemoteOptions = {}
 ): RemoteControl {
   const remote = connection.remote;
@@ -108,6 +170,12 @@ export function remoteControl(
     },
     async abort() {
       return need().abort(agent(), BACKGROUND_CONTEXT);
+    },
+    async inventory({ watch = false } = {}) {
+      const state = connection.inventory;
+      if (!state) throw failure('EOPNOTSUPP', 'this agent has no inventory');
+      const snapshot = narrowInventory(await current(state), agent());
+      return watch ? { snapshot, events: snapshots(state, agent, snapshot) } : { snapshot };
     },
   };
 }

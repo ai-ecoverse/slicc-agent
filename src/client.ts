@@ -21,6 +21,7 @@ import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
 import {
   AgentControl,
+  AgentInventoryService,
   AgentPagesService,
   AgentRemoteService,
   AgentSettings,
@@ -31,6 +32,7 @@ import {
   type Delivered,
   type GuestProposal,
   type GuestShown,
+  type InventoryState,
   type MonitorFeed,
   OWNER_SETTINGS_METHODS,
   PAGE_METHODS,
@@ -72,6 +74,7 @@ export interface AgentConnection {
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly pages?: AgentPages;
+  readonly inventory?: ReplicatedState<InventoryState>;
   readonly closed: Promise<Error | undefined>;
   readonly readOnly?: boolean;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
@@ -177,6 +180,21 @@ export async function holding(
   }
 }
 
+export async function optional(
+  host: Host<AgentPrincipal>,
+  link: PortLink,
+  contract: Contract
+): Promise<Remote | undefined> {
+  const got = host.get(contract, {}) as Promise<unknown> as Promise<Remote>;
+  return Promise.race([got, ended(link)]).catch(() => {
+    void got.then(
+      (ref) => ref.release(),
+      () => undefined
+    );
+    return undefined;
+  });
+}
+
 export async function connectAgent(
   endpoint: PortEndpoint,
   options: { context?: Context } = {}
@@ -201,8 +219,10 @@ export async function connectAgent(
     Remote,
     Remote,
   ];
+  const inventoryHandle = await optional(host, link, AgentInventoryService);
   const release = () => {
     for (const handle of handles) handle.release();
+    inventoryHandle?.release();
   };
   const root: Root = (run, rootOptions) => host.root(run, rootOptions);
   const control = bound<AgentControl>(controlHandle, root, CONTROL_METHODS, controlAnswer);
@@ -267,6 +287,9 @@ export async function connectAgent(
     settings: lastingSettings(settings, hold),
     remote,
     pages,
+    ...(inventoryHandle?.variant === 'owner'
+      ? { inventory: hold(replicated(inventoryHandle.inventory as Readable<InventoryState>)) }
+      : {}),
     closed,
     webhook(name, delivery) {
       return control.webhook(
