@@ -94,6 +94,39 @@ function tolerantSource(source: string): string {
   return lines.join('\n');
 }
 
+function entryBoundaries(source: string) {
+  if (/[\r\u0085\u2028\u2029]/.test(source)) return undefined;
+  const lines = source.split('\n');
+  const owners: number[] = [0];
+  const ends = new Map<number, number>();
+  let owner = 0;
+  let keyOwner = false;
+  for (let index = 1; index < lines.length; index++) {
+    const line = lines[index] as string;
+    if (line.startsWith('\t')) return undefined;
+    if (!/^ *$/.test(line) && !/^ *#/.test(line)) {
+      if (line.startsWith(' ')) {
+        if (!keyOwner) return undefined;
+      } else {
+        const key = /^[A-Za-z][\w-]*:(?:[ \t]|$)/.test(line);
+        if (
+          !key &&
+          (/^\s/.test(line) ||
+            /:(?:[ \t]|$)/.test(line) ||
+            `?:-[]{}#&*!|>'"%@\``.includes(line[0] as string))
+        )
+          return undefined;
+        ends.set(owner, index);
+        owner = index;
+        keyOwner = key;
+      }
+    }
+    owners.push(owner);
+  }
+  ends.set(owner, lines.length);
+  return { lines, owners, ends };
+}
+
 function salvageSource(
   source: string,
   retried: string,
@@ -101,18 +134,9 @@ function salvageSource(
   issues: readonly { pos: [number, number]; message: string; code: string }[],
   counter: LineCounter
 ) {
-  const lines = source.split('\n');
-  const owners: number[] = [];
-  const ends = new Map<number, number>();
-  let owner = 0;
-  for (let index = 0; index < lines.length; index++) {
-    if (/^[^\s#]/.test(lines[index] as string)) {
-      ends.set(owner, index);
-      owner = index;
-    }
-    owners.push(owner);
-  }
-  ends.set(owner, lines.length);
+  const boundaries = entryBoundaries(source);
+  if (!boundaries) return undefined;
+  const { lines, owners, ends } = boundaries;
   const dropped = new Map<number, { end: number; message: string }>();
   for (const issue of issues) {
     if (issue.code === 'MISSING_CHAR') return undefined;

@@ -204,38 +204,58 @@ test('boot salvages a skill with a stray line and preserves another full descrip
   assert.match(JSON.stringify(seen.warnings[0]), /at line 4/);
 });
 
-test('a malformed role tools list cannot launch a scoop with default tools', async (t) => {
-  const page = await chrome.page(t);
-  await page.goto('/');
-  const seen = await staged(page, 'malformed role restrictions', async () => {
-    await import('/dist-test/page.js');
-    const { bootKernel } = await import('/kernel.js');
-    const kernel = await bootKernel();
-    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
-    const terminal = await attachKernel(await kernel.connect());
-    await terminal.fs.mkdir('/home/.pi/agent/agents', { recursive: true });
-    await terminal.fs.writeFile(
-      '/home/.pi/agent/agents/reader.md',
-      '---\nname: reader\ndescription: read only\ntools:\n  - read\n  - !x grep\n---\nYou only read.'
+for (const [shape, restriction] of [
+  ['tools list', 'tools:\n  - read\n  - !x grep'],
+  ['explicit key', '? tools: [read, grep]'],
+]) {
+  test(`a malformed role ${shape} cannot launch a scoop with default tools`, async (t) => {
+    const page = await chrome.page(t);
+    await page.goto('/');
+    const seen = await staged(
+      page,
+      'malformed role restrictions',
+      async (restriction) => {
+        await import('/dist-test/page.js');
+        const { bootKernel } = await import('/kernel.js');
+        const kernel = await bootKernel();
+        const { attachKernel } = await import(
+          '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
+        );
+        const terminal = await attachKernel(await kernel.connect());
+        await terminal.fs.mkdir('/home/.pi/agent/agents', { recursive: true });
+        await terminal.fs.writeFile(
+          '/home/.pi/agent/agents/reader.md',
+          `---\nname: reader\ndescription: read only\n${restriction}\n---\nYou only read.`
+        );
+        const owner = await startTracked({
+          worker: () =>
+            new Worker('/dist-test/main-worker.js?answer=Unexpected.', { type: 'module' }),
+          kernel: { connect: () => kernel.connect() },
+        });
+        await owner.connect();
+        await when(
+          [files(kernel, ['/usr/local/bin'])],
+          () => terminal.fs.exists('/usr/local/bin/agent'),
+          'the agent command'
+        );
+        const listed = await kernel.run(['bash', '-c', 'agent list --agents']);
+        const spawned = await kernel.run([
+          'bash',
+          '-c',
+          'agent --role reader --prompt "Write a file"',
+        ]);
+        const scoops = await kernel.run(['bash', '-c', 'agent list']);
+        await owner.release();
+        return { listed, spawned, scoops };
+      },
+      restriction
     );
-    const owner = await startTracked({
-      worker: () => new Worker('/dist-test/main-worker.js?answer=Unexpected.', { type: 'module' }),
-      kernel: { connect: () => kernel.connect() },
-    });
-    await owner.connect();
-    await when(
-      [files(kernel, ['/usr/local/bin'])],
-      () => terminal.fs.exists('/usr/local/bin/agent'),
-      'the agent command'
+    assert.doesNotMatch(seen.listed.stdout, /^reader\t/m);
+    assert.notEqual(seen.spawned.status, 0);
+    assert.match(
+      seen.spawned.stderr + seen.spawned.stdout,
+      /unknown.*role|role.*unknown|not found/i
     );
-    const listed = await kernel.run(['bash', '-c', 'agent list --agents']);
-    const spawned = await kernel.run(['bash', '-c', 'agent --role reader --prompt "Write a file"']);
-    const scoops = await kernel.run(['bash', '-c', 'agent list']);
-    await owner.release();
-    return { listed, spawned, scoops };
+    assert.doesNotMatch(seen.scoops.stdout, /reader/);
   });
-  assert.doesNotMatch(seen.listed.stdout, /^reader\t/m);
-  assert.notEqual(seen.spawned.status, 0);
-  assert.match(seen.spawned.stderr + seen.spawned.stdout, /unknown.*role|role.*unknown|not found/i);
-  assert.doesNotMatch(seen.scoops.stdout, /reader/);
-});
+}
