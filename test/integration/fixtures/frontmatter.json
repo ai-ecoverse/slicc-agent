@@ -287,5 +287,19 @@
       "body": "Body",
       "problems": []
     }
+  },
+  {
+    "file": "compatibility:skills/bracketed/SKILL.md",
+    "text": "---\nname: bracketed\ndescription: [WIP] fix [x]\nallowed-tools: [bash, read]\n---\nBody",
+    "mappings": [],
+    "expected": {
+      "fields": {
+        "name": "bracketed",
+        "description": "[WIP] fix [x]",
+        "allowed-tools": ["bash", "read"]
+      },
+      "body": "Body",
+      "problems": []
+    }
   }
 ]

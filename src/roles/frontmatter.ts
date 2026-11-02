@@ -1,4 +1,4 @@
-import { isAlias, isScalar, LineCounter, parseDocument, visit } from 'yaml';
+import { isAlias, isCollection, isScalar, LineCounter, parseDocument, visit } from 'yaml';
 
 export type FrontmatterValue = string | number | boolean | string[];
 
@@ -41,6 +41,18 @@ function fieldsFrom(
   return Object.fromEntries(fields);
 }
 
+function retryValue(raw: string, source: string): string | undefined {
+  const scalar = parseDocument(source, {
+    schema: 'core',
+    customTags: [],
+    resolveKnownTags: false,
+  });
+  const clean = !scalar.errors.length && !scalar.warnings.length;
+  if (/^[[{]/.test(raw) && clean && isCollection(scalar.contents)) return undefined;
+  const typed = clean && isScalar(scalar.contents) && typeof scalar.contents.value !== 'string';
+  return typed ? raw : JSON.stringify(raw);
+}
+
 function tolerantSource(source: string): string {
   const lines = source.split('\n');
   for (let index = 0; index < lines.length; index++) {
@@ -51,37 +63,33 @@ function tolerantSource(source: string): string {
       !value ||
       value.startsWith('#') ||
       /^["']/.test(value) ||
-      /^\[.*\]$/s.test(value) ||
-      /^\{.*\}$/s.test(value) ||
       /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(value)
     )
       continue;
     let raw = value;
     let blanks = 0;
+    const continuation: string[] = [];
     for (let next = index + 1; next < lines.length; next++) {
       const line = lines[next] as string;
       if (!line.trim()) {
+        continuation.push(line);
         blanks++;
         continue;
       }
-      if (line.trimStart().startsWith('#')) continue;
+      if (line.trimStart().startsWith('#')) {
+        continuation.push(line);
+        continue;
+      }
       if (!/^[ \t]/.test(line)) break;
+      continuation.push(line);
       const continued = line.replace(/[ \t]+#.*$/, '').trim();
       raw += `${blanks ? '\n'.repeat(blanks) : ' '}${continued}`;
       blanks = 0;
-      lines[next] = '';
     }
-    const scalar = parseDocument(raw, {
-      schema: 'core',
-      customTags: [],
-      resolveKnownTags: false,
-    });
-    const typed =
-      !scalar.errors.length &&
-      !scalar.warnings.length &&
-      isScalar(scalar.contents) &&
-      typeof scalar.contents.value !== 'string';
-    lines[index] = `${found[1]}: ${typed ? raw : JSON.stringify(raw)}`;
+    const quoted = retryValue(raw, [found[2], ...continuation].join('\n'));
+    if (quoted === undefined) continue;
+    for (let offset = 1; offset <= continuation.length; offset++) lines[index + offset] = '';
+    lines[index] = `${found[1]}: ${quoted}`;
   }
   return lines.join('\n');
 }
