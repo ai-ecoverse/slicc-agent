@@ -7,8 +7,9 @@ import {
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
-import type { LickTarget } from '../licks/lick.ts';
 import type { Licks } from '../licks/licks.ts';
+import { cgiBridge, folderOf, NO_OWNER, type SprinkleLick, targetOf } from './bridge.ts';
+import type { CgiKernel } from './cgi-run.ts';
 import {
   describe,
   homePath,
@@ -38,6 +39,7 @@ export interface SprinklesRuntime {
   readonly sprinkles: ReplicatedState<Sprinkle[]>;
   send(id: string, payload: SprinklePayload, context: Context): Promise<{ delivered: boolean }>;
   call(id: string, method: string, args: readonly unknown[], context: Context): Promise<JsonValue>;
+  lick(id: string, ask: SprinkleLick, context: Context): Promise<string | undefined>;
   claim(id: string, cone: string, context: Context): Promise<void>;
   reload(context: Context): Promise<void>;
   close(context: Context): Promise<void>;
@@ -56,6 +58,7 @@ export interface SprinklesAttach {
   envOf?: (agentId: string, context: Context) => Promise<ExecutionEnv | undefined>;
   homeOf?: (agentId: string) => string | undefined;
   shared?: string;
+  kernelOf?: (agentId: string) => Promise<CgiKernel | undefined>;
 }
 
 const BUILTIN = new Set([WELCOME, SUGGESTIONS]);
@@ -63,10 +66,6 @@ const BUILTIN = new Set([WELCOME, SUGGESTIONS]);
 export interface SprinklePlace {
   dir: string;
   cone: string;
-}
-
-function targetOf(agentId: string): LickTarget {
-  return agentId.startsWith('scoop:') ? (agentId as LickTarget) : `cone:${agentId}`;
 }
 
 export function liveOwner(agents: Agents, owner: string | undefined): string | undefined {
@@ -98,7 +97,8 @@ async function filesIn(
   reserved: ReadonlySet<string>,
   owned: Record<string, string>,
   using: Context,
-  found: Record<string, string> = {}
+  found: Record<string, string> = {},
+  folders: Map<string, string> = new Map()
 ): Promise<Sprinkle[]> {
   const { env, agents } = options;
   const out: Sprinkle[] = [];
@@ -108,6 +108,8 @@ async function filesIn(
       if (reserved.has(name) || out.some((item) => item.id === id)) continue;
       const read = await env.readTextFile(path, using);
       if (place.cone && !owned[id]) found[id] = place.cone;
+      const folder = folderOf(name, path);
+      if (folder) folders.set(id, folder);
       const owner = owned[id] ?? (place.cone || undefined);
       if (read.ok) out.push(entry(name, read.value, ownerOf(agents, owner), id));
     }
@@ -119,7 +121,8 @@ function reloader(
   dir: string,
   builtins: { welcome: string | undefined; suggestions: string | undefined },
   sprinkles: ReplicatedState<Sprinkle[]> & { replace(context: Context, value: Sprinkle[]): void },
-  owners: (context: Context) => Promise<Record<string, string>>
+  owners: (context: Context) => Promise<Record<string, string>>,
+  folders: Map<string, string>
 ) {
   const { env, agents } = options;
   const { welcome, suggestions } = builtins;
@@ -130,7 +133,10 @@ function reloader(
     const offered = stored?.ok === true && stored.value;
     const reserved = new Set([WELCOME, ...(offered ? [SUGGESTIONS] : [])]);
     const found: Record<string, string> = {};
-    const out = await filesIn(options, dir, reserved, owned, using, found);
+    const seen = new Map<string, string>();
+    const out = await filesIn(options, dir, reserved, owned, using, found, seen);
+    folders.clear();
+    for (const [id, folder] of seen) folders.set(id, folder);
     if (Object.keys(found).length)
       await options.harness.commit(async (tx) => {
         const doc = await tx.doc(SprinklesDoc);
@@ -147,7 +153,7 @@ function reloader(
   };
 }
 
-export const NO_OWNER = 'this sprinkle has no owner, so it can only be shown';
+export { NO_OWNER, type SprinkleLick } from './bridge.ts';
 
 export async function ownedRead(
   files: ExecutionEnv,
@@ -203,7 +209,18 @@ export function setupSprinkles() {
       const suggestions = await builtin(SUGGESTIONS);
       const owners = async (using: Context) =>
         (await harness.snapshot(SprinklesDoc, using))?.owners ?? {};
-      const reload = reloader(options, dir, { welcome, suggestions }, sprinkles, owners);
+      const folders = new Map<string, string>();
+      const reload = reloader(options, dir, { welcome, suggestions }, sprinkles, owners, folders);
+      const cgi = cgiBridge({
+        licks,
+        kernelOf: options.kernelOf,
+        find: (id) => find(id),
+        folder: (id) => folders.get(id),
+        async owner(id, using) {
+          const owned = (await owners(using))[id];
+          return options.places ? liveOwner(agents, owned) : ownerOf(agents, owned);
+        },
+      });
       const inside = async (path: unknown, using: Context) => {
         const asked = homePath(path);
         const real = await env.canonicalPath(asked, using);
@@ -312,10 +329,14 @@ export function setupSprinkles() {
               return null;
             },
           };
+          const scripts = cgi.methods(id, args, using);
+          if (Object.hasOwn(scripts, method))
+            return (scripts[method] as () => Promise<JsonValue>)();
           const handler = handlers[method as SprinkleMethod];
           if (!handler) throw new Error(NO_EXEC);
           return handler();
         },
+        lick: cgi.lick,
         async claim(id, cone, using) {
           await reload(using);
           if (id === SUGGESTIONS || !find(id) || (await owners(using))[id]) return;
@@ -330,6 +351,7 @@ export function setupSprinkles() {
           await reload(using);
         },
         async close(using) {
+          cgi.stop();
           offCone();
           clearTimeout(timer);
           await watcher?.stop(using);

@@ -56,6 +56,7 @@ export interface AttachOptions {
   models?: CliOptions['models'];
   panel?: CliOptions['panel'];
   webhook?: CliOptions['webhook'];
+  sprinkle?: CliOptions['sprinkle'];
   mcp?: (names: readonly string[]) => ToolRegistration[];
   layout?: Layout;
   spools?: Spools;
@@ -344,6 +345,7 @@ export function setupScoops(
         layout,
         ...(options.panel ? { panel: options.panel } : {}),
         ...(options.webhook ? { webhook: options.webhook } : {}),
+        sprinkle: options.sprinkle,
         workflow: cliCommand(workflows.workflows, layout, env, agents),
         licks,
       });

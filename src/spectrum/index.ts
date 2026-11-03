@@ -124,7 +124,7 @@ export function createAgentModel(
       connection.owner
     ),
     tray: new TrayAdapter(connection.settings, selected),
-    sprinkles: new SprinkleAdapter(connection, report),
+    sprinkles: new SprinkleAdapter(connection, report, options.page?.tab ?? null),
     memory: new MemoryAdapter(connection, report),
     changes: new ChangesAdapter(connection, report),
     notices: new NoticesAdapter(connection.settings, report, options.notices),

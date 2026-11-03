@@ -2,6 +2,7 @@ import type { Context, ReplicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentsState } from '../agents.ts';
 import type { Licks } from '../licks/licks.ts';
+import { sprinklesOf } from '../sprinkles/cgi.ts';
 import type { Approvals } from './index.ts';
 import {
   type Approval,
@@ -28,6 +29,7 @@ export interface SudoRequest {
   cwd?: string;
   pid?: number;
   tag?: string;
+  tags?: string[];
   tty?: string;
   createdAt?: number;
   expiresAt: number;
@@ -85,6 +87,9 @@ export function sudoRequester(
 ): { requester: ApprovalRequester; agentId: string } {
   const tag = tagOf(request.tag);
   const name = request.user;
+  const sprinkle = sprinklesOf(Array.isArray(request.tags) ? request.tags.filter(text) : [])[0];
+  if (sprinkle)
+    return { requester: { kind: 'user', name, where: `the ${sprinkle} sprinkle` }, agentId: '' };
   if (tag?.kind === 'agent' && text(tag.agentId)) {
     const id = tag.agentId.startsWith('cone:') ? tag.agentId.slice('cone:'.length) : tag.agentId;
     const known = agents?.cones[id]?.name ?? agents?.scoops[id]?.name ?? name;
