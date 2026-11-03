@@ -11,6 +11,7 @@ export const JUDGE_MODEL: ModelRef = { provider: 'adobe', modelId: 'clef' };
 export const JUDGE_ALLOW = 0.8;
 export const JUDGE_DENY = 0.8;
 export const JUDGE_TIMEOUT = 15_000;
+export const ASK_MIN_MS = 30_000;
 export const UNTRUSTED_LIMIT = 4000;
 
 export type JudgeOutcome = 'approve' | 'deny' | 'ask';
@@ -142,6 +143,9 @@ export function verdictOf(result: ClassifierResult, model: string): Judgement {
     };
   return { outcome: 'ask', verdict: { ...lean(low, high, aligned), ...facts } };
 }
+
+export const routed = (outcome: JudgeOutcome, present: boolean): JudgeOutcome =>
+  outcome === 'deny' && present ? 'ask' : outcome;
 
 export function judgeModelOf(text: string | undefined): ModelRef | null {
   let named: unknown;

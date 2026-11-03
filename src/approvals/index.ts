@@ -7,7 +7,7 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { Clock } from '../clock.ts';
-import type { ApprovalJudge, Judgement } from './judge.ts';
+import { type ApprovalJudge, ASK_MIN_MS, type Judgement, routed } from './judge.ts';
 import {
   APPROVAL_MS,
   type Approval,
@@ -33,6 +33,7 @@ import {
 
 export * from './intent.ts';
 export * from './judge.ts';
+export * from './present.ts';
 export * from './record.ts';
 
 export type ApprovalDecided =
@@ -74,6 +75,7 @@ export interface ApprovalsAttach {
   scoops?: ScoopRouter;
   guestAlways?: (kind: ApprovalKind) => boolean;
   sudoApprover?: () => unknown;
+  present?: (item: Approval, context: Context) => Promise<boolean>;
 }
 
 const copy = (items: readonly Approval[]): Approval[] => JSON.parse(JSON.stringify(items));
@@ -120,15 +122,23 @@ const withdrawIn =
     return hit.map((item) => copy([item])[0] as Approval);
   };
 
-const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: ApprovalsState) => {
-  const item = doc.items.find((entry) => entry.id === id);
-  if (item?.tier !== 'agent') return undefined;
-  const late = item.state === 'unanswered' && item.reason === REASONS.timeout && !item.verdict;
-  if (item.state !== 'pending' && !(late && judgement.verdict)) return undefined;
-  if (judgement.verdict) item.verdict = judgement.verdict;
-  if (late) return copy([item])[0] as Approval;
-  if (judgement.outcome === 'ask') item.tier = 'user';
-  else {
+type Judged = { judgement: Judgement; present: boolean };
+
+const judgedIn =
+  (id: string, { judgement, present }: Judged, now: () => number) =>
+  (doc: ApprovalsState) => {
+    const item = doc.items.find((entry) => entry.id === id);
+    if (item?.tier !== 'agent') return undefined;
+    const late = item.state === 'unanswered' && item.reason === REASONS.timeout && !item.verdict;
+    if (item.state !== 'pending' && !(late && judgement.verdict)) return undefined;
+    if (judgement.verdict) item.verdict = judgement.verdict;
+    if (late) return copy([item])[0] as Approval;
+    const outcome = routed(judgement.outcome, present && item.expiresAt - now() >= ASK_MIN_MS);
+    if (outcome === 'ask') {
+      item.tier = 'user';
+      if (judgement.outcome === 'deny') item.always = false;
+      return copy([item])[0] as Approval;
+    }
     const at = now();
     const ruling = ruled(
       item,
@@ -139,9 +149,21 @@ const judgedIn = (id: string, judgement: Judgement, now: () => number) => (doc: 
     );
     if (ruling.answer) item.answer = ruling.answer;
     if (ruling.settle) mark(item, ruling.settle, at);
-  }
-  return copy([item])[0] as Approval;
-};
+    return copy([item])[0] as Approval;
+  };
+
+async function judgedBy(
+  judge: ApprovalJudge,
+  present: ApprovalsAttach['present'],
+  item: Approval,
+  using: Context
+): Promise<Judged> {
+  const judgement = await judge
+    .judge(item, using)
+    .catch((error: unknown): Judgement => ({ outcome: 'ask', error: String(error) }));
+  if (judgement.outcome !== 'deny' || !present) return { judgement, present: false };
+  return { judgement, present: await present(item, using).catch(() => false) };
+}
 
 function following(
   watch: WatchHandle<Readonly<ApprovalsState>>,
@@ -290,15 +312,14 @@ export async function attachApprovals(
     };
     if (signal?.aborted) return abort();
     signal?.addEventListener('abort', abort, { once: true });
-    const judgement = await judge
-      .judge(item, using)
-      .catch((error: unknown): Judgement => ({ outcome: 'ask', error: String(error) }));
+    const judged = await judgedBy(judge, options.present, item, using);
     signal?.removeEventListener('abort', abort);
     if (gone || closed) return;
-    const after = await serial(judgedIn(item.id, judgement, now), BACKGROUND_CONTEXT).catch(
+    const after = await serial(judgedIn(item.id, judged, now), BACKGROUND_CONTEXT).catch(
       () => undefined
     );
-    if (after) await judge.record?.(after, judgement, BACKGROUND_CONTEXT).catch(() => undefined);
+    if (after)
+      await judge.record?.(after, judged.judgement, BACKGROUND_CONTEXT).catch(() => undefined);
   };
   return {
     state,

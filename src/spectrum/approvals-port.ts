@@ -49,6 +49,9 @@ function requesterOf(item: Item): ApprovalRequester {
   };
 }
 
+const verdictOf = (item: Item) =>
+  item.verdict ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } } : {};
+
 export function shown(item: Item, agentName: string | undefined): Approval {
   const base = {
     id: item.id,
@@ -66,6 +69,7 @@ export function shown(item: Item, agentName: string | undefined): Approval {
       ...(cwd ? { cwd } : {}),
       always: item.always,
       ...(alwaysScope ? { alwaysScope } : {}),
+      ...verdictOf(item),
     };
   }
   const guest = {
@@ -73,9 +77,7 @@ export function shown(item: Item, agentName: string | undefined): Approval {
     agentId: item.agentId,
     ...(agentName ? { agentName } : {}),
     always: item.always,
-    ...(item.verdict
-      ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } }
-      : {}),
+    ...verdictOf(item),
   };
   if (item.kind === 'guest-tool')
     return {

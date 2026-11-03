@@ -13,6 +13,10 @@ import {
 
 export type SudoAnswer = 'once' | 'always' | 'deny';
 
+export type SudoDenial = { answer: 'deny'; message: string };
+
+export type SudoReply = SudoAnswer | SudoDenial;
+
 export interface SudoRequest {
   id: string;
   kind: 'sudo';
