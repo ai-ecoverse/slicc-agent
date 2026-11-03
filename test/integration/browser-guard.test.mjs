@@ -116,6 +116,16 @@ test('bash scopes browser refusals to the invoked tool and reports its protected
       'bash /usr/bin/playwright-cli open https://seven.sliccy.ai/',
       'cp /usr/bin/playwright-cli /tmp/p && /tmp/p open https://seven.sliccy.ai/',
       'timeout 30 playwright-cli open https://vault.sliccy.ai/',
+      `rg --pre 'playwright-cli open https://seven.sliccy.ai/' pattern /tmp/input`,
+      `rg --pre='playwright-cli open https://seven.sliccy.ai/' pattern /tmp/input`,
+      `sort --compress-program='playwright-cli open https://seven.sliccy.ai/' /tmp/input`,
+      `sort --compress-program 'playwright-cli open https://seven.sliccy.ai/' /tmp/input`,
+      `git grep -O'playwright-cli open https://seven.sliccy.ai/' pattern`,
+      `git grep --open-files-in-pager='playwright-cli open https://seven.sliccy.ai/' pattern`,
+      `git log -c 'alias.x=!playwright-cli open https://seven.sliccy.ai/'`,
+      `git log --exec-path='playwright-cli https://seven.sliccy.ai/'`,
+      `git -c 'alias.x=!playwright-cli open https://seven.sliccy.ai/' log`,
+      `git --exec-path='playwright-cli https://seven.sliccy.ai/' log`,
     ];
     blocked.push(
       ...reviewed.map((command) => [
