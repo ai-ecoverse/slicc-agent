@@ -1,6 +1,6 @@
 import { defineExtension, type Extension, hook, ToolTask } from '@earendil-works/pi-durable';
 import { FACADE_PORT, kernelHost, ownKernelServer } from '../kernel/loopback.ts';
-import { PROTECTED_RULES, type ProtectedMatcher, protectedMatcher } from './origins.ts';
+import { folded, PROTECTED_RULES, type ProtectedMatcher, protectedMatcher } from './origins.ts';
 import { commands, MAX_DEPTH, type SimpleCommand, words } from './shell.ts';
 
 export const BROWSER_GUARD = 'slicc-browser-guard';
@@ -14,6 +14,7 @@ const SCHEMED = /^[a-z][a-z0-9+.-]*:/i;
 const EMBEDDED = /[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>(){}\\]+/gi;
 const RELATIVE = /(?<![:\w/])\/\/[^\s'"`<>(){}\\/]+/g;
 const PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|-{1,2}[A-Za-z0-9-]+)=/;
+const IPV6 = /\[[0-9a-f]*:/i;
 const HOSTLIKE =
   /^[^\s/?#]*(?:\.|%2e|%e3%80%82|%ef%bc%8e|%ef%bd%a1|[\u3002\uff0e\uff61])[^\s/?#]*(?:[/?#]\S*)?$/i;
 
@@ -53,8 +54,12 @@ export function candidates(raw: string): Candidate[] {
     ...(value.match(RELATIVE) ?? []).map((relative) => `https:${relative}`),
   ].map((url) => ({ url, lenient: false }));
   if (!/^[/.~-]/.test(value) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(value))
-    found.push({ url: `https://${value}`, lenient: !HOSTLIKE.test(value) });
-  if (value.startsWith('//')) found.push({ url: `https:${value}`, lenient: false });
+    found.push({
+      url: `https://${value}`,
+      lenient: !HOSTLIKE.test(value) || (/[[\]]/.test(value) && !IPV6.test(folded(value))),
+    });
+  if (value.startsWith('//') && value.length > 2)
+    found.push({ url: `https:${value}`, lenient: false });
   return found.filter((each) => SCHEMED.test(each.url));
 }
 
@@ -150,11 +155,13 @@ function inertText(source: string, matcher: ProtectedMatcher): string {
 }
 
 function protectedArgument(args: string[], matcher: ProtectedMatcher): string | undefined {
-  for (const arg of args.flatMap((arg) => [arg, ...words(arg)])) {
+  for (const arg of args.flatMap((arg) => words(arg))) {
     for (const { url, lenient } of candidates(arg)) {
       const rule = foreignKernel(url)
         ? 'foreign kernel host or CDP facade'
-        : matcher.rule(url, { readOnly: lenient });
+        : matcher.rule(url, {
+            readOnly: lenient && (parse(url) !== undefined || !matcher.mentions(url)),
+          });
       if (rule) return `${REFUSAL} Rule: ${rule}; target: ${url}`;
     }
   }

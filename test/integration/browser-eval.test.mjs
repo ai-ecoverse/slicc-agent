@@ -65,6 +65,11 @@ test('bash accepts ordinary CGI eval code and refuses protected URLs inside eval
       '[www%2Esliccy%2Eai]',
       '[www\u3002sliccy\uff0eai]',
       '[www%E3%80%82sliccy%EF%BD%A1ai]',
+      '[www%252Esliccy%252Eai]',
+      '[ｗｗｗ．ｓｌｉｃｃｙ．ａｉ]',
+      '[fe80::..]',
+      '[fe80::g.]',
+      '[sli\u200bccy.ai]',
       '() => { // https://www.sliccy.ai/os/\nreturn location.href; }',
     ];
     const blocked = protectedExpressions.map(
