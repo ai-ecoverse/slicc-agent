@@ -25,7 +25,17 @@ import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from '.
 import type { ProcessGroups } from './groups.ts';
 import type { Jobs } from './jobs.ts';
 import { dirname, normalize, resolve } from './paths.ts';
-import { nativeWatch, type PathsChange, type PollOptions, pollWatch, RESCAN_MS } from './watch.ts';
+import {
+  DEEP_RESCAN_MS,
+  nativeWatch,
+  type PathsChange,
+  type PolledWatcher,
+  type PollOptions,
+  type PollTiming,
+  pollWatch,
+  RESCAN_BACKOFF,
+  RESCAN_MS,
+} from './watch.ts';
 
 export interface KernelEnvOptions {
   cwd: string;
@@ -274,24 +284,42 @@ export class SliccKernelEnv implements ExecutionEnv {
         this.#poll.mode === 'polling'
           ? undefined
           : await nativeWatch(this.#fs, this.cwd, targets, reported);
-      const intervalMs = native ? (this.#poll.rescanMs ?? RESCAN_MS) : this.#poll.intervalMs;
       const rescanned = (change: PathsChange) => {
         native?.recheck(change.paths);
         onChange(change);
       };
-      const polled = await pollWatch(this.#fs, this.cwd, targets, rescanned, {
-        ...(intervalMs === undefined ? {} : { intervalMs }),
-      });
-      absorb = (paths) => polled.absorb(paths);
-      const watcher: FileWatcher = native
-        ? {
-            mode: 'native',
-            async stop(closing: Context) {
-              await native.stop(closing);
-              await polled.stop(closing);
-            },
-          }
-        : polled;
+      const poll = (group: readonly WatchTarget[], timing: PollTiming) =>
+        pollWatch(this.#fs, this.cwd, group, rescanned, timing);
+      const polled: PolledWatcher[] = [];
+      if (!native) {
+        const { intervalMs } = this.#poll;
+        polled.push(await poll(targets, intervalMs === undefined ? {} : { intervalMs }));
+      } else {
+        const deep = targets.filter((target) => target.recursive === true);
+        const shallow = targets.filter((target) => target.recursive !== true);
+        const backoff = RESCAN_BACKOFF;
+        if (deep.length)
+          polled.push(
+            await poll(deep, { intervalMs: this.#poll.deepRescanMs ?? DEEP_RESCAN_MS, backoff })
+          );
+        if (shallow.length)
+          polled.push(
+            await poll(shallow, { intervalMs: this.#poll.rescanMs ?? RESCAN_MS, backoff })
+          );
+      }
+      absorb = (paths) => {
+        for (const each of polled) each.absorb(paths);
+      };
+      const stopPolls = async (closing: Context) => {
+        for (const each of polled) await each.stop(closing);
+      };
+      const watcher: FileWatcher = {
+        mode: native ? 'native' : 'polling',
+        async stop(closing: Context) {
+          await native?.stop(closing);
+          await stopPolls(closing);
+        },
+      };
       this.#watchers.add(watcher);
       return {
         mode: watcher.mode,

@@ -65,12 +65,28 @@ export function differences(before: Snapshot, after: Snapshot): string[] {
 export interface PollOptions {
   intervalMs?: number;
   rescanMs?: number;
+  deepRescanMs?: number;
   mode?: 'native' | 'polling';
 }
 
+export interface PollTiming {
+  intervalMs?: number;
+  backoff?: number;
+}
+
 export const RESCAN_MS = 2000;
+export const DEEP_RESCAN_MS = 30_000;
 export const POLL_MS = 500;
 export const SCAN_BACKOFF = 10;
+export const RESCAN_BACKOFF = 50;
+
+let lane: Promise<unknown> = Promise.resolve();
+
+export function exclusive<T>(run: () => Promise<T>): Promise<T> {
+  const turn = lane.then(run);
+  lane = turn.catch(() => undefined);
+  return turn;
+}
 
 export function pollInterval(targets: readonly WatchTarget[]): number {
   return targets.some((target) => target.recursive === true) ? RESCAN_MS : POLL_MS;
@@ -117,28 +133,47 @@ export async function pollWatch(
   cwd: string,
   targets: readonly WatchTarget[],
   onChange: (change: PathsChange) => void,
-  options: PollOptions = {}
+  options: PollTiming = {}
 ): Promise<PolledWatcher> {
-  const first = Date.now();
-  let current = await snapshot(fs, cwd, targets);
-  let took = Date.now() - first;
+  let took = 0;
+  const timed = async <T>(run: () => Promise<T>): Promise<T> => {
+    const started = Date.now();
+    try {
+      return await run();
+    } finally {
+      took = Date.now() - started;
+    }
+  };
+  let current = await exclusive(() => timed(() => snapshot(fs, cwd, targets)));
   const resolved = targets.map((target) => ({ ...target, path: resolve(cwd, target.path) }));
   const interval = options.intervalMs ?? pollInterval(targets);
+  const backoff = options.backoff ?? SCAN_BACKOFF;
   const absorbing = new Set<string>();
   let open = true;
   let due = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = false;
-  let done = Promise.resolve();
+  let active: Promise<unknown> | undefined;
+  const turn = (run: () => Promise<void>) =>
+    exclusive(async () => {
+      if (!open) return;
+      active = run();
+      try {
+        await active;
+      } finally {
+        active = undefined;
+      }
+    });
   const tick = async () => {
-    const started = Date.now();
-    const next = await snapshot(fs, cwd, targets);
-    took = Date.now() - started;
-    const heard = [...absorbing];
-    const paths = differences(current, next).filter(
-      (path) => !heard.some((known) => inside(known, path) || dirname(known) === path)
-    );
-    current = next;
+    let paths: string[] = [];
+    await turn(async () => {
+      const next = await timed(() => snapshot(fs, cwd, targets));
+      const heard = [...absorbing];
+      paths = differences(current, next).filter(
+        (path) => !heard.some((known) => inside(known, path) || dirname(known) === path)
+      );
+      current = next;
+    });
     if (open && paths.length > 0) onChange({ kind: 'paths', paths });
   };
   const work = async () => {
@@ -147,7 +182,7 @@ export async function pollWatch(
         if (absorbing.size > 0) {
           const paths = outermost(absorbing);
           absorbing.clear();
-          await absorbPaths(fs, current, resolved, paths);
+          await turn(() => absorbPaths(fs, current, resolved, paths));
         } else {
           due = false;
           await tick().catch(() => undefined);
@@ -166,13 +201,13 @@ export async function pollWatch(
         due = true;
         kick();
       },
-      Math.max(interval, took * SCAN_BACKOFF)
+      Math.max(interval, took * backoff)
     );
   };
   const kick = () => {
     if (running) return;
     running = true;
-    done = work();
+    void work();
   };
   schedule();
   return {
@@ -186,7 +221,7 @@ export async function pollWatch(
       open = false;
       clearTimeout(timer);
       timer = undefined;
-      await done;
+      await active?.catch(() => undefined);
     },
   };
 }
@@ -296,7 +331,7 @@ export async function nativeWatch(
     if (!(await fs.exists(path).catch(() => false)) || !(await attach(entry.target))) return;
     waiting.delete(id);
     void entry.handle?.close();
-    const found = await snapshot(fs, '/', [entry.target]);
+    const found = await exclusive(() => snapshot(fs, '/', [entry.target]));
     const paths = [...found.keys()].flatMap((at) => mapChange(live, at));
     if (open && paths.length) onChange({ kind: 'paths', paths: [...new Set(paths)] });
   };

@@ -5,7 +5,7 @@ import { launch, staged } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-test('watch: a missing target keeps its group native, is heard once it is created, and costs no scans', async (t) => {
+test('watch: a missing target keeps its group native, is heard once it is created, and is not rescanned for seconds', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await staged(page, 'watch a missing target', async () => {
@@ -25,7 +25,7 @@ test('watch: a missing target keeps its group native, is heard once it is create
       counts.stat += 1;
       return client.fs.stat(path);
     };
-    const env = new SliccKernelEnv({ ...client, fs }, { cwd: '/', watch: { rescanMs: 600_000 } });
+    const env = new SliccKernelEnv({ ...client, fs }, { cwd: '/' });
     const heard = [];
     let wake = () => {};
     const result = await env.watch(
@@ -51,7 +51,7 @@ test('watch: a missing target keeps its group native, is heard once it is create
         wake();
       });
     const idle = { ...counts };
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     const scans = { readdir: counts.readdir - idle.readdir, stat: counts.stat - idle.stat };
     await client.fs.writeFile('/home/w/here/a.txt', 'a');
     await until('/home/w/here/a.txt');
