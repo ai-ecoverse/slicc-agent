@@ -82,6 +82,33 @@ test('bash scopes browser refusals to the invoked tool and reports its protected
       ['xargs -n 1 playwright-cli open https://seven.sliccy.ai/', 'protected domain sliccy.ai'],
       ['echo playwright-cli; eval "$browser_command"', 'command too dynamic to check'],
     ];
+    const reviewed = [
+      'playwright-cli open &>/tmp/out https://seven.sliccy.ai/',
+      'playwright-cli &>/tmp/out open https://seven.sliccy.ai/',
+      'playwright-cli open &>>/tmp/out https://seven.sliccy.ai/',
+      'function f { playwright-cli open https://seven.sliccy.ai/; }; f',
+      'coproc playwright-cli open https://seven.sliccy.ai/; wait',
+      "bash <<'EOF'\nplaywright-cli open https://seven.sliccy.ai/\nEOF",
+      "bash <(echo 'playwright-cli open https://seven.sliccy.ai/')",
+      "cat > /tmp/x.sh <<'EOF'\nplaywright-cli open https://seven.sliccy.ai/\nEOF\nsh /tmp/x.sh",
+      "ksh -c 'playwright-cli open https://seven.sliccy.ai/'",
+      'timeout 2 playwright-cli open https://seven.sliccy.ai/',
+      'nice -n 19 playwright-cli open https://seven.sliccy.ai/',
+      'stdbuf -oL playwright-cli open https://seven.sliccy.ai/',
+      'find "$PWD" -maxdepth 0 -exec playwright-cli open https://seven.sliccy.ai/ \\;',
+      "printf '%s\\n' https://seven.sliccy.ai/ | xargs playwright-cli open",
+      "printf '%s\\n' https://seven.sliccy.ai/ | xargs -I {} playwright-cli open {}",
+      'xargs -d x playwright-cli open https://seven.sliccy.ai/ < /dev/null',
+      'xargs --delimiter x playwright-cli open https://seven.sliccy.ai/ < /dev/null',
+      'script -q /dev/null playwright-cli open https://seven.sliccy.ai/',
+      `python3 -c 'import os; os.system("playwright-cli open https://seven.sliccy.ai/")'`,
+      `node -e 'require("child_process").execSync("playwright-cli open https://seven.sliccy.ai/")'`,
+      'command timeout 5 playwright-cli open https://seven.sliccy.ai/',
+      'setsid --wait playwright-cli open https://seven.sliccy.ai/',
+      'ionice -c 3 playwright-cli open https://seven.sliccy.ai/',
+      'echo https://seven.sliccy.ai/ | xargs playwright-cli open',
+    ];
+    blocked.push(...reviewed.map((command) => [command, 'protected domain sliccy.ai']));
     const params = new URLSearchParams([
       ...[...allowed, ...blocked.map(([command]) => command)].map((command) => [
         'tool',
@@ -110,9 +137,10 @@ test('bash scopes browser refusals to the invoked tool and reports its protected
   }
   assert.match(seen.results[4], /issue-created/);
   assert.match(seen.results[5], /issue-created[\s\S]*issue-created/);
-  for (const [index, [command, rule]] of seen.blocked.entries()) {
-    assert.ok(seen.results[seen.allowed.length + index].includes(`Rule: ${rule}`), command);
-  }
+  const missed = seen.blocked.filter(
+    ([, rule], index) => !seen.results[seen.allowed.length + index].includes(`Rule: ${rule}`)
+  );
+  assert.deepEqual(missed, []);
   assert.doesNotMatch(seen.invocations, /sliccy\.ai|foreign\.kernel|9222\.kernel/);
   assert.equal(seen.invocations.trim().split('\n').length, 4);
 });
