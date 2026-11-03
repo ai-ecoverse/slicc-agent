@@ -259,6 +259,44 @@ test('nothing a guest triggered can be allowed always, while sudo can', async (t
   assert.deepEqual(seen.answers, ['once', 'always']);
 });
 
+test('an owner can answer always', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  const seen = await page.evaluate(async () => {
+    const { owner, ask, until, record, listed } = globalThis.t;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    const item = await ask({
+      kind: 'sudo',
+      agentId: 'cone',
+      requester: { kind: 'agent', name: 'cone', agentId: 'cone' },
+      tier: 'user',
+      always: true,
+      detail: { command: 'ls /root', target: 'root' },
+    });
+    await until(() => listed(model, item.id), 'the approval');
+    const offered = model.approvals.list().find(({ id }) => id === item.id).always;
+    const before = structuredClone(record(local, item.id));
+    await model.approvals.decide(item.id, 'always');
+    await until(() => record(local, item.id)?.state === 'approved', 'the answer');
+    const after = structuredClone(record(local, item.id));
+    await local.close();
+    await owner.release();
+    return { offered, before, after };
+  });
+  assert.equal(seen.offered, true);
+  assert.equal(seen.before.state, 'pending');
+  assert.equal(seen.before.decidedBy, null);
+  assert.ok(seen.after.decidedAt >= seen.before.createdAt);
+  assert.deepEqual(seen.after, {
+    ...seen.before,
+    state: 'approved',
+    decidedBy: 'owner',
+    answer: 'always',
+    decidedAt: seen.after.decidedAt,
+  });
+});
+
 test('a pending approval survives a reload, and one answered before it stays answered', async (t) => {
   const page = await chrome.page(t);
   const directory = `/approvals-${Date.now()}`;
