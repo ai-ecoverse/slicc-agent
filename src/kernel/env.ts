@@ -25,7 +25,7 @@ import { attempt, info, KernelDirReader, SnapshotLines, SnapshotReader } from '.
 import type { ProcessGroups } from './groups.ts';
 import type { Jobs } from './jobs.ts';
 import { dirname, normalize, resolve } from './paths.ts';
-import { nativeWatch, type PollOptions, pollWatch, RESCAN_MS } from './watch.ts';
+import { nativeWatch, type PathsChange, type PollOptions, pollWatch, RESCAN_MS } from './watch.ts';
 
 export interface KernelEnvOptions {
   cwd: string;
@@ -275,7 +275,11 @@ export class SliccKernelEnv implements ExecutionEnv {
           ? undefined
           : await nativeWatch(this.#fs, this.cwd, targets, reported);
       const intervalMs = native ? (this.#poll.rescanMs ?? RESCAN_MS) : this.#poll.intervalMs;
-      const polled = await pollWatch(this.#fs, this.cwd, targets, onChange, {
+      const rescanned = (change: PathsChange) => {
+        native?.recheck(change.paths);
+        onChange(change);
+      };
+      const polled = await pollWatch(this.#fs, this.cwd, targets, rescanned, {
         ...(intervalMs === undefined ? {} : { intervalMs }),
       });
       absorb = (paths) => polled.absorb(paths);

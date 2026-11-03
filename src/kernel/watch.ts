@@ -69,10 +69,25 @@ export interface PollOptions {
 }
 
 export const RESCAN_MS = 2000;
+export const POLL_MS = 500;
+export const SCAN_BACKOFF = 10;
+
+export function pollInterval(targets: readonly WatchTarget[]): number {
+  return targets.some((target) => target.recursive === true) ? RESCAN_MS : POLL_MS;
+}
 
 function baseOf(path: string, target: WatchTarget): string | undefined {
   if (inside(path, target.path)) return target.path;
   return inside(target.path, path) ? path : undefined;
+}
+
+function outermost(paths: Iterable<string>): string[] {
+  const out: string[] = [];
+  for (const path of [...paths].sort()) {
+    const last = out.at(-1);
+    if (last === undefined || !inside(last, path)) out.push(path);
+  }
+  return out;
 }
 
 async function absorbPaths(
@@ -85,10 +100,15 @@ async function absorbPaths(
     for (const target of targets) {
       const base = baseOf(path, target);
       if (base === undefined) continue;
-      for (const key of [...current.keys()]) if (inside(base, key)) current.delete(key);
+      const was = current.get(base);
+      current.delete(base);
+      if (was?.startsWith('d'))
+        for (const key of [...current.keys()]) if (inside(base, key)) current.delete(key);
       await scan(fs, base, target, base === target.path || target.recursive === true, current);
     }
 }
+
+export type PathsChange = Extract<FileChange, { kind: 'paths' }>;
 
 export type PolledWatcher = FileWatcher & { absorb(paths: readonly string[]): void };
 
@@ -96,32 +116,77 @@ export async function pollWatch(
   fs: KernelFs,
   cwd: string,
   targets: readonly WatchTarget[],
-  onChange: (change: FileChange) => void,
+  onChange: (change: PathsChange) => void,
   options: PollOptions = {}
 ): Promise<PolledWatcher> {
+  const first = Date.now();
   let current = await snapshot(fs, cwd, targets);
+  let took = Date.now() - first;
   const resolved = targets.map((target) => ({ ...target, path: resolve(cwd, target.path) }));
-  const refresh = (paths: readonly string[]) => absorbPaths(fs, current, resolved, paths);
+  const interval = options.intervalMs ?? pollInterval(targets);
+  const absorbing = new Set<string>();
   let open = true;
-  let running = Promise.resolve();
+  let due = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running = false;
+  let done = Promise.resolve();
   const tick = async () => {
+    const started = Date.now();
     const next = await snapshot(fs, cwd, targets);
-    const paths = differences(current, next);
+    took = Date.now() - started;
+    const heard = [...absorbing];
+    const paths = differences(current, next).filter(
+      (path) => !heard.some((known) => inside(known, path) || dirname(known) === path)
+    );
     current = next;
     if (open && paths.length > 0) onChange({ kind: 'paths', paths });
   };
-  const timer = setInterval(() => {
-    running = running.then(tick);
-  }, options.intervalMs ?? 100);
+  const work = async () => {
+    try {
+      while (open && (absorbing.size > 0 || due)) {
+        if (absorbing.size > 0) {
+          const paths = outermost(absorbing);
+          absorbing.clear();
+          await absorbPaths(fs, current, resolved, paths);
+        } else {
+          due = false;
+          await tick().catch(() => undefined);
+        }
+      }
+    } finally {
+      running = false;
+      schedule();
+    }
+  };
+  const schedule = () => {
+    if (!open || timer !== undefined) return;
+    timer = setTimeout(
+      () => {
+        timer = undefined;
+        due = true;
+        kick();
+      },
+      Math.max(interval, took * SCAN_BACKOFF)
+    );
+  };
+  const kick = () => {
+    if (running) return;
+    running = true;
+    done = work();
+  };
+  schedule();
   return {
     mode: 'polling',
     absorb(paths) {
-      running = running.then(() => refresh(paths));
+      if (!open || paths.length === 0) return;
+      for (const path of paths) absorbing.add(path);
+      kick();
     },
     async stop(_context: Context) {
       open = false;
-      clearInterval(timer);
-      await running;
+      clearTimeout(timer);
+      timer = undefined;
+      await done;
     },
   };
 }
@@ -136,7 +201,7 @@ function inside(base: string, path: string): boolean {
   return path === base || path.startsWith(base === '/' ? '/' : `${base}/`);
 }
 
-const FALLBACK = new Set(['ENOSYS', 'ENOENT', 'ENOTDIR']);
+const FALLBACK = new Set(['ENOENT', 'ENOTDIR']);
 
 type Watched = WatchTarget & { real: string };
 
@@ -154,50 +219,127 @@ export function mapChange(targets: readonly Watched[], path: string): string[] {
   return out;
 }
 
+type Handle = { close(): unknown };
+
+export type NativeWatcher = FileWatcher & { recheck(paths: readonly string[]): void };
+
+function codeOf(error: unknown): string {
+  return String((Object(error) as { code?: unknown }).code);
+}
+
 export async function nativeWatch(
   fs: KernelFs,
   cwd: string,
   targets: readonly WatchTarget[],
   onChange: (change: FileChange) => void
-): Promise<FileWatcher | undefined> {
+): Promise<NativeWatcher | undefined> {
   const watch = fs.watch?.bind(fs);
   if (!watch) return undefined;
-  const resolved: Watched[] = [];
-  for (const target of targets) {
-    const path = resolve(cwd, target.path);
-    if (!(await fs.exists(path).catch(() => false))) return undefined;
-    resolved.push({ ...target, path, real: await fs.realpath(path).catch(() => path) });
-  }
+  const live: Watched[] = [];
+  const handles: Handle[] = [];
+  const waiting = new Map<number, { target: WatchTarget; handle: Handle | undefined }>();
+  const dirty = new Set<number>();
+  let settling = false;
+  let settled = Promise.resolve();
   let open = true;
-  const handles: { close(): unknown }[] = [];
-  const closeAll = async () => {
-    for (const handle of handles.splice(0)) await handle.close();
+  const recheck = (paths: readonly string[] | undefined) => {
+    if (!open) return;
+    for (const [id, { target }] of waiting)
+      if (!paths || paths.some((at) => inside(at, target.path) || inside(target.path, at)))
+        dirty.add(id);
+    if (dirty.size > 0) kick();
   };
   const report = (change: { paths: string[] } | { overflow: true }) => {
     if (!open) return;
     if (!('paths' in change)) {
       onChange({ kind: 'overflow' });
+      recheck(undefined);
       return;
     }
-    const paths = [...new Set(change.paths.flatMap((path) => mapChange(resolved, path)))];
+    const paths = [...new Set(change.paths.flatMap((path) => mapChange(live, path)))];
     if (paths.length) onChange({ kind: 'paths', paths });
+    recheck(change.paths);
+  };
+  const heard = (change: { paths: string[] } | { overflow: true }) =>
+    recheck('paths' in change ? change.paths : undefined);
+  const attach = async (target: WatchTarget): Promise<boolean> => {
+    const real = await fs.realpath(target.path).catch(() => target.path);
+    const recursive = { recursive: target.recursive === true };
+    const opened: Handle[] = [];
+    try {
+      opened.push(await watch([target.path], recursive, report));
+      if (real !== target.path) opened.push(await watch([real], recursive, report));
+    } catch (error) {
+      for (const handle of opened) await handle.close();
+      if (FALLBACK.has(codeOf(error))) return false;
+      throw error;
+    }
+    handles.push(...opened);
+    live.push({ ...target, real });
+    return true;
+  };
+  const wait = async (id: number, target: WatchTarget) => {
+    const entry = { target, handle: undefined as Handle | undefined };
+    waiting.set(id, entry);
+    entry.handle = await watch([target.path], { recursive: true }, heard).catch(
+      (error: unknown) => {
+        if (codeOf(error) === 'ENOSYS') throw error;
+        return undefined;
+      }
+    );
+    if (await fs.exists(target.path).catch(() => false)) dirty.add(id);
+  };
+  const settle = async (id: number) => {
+    const entry = waiting.get(id);
+    if (!entry || !open) return;
+    const { path } = entry.target;
+    if (!(await fs.exists(path).catch(() => false)) || !(await attach(entry.target))) return;
+    waiting.delete(id);
+    void entry.handle?.close();
+    const found = await snapshot(fs, '/', [entry.target]);
+    const paths = [...found.keys()].flatMap((at) => mapChange(live, at));
+    if (open && paths.length) onChange({ kind: 'paths', paths: [...new Set(paths)] });
+  };
+  const drain = async () => {
+    try {
+      while (open && dirty.size > 0) {
+        const id = dirty.values().next().value as number;
+        dirty.delete(id);
+        await settle(id).catch(() => undefined);
+      }
+    } finally {
+      settling = false;
+    }
+  };
+  const kick = () => {
+    if (settling) return;
+    settling = true;
+    settled = drain();
+  };
+  const closeAll = async () => {
+    open = false;
+    for (const handle of handles.splice(0)) await handle.close();
+    for (const entry of waiting.values()) await entry.handle?.close();
+    waiting.clear();
   };
   try {
-    for (const target of resolved) {
-      const recursive = { recursive: target.recursive === true };
-      handles.push(await watch([target.path], recursive, report));
-      if (target.real !== target.path) handles.push(await watch([target.real], recursive, report));
+    for (const [id, target] of targets.entries()) {
+      const resolved = { ...target, path: resolve(cwd, target.path) };
+      const present = await fs.exists(resolved.path).catch(() => false);
+      if (!present || !(await attach(resolved))) await wait(id, resolved);
     }
   } catch (error) {
     await closeAll();
-    if (FALLBACK.has((error as { code?: string }).code ?? '')) return undefined;
+    if (codeOf(error) === 'ENOSYS') return undefined;
     throw error;
   }
+  if (dirty.size > 0) kick();
   return {
     mode: 'native',
+    recheck,
     async stop(_context: Context) {
-      open = false;
       await closeAll();
+      await settled;
     },
   };
 }
