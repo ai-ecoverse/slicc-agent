@@ -23,7 +23,6 @@ import {
   seedPolicy,
   verdictRecorder,
 } from './approvals/index.ts';
-import { browserGuard } from './browser/guard.ts';
 import { attachChanges, CHANGES_MS } from './changes/index.ts';
 import {
   codemodeExtension,
@@ -302,10 +301,9 @@ async function modelsOf(
   return { store, records, providers, fields, models, bases, endpoints, defaultModel };
 }
 
-function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>, origin: string) {
+function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>) {
   const registry = createRegistry();
   registry.install(CodingTools);
-  registry.install(browserGuard([origin]));
   registry.install(sliccPrompt(facts));
   const read = (CodingTools.tools as readonly ToolRegistration[]).find(
     (tool) => tool.name === 'read'
@@ -352,7 +350,7 @@ async function prepare(
     facts,
     ...made,
     reach: transportReach(kernel.client),
-    registry: baseRegistry(facts, scope.location.origin),
+    registry: baseRegistry(facts),
   };
 }
 
@@ -592,13 +590,9 @@ export async function start(
       agents: agent.agents,
       groups,
       env: home,
-      envOf: async (conversationId, context) => environment({ conversationId }, context),
       ...at,
-      ...(people
-        ? { layout: people.layout, spools: people.spools, enforced: people.enforced }
-        : {}),
+      ...(people ? { layout: people.layout, spools: people.spools } : {}),
       alive: alive(client),
-      reads: skillsRuntime.dirs,
       memory: memoryRuntime.command,
       gelatiere: gelatiere.command,
       freezer: freezer.command,

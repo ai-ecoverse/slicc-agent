@@ -38,7 +38,6 @@ export interface AgentUsers {
   readonly accounts: Accounts;
   readonly layout: Layout;
   readonly spools: Spools;
-  readonly enforced: boolean;
   readonly people: SkillPeople;
   follow(
     runtimes: readonly {
@@ -125,7 +124,7 @@ export function agentUsers(
   const state = () => agents()?.state() ?? { cones: {}, active: 'cone', next: 2, scoops: {} };
   const envOf = async (agentId: string, home: string) =>
     new SliccKernelEnv(await accounts.client(agentId), { cwd: home });
-  const layout = usersLayout(state, envOf, root);
+  const layout = usersLayout(state, envOf, root, mode === 'enforce');
   let ready: () => void = () => undefined;
   const started = new Promise<void>((resolve) => {
     ready = resolve;
@@ -143,7 +142,6 @@ export function agentUsers(
   return {
     accounts,
     layout,
-    enforced: mode === 'enforce',
     people: {
       homes,
       homeOfAgent(agentId) {

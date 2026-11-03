@@ -15,6 +15,7 @@ export type Persist = 'tmp' | 'durable';
 
 export interface Layout {
   readonly users: boolean;
+  readonly enforced: boolean;
   scoopRoot(folder: string): string;
   workspace(folder: string): string;
   reports(folder: string, cone: string): string;
@@ -26,6 +27,7 @@ export interface Layout {
 
 export const LEGACY: Layout = {
   users: false,
+  enforced: false,
   scoopRoot: (folder) => `${SCOOPS_ROOT}/${folder}`,
   workspace: (folder) => `${SCOOPS_ROOT}/${folder}/workspace`,
   reports: (folder) => `${SCOOPS_ROOT}/${folder}/reports`,
@@ -48,12 +50,14 @@ export function agentOfUser(state: Readonly<AgentsState>, user: string): string 
 export function usersLayout(
   state: () => Readonly<AgentsState>,
   envOf: (agentId: string, home: string) => Promise<ExecutionEnv>,
-  root: Pick<ExecutionEnv, 'exec'>
+  root: Pick<ExecutionEnv, 'exec'>,
+  enforced: boolean
 ): Layout {
   const homeOfUser = (user: string | null) =>
     user && user !== ROOT_USER ? homeOf(user) : ROOT_HOME;
   return {
     users: true,
+    enforced,
     scoopRoot: (folder) => homeOf(scoopUser(folder)),
     workspace: (folder) => homeOf(scoopUser(folder)),
     reports: (folder, cone) => `${homeOf(cone)}/.slicc/reports/${folder}`,

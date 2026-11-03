@@ -36,7 +36,7 @@ async function seed() {
   const kept = await agent.agents.createCone('kept', ctx);
   const conversation = await agent.agents.conversation(kept, ctx);
   await conversation.configure(
-    { extensions: { remove: named(['slicc-browser-guard']) }, tools: named(['bash']) },
+    { extensions: { remove: named(['slicc-images']) }, tools: named(['read']) },
     ctx
   );
   for (const seat of params.getAll('seat').map((spec) => JSON.parse(spec)))
