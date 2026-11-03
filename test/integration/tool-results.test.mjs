@@ -5,7 +5,7 @@ import { launch, staged } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-test('the model gets the text of MCP resource tools, lick decisions, failed scoop reads, also from codemode, and fitted wide images', async (t) => {
+test('the model gets the text of MCP resource tools, lick decisions, scoop reads outside the scoop folders on a kernel without users, also from codemode, and fitted wide images', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const steps = [
@@ -14,12 +14,12 @@ test('the model gets the text of MCP resource tools, lick decisions, failed scoo
     { tool: { name: 'lick_confirm', args: { lick_id: 'lk-nope', reason: 'fine' } } },
     { tool: { name: 'read', args: { path: '/tmp/wide.png' } } },
     { answer: 'Cone done.' },
-    { tool: { name: 'read', args: { path: '/tmp/missing.txt' } } },
+    { tool: { name: 'read', args: { path: '/etc/hostname' } } },
     {
       tool: {
         name: 'codemode',
         args: {
-          code: 'try { text(await tools.read({ path: "/tmp/missing.txt" })); } catch (error) { text(`failed: ${error.message}`); }',
+          code: 'try { text(await tools.read({ path: "/etc/hostname" })); } catch (error) { text(`failed: ${error.message}`); }',
         },
       },
     },
@@ -61,8 +61,12 @@ test('the model gets the text of MCP resource tools, lick decisions, failed scoo
         ['relay', 'mcp.test'],
         ...steps.map((step) => ['step', JSON.stringify(step)]),
       ]);
+      let worker;
       const owner = await startTracked({
-        worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
+        worker: () => {
+          worker = new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' });
+          return worker;
+        },
         kernel: { connect: () => kernel.connect() },
       });
       const connection = await owner.connect();
@@ -74,7 +78,7 @@ test('the model gets the text of MCP resource tools, lick decisions, failed scoo
       const scoop = await connection.control.createScoop('cone', 'probe', ctx);
       const sent = await connection.control.send(
         {
-          text: 'Read the missing file.',
+          text: 'Read the hostname.',
           whenBusy: 'followUp',
           requestId: null,
           agentId: scoop.id,
@@ -99,7 +103,18 @@ test('the model gets the text of MCP resource tools, lick decisions, failed scoo
         () => results(scoopView()).length >= 2,
         'two scoop results'
       );
-      const result = { cone: results(connection.transcript.value), scoop: results(scoopView()) };
+      const asked = await new Promise((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = ({ data }) => resolve(data);
+        worker.postMessage({ requests: channel.port2 }, [channel.port2]);
+      });
+      const hostname = new TextDecoder().decode(await client.fs.readFile('/etc/hostname'));
+      const result = {
+        cone: results(connection.transcript.value),
+        scoop: results(scoopView()),
+        hostname,
+        system: asked.find((text) => text.includes('You are the scoop')) ?? '',
+      };
       await owner.release();
       return result;
     },
@@ -116,7 +131,15 @@ test('the model gets the text of MCP resource tools, lick decisions, failed scoo
   assert.match(image.text, /\/tmp\/wide\.png \(image\/(png|jpeg), \d+ bytes\)/);
   assert.equal(image.images, 1);
   assert.equal(seen.scoop[0].name, 'read');
-  assert.match(seen.scoop[0].text, /\/tmp\/missing\.txt/);
+  assert.ok(seen.hostname.trim());
+  assert.ok(seen.scoop[0].text.includes(seen.hostname.trim()));
+  assert.doesNotMatch(seen.scoop[0].text, /outside this scoop/);
   assert.equal(seen.scoop[1].name, 'codemode');
-  assert.match(seen.scoop[1].text, /Output:\n+failed: .*\/tmp\/missing\.txt/);
+  assert.ok(seen.scoop[1].text.includes(seen.hostname.trim()));
+  assert.doesNotMatch(seen.scoop[1].text, /failed:|outside this scoop/);
+  assert.match(
+    seen.system,
+    /Your tools and your bash are not confined: they see the whole file system and every process\./
+  );
+  assert.doesNotMatch(seen.system, /only reach/);
 });

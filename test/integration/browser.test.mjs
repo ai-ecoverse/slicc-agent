@@ -85,6 +85,55 @@ test('a playwright-cli screenshot read back shows on the tool card, through the 
   assert.match(seen.tools[1].image, /^data:image\/png;base64,iVBORw0KGgo/);
 });
 
+test("bash leaves playwright-cli to judge SLICC's own pages, also from codemode, through the production worker", async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'bash leaves playwright-cli to judge', async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const client = await attachKernel(await kernel.connect());
+    let pnpm = '';
+    const probe = await client.spawn(['bash', '-c', 'printf %s "$PNPM_HOME"'], {
+      cwd: '/',
+      onStdout: (bytes) => {
+        pnpm += new TextDecoder().decode(bytes);
+      },
+    });
+    await probe.exited;
+    const bin = `${pnpm || '/home/.local/share/pnpm'}/bin`;
+    await client.fs.mkdir(bin, { recursive: true });
+    await client.fs.writeFile(`${bin}/playwright-cli`, '#!/bin/bash\necho "opened $*"\n');
+    const bash = (command) => ['tool', JSON.stringify({ name: 'bash', args: { command } })];
+    const opened = `chmod +x ${bin}/playwright-cli && playwright-cli open https://seven.sliccy.ai/home/y.html`;
+    const code = `text((await tools.bash({ command: ${JSON.stringify(opened)} })).output);`;
+    const params = new URLSearchParams([
+      ['code', code],
+      bash(
+        `chmod +x ${bin}/playwright-cli && playwright-cli open https://seven.sliccy.ai/home/x.html`
+      ),
+      ['answer', 'Opened.'],
+    ]);
+    const owner = await startTracked({
+      worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const answer = await connection.prompt('Open seven.');
+    const results = connection.transcript.value.entries
+      .filter((entry) => entry.kind === 'pi.tool-result')
+      .map((entry) => entry.model[0].content.map((part) => part.text ?? '').join(''));
+    await owner.release();
+    return { answer, results };
+  });
+  assert.equal(seen.answer, 'Opened.');
+  assert.equal(seen.results.length, 2);
+  assert.match(seen.results[0], /opened open https:\/\/seven\.sliccy\.ai\/home\/y\.html/);
+  assert.match(seen.results[1], /opened open https:\/\/seven\.sliccy\.ai\/home\/x\.html/);
+  for (const result of seen.results) assert.doesNotMatch(result, /can't be opened or driven/);
+});
+
 test("with SLICC_CDP_URL set and no browser attached, the browser skill's check reports not connected", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
