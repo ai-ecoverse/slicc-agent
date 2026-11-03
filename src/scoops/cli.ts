@@ -15,6 +15,8 @@ import { LICK_CHANNELS, type LickTarget } from '../licks/lick.ts';
 import type { Licks } from '../licks/licks.ts';
 import { scopedName, type WebhookDelivery } from '../licks/sources.ts';
 import { findRole, type Roles } from '../roles/roles.ts';
+import { sprinklesOf } from '../sprinkles/cgi.ts';
+import type { SprinkleLick } from '../sprinkles/index.ts';
 import { callerOf as agentOf } from './identity.ts';
 import type { Request, Runner } from './requests.ts';
 import { retryEnded } from './retry.ts';
@@ -73,6 +75,7 @@ export interface CliOptions {
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
   licks?: Pick<Licks, 'deliver'>;
   webhook?: (name: string, delivery: WebhookDelivery, context: Context) => Promise<boolean>;
+  sprinkle?: (id: string, ask: SprinkleLick, context: Context) => Promise<string | undefined>;
   workflow?: (
     argv: readonly string[],
     who: Caller & { taints: InheritedTaint[] },
@@ -576,6 +579,32 @@ async function webhookSend(
     : fail(`there is no webhook ${source}; add ~/.slicc/webhooks/${source}.json`);
 }
 
+async function sprinkleSend(
+  deps: Deps,
+  request: Request,
+  parsed: Flags,
+  lineage: Lineage | undefined,
+  tagged: readonly InheritedTaint[],
+  context: Context
+): Promise<Answer> {
+  const ids = sprinklesOf(lineage?.tags ?? []);
+  if (ids.length !== 1 || !deps.sprinkle) return refusedChannel('sprinkle');
+  const text = (await message(deps, unnamed(parsed), request, context)).trim();
+  if (!text) return fail('send needs a message, --file or -', 2);
+  const refused = await deps.sprinkle(
+    ids[0] as string,
+    {
+      target: parsed.rest[0] ?? '',
+      source: last(parsed, '--source') ?? null,
+      text,
+      user: request.user ?? null,
+      taints: distinctTaints(tagged),
+    },
+    context
+  );
+  return refused ? fail(refused) : ok('');
+}
+
 function unnamed(parsed: Flags): Flags {
   return { ...parsed, rest: parsed.rest.slice(1) };
 }
@@ -591,6 +620,7 @@ async function lickSend(
   const unknown = [...parsed.switches][0];
   if (unknown) return fail(`unknown option ${unknown}`, 2);
   const channel = last(parsed, '--lick') ?? '';
+  if (channel === 'sprinkle') return sprinkleSend(deps, request, parsed, lineage, tagged, context);
   if (!PROCESS_LICKS.includes(channel)) return refusedChannel(channel);
   if (!deps.licks) return fail('licks are not available in this agent');
   const sender = {

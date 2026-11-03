@@ -10,11 +10,13 @@ type Payload = { action?: unknown; data?: unknown; target?: unknown } | null;
 export class SprinkleAdapter extends Emitter<SprinkleEvents> implements SprinklePort {
   readonly #connection: AgentConnection;
   readonly #report: Report;
+  readonly #tab: string | null;
 
-  constructor(connection: AgentConnection, report: Report = warn) {
+  constructor(connection: AgentConnection, report: Report = warn, tab: string | null = null) {
     super();
     this.#connection = connection;
     this.#report = report;
+    this.#tab = tab;
     connection.sprinkles?.subscribe(() => this.emit('sprinkles', this.list()));
   }
 
@@ -40,10 +42,11 @@ export class SprinkleAdapter extends Emitter<SprinkleEvents> implements Sprinkle
   }
 
   call(id: string, method: string, args: readonly unknown[]): Promise<unknown> {
+    const given = method === 'cgi' ? [{ ...(args[0] as object), tab: this.#tab }] : args;
     return this.#connection.control.sprinkleCall(
       id,
       method,
-      args as JsonValue[],
+      given as JsonValue[],
       BACKGROUND_CONTEXT
     );
   }

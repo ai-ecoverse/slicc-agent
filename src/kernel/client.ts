@@ -5,6 +5,8 @@ export interface KernelStat {
   size: number;
   mtime: Date | number;
   ino?: number;
+  mode?: number;
+  uid?: number;
 }
 
 export interface KernelFs {
@@ -38,6 +40,7 @@ export interface SpawnOptions {
   env?: Record<string, string>;
   pgid?: number;
   tag?: string;
+  stdin?: Uint8Array;
   onStdout?(bytes: Uint8Array): void;
   onStderr?(bytes: Uint8Array): void;
 }

@@ -45,7 +45,7 @@ import { HOME, kernelEnvironment, SliccKernelEnv } from './kernel/env.ts';
 import { processGroups } from './kernel/groups.ts';
 import { backgroundJobs } from './kernel/jobs.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
-import { AGENT_DIR, ROOT_HOME } from './layout.ts';
+import { AGENT_DIR, ROOT_HOME, ROOT_USER } from './layout.ts';
 import { type Licks, setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
 import { type McpAccounts, setupMcp } from './mcp/index.ts';
@@ -84,7 +84,7 @@ import {
   sliccProviders,
 } from './settings.ts';
 import { RELOAD_MS, setupSkills } from './skills/index.ts';
-import { setupSprinkles } from './sprinkles/index.ts';
+import { type SprinklesAttach, setupSprinkles } from './sprinkles/index.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
 import {
   agentVersion,
@@ -460,6 +460,29 @@ function freezerOf(
   return freezer;
 }
 
+function attachSprinkles(
+  agent: Agent,
+  licks: Licks,
+  env: SliccKernelEnv,
+  client: KernelClient,
+  people: AgentUsers | undefined,
+  more: Pick<SprinklesAttach, 'intercept' | 'assets'>
+) {
+  return setupSprinkles().attach(
+    {
+      ...more,
+      harness: agent.harness,
+      agents: agent.agents,
+      licks,
+      env,
+      reloadMs: RELOAD_MS,
+      kernelOf: async () => ({ client, user: ROOT_USER }),
+      ...(people?.sprinkles() ?? {}),
+    },
+    BACKGROUND_CONTEXT
+  );
+}
+
 function kernelParts(client: KernelClient) {
   return [createActivity(), processGroups(client), backgroundJobs(client)] as const;
 }
@@ -543,19 +566,10 @@ export async function start(
     BACKGROUND_CONTEXT
   );
   const gelatiere = lateGelatiere();
-  const sprinkles = await setupSprinkles().attach(
-    {
-      intercept: gelatiere.intercept,
-      harness: agent.harness,
-      agents: agent.agents,
-      licks: licks.licks,
-      env: home,
-      assets: options.assets ?? packageAssets(),
-      reloadMs: RELOAD_MS,
-      ...(people?.sprinkles() ?? {}),
-    },
-    BACKGROUND_CONTEXT
-  );
+  const sprinkles = await attachSprinkles(agent, licks.licks, home, client, people, {
+    intercept: gelatiere.intercept,
+    assets: options.assets ?? packageAssets(),
+  });
   people?.follow([sources, skillsRuntime, sprinkles]);
   let roles: ScoopsRuntime | undefined;
   const memoryRuntime = await memory.attach(
@@ -591,6 +605,7 @@ export async function start(
       models: modelsOfAgent(agent, settings, models, vault),
       panel: pages.command,
       webhook: sources.webhook,
+      sprinkle: sprinkles.lick,
       mcp: mcp.direct,
       ...(options.assets ? { assets: options.assets } : {}),
     },

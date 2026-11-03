@@ -92,4 +92,4 @@ export function sharedPaths(shared: string) {
 }
 
 export const NO_EXEC =
-  "sprinkles can't run commands in SLICC; send the agent a message with slicc.lick() and let it run them";
+  'a sprinkle runs commands only through the scripts in its own cgi-bin/ folder, or by sending the agent a message with slicc.lick()';

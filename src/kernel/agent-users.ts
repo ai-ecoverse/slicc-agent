@@ -27,6 +27,7 @@ import {
   homeOf,
   scoopUser,
   type UsersMode,
+  userOf,
   wanted,
 } from './accounts.ts';
 import type { KernelClient } from './client.ts';
@@ -168,6 +169,11 @@ export function agentUsers(
         envOf: (agentId: string) => this.envOfAgent(agentId),
         homeOf: (agentId: string) => accounts.home(agentId),
         shared: SHARED_DIR,
+        kernelOf: async (agentId: string) => {
+          const user = userOf(state(), agentId);
+          const client = user ? await accounts.client(agentId).catch(() => undefined) : undefined;
+          return client && user ? { client, user } : undefined;
+        },
       };
     },
     async envOfAgent(agentId) {
