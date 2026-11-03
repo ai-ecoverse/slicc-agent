@@ -59,82 +59,80 @@ export function candidates(raw: string): Candidate[] {
 }
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const WRAPPERS = new Set(['env', 'sudo', 'command', 'exec', 'time', 'nohup', 'xargs']);
-const OPTION_VALUE: Record<string, Set<string>> = {
-  env: new Set(['-u', '--unset', '-C', '--chdir']),
-  exec: new Set(['-a']),
-  xargs: new Set([
-    '-a',
-    '--arg-file',
-    '-E',
-    '-I',
-    '--replace',
-    '-L',
-    '--max-lines',
-    '-n',
-    '--max-args',
-    '-P',
-    '--max-procs',
-    '-s',
-    '--max-chars',
-  ]),
-  time: new Set(['-f', '--format', '-o', '--output']),
-  sudo: new Set([
-    '-u',
-    '--user',
-    '-g',
-    '--group',
-    '-h',
-    '--host',
-    '-p',
-    '--prompt',
-    '-C',
-    '--close-from',
-    '-D',
-    '--chdir',
-    '-R',
-    '--chroot',
-    '-r',
-    '--role',
-    '-t',
-    '--type',
-    '-T',
-    '--command-timeout',
-  ]),
-};
-const CONTROL = new Set(['!', 'if', 'then', 'elif', 'else', 'do', 'while', 'until', '{', '}']);
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
-const DYNAMIC = 'command too dynamic to check';
+const INERT = new Set([
+  'head',
+  'tail',
+  'cat',
+  'grep',
+  'egrep',
+  'fgrep',
+  'rg',
+  'echo',
+  'printf',
+  'jq',
+  'wc',
+  'ls',
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+]);
+const GH = new Set(['issue', 'pr', 'api', 'search']);
+const GIT = new Set(['log', 'show', 'grep', 'diff', 'status']);
+const BROWSER_WORD = /\b(?:playwright-cli|curlwright)\b/;
 
 function basename(word: string): string {
   return word.slice(word.lastIndexOf('/') + 1);
 }
 
-function unwrap(args: string[]): boolean {
-  const wrapper = basename(args.shift() as string);
-  while (args[0]?.startsWith('-')) {
-    const option = args.shift() as string;
-    if (wrapper === 'command' && /^-[p]*[vV]/.test(option)) return false;
-    if (wrapper === 'env' && (option === '-S' || option.startsWith('--split-string'))) {
-      args.unshift('eval');
-      return true;
-    }
-    if (option === '--') break;
-    if (OPTION_VALUE[wrapper]?.has(option)) args.shift();
+function dataCommand(simple: SimpleCommand, depth: number, matcher: ProtectedMatcher): boolean {
+  if (simple.output || simple.uncertain || depth >= MAX_DEPTH) return false;
+  const args = [...simple.words];
+  if (args[0] === 'do') args.shift();
+  while (ASSIGNMENT.test(args[0] ?? '')) {
+    if (protectedArgument([args.shift() as string], matcher)) return false;
   }
-  return true;
+  if (/[$`*?[\]]/.test(args[0] ?? '')) return false;
+  const executable = args.shift() ?? '';
+  if (protectedArgument([executable], matcher)) return false;
+  const name = basename(executable);
+  if (
+    !INERT.has(name) &&
+    !(name === 'gh' && GH.has(args[0] ?? '')) &&
+    !(name === 'git' && GIT.has(args[0] ?? ''))
+  )
+    return false;
+  if (args.some((arg) => /^--(?:output|ext-diff|textconv)(?:=|$)/.test(arg))) return false;
+  return simple.scripts.every((script) => {
+    const nested = commands(script);
+    return nested.length > 0 && nested.every((command) => dataCommand(command, depth + 1, matcher));
+  });
 }
 
-function invocation(command: SimpleCommand): string[] {
-  const args = [...command.words];
-  while (args.length) {
-    const first = args[0] as string;
-    if (ASSIGNMENT.test(first) || CONTROL.has(first)) args.shift();
-    else if (WRAPPERS.has(basename(first))) {
-      if (!unwrap(args)) return [];
-    } else break;
+function classified(simple: SimpleCommand): boolean {
+  if (simple.uncertain) return false;
+  const first = simple.words[0] as string;
+  return (
+    BROWSER.has(basename(first)) ||
+    first === 'for' ||
+    (simple.words.length === 1 && ['do', 'done'].includes(first))
+  );
+}
+
+function inertText(source: string, matcher: ProtectedMatcher): string {
+  const parsed = commands(source);
+  const inert = parsed.map((simple) => dataCommand(simple, 0, matcher));
+  const known = parsed.every((simple, at) => inert[at] || classified(simple));
+  if (!known) return source;
+  for (let at = parsed.length - 2; at >= 0; at--)
+    if (parsed[at]?.pipe && !inert[at + 1]) inert[at] = false;
+  const chars = source.split('');
+  for (const [at, simple] of parsed.entries()) {
+    if (!inert[at]) continue;
+    for (const [start, end] of simple.ranges)
+      for (let index = start; index < end; index++) chars[index] = ' ';
   }
-  return args;
+  return chars.join('');
 }
 
 function protectedArgument(args: string[], matcher: ProtectedMatcher): string | undefined {
@@ -149,50 +147,21 @@ function protectedArgument(args: string[], matcher: ProtectedMatcher): string | 
   return undefined;
 }
 
-function dynamicRefusal(name: string): string {
-  return `${REFUSAL} Rule: ${DYNAMIC} (${name}).`;
-}
-
-function scriptRefusal(
-  simple: SimpleCommand,
-  args: string[],
-  name: string,
-  matcher: ProtectedMatcher,
-  depth: number,
-  browserAround: boolean
-): string | undefined {
-  if (['source', '.'].includes(name) || /[$`]/.test(name))
-    return browserAround ? dynamicRefusal(name) : undefined;
-  const script = args.findIndex((arg) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(arg));
-  if (name !== 'eval' && !(SHELLS.has(name) && script >= 0)) return undefined;
-  if (simple.dynamic || depth >= MAX_DEPTH) return browserAround ? dynamicRefusal(name) : undefined;
-  const source = name === 'eval' ? args.join(' ') : (args[script + 1] ?? '');
-  return refused(source, matcher, depth + 1, browserAround);
-}
-
-export function refused(
-  command: string,
-  matcher: ProtectedMatcher,
-  depth = 0,
-  browserAround = /\b(?:playwright-cli|curlwright)\b/.test(command)
-): string | undefined {
-  for (const simple of commands(command)) {
-    if (depth >= MAX_DEPTH && simple.scripts.length && browserAround)
-      return dynamicRefusal('substitution');
-    for (const script of simple.scripts) {
-      if (depth >= MAX_DEPTH) continue;
-      const reason = refused(script, matcher, depth + 1, browserAround);
-      if (reason) return reason;
-    }
-    const [word = '', ...args] = invocation(simple);
-    const name = basename(word);
-    const script = scriptRefusal(simple, args, name, matcher, depth, browserAround);
-    if (script) return script;
-    if (!BROWSER.has(name)) continue;
-    const reason = protectedArgument([...args, ...simple.input], matcher);
-    if (reason) return reason;
-    if (simple.dynamic) return dynamicRefusal(name);
-  }
+export function refused(command: string, matcher: ProtectedMatcher): string | undefined {
+  if (!BROWSER_WORD.test(command) && !words(command).some((word) => BROWSER.has(basename(word))))
+    return undefined;
+  const remaining = inertText(command, matcher);
+  const reason = protectedArgument([remaining], matcher);
+  if (reason) return reason;
+  if (
+    commands(remaining).some(
+      (simple) =>
+        simple.dynamic &&
+        (BROWSER_WORD.test(simple.words.join(' ')) ||
+          ['eval', 'source', '.'].includes(simple.words[0] as string))
+    )
+  )
+    return `${REFUSAL} Rule: command too dynamic to check.`;
   return undefined;
 }
 

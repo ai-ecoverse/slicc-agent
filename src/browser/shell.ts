@@ -14,6 +14,10 @@ const ESCAPES: Record<string, string> = {
 };
 
 export interface SimpleCommand {
+  ranges: [number, number][];
+  output: boolean;
+  pipe: boolean;
+  uncertain: boolean;
   scripts: string[];
   words: string[];
   input: string[];
@@ -74,12 +78,23 @@ class Scanner {
   readonly words: string[] = [];
   readonly nested: string[] = [];
   readonly commands: SimpleCommand[] = [];
-  #command: SimpleCommand = { words: [], input: [], dynamic: false, scripts: [] };
+  #command: SimpleCommand = {
+    words: [],
+    input: [],
+    dynamic: false,
+    scripts: [],
+    ranges: [],
+    output: false,
+    pipe: false,
+    uncertain: false,
+  };
   #redirect = '';
   #quoted = false;
   #heredocs: { delimiter: string; strip: boolean; quoted: boolean; command: SimpleCommand }[] = [];
   #word: string | undefined;
   #index = 0;
+  #start = 0;
+  #uncertain = false;
 
   readonly source: string;
   readonly structural: boolean;
@@ -109,6 +124,12 @@ class Scanner {
         });
       else if (this.#redirect === '<<<') this.#command.input.push(this.#word);
       else if (!this.#redirect) this.#command.words.push(this.#word);
+      if (
+        this.#redirect.includes('>') &&
+        this.#word !== '/dev/null' &&
+        !(this.#redirect.endsWith('&') && /^(?:[0-9]+-?|-)$/.test(this.#word))
+      )
+        this.#command.output = true;
       this.#redirect = '';
     }
     this.#word = undefined;
@@ -118,6 +139,7 @@ class Scanner {
   #substitute(from: number, open: string, close: string, prefix: string): void {
     const stop = closing(this.source, from, open, close);
     const inner = this.source.slice(from, stop);
+    if (stop >= this.source.length) this.#uncertain = true;
     this.nested.push(inner);
     if (prefix !== '${') this.#command.scripts.push(inner);
     this.#command.dynamic = true;
@@ -129,6 +151,7 @@ class Scanner {
     let stop = this.#index + 1;
     while (stop < this.source.length && this.source[stop] !== '`')
       stop += this.source[stop] === '\\' ? 2 : 1;
+    if (stop >= this.source.length) this.#uncertain = true;
     this.#command.dynamic = true;
     const script = this.source.slice(this.#index + 1, stop).replace(/\\(.)/g, '$1');
     this.nested.push(script);
@@ -148,6 +171,7 @@ class Scanner {
   #single(): void {
     const stop = this.source.indexOf("'", this.#index + 1);
     const last = stop < 0 ? this.source.length : stop;
+    if (stop < 0) this.#uncertain = true;
     this.#append(this.source.slice(this.#index + 1, last));
     this.#index = last + 1;
   }
@@ -163,6 +187,7 @@ class Scanner {
       } else if (char === '`') this.#backtick();
       else if (!(char === '$' && this.#dollar())) this.#plain(char);
     }
+    if (this.#at() !== '"') this.#uncertain = true;
     this.#index++;
   }
 
@@ -198,24 +223,44 @@ class Scanner {
     return true;
   }
 
-  #finish(): void {
+  #finish(pipe = false): void {
     this.#end();
+    if (this.#redirect) this.#uncertain = true;
+    this.#command.ranges.unshift([this.#start, this.#index]);
+    this.#command.pipe = pipe;
+    this.#start = this.#index + 1;
     if (this.#command.words.length) this.commands.push(this.#command);
-    this.#command = { words: [], input: [], dynamic: false, scripts: [] };
+    this.#command = {
+      words: [],
+      input: [],
+      dynamic: false,
+      scripts: [],
+      ranges: [],
+      output: false,
+      pipe: false,
+      uncertain: false,
+    };
   }
 
   #bodies(): void {
     for (const { delimiter, strip, quoted, command } of this.#heredocs) {
       let body = '';
+      const start = this.#index;
+      let closed = false;
       while (this.#index < this.source.length) {
         const stop = this.source.indexOf('\n', this.#index);
         const end = stop < 0 ? this.source.length : stop;
         const raw = this.source.slice(this.#index, end);
         const line = strip ? raw.replace(/^\t+/, '') : raw;
         this.#index = end + 1;
-        if (line === delimiter) break;
+        if (line === delimiter) {
+          closed = true;
+          break;
+        }
         body += `${line}\n`;
       }
+      if (!closed) this.#uncertain = true;
+      command.ranges.push([start, Math.min(this.#index, this.source.length)]);
       command.input.push(body);
       if (!quoted && /[$`]/.test(body)) {
         command.dynamic = true;
@@ -223,18 +268,25 @@ class Scanner {
       }
     }
     this.#heredocs = [];
+    this.#start = this.#index;
   }
 
   #operator(char: string): boolean {
     if (!this.structural) return false;
-    if ((char === '<' || char === '>') && this.#at(1) !== '(') {
+    if (
+      ((char === '<' || char === '>') && this.#at(1) !== '(') ||
+      (char === '&' && this.#at(1) === '>')
+    ) {
       if (/^[0-9]+$/.test(this.#word ?? '')) this.#word = undefined;
       this.#end();
-      const operator = /^(?:<<<|<<-|<<|>>|<>|>&|<&|>|<)/.exec(this.source.slice(this.#index))![0];
+      const operator = /^(?:&>>|&>|<<<|<<-|<<|>>|<>|>&|<&|>|<)/.exec(
+        this.source.slice(this.#index)
+      )![0];
       this.#redirect = operator;
       this.#index += operator.length;
     } else if (';|&()\n'.includes(char)) {
-      this.#finish();
+      if (char === '(' || char === ')') this.#uncertain = true;
+      this.#finish(char === '|' && this.#at(1) !== '|' && this.source[this.#index - 1] !== '|');
       this.#index++;
       if (char === '\n') this.#bodies();
     } else return false;
@@ -242,6 +294,7 @@ class Scanner {
   }
 
   #step(char: string): void {
+    if (this.structural && (char === '{' || char === '}')) this.#uncertain = true;
     if (this.#operator(char)) return;
     if ((char === '<' || char === '>') && this.#at(1) === '(') {
       this.#end();
@@ -271,6 +324,8 @@ class Scanner {
   scan(): Split {
     while (this.#index < this.source.length) this.#step(this.#at());
     this.#finish();
+    if (this.#heredocs.length) this.#uncertain = true;
+    for (const command of this.commands) command.uncertain = this.#uncertain;
     return { words: this.words, nested: this.nested };
   }
 }
