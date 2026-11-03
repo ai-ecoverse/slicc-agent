@@ -15,7 +15,7 @@ import {
 import type { Choosable } from '../selection.ts';
 import { cliCommand, setupWorkflows, workflowEngine } from '../workflow/index.ts';
 import { type CliOptions, createCli, RUN_DIR } from './cli.ts';
-import { guardExtension, scoopsExtension, scoopTasks } from './extension.ts';
+import { scoopsExtension, scoopTasks } from './extension.ts';
 import {
   CONTROL_DIR,
   type ControlPlane,
@@ -23,7 +23,7 @@ import {
   type PlaneOptions,
   PROTOCOL_MARK,
 } from './requests.ts';
-import { choosable, createScoops, type EnvOf, type Scoops, type ScoopsHost } from './service.ts';
+import { choosable, createScoops, type Scoops, type ScoopsHost } from './service.ts';
 
 export const BUILTIN_ROLES = ['scout', 'worker', 'reviewer', 'oracle', 'delegate', 'gelatiere'];
 export const PNPM_HOME = '/home/.local/share/pnpm';
@@ -50,7 +50,6 @@ export interface AttachOptions {
   controlDir?: string;
   sweepEvery?: number;
   alive?: (pid: number) => Promise<boolean>;
-  reads: () => readonly string[];
   memory?: CliOptions['memory'];
   gelatiere?: CliOptions['gelatiere'];
   freezer?: CliOptions['freezer'];
@@ -59,8 +58,6 @@ export interface AttachOptions {
   webhook?: CliOptions['webhook'];
   mcp?: (names: readonly string[]) => ToolRegistration[];
   layout?: Layout;
-  enforced?: boolean;
-  envOf: EnvOf;
   spools?: Spools;
   agentDir?: string;
 }
@@ -282,7 +279,6 @@ export function setupScoops(
   let cached: Roles = { roles: [], warnings: [], limits: { ...DEFAULT_LIMITS } };
   let layout = LEGACY;
   registry.install(scoopsExtension(tasks, () => layout));
-  registry.install(guardExtension(lookup));
   const workflows = setupWorkflows(registry);
   return {
     scoops,
@@ -297,11 +293,8 @@ export function setupScoops(
         licks,
         tools: fileTools,
         groups,
-        reads: options.reads,
         files: env,
         layout,
-        ...(options.enforced ? { enforced: true } : {}),
-        envOf: options.envOf,
         exclude: [workflows.extension],
         ...(options.mcp ? { mcp: options.mcp } : {}),
       });
