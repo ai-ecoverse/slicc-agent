@@ -44,6 +44,37 @@ test('codemode runs QuickJS in a nested worker of the production agent worker an
   );
 });
 
+test('codemode finds QuickJS past a candidate path that a fallback host answers with an HTML page', async (t) => {
+  const page = await chrome.page(t);
+  const decoy = '/dist-test/node_modules/quickjs-wasi/quickjs.wasm';
+  chrome.overrides.set(decoy, '<!DOCTYPE html>\n<html><head><title>slicc</title></head></html>\n');
+  await page.goto('/');
+  const seen = await staged(page, 'codemode finds QuickJS past', async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const params = new URLSearchParams([
+      ['code', 'return 1 + 1;'],
+      ['answer', 'Done.'],
+    ]);
+    const owner = await startTracked({
+      worker: () => new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const connection = await owner.connect();
+    const answer = await connection.prompt('Run the script.');
+    const results = connection.transcript.value.entries
+      .filter((entry) => entry.kind === 'pi.tool-result')
+      .map((entry) => entry.model[0].content.map((part) => part.text ?? '').join(''));
+    await owner.release();
+    return { answer, results };
+  });
+  assert.ok(chrome.requests.includes(decoy));
+  assert.equal(seen.answer, 'Done.');
+  assert.equal(seen.results.length, 1);
+  assert.match(seen.results[0], /^Script completed\nWall time \d+\.\d seconds\nOutput:\n2$/);
+});
+
 test("a script's tool calls run as pi tool calls: each shows live to followers, and a long bash output comes back as its tail with the spill file", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');

@@ -349,7 +349,12 @@ export async function locateWasm(
 ): Promise<WebAssembly.Module | undefined> {
   for (const url of wasmCandidates(from)) {
     const response = await fetcher(url).catch(() => undefined);
-    if (response?.ok) return WebAssembly.compile(await response.arrayBuffer());
+    if (!response?.ok) continue;
+    const module = await response
+      .arrayBuffer()
+      .then((bytes) => WebAssembly.compile(bytes))
+      .catch(() => undefined);
+    if (module) return module;
   }
   return undefined;
 }
