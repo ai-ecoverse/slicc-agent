@@ -71,7 +71,7 @@ function validateDescription(description: unknown): string[] {
 
 export function skillFromText(text: string, filePath: string, source: SkillSource): Loaded {
   const declared = basename(filePath) === 'SKILL.md';
-  const { fields, problems } = parseFrontmatter(text);
+  const { fields, problems } = parseFrontmatter(text, [], ['disable-model-invocation']);
   const diagnostics: Diagnostic[] = [];
   const description = typeof fields.description === 'string' ? fields.description.trim() : '';
   if (!declared && !description) return { skills: [], diagnostics };

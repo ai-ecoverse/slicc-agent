@@ -160,7 +160,11 @@ export function parseRole(
   path: string,
   warnings: string[]
 ): Role | undefined {
-  const { fields, body, problems } = parseFrontmatter(text, ['memory']);
+  const { fields, body, problems } = parseFrontmatter(
+    text,
+    ['memory'],
+    [...APPLIED].filter((key) => key !== 'name' && key !== 'description')
+  );
   for (const problem of problems) warnings.push(`${path}: ${problem}`);
   const name = fields.name;
   const description = fields.description;
