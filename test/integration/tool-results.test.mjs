@@ -5,7 +5,7 @@ import { launch, staged } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-test('the model gets the text of MCP resource tools, lick decisions, refused scoop reads, also from codemode, and fitted wide images', async (t) => {
+test('the model gets the text of MCP resource tools, lick decisions, failed scoop reads, also from codemode, and fitted wide images', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const steps = [
@@ -14,12 +14,12 @@ test('the model gets the text of MCP resource tools, lick decisions, refused sco
     { tool: { name: 'lick_confirm', args: { lick_id: 'lk-nope', reason: 'fine' } } },
     { tool: { name: 'read', args: { path: '/tmp/wide.png' } } },
     { answer: 'Cone done.' },
-    { tool: { name: 'read', args: { path: '/etc/hostname' } } },
+    { tool: { name: 'read', args: { path: '/tmp/missing.txt' } } },
     {
       tool: {
         name: 'codemode',
         args: {
-          code: 'try { text(await tools.read({ path: "/etc/hostname" })); } catch (error) { text(`refused: ${error.message}`); }',
+          code: 'try { text(await tools.read({ path: "/tmp/missing.txt" })); } catch (error) { text(`failed: ${error.message}`); }',
         },
       },
     },
@@ -73,7 +73,12 @@ test('the model gets the text of MCP resource tools, lick decisions, refused sco
       await connection.prompt('Use the tools.');
       const scoop = await connection.control.createScoop('cone', 'probe', ctx);
       const sent = await connection.control.send(
-        { text: 'Read the hostname.', whenBusy: 'followUp', requestId: null, agentId: scoop.id },
+        {
+          text: 'Read the missing file.',
+          whenBusy: 'followUp',
+          requestId: null,
+          agentId: scoop.id,
+        },
         ctx
       );
       await connection.control.wait(sent.submissionId, ctx);
@@ -111,10 +116,7 @@ test('the model gets the text of MCP resource tools, lick decisions, refused sco
   assert.match(image.text, /\/tmp\/wide\.png \(image\/(png|jpeg), \d+ bytes\)/);
   assert.equal(image.images, 1);
   assert.equal(seen.scoop[0].name, 'read');
-  assert.match(seen.scoop[0].text, /\/etc\/hostname is outside this scoop's folders\./);
+  assert.match(seen.scoop[0].text, /\/tmp\/missing\.txt/);
   assert.equal(seen.scoop[1].name, 'codemode');
-  assert.match(
-    seen.scoop[1].text,
-    /Output:\n+refused: Tool call blocked: \/etc\/hostname is outside this scoop's folders\./
-  );
+  assert.match(seen.scoop[1].text, /Output:\n+failed: .*\/tmp\/missing\.txt/);
 });

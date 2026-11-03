@@ -68,23 +68,15 @@ export interface ScoopTasks {
   wait: AnyTask;
 }
 
-export type EnvOf = (
-  conversationId: ConversationId,
-  context: Context
-) => Promise<Pick<ExecutionEnv, 'canonicalPath'> | undefined>;
-
 export interface ScoopsHost {
   harness: Harness;
   agents: Agents;
   licks: Licks;
   groups?: ProcessGroups;
   tools?: readonly ToolRegistration[];
-  reads?: () => readonly string[];
   files?: Pick<ExecutionEnv, 'remove' | 'createDir'>;
-  envOf?: EnvOf;
   mcp?: (names: readonly string[]) => ToolRegistration[];
   layout?: Layout;
-  enforced?: boolean;
   exclude?: readonly Extension[];
 }
 

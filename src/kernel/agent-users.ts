@@ -37,7 +37,6 @@ export interface AgentUsers {
   readonly accounts: Accounts;
   readonly layout: Layout;
   readonly spools: Spools;
-  readonly enforced: boolean;
   readonly people: SkillPeople;
   follow(
     runtimes: readonly {
@@ -142,7 +141,6 @@ export function agentUsers(
   return {
     accounts,
     layout,
-    enforced: mode === 'enforce',
     people: {
       homes,
       homeOfAgent(agentId) {

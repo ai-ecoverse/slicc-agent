@@ -92,7 +92,6 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@ai-ecoverse/slicc-browsers": "1.19.0",
     "@ai-ecoverse/slicc-vault": "1.21.2",
     "@aws-sdk/middleware-websocket": "^3.972.54",
     "@earendil-works/chord": "1.5.0",

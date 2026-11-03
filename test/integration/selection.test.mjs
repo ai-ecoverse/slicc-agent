@@ -13,9 +13,12 @@ test('a conversation stored with a copied extension list gets a built-in it lack
     stage('the seeded store');
     const directory = `/.slicc/selection-${Date.now()}`;
     const seeded = await new Promise((resolve) => {
-      const worker = new Worker(`/dist-test/legacy-worker.js?directory=${directory}`, {
-        type: 'module',
-      });
+      const worker = new Worker(
+        `/dist-test/legacy-worker.js?directory=${directory}&without=slicc-images`,
+        {
+          type: 'module',
+        }
+      );
       worker.onmessage = ({ data }) => {
         worker.terminate();
         resolve(data);
@@ -27,35 +30,27 @@ test('a conversation stored with a copied extension list gets a built-in it lack
     const kernel = await bootKernel();
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
     const client = await attachKernel(await kernel.connect());
-    let pnpm = '';
-    const probe = await client.spawn(['bash', '-c', 'printf %s "$PNPM_HOME"'], {
-      cwd: '/',
-      onStdout: (bytes) => {
-        pnpm += new TextDecoder().decode(bytes);
-      },
-    });
-    await probe.exited;
-    const bin = `${pnpm || '/home/.local/share/pnpm'}/bin`;
-    await client.fs.mkdir(bin, { recursive: true });
-    await client.fs.writeFile(`${bin}/playwright-cli`, '#!/bin/bash\necho "opened $*"\n');
+    const canvas = new OffscreenCanvas(2400, 60);
+    canvas.getContext('2d').fillRect(0, 0, 2400, 60);
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
+    await client.fs.writeFile('/tmp/wide.png', new Uint8Array(await blob.arrayBuffer()));
     await client.fs.mkdir('/home/.pi/agent', { recursive: true });
     await client.fs.writeFile('/home/.pi/agent/settings.json', '{"memory":{"extract":false}}');
-    const open = `chmod +x ${bin}/playwright-cli && playwright-cli open ${location.origin}/home/x.html`;
-    const bash = { tool: { name: 'bash', args: { command: open } } };
+    const read = { tool: { name: 'read', args: { path: '/tmp/wide.png' } } };
     const steps = [
-      bash,
+      read,
       { answer: 'Old.' },
-      bash,
+      read,
       { answer: 'Kept.' },
-      { tool: { name: 'read', args: { path: '/etc/hostname' } } },
-      { answer: 'Kept read.' },
-      bash,
+      { tool: { name: 'bash', args: { command: 'echo hi' } } },
+      { answer: 'Kept bash.' },
+      read,
       { answer: 'Forked.' },
-      bash,
+      read,
       { answer: 'Fresh.' },
-      bash,
+      read,
       { answer: 'Thawed.' },
-      bash,
+      read,
       { answer: 'Kept fresh.' },
     ];
     const params = new URLSearchParams([
@@ -93,39 +88,40 @@ test('a conversation stored with a copied extension list gets a built-in it lack
     };
     await until(() => entries('cone').length && shown(seeded.kept), 'both cones');
     const out = {};
-    out.old = await run('cone', 'Open it.');
-    out.kept = await run(seeded.kept, 'Open it.');
-    out.keptRead = await run(seeded.kept, 'Read it.');
+    out.old = await run('cone', 'Read it.');
+    out.kept = await run(seeded.kept, 'Read it.');
+    out.keptBash = await run(seeded.kept, 'Run it.');
     const answers = entries('cone').filter((entry) => entry.kind === 'pi.assistant');
     const rewound = await connection.control.rewindAgent('cone', `e${answers[1].id}`, ctx);
     out.rewound = rewound.done;
     await until(() => entries('cone').some((entry) => entry.kind === 'slicc.rewound'), 'the fork');
-    out.forked = await run('cone', 'Open it.');
+    out.forked = await run('cone', 'Read it.');
     await connection.control.newChat('cone', ctx);
     await until(() => !entries('cone').some((entry) => entry.kind === 'pi.user'), 'the new chat');
-    out.fresh = await run('cone', 'Open it.');
+    out.fresh = await run('cone', 'Read it.');
     const frozen = await connection.control.freeze('cone', ctx);
     await until(() => !shown('cone'), 'the frozen cone');
     await connection.control.thaw(frozen.id, ctx);
     await until(() => shown('cone'), 'the thawed cone');
-    out.thawed = await run('cone', 'Open it.');
+    out.thawed = await run('cone', 'Read it.');
     await connection.control.newChat(seeded.kept, ctx);
     await until(
       () => !entries(seeded.kept).some((entry) => entry.kind === 'pi.user'),
       'the kept new chat'
     );
-    out.keptFresh = await run(seeded.kept, 'Open it.');
+    out.keptFresh = await run(seeded.kept, 'Read it.');
     await owner.release();
     return out;
   });
-  const refusal = /SLICC's own pages can't be opened or driven from the browser tools\./;
-  assert.match(seen.old, refusal);
-  assert.doesNotMatch(seen.old, /opened open/);
-  assert.match(seen.kept, /^opened open /);
-  assert.match(seen.keptRead, /Tool read is not available/);
+  const image = /\/tmp\/wide\.png \(image\/(png|jpeg), \d+ bytes\)/;
+  assert.match(seen.old, image);
+  assert.doesNotMatch(seen.kept, image);
+  assert.doesNotMatch(seen.kept, /not available/);
+  assert.match(seen.keptBash, /Tool bash is not available/);
   assert.equal(seen.rewound, true);
-  assert.match(seen.forked, refusal);
-  assert.match(seen.fresh, refusal);
-  assert.match(seen.thawed, refusal);
-  assert.match(seen.keptFresh, /^opened open /);
+  assert.match(seen.forked, image);
+  assert.match(seen.fresh, image);
+  assert.match(seen.thawed, image);
+  assert.doesNotMatch(seen.keptFresh, image);
+  assert.doesNotMatch(seen.keptFresh, /not available/);
 });
