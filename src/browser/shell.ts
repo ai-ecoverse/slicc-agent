@@ -13,6 +13,13 @@ const ESCAPES: Record<string, string> = {
   v: '\v',
 };
 
+export interface SimpleCommand {
+  scripts: string[];
+  words: string[];
+  input: string[];
+  dynamic: boolean;
+}
+
 export interface Split {
   words: string[];
   nested: string[];
@@ -66,13 +73,20 @@ function ansi(source: string, start: number): { text: string; end: number } {
 class Scanner {
   readonly words: string[] = [];
   readonly nested: string[] = [];
+  readonly commands: SimpleCommand[] = [];
+  #command: SimpleCommand = { words: [], input: [], dynamic: false, scripts: [] };
+  #redirect = '';
+  #quoted = false;
+  #heredocs: { delimiter: string; strip: boolean; quoted: boolean; command: SimpleCommand }[] = [];
   #word: string | undefined;
   #index = 0;
 
   readonly source: string;
+  readonly structural: boolean;
 
-  constructor(source: string) {
+  constructor(source: string, structural = false) {
     this.source = source;
+    this.structural = structural;
   }
 
   #at(offset = 0): string {
@@ -84,14 +98,29 @@ class Scanner {
   }
 
   #end(): void {
-    if (this.#word !== undefined) this.words.push(this.#word);
+    if (this.#word !== undefined) {
+      this.words.push(this.#word);
+      if (this.#redirect.startsWith('<<') && this.#redirect !== '<<<')
+        this.#heredocs.push({
+          delimiter: this.#word,
+          quoted: this.#quoted,
+          strip: this.#redirect === '<<-',
+          command: this.#command,
+        });
+      else if (this.#redirect === '<<<') this.#command.input.push(this.#word);
+      else if (!this.#redirect) this.#command.words.push(this.#word);
+      this.#redirect = '';
+    }
     this.#word = undefined;
+    this.#quoted = false;
   }
 
   #substitute(from: number, open: string, close: string, prefix: string): void {
     const stop = closing(this.source, from, open, close);
     const inner = this.source.slice(from, stop);
     this.nested.push(inner);
+    if (prefix !== '${') this.#command.scripts.push(inner);
+    this.#command.dynamic = true;
     this.#append(`${prefix}${inner}${close}`);
     this.#index = stop + 1;
   }
@@ -100,7 +129,10 @@ class Scanner {
     let stop = this.#index + 1;
     while (stop < this.source.length && this.source[stop] !== '`')
       stop += this.source[stop] === '\\' ? 2 : 1;
-    this.nested.push(this.source.slice(this.#index + 1, stop).replace(/\\(.)/g, '$1'));
+    this.#command.dynamic = true;
+    const script = this.source.slice(this.#index + 1, stop).replace(/\\(.)/g, '$1');
+    this.nested.push(script);
+    this.#command.scripts.push(script);
     this.#append(this.source.slice(this.#index, stop + 1));
     this.#index = stop + 1;
   }
@@ -135,6 +167,7 @@ class Scanner {
   }
 
   #plain(char: string): void {
+    if (char === '$' && /[A-Za-z_0-9@*?#$!-]/.test(this.#at(1))) this.#command.dynamic = true;
     this.#append(char);
     this.#index++;
   }
@@ -145,6 +178,7 @@ class Scanner {
   }
 
   #escape(): void {
+    this.#quoted = true;
     if (this.#at(1) !== '\n') this.#append(this.#at(1));
     this.#index += 2;
   }
@@ -160,10 +194,55 @@ class Scanner {
       this.#index++;
       this.#double();
     } else return false;
+    this.#quoted = true;
+    return true;
+  }
+
+  #finish(): void {
+    this.#end();
+    if (this.#command.words.length) this.commands.push(this.#command);
+    this.#command = { words: [], input: [], dynamic: false, scripts: [] };
+  }
+
+  #bodies(): void {
+    for (const { delimiter, strip, quoted, command } of this.#heredocs) {
+      let body = '';
+      while (this.#index < this.source.length) {
+        const stop = this.source.indexOf('\n', this.#index);
+        const end = stop < 0 ? this.source.length : stop;
+        const raw = this.source.slice(this.#index, end);
+        const line = strip ? raw.replace(/^\t+/, '') : raw;
+        this.#index = end + 1;
+        if (line === delimiter) break;
+        body += `${line}\n`;
+      }
+      command.input.push(body);
+      if (!quoted && /[$`]/.test(body)) {
+        command.dynamic = true;
+        command.scripts.push(...new Scanner(body).inputScripts());
+      }
+    }
+    this.#heredocs = [];
+  }
+
+  #operator(char: string): boolean {
+    if (!this.structural) return false;
+    if ((char === '<' || char === '>') && this.#at(1) !== '(') {
+      if (/^[0-9]+$/.test(this.#word ?? '')) this.#word = undefined;
+      this.#end();
+      const operator = /^(?:<<<|<<-|<<|>>|<>|>&|<&|>|<)/.exec(this.source.slice(this.#index))![0];
+      this.#redirect = operator;
+      this.#index += operator.length;
+    } else if (';|&()\n'.includes(char)) {
+      this.#finish();
+      this.#index++;
+      if (char === '\n') this.#bodies();
+    } else return false;
     return true;
   }
 
   #step(char: string): void {
+    if (this.#operator(char)) return;
     if ((char === '<' || char === '>') && this.#at(1) === '(') {
       this.#end();
       this.#substitute(this.#index + 2, '(', ')', `${char}(`);
@@ -178,9 +257,20 @@ class Scanner {
     else if (!(char === '$' && this.#dollar())) this.#plain(char);
   }
 
+  inputScripts(): string[] {
+    while (this.#index < this.source.length) {
+      if (this.#at() === '\\') this.#index += 2;
+      else if (this.#at() === '`') this.#backtick();
+      else if (this.#at() === '$' && this.#at(1) === '(')
+        this.#substitute(this.#index + 2, '(', ')', '$(');
+      else this.#index++;
+    }
+    return this.#command.scripts;
+  }
+
   scan(): Split {
     while (this.#index < this.source.length) this.#step(this.#at());
-    this.#end();
+    this.#finish();
     return { words: this.words, nested: this.nested };
   }
 }
@@ -198,4 +288,10 @@ export function words(source: string, depth = 0, seen = new Set<string>()): stri
   );
   for (const inner of deeper) seen.add(inner);
   return [...found, ...deeper.flatMap((inner) => words(inner, depth + 1, seen))];
+}
+
+export function commands(source: string): SimpleCommand[] {
+  const scanner = new Scanner(source, true);
+  scanner.scan();
+  return scanner.commands;
 }
