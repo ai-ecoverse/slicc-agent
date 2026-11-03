@@ -48,7 +48,7 @@ A scoop starts with your provider, model and thinking level. Use `--model provid
 
 `panel list` shows the panels of the SLICC tab showing your cone, and `panel open|close|focus|move <id>` rearranges them (`panel --help` has the rest). A sprinkle is `sprinkle:<name>`. `panel tabs` lists the tabs showing your cone, and `--tab <tab>` sends a command to one of them. Exit 3 means no tab shows your cone, and exit 4 means the tab didn't answer.
 
-Without `--tools`, a scoop gets read, write, edit and bash; `--tools read,bash` is an allowlist. grep, find and ls map to bash, and bash can change files, so no tool list is truly read-only. A scoop runs as its own user, so the kernel decides what its tools and its bash may read and change.
+Without `--tools`, a scoop gets read, write, edit and bash; `--tools read,bash` is an allowlist. grep, find and ls map to bash, and bash can change files, so no tool list is truly read-only. A scoop's tools and bash are confined by the kernel only when it enforces users (`users: 'enforce'`); otherwise they reach the whole file system, and the scoop is told which applies.
 
 ## Inspect, talk, stop
 

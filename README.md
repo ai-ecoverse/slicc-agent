@@ -111,7 +111,7 @@ With users, each cone and each scoop is a kernel user, and works as that user:
   | sync transcripts | `/tmp/agent-sessions/<user>/` (`0700`), or `~/sessions/` with `--persist-session` |
   | the suggestions store and catalog cache, the welcome flag and profile | `/var/lib/slicc/agent/shared/` (root, `0700`). The built-in welcome and suggestions sprinkles read it as `/shared/…`, through the worker and only inside that folder; a user's sprinkle reads `/shared/…` as its owner's home |
 - **No migration:** there's nothing for old installs. Every install starts with this layout.
-- **No scoop guard:** the kernel's permissions decide what a scoop's tools and bash may read and change. With `users: 'off'` or `'report'` nothing confines them, and the scoop is told so.
+- **No scoop guard:** only with `users: 'enforce'` do the kernel's permissions decide what a scoop's tools and bash may read and change. With `users: 'off'` or `'report'` (which only logs what permissions would refuse) nothing confines them, and the scoop is told so.
 
 ### The worker seven starts
 
@@ -268,7 +268,7 @@ Each scoop is owned by a background durable task, its **anchor**, so Stop in its
 
 **Roles** are pi agent files: Markdown with YAML frontmatter (`name`, `description`, `tools`, `model`, `thinking`, `memory`, `inheritProjectContext`, `inheritGlobalContext`, …) and the role's prompt as the body, added to the scoop's instructions. The built-ins are `scout`, `worker`, `reviewer`, `oracle`, `delegate` and `gelatiere` (below). The first source with a name wins: `~/.pi/agent/agents/`, then the built-ins, then packages (see Package resources) that name a folder in `pi-subagents.agents` or `pi.subagents.agents`. A package role that loses its name is skipped with a warning in `agent list`. A project's `.pi/agents/` will count only in trusted folders, and folders can't be trusted yet. `~/.pi/agent/settings.json` can override roles (`subagents.agentOverrides`) and set the limits `subagents.maxLiveScoops` (16 live scoops per cone) and `subagents.maxPerTurn` (64 scoops started per cone turn), which the worker counts for both kinds.
 
-**Isolation.** A scoop runs as its own kernel user, so the kernel decides what its file tools and its bash may read and change; the agent doesn't check paths itself. A sync run shares the caller's cwd and `--read-only` paths with the scoop first (see Sharing in a sync run). A scoop's commands share one process group (see Bash and files on slicc-kernel), and stopping the scoop signals it, together with any group recorded for the scoop on an older kernel.
+**Isolation.** The agent doesn't check paths itself. With `users: 'enforce'` a scoop runs as its own kernel user, and the kernel decides what its file tools and its bash may read and change; with `users: 'off'` or `'report'` they are unconfined. A sync run shares the caller's cwd and `--read-only` paths with the scoop first (see Sharing in a sync run). A scoop's commands share one process group (see Bash and files on slicc-kernel), and stopping the scoop signals it, together with any group recorded for the scoop on an older kernel.
 
 **Rewind.** Dropping a turn never waits for scoops. Scoops the dropped turn created are stopped and marked gone; requests it handed to older scoops are aborted and their reports withdrawn; scoops it stopped come back idle, with a fresh, empty working folder. The `slicc.rewound` entry lists them, and its notice says "Stopped scoop X. Restored scoop Y."
 

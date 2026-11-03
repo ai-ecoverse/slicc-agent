@@ -123,7 +123,7 @@ export function agentUsers(
   const state = () => agents()?.state() ?? { cones: {}, active: 'cone', next: 2, scoops: {} };
   const envOf = async (agentId: string, home: string) =>
     new SliccKernelEnv(await accounts.client(agentId), { cwd: home });
-  const layout = usersLayout(state, envOf, root);
+  const layout = usersLayout(state, envOf, root, mode === 'enforce');
   let ready: () => void = () => undefined;
   const started = new Promise<void>((resolve) => {
     ready = resolve;

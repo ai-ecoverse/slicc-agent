@@ -53,9 +53,9 @@ export function scoopFacts(
     layout.users
       ? `You run as the user ${layout.scoopRoot(record.folder).slice('/home/'.length)}, and your home is ${place}: work there. Your cone can read your home; you can't read your cone's home or another scoop's. /tmp is shared scratch.`
       : `Work in ${place}.`,
-    layout.users
+    layout.enforced
       ? 'Your tools and your bash run as your user too, so the kernel decides what they may read and change. Stay in your home, and change nothing outside it unless the request says so.'
-      : 'Your tools and your bash are not confined: they see the whole file system and every process. Stay in your folder anyway, and change nothing outside it unless the request says so.',
+      : `Your tools and your bash are not confined: they see the whole file system and every process. Stay in your ${layout.users ? 'home' : 'folder'} anyway, and change nothing outside it unless the request says so.`,
     'You may run `agent` synchronously for a bounded side task (calls nest at most three deep), but you cannot start asynchronous scoops (`agent --async`, `subagent spawn`).',
   ].join('\n');
 }
