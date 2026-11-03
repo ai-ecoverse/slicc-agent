@@ -79,10 +79,24 @@ const INERT = new Set([
 ]);
 const GH = new Set(['issue', 'pr', 'api', 'search']);
 const GIT = new Set(['log', 'show', 'grep', 'diff', 'status']);
+const EXECUTION_OPTIONS: Record<string, readonly string[]> = {
+  rg: ['--pre'],
+  sort: ['--compress-program'],
+  git: ['--exec-path', '--open-files-in-pager', '--config-env'],
+};
 const BROWSER_WORD = /\b(?:playwright-cli|curlwright)\b/;
 
 function basename(word: string): string {
   return word.slice(word.lastIndexOf('/') + 1);
+}
+
+function executableOption(name: string, arg: string): boolean {
+  const flag = arg.split('=', 1)[0] as string;
+  if (flag.startsWith('--') && flag !== '--')
+    return ['--output', '--ext-diff', '--textconv', ...(EXECUTION_OPTIONS[name] ?? [])].some(
+      (option) => option.startsWith(flag)
+    );
+  return (name === 'git' && /^-[^-]*[cO]/.test(arg)) || (name === 'sort' && /^-[^-]*o/.test(arg));
 }
 
 function dataCommand(simple: SimpleCommand, depth: number, matcher: ProtectedMatcher): boolean {
@@ -102,7 +116,7 @@ function dataCommand(simple: SimpleCommand, depth: number, matcher: ProtectedMat
     !(name === 'git' && GIT.has(args[0] ?? ''))
   )
     return false;
-  if (args.some((arg) => /^--(?:output|ext-diff|textconv)(?:=|$)/.test(arg))) return false;
+  if (args.some((arg) => executableOption(name, arg))) return false;
   return simple.scripts.every((script) => {
     const nested = commands(script);
     return nested.length > 0 && nested.every((command) => dataCommand(command, depth + 1, matcher));
