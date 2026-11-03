@@ -82,6 +82,10 @@ test('bash scopes browser refusals to the invoked tool and reports its protected
       ['xargs -n 1 playwright-cli open https://seven.sliccy.ai/', 'protected domain sliccy.ai'],
       ['echo playwright-cli; eval "$browser_command"', 'command too dynamic to check'],
     ];
+    allowed.push(
+      "gh issue create --body-file 'https://seven.sliccy.ai/playwright-cli' < /dev/null",
+      "git log --grep='playwright-cli https://seven.sliccy.ai/'"
+    );
     const reviewed = [
       'playwright-cli open &>/tmp/out https://seven.sliccy.ai/',
       'playwright-cli &>/tmp/out open https://seven.sliccy.ai/',
@@ -107,8 +111,20 @@ test('bash scopes browser refusals to the invoked tool and reports its protected
       'setsid --wait playwright-cli open https://seven.sliccy.ai/',
       'ionice -c 3 playwright-cli open https://seven.sliccy.ai/',
       'echo https://seven.sliccy.ai/ | xargs playwright-cli open',
+      'npx playwright-cli open https://seven.sliccy.ai/',
+      'node /usr/bin/playwright-cli open https://seven.sliccy.ai/',
+      'bash /usr/bin/playwright-cli open https://seven.sliccy.ai/',
+      'cp /usr/bin/playwright-cli /tmp/p && /tmp/p open https://seven.sliccy.ai/',
+      'timeout 30 playwright-cli open https://vault.sliccy.ai/',
     ];
-    blocked.push(...reviewed.map((command) => [command, 'protected domain sliccy.ai']));
+    blocked.push(
+      ...reviewed.map((command) => [
+        command,
+        command.includes('vault.sliccy.ai')
+          ? 'protected host vault.sliccy.ai'
+          : 'protected domain sliccy.ai',
+      ])
+    );
     const params = new URLSearchParams([
       ...[...allowed, ...blocked.map(([command]) => command)].map((command) => [
         'tool',
