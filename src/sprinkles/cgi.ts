@@ -38,7 +38,7 @@ export type CgiParsed =
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const PREFIX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]*$/;
 const HEADER = /^([!#$%&'*+.^_`|~0-9A-Za-z-]+):[ \t]*(.*?)[ \t]*$/;
-const STATUS = /^([1-5][0-9][0-9])(?:[ \t]+(.*))?$/;
+const STATUS = /^([2-5][0-9][0-9])(?:[ \t]+(.*))?$/;
 const HOP = new Set([
   'connection',
   'keep-alive',

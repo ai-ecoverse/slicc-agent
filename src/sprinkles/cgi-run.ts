@@ -167,9 +167,16 @@ export class CgiRun {
   #errorBytes = 0;
   #head: CgiHead | undefined;
   #waiting: (() => void)[] = [];
+  readonly #bodiless: boolean;
 
-  constructor(sprinkle: string, limits: CgiLimits, publish: (run: CgiRun) => string) {
+  constructor(
+    sprinkle: string,
+    limits: CgiLimits,
+    publish: (run: CgiRun) => string,
+    bodiless = false
+  ) {
     this.sprinkle = sprinkle;
+    this.#bodiless = bodiless;
     this.#limits = limits;
     this.#publish = publish;
     const { promise, resolve } = Promise.withResolvers<CgiReply>();
@@ -227,7 +234,7 @@ export class CgiRun {
   }
 
   drain(): string {
-    const body = toBase64(joined(this.#queue));
+    const body = this.#bodiless ? '' : toBase64(joined(this.#queue));
     this.#queue = [];
     return body;
   }
@@ -272,7 +279,7 @@ export class CgiRun {
       this.#head = plain(200);
       this.#queue.push(bytes);
     } else {
-      this.#head = plain(500);
+      this.#head = plain(502);
       this.#queue.push(encode(`${parsed.reason}\n`));
       this.stop(parsed.reason);
     }
@@ -323,7 +330,7 @@ export function cgiRunner(
   };
   const execute = (site: CgiSite, kernel: CgiKernel, request: CgiRequest, path: string) => {
     const { script, pathInfo } = scriptOf(request.path) as { script: string; pathInfo: string };
-    const run = new CgiRun(site.id, limits, publish);
+    const run = new CgiRun(site.id, limits, publish, request.method === 'HEAD');
     const fs = kernel.client.fs;
     const env = cgiEnv({
       request,

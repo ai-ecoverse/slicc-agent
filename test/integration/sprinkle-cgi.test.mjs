@@ -34,6 +34,7 @@ const SCRIPTS = {
     "process.stdout.write('Status: 201 Created\\nContent-Type: application/json\\n\\n' + JSON.stringify({ ok: true, count: list.length }));",
   ].join('\n'),
   'cgi-bin/fail': ['#!/bin/sh', 'echo broken >&2', 'exit 3'].join('\n'),
+  'cgi-bin/early': ['#!/bin/sh', "printf 'Status: 103 Early Hints\\n\\n'"].join('\n'),
   'cgi-bin/open': ['#!/bin/sh', 'echo planted'].join('\n'),
 };
 
@@ -90,7 +91,7 @@ const helpers = () => {
       headers: Object.fromEntries(
         reply.headers.map(([name, value]) => [name.toLowerCase(), value])
       ),
-      body: type?.startsWith('application/json') ? JSON.parse(bytes) : bytes,
+      body: bytes && type?.startsWith('application/json') ? JSON.parse(bytes) : bytes,
     };
   };
 };
@@ -141,6 +142,8 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
       'the sprinkle lick'
     );
     const fail = await window.cgi({ path: 'fail' });
+    const early = await window.cgi({ path: 'early' });
+    const head = await window.cgi({ method: 'HEAD', path: 'list' });
     const open = await window.cgi({ path: 'open' });
     const dots = await window.cgi({ path: '..%2Fnotes.shtml' });
     const hidden = await window.cgi({ path: '.list' });
@@ -155,6 +158,8 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
       add,
       again,
       fail,
+      early: early.status,
+      head: { status: head.status, notes: head.headers['x-notes'], body: head.body },
       open,
       dots: dots.status,
       hidden: hidden.status,
@@ -189,6 +194,8 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
   assert.deepEqual(seen.licks, [{ channel: 'sprinkle', title: 'Notes', text: 'added hello' }]);
   assert.equal(seen.fail.status, 500);
   assert.equal(seen.fail.body, 'broken\n');
+  assert.equal(seen.early, 502);
+  assert.deepEqual(seen.head, { status: 200, notes: '2', body: '' });
   assert.equal(seen.open.status, 403);
   assert.match(seen.open.body, /cgi-bin\/open is refused: its group or others can write it/);
   assert.deepEqual([seen.dots, seen.hidden, seen.missing], [404, 404, 404]);
