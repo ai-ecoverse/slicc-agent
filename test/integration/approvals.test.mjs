@@ -7,15 +7,16 @@ import { launch } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-async function boot(page, directory) {
+async function boot(page, directory, approver = 'user') {
+  const query = new URLSearchParams({ 'sudo-approver': approver });
+  if (directory) query.set('directory', directory);
   await page.goto('/');
-  await page.evaluate(async (directory) => {
+  await page.evaluate(async (query) => {
     await import('/dist-test/page.js');
     let worker;
-    const query = directory ? `?directory=${directory}` : '';
     const owner = await startAgent({
       worker: () => {
-        worker = new Worker(`/dist-test/agent-worker.js${query}`, { type: 'module' });
+        worker = new Worker(`/dist-test/agent-worker.js?${query}`, { type: 'module' });
         return worker;
       },
     });
@@ -25,6 +26,12 @@ async function boot(page, directory) {
         port1.onmessage = ({ data }) =>
           data.error ? reject(new Error(data.error)) : resolve(data.item);
         worker.postMessage({ approve: draft, reply: port2 }, [port2]);
+      });
+    const decide = (id, answer, by) =>
+      new Promise((resolve) => {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = ({ data }) => resolve(data);
+        worker.postMessage({ decide: { id, answer, by }, reply: port2 }, [port2]);
       });
     const MIB = 1024 * 1024;
     const sink = (channel) => {
@@ -111,6 +118,7 @@ async function boot(page, directory) {
     globalThis.t = {
       owner,
       ask,
+      decide,
       commits,
       follow,
       until,
@@ -121,7 +129,7 @@ async function boot(page, directory) {
       guest,
       message,
     };
-  }, directory ?? null);
+  }, query.toString());
 }
 
 test('every owner device answers over the link, with or without Control, and the first decision wins', async (t) => {
@@ -257,6 +265,89 @@ test('nothing a guest triggered can be allowed always, while sudo can', async (t
   assert.equal(seen.always, "Always isn't offered for this request.");
   assert.equal(seen.stillPending, 'pending');
   assert.deepEqual(seen.answers, ['once', 'always']);
+});
+
+test('only a person can answer always', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, undefined, 'agent');
+  const seen = await page.evaluate(async () => {
+    const { owner, ask, decide, until, record } = globalThis.t;
+    const local = await owner.connect();
+    const rows = [];
+    for (const by of ['host', 'judge']) {
+      const item = await ask({
+        kind: 'sudo',
+        agentId: 'cone',
+        requester: { kind: 'agent', name: 'cone', agentId: 'cone' },
+        tier: 'agent',
+        always: true,
+        detail: { command: 'ls /root', target: 'root' },
+      });
+      await until(() => record(local, item.id), 'the approval');
+      const before = structuredClone(record(local, item.id));
+      const result = await decide(item.id, 'always', by);
+      const after = structuredClone(record(local, item.id));
+      const once = await decide(item.id, 'once', by);
+      await until(() => record(local, item.id)?.state === 'approved', 'the answer');
+      const settled = structuredClone(record(local, item.id));
+      rows.push({ by, before, result, after, once, settled });
+    }
+    await local.close();
+    await owner.release();
+    return rows;
+  });
+  for (const row of seen) {
+    assert.equal(row.before.always, true);
+    assert.equal(row.before.state, 'pending');
+    assert.equal(row.before.tier, 'agent');
+    assert.deepEqual(row.result, {
+      done: false,
+      state: null,
+      error: 'Always can only be answered by a person.',
+    });
+    assert.deepEqual(row.after, row.before);
+    assert.deepEqual(row.once, { done: true, state: 'approved', error: null });
+    assert.equal(row.settled.answer, 'once');
+    assert.equal(row.settled.decidedBy, row.by);
+  }
+});
+
+test('an owner can answer always', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  const seen = await page.evaluate(async () => {
+    const { owner, ask, until, record, listed } = globalThis.t;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    const item = await ask({
+      kind: 'sudo',
+      agentId: 'cone',
+      requester: { kind: 'agent', name: 'cone', agentId: 'cone' },
+      tier: 'user',
+      always: true,
+      detail: { command: 'ls /root', target: 'root' },
+    });
+    await until(() => listed(model, item.id), 'the approval');
+    const offered = model.approvals.list().find(({ id }) => id === item.id).always;
+    const before = structuredClone(record(local, item.id));
+    await model.approvals.decide(item.id, 'always');
+    await until(() => record(local, item.id)?.state === 'approved', 'the answer');
+    const after = structuredClone(record(local, item.id));
+    await local.close();
+    await owner.release();
+    return { offered, before, after };
+  });
+  assert.equal(seen.offered, true);
+  assert.equal(seen.before.state, 'pending');
+  assert.equal(seen.before.decidedBy, null);
+  assert.ok(seen.after.decidedAt >= seen.before.createdAt);
+  assert.deepEqual(seen.after, {
+    ...seen.before,
+    state: 'approved',
+    decidedBy: 'owner',
+    answer: 'always',
+    decidedAt: seen.after.decidedAt,
+  });
 });
 
 test('a pending approval survives a reload, and one answered before it stays answered', async (t) => {

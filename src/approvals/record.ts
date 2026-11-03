@@ -186,6 +186,8 @@ export function ruled(
   if (!answerer(by, item)) return { error: "This request isn't yours to answer." };
   const known = answerOf(answer);
   if (known === 'always' && scoopTier(by)) return { error: 'A scoop answers once or deny.' };
+  if (known === 'always' && !personal(by))
+    return { error: 'Always can only be answered by a person.' };
   if (known === 'always' && !item.always)
     return { error: "Always isn't offered for this request." };
   if (!known) return { settle: { state: 'rejected', by, reason: REASONS.unknownAnswer } };
