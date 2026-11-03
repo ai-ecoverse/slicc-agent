@@ -142,7 +142,13 @@ async function start() {
     ...(clock ? { now: clock.now, setTimer: clock.setTimer } : {}),
   };
   if (params.has('native')) return hostAgent(agent);
-  return hostAgent(agent, { approvals: await attachApprovals({ harness, ...ttlMs }) });
+  return hostAgent(agent, {
+    approvals: await attachApprovals({
+      harness,
+      ...ttlMs,
+      sudoApprover: () => params.get('sudo-approver'),
+    }),
+  });
 }
 
 let guestLinks = 0;
@@ -184,6 +190,18 @@ self.addEventListener('message', ({ data }) => {
     void host.then((ready) => data.reviews.postMessage(ready.guests.reviews.value ?? null));
   if (data?.seat)
     void host.then((ready) => data.reply.postMessage(ready.guests.record(data.seat) ?? null));
+  if (data?.decide)
+    void host
+      .then((ready) =>
+        ready.approvals.decide(
+          data.decide.id,
+          data.decide.answer,
+          undefined,
+          data.decide.by,
+          BACKGROUND_CONTEXT
+        )
+      )
+      .then((result) => data.reply.postMessage(result));
   if (!data?.approve) return;
   host
     .then((ready) => ready.approvals.request(data.approve, BACKGROUND_CONTEXT))
