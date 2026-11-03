@@ -1,4 +1,4 @@
-import type { SudoAnswer, SudoRequest } from './approvals/sudo.ts';
+import type { SudoReply, SudoRequest } from './approvals/sudo.ts';
 import { type ApproveOptions, askSudo, unavailable } from './approvals/sudo-client.ts';
 import { type AgentConnection, connectAgent } from './client.ts';
 import { type KernelSource, serveAdmin } from './kernel/users.ts';
@@ -22,7 +22,7 @@ export interface PortOptions {
 export interface AgentOwner {
   connect(options?: PortOptions): Promise<AgentConnection>;
   port(options?: PortOptions): Promise<PortEndpoint & Transferable>;
-  approve(request: SudoRequest, options?: ApproveOptions): Promise<SudoAnswer>;
+  approve(request: SudoRequest, options?: ApproveOptions): Promise<SudoReply>;
   restart(): Promise<void>;
   release(): Promise<void>;
 }

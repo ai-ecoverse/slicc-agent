@@ -504,20 +504,38 @@ test('the approvals policy is seeded root-owned without a prompt, and a kernel u
 
 test('the eval set: the recorded classifier answers reach the expected verdicts through the approvals surface', async (t) => {
   const page = await chrome.page(t);
-  await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
+  await boot(page, { query: 'answer=Noted.', files: { [SETTINGS]: judgeSettings('judge/j-1') } });
   const seen = await staged(
     page,
     'the eval set the recorded',
     async (cases) => {
-      const { owner, ask, message, tool, settled, table } = globalThis.t;
+      const { owner, ask, message, tool, settled, table, until } = globalThis.t;
       const local = await owner.connect();
-      const untrusted = (entry) =>
-        entry.kind === 'guest-tool' ? `${entry.tool}: ${entry.summary}` : entry.text;
+      await local.prompt("Let's try sudo.");
+      await local.control.approvalPolicySet({ sudo: { approver: 'agent' } }, BACKGROUND_CONTEXT);
+      await until(() => local.approvalPolicy?.value?.sudo?.approver === 'agent', 'the policy');
+      const untrusted = (entry) => {
+        if (entry.kind === 'sudo') return entry.command;
+        return entry.kind === 'guest-tool' ? `${entry.tool}: ${entry.summary}` : entry.text;
+      };
+      const sudo = (entry) => ({
+        kind: 'sudo',
+        agentId: 'cone',
+        requester: entry.present
+          ? { kind: 'agent', name: 'sliccy', agentId: 'cone' }
+          : { kind: 'user', name: 'cone' },
+        tier: 'agent',
+        detail: { command: entry.command, target: entry.target, cwd: entry.cwd },
+      });
       table(Object.fromEntries(cases.map((entry) => [untrusted(entry), entry.recorded])));
       const out = [];
       for (const entry of cases) {
         const draft =
-          entry.kind === 'guest-tool' ? tool(entry.tool, entry.summary) : message(entry.text);
+          entry.kind === 'sudo'
+            ? sudo(entry)
+            : entry.kind === 'guest-tool'
+              ? tool(entry.tool, entry.summary)
+              : message(entry.text);
         const item = await settled(local, (await ask(draft)).id);
         const got =
           item.state === 'approved' ? 'approve' : item.state === 'rejected' ? 'deny' : 'ask';
@@ -536,4 +554,5 @@ test('the eval set: the recorded classifier answers reach the expected verdicts 
   );
   for (const verdict of ['approve', 'deny', 'ask'])
     assert.ok(evals.cases.some((entry) => entry.expect === verdict));
+  assert.ok(evals.cases.some((entry) => entry.kind === 'sudo' && entry.present));
 });

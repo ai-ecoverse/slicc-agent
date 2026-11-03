@@ -29,6 +29,7 @@ export {
   ApprovalsDoc,
   type ApprovalTier,
   type ApprovalVerdict,
+  ASK_MIN_MS,
   approvalJudge,
   attachApprovals,
   DEFAULT_POLICY,
@@ -46,7 +47,9 @@ export {
   type OwnerIntent,
   ownerIntent,
   POLICY_FILE,
+  PRESENT_MS,
   REASONS,
+  routed,
   seedPolicy,
   VERDICT_REASONS,
   verdictOf,
@@ -59,7 +62,13 @@ export {
   DEFAULT_APPROVAL_POLICY,
   type SudoPolicy,
 } from './approvals/policy.ts';
-export type { AgentSudo, SudoAnswer, SudoRequest } from './approvals/sudo.ts';
+export type {
+  AgentSudo,
+  SudoAnswer,
+  SudoDenial,
+  SudoReply,
+  SudoRequest,
+} from './approvals/sudo.ts';
 export {
   FILE_LIMIT,
   IMAGE_LIMIT,

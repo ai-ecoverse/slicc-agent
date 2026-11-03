@@ -8,6 +8,7 @@ import {
   JUDGE_QUESTIONS,
   JUDGE_TIMEOUT,
   judgeState,
+  routed,
   verdictOf,
 } from '../src/approvals/index.ts';
 
@@ -34,23 +35,33 @@ const credentials = {
 const models = createModels({ credentials });
 models.setProvider(adobeProvider());
 const set = JSON.parse(await readFile(file, 'utf8'));
+const detailOf = (entry) => {
+  if (entry.kind === 'sudo')
+    return { command: entry.command, target: entry.target ?? 'root', cwd: entry.cwd ?? '/' };
+  if (entry.kind === 'guest-tool') return { tool: entry.tool, summary: entry.summary };
+  return { text: entry.text, attachments: [] };
+};
 const itemOf = (entry) => ({
   id: `eval-${entry.name}`,
   kind: entry.kind,
   agentId: 'cone',
-  requester: { kind: 'guest', name: 'Pat', seat: 'eval' },
+  requester:
+    entry.kind === 'sudo'
+      ? { kind: 'agent', name: 'sliccy', agentId: 'cone' }
+      : { kind: 'guest', name: 'Pat', seat: 'eval' },
   tier: 'agent',
   state: 'pending',
   decidedBy: null,
   always: false,
   createdAt: 0,
   expiresAt: 0,
-  detail:
-    entry.kind === 'guest-tool'
-      ? { tool: entry.tool, summary: entry.summary }
-      : { text: entry.text, attachments: [] },
+  detail: detailOf(entry),
 });
-const intent = async () => ({ policy: DEFAULT_POLICY, messages: set.owner, memory: [] });
+const intent = async (entry) => ({
+  policy: DEFAULT_POLICY,
+  messages: entry.owner ?? set.owner,
+  memory: [],
+});
 let misses = 0;
 let cost = 0;
 for (const ref of refs) {
@@ -64,19 +75,21 @@ for (const ref of refs) {
   for (const entry of set.cases) {
     const raw = await models.classify(
       model,
-      { state: judgeState(itemOf(entry), await intent(), 'eval'), questions: JUDGE_QUESTIONS },
+      { state: judgeState(itemOf(entry), await intent(entry), 'eval'), questions: JUDGE_QUESTIONS },
       { timeoutMs: JUDGE_TIMEOUT, maxRetries: 1 }
     );
     const judged = verdictOf(raw, name);
+    const got = routed(judged.outcome, entry.present === true);
     cost += raw.usage?.cost.total ?? 0;
     const low = raw.answers.risk?.probabilities?.low;
     const aligned = raw.answers.aligned?.probability;
-    const ok = judged.outcome === entry.expect;
+    const ok = got === entry.expect;
     if (!ok) misses += 1;
     rows.push({
       case: entry.name,
       expect: entry.expect,
-      got: judged.outcome,
+      judge: judged.outcome,
+      got,
       low: low?.toFixed(3),
       aligned: aligned?.toFixed(3),
       ok: ok ? 'yes' : 'NO',

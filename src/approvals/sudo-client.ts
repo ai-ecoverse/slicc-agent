@@ -5,7 +5,7 @@ import { AgentSudoService, SUDO_METHODS } from '../services.ts';
 import { bound, type Remote, type Root } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import type { Approval } from './record.ts';
-import type { AgentSudo, SudoAnswer, SudoRequest } from './sudo.ts';
+import type { AgentSudo, SudoAnswer, SudoDenial, SudoReply, SudoRequest } from './sudo.ts';
 
 export interface ApproveOptions {
   signal?: AbortSignal;
@@ -22,6 +22,19 @@ const missing = () => () => Promise.reject(unavailable());
 export function answerOf(item: Approval | undefined): SudoAnswer | null {
   if (!item || item.state === 'pending') return null;
   return item.state === 'approved' && item.answer ? item.answer : 'deny';
+}
+
+export const JUDGE_DENIED = 'sudo: denied by the approval judge';
+
+export function replyOf(item: Approval | undefined): SudoReply | null {
+  const answer = answerOf(item);
+  if (answer !== 'deny' || item?.state !== 'rejected' || item.decidedBy !== 'judge') return answer;
+  const reason = item.verdict?.reason;
+  const denial: SudoDenial = {
+    answer: 'deny',
+    message: reason ? `${JUDGE_DENIED}: ${reason}` : JUDGE_DENIED,
+  };
+  return denial;
 }
 
 function halted(stop: AbortSignal | undefined): Promise<never> {
@@ -66,12 +79,12 @@ function settled(
   id: string,
   signals: { signal: AbortSignal | undefined; stop: AbortSignal | undefined },
   ended: Promise<never>
-): Promise<{ answer: SudoAnswer; aborted: unknown }> {
+): Promise<{ answer: SudoReply; aborted: unknown }> {
   const { signal, stop } = signals;
   return new Promise((resolve) => {
     let off: () => void = () => undefined;
     let done = false;
-    const finish = (answer: SudoAnswer, aborted: unknown = null) => {
+    const finish = (answer: SudoReply, aborted: unknown = null) => {
       if (done) return;
       done = true;
       off();
@@ -87,7 +100,7 @@ function settled(
     stop?.addEventListener('abort', halt, { once: true });
     ended.catch(() => finish('deny'));
     off = approvals.subscribe((items) => {
-      const answer = answerOf(items?.find((item) => item.id === id));
+      const answer = replyOf(items?.find((item) => item.id === id));
       if (answer) finish(answer);
     });
     if (done) off();
@@ -118,7 +131,7 @@ export async function askSudo(
   request: SudoRequest,
   options: ApproveOptions = {},
   stop?: AbortSignal
-): Promise<SudoAnswer> {
+): Promise<SudoReply> {
   const { signal } = options;
   const link = await open(endpoint, stop);
   try {

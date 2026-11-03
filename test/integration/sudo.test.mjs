@@ -24,6 +24,7 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
       stage('the kernel');
       const { bootKernel } = await import('/kernel.js');
       const asked = [];
+      const replies = [];
       const held = {};
       const kernel = await bootKernel(
         {},
@@ -32,7 +33,12 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
           approve: (req, options) => {
             asked.push(req.id);
             const where = req.tag?.includes('follower:') ? 'on Pat’s phone' : undefined;
-            return held.owner.approve(req, { ...options, ...(where ? { where } : {}) });
+            const reply = held.owner.approve(req, { ...options, ...(where ? { where } : {}) });
+            reply.then(
+              (answer) => replies.push({ id: req.id, answer }),
+              () => undefined
+            );
+            return reply;
           },
         }
       );
@@ -131,6 +137,7 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         setTable,
         owner,
         asked,
+        replies,
         follow,
         until,
         sudoItems,
@@ -555,4 +562,139 @@ test('a sudo asked right after a restart reaches the new worker, while the one w
     return { old, answer, first: [reloaded.state, reloaded.reason] };
   });
   assert.deepEqual(seen, { old: 'deny', answer: 'once', first: ['withdrawn', 'restart'] });
+});
+
+test("with the agent policy, the judge's deny of the owner's own sudo asks the owner while they're there, with its reason and only Allow once; with nobody to ask, for a scoop or with too little time left it still denies, and says the judge denied it", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    worker: 'main-worker.js',
+    query: '?judge&answer=Noted.',
+    files: {
+      '/home/.pi/agent/settings.json': JSON.stringify({ approvals: { judgeModel: 'judge/j-1' } }),
+    },
+  });
+  const seen = await staged(page, 'a judge deny asks the owner', async () => {
+    const { owner, ask, setTable, until, newest, sudo, tags, replies } = globalThis.t;
+    const risky = { low: 0.05, aligned: 0.9 };
+    setTable({
+      '/usr/bin/cat /etc/hostname': risky,
+      '/usr/bin/cat /etc/passwd': risky,
+      '/usr/bin/cat /etc/group': risky,
+      '/usr/bin/cat /etc/shells': risky,
+      '/usr/bin/cat /etc/hosts': risky,
+    });
+    let local = await owner.connect();
+    const model = createAgentModel(local);
+    await model.agent.ready();
+    await local.prompt('Check how the MCP sign-in is stored with sudo, without printing it.');
+    await local.control.approvalPolicySet({ sudo: { approver: 'agent' } }, BACKGROUND_CONTEXT);
+    await until(() => local.approvalPolicy?.value?.sudo?.approver === 'agent', 'the policy');
+    const running = sudo(['cat', '/etc/hostname'], tags.cone);
+    const asked = await until(() => {
+      const item = newest(local);
+      return item?.detail.command === '/usr/bin/cat /etc/hostname' && item.tier === 'user' && item;
+    }, 'the judged request to reach the owner');
+    const listed = model.approvals.list().find((approval) => approval.id === asked.id);
+    const always = await model.approvals.decide(asked.id, 'always').then(
+      () => 'decided',
+      (error) => error.message
+    );
+    await model.approvals.decide(asked.id, 'once');
+    const allowed = await running;
+    const decided = local.approvals.value.find((item) => item.id === asked.id);
+    const again = await sudo(['-n', 'cat', '/etc/hostname'], tags.cone);
+    const sudoers = await globalThis.t.kernel.run(['ls', '/etc/sudoers.d'], {});
+    const short = await ask({
+      kind: 'sudo',
+      agentId: 'cone',
+      requester: { kind: 'agent', name: 'sliccy', agentId: 'cone' },
+      tier: 'agent',
+      expiresAt: Date.now() + 10_000,
+      detail: { command: '/usr/bin/cat /etc/hosts', target: 'root', cwd: '/' },
+    });
+    const hurried = await until(() => {
+      const item = local.approvals.value.find((entry) => entry.id === short.id);
+      return item?.state !== 'pending' && item;
+    }, 'the hurried request to settle');
+    const scoop = await local.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
+    const scooped = await sudo(
+      ['cat', '/etc/group'],
+      JSON.stringify({ kind: 'agent', agentId: scoop.id })
+    );
+    const byScoop = newest(local);
+    await local.close();
+    const alone = await sudo(['cat', '/etc/passwd'], tags.cone);
+    local = await owner.connect();
+    const unattended = await until(() => {
+      const item = newest(local);
+      return item?.detail.command === '/usr/bin/cat /etc/passwd' && item;
+    }, 'the unattended request');
+    const pick = ({ state, tier, decidedBy, answer, always, verdict }) => ({
+      state,
+      tier,
+      decidedBy,
+      answer: answer ?? null,
+      always,
+      verdict: verdict?.decision ?? null,
+    });
+    const result = {
+      asked: pick(asked),
+      listed: { verdict: listed?.verdict ?? null, always: listed?.always ?? null },
+      always,
+      allowed: allowed.status,
+      decided: pick(decided),
+      again: again.stderr,
+      sudoers: sudoers.stdout,
+      hurried: pick(hurried),
+      scooped: { status: scooped.status, stderr: scooped.stderr, item: pick(byScoop) },
+      alone: { status: alone.status, stderr: alone.stderr, item: pick(unattended) },
+      replies: replies.map((entry) => entry.answer),
+    };
+    await local.close();
+    await owner.release();
+    return result;
+  });
+  assert.deepEqual(seen.asked, {
+    state: 'pending',
+    tier: 'user',
+    decidedBy: null,
+    answer: null,
+    always: false,
+    verdict: 'deny',
+  });
+  assert.deepEqual(seen.listed, {
+    verdict: { decision: 'deny', reason: 'it looks high-risk.' },
+    always: false,
+  });
+  assert.equal(seen.always, "Always isn't offered for this request.");
+  assert.equal(seen.allowed, 0);
+  assert.deepEqual(seen.decided, {
+    state: 'approved',
+    tier: 'user',
+    decidedBy: 'owner',
+    answer: 'once',
+    always: false,
+    verdict: 'deny',
+  });
+  assert.match(seen.again, /a password is required/);
+  assert.doesNotMatch(seen.sudoers, /cone/);
+  const denied = {
+    state: 'rejected',
+    tier: 'agent',
+    decidedBy: 'judge',
+    answer: null,
+    verdict: 'deny',
+  };
+  assert.deepEqual({ ...seen.hurried, always: undefined }, { ...denied, always: undefined });
+  assert.deepEqual({ ...seen.scooped.item, always: undefined }, { ...denied, always: undefined });
+  assert.deepEqual({ ...seen.alone.item, always: undefined }, { ...denied, always: undefined });
+  const judged = {
+    answer: 'deny',
+    message: 'sudo: denied by the approval judge: it looks high-risk.',
+  };
+  assert.deepEqual(seen.replies, ['once', judged, judged]);
+  for (const run of [seen.scooped, seen.alone]) {
+    assert.notEqual(run.status, 0);
+    assert.doesNotMatch(run.stderr, /withdrawn/);
+  }
 });

@@ -12,10 +12,14 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agent } from './agent.ts';
 import {
+  type Approval,
   type ApprovalJudge,
   type Approvals,
+  type Attendance,
   attachApprovals,
+  attendance,
   type Decider,
+  ownerPresent,
 } from './approvals/index.ts';
 import { type ApprovalPolicies, alwaysFor, attachApprovalPolicy } from './approvals/policy.ts';
 import { type AgentSudo, createSudo, ownedSudo } from './approvals/sudo.ts';
@@ -185,23 +189,38 @@ function gatedControls(
   return { trusted, viewed };
 }
 
+type ApprovalOptions = {
+  approvals?: Approvals;
+  judge?: ApprovalJudge;
+  intent?: ScoopReviewHost['intent'];
+  approvalMs?: number;
+};
+
 async function approving(
   agent: Agent,
   policy: ApprovalPolicies,
   options: { judge?: ApprovalJudge; intent?: ScoopReviewHost['intent']; approvalMs?: number },
+  owners: Attendance,
   context: Context
 ): Promise<Approvals> {
+  let items = (): readonly Approval[] => [];
   const approvals = await attachApprovals(
     {
       harness: agent.harness,
       guestAlways: alwaysFor(policy),
       sudoApprover: () => policy.current().sudo.approver,
+      present: ownerPresent({
+        attended: owners.attended,
+        agents: agent.agents,
+        items: () => items(),
+      }),
       scoops: agent.scoopReviews,
       ...(options.judge ? { judge: options.judge } : {}),
       ...(options.approvalMs ? { ttlMs: options.approvalMs } : {}),
     },
     context
   );
+  items = () => approvals.state.value as Approval[];
   agent.scoopReviews.bind({
     approvals,
     agents: agent.agents,
@@ -209,6 +228,19 @@ async function approving(
     ...(options.intent ? { intent: options.intent } : {}),
   });
   return approvals;
+}
+
+export async function approvalsOf(
+  agent: Agent,
+  policy: ApprovalPolicies,
+  options: ApprovalOptions,
+  context: Context
+) {
+  const owners = attendance();
+  const approvals = options.approvals ?? (await approving(agent, policy, options, owners, context));
+  const decide: Served['decide'] = (by) => (id, decision, reason, using) =>
+    approvals.decide(id, decision, reason, by, using);
+  return { approvals, serving: { decide, owners } };
 }
 
 async function guestsOf(
@@ -244,33 +276,28 @@ const inventoryOf = (
 
 const noRevision = () => replicatedState<PrivateRevision>({ revision: 0 });
 
-export async function hostAgent(
-  agent: Agent,
-  options: {
-    serverId?: string;
-    context?: Context;
-    settings?: AgentSettings;
-    licks?: HostLicks;
-    scoops?: HostScoops;
-    skills?: SkillsRuntime;
-    sprinkles?: SprinklesRuntime;
-    memory?: MemoryRuntime;
-    freezer?: FreezerRuntime;
-    changes?: ChangesRuntime;
-    mcp?: Pick<McpRuntime, 'close'>;
-    users?: UserClients;
-    monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users'>;
-    pages?: Pages;
-    secrets?: HostSecrets;
-    uploads?: Uploads;
-    thumbnail?: Thumbnail;
-    labels?: LabelsRuntime;
-    approvals?: Approvals;
-    judge?: ApprovalJudge;
-    intent?: ScoopReviewHost['intent'];
-    approvalMs?: number;
-  } = {}
-): Promise<AgentHost> {
+export type HostOptions = {
+  serverId?: string;
+  context?: Context;
+  settings?: AgentSettings;
+  licks?: HostLicks;
+  scoops?: HostScoops;
+  skills?: SkillsRuntime;
+  sprinkles?: SprinklesRuntime;
+  memory?: MemoryRuntime;
+  freezer?: FreezerRuntime;
+  changes?: ChangesRuntime;
+  mcp?: Pick<McpRuntime, 'close'>;
+  users?: UserClients;
+  monitor?: Pick<MonitorOptions, 'kernel' | 'groups' | 'users'>;
+  pages?: Pages;
+  secrets?: HostSecrets;
+  uploads?: Uploads;
+  thumbnail?: Thumbnail;
+  labels?: LabelsRuntime;
+} & ApprovalOptions;
+
+export async function hostAgent(agent: Agent, options: HostOptions = {}): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const serverId = options.serverId ?? crypto.randomUUID();
   let refresh = () => {};
@@ -288,7 +315,7 @@ export async function hostAgent(
   const pages = options.pages ?? createPages();
   const deliveries = trackDeliveries(agent.harness, state, context);
   const policy = await attachApprovalPolicy(agent.harness, context);
-  const approvals = options.approvals ?? (await approving(agent, policy, options, context));
+  const { approvals, serving } = await approvalsOf(agent, policy, options, context);
   const monitor = createMonitor({
     ...options.monitor,
     harness: agent.harness,
@@ -372,8 +399,7 @@ export async function hostAgent(
     pages,
     inventory: inventory.state,
     guest: guestOpener(guests, agent.agents, mounted.views, context),
-    decide: (by) => (id, decision, reason, using) =>
-      approvals.decide(id, decision, reason, by, using),
+    ...serving,
   });
   const offGuests = guests.onEnd((id) => {
     void host.invalidatePrincipal(
@@ -449,6 +475,7 @@ interface Served {
   inventory?: ReplicatedState<InventoryState>;
   guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
   decide: (by: Decider) => AgentControl['decide'];
+  owners?: Attendance;
 }
 
 export const CLOSED_TO_GUESTS = 'a guest seat has only its transcript and propose';
@@ -519,8 +546,14 @@ export function serveAgent(serving: Served): Host<AgentPrincipal> {
     createHost<AgentPrincipal>({ name: AGENT_HOST, self: SELF, principalKey })
   );
   const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
-  host.serve(AgentControl, (_input, principal) => {
+  host.serve(AgentControl, (_input, principal, self) => {
     const control = seated(serving, principal);
+    if (serving.owners && principal.seat !== 'host' && principal.seat !== 'guest')
+      self.resource('owner-device', {
+        version: 1,
+        open: () => (serving.owners as Attendance).attend(),
+        close: (leave) => leave(),
+      });
     return principal.seat === 'view'
       ? { variant: 'view', ...served(() => control, VIEW_METHODS) }
       : { variant: 'control', ...served(() => control, CONTROL_METHODS) };
