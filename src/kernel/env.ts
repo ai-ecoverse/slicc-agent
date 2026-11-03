@@ -27,6 +27,7 @@ import type { Jobs } from './jobs.ts';
 import { dirname, normalize, resolve } from './paths.ts';
 import {
   DEEP_RESCAN_MS,
+  hearsPeers,
   nativeWatch,
   type PathsChange,
   type PolledWatcher,
@@ -291,17 +292,19 @@ export class SliccKernelEnv implements ExecutionEnv {
       const poll = (group: readonly WatchTarget[], timing: PollTiming) =>
         pollWatch(this.#fs, this.cwd, group, rescanned, timing);
       const polled: PolledWatcher[] = [];
-      if (!native) {
-        const { intervalMs } = this.#poll;
-        polled.push(await poll(targets, intervalMs === undefined ? {} : { intervalMs }));
-      } else {
-        const deep = targets.filter((target) => target.recursive === true);
-        const shallow = targets.filter((target) => target.recursive !== true);
+      const timing = (intervalMs: number | undefined) =>
+        intervalMs === undefined ? {} : { intervalMs };
+      if (!native) polled.push(await poll(targets, timing(this.#poll.intervalMs)));
+      else {
         const backoff = RESCAN_BACKOFF;
+        const { deepRescanMs } = this.#poll;
+        const peers = deepRescanMs === undefined && (await hearsPeers(this.#client));
+        const deep = targets.filter(
+          (target) => target.recursive === true && (!peers || native.blind.includes(target))
+        );
+        const shallow = targets.filter((target) => target.recursive !== true);
         if (deep.length)
-          polled.push(
-            await poll(deep, { intervalMs: this.#poll.deepRescanMs ?? DEEP_RESCAN_MS, backoff })
-          );
+          polled.push(await poll(deep, { intervalMs: deepRescanMs ?? DEEP_RESCAN_MS, backoff }));
         if (shallow.length)
           polled.push(
             await poll(shallow, { intervalMs: this.#poll.rescanMs ?? RESCAN_MS, backoff })

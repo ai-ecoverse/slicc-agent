@@ -1,7 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import type { FileChange, FileWatcher, WatchTarget } from '@earendil-works/pi-durable/env';
-import type { KernelFs } from './client.ts';
-import { dirname, resolve } from './paths.ts';
+import type { KernelClient, KernelFs } from './client.ts';
+import { basename, dirname, resolve } from './paths.ts';
 
 type Snapshot = Map<string, string>;
 
@@ -236,8 +236,6 @@ function inside(base: string, path: string): boolean {
   return path === base || path.startsWith(base === '/' ? '/' : `${base}/`);
 }
 
-const FALLBACK = new Set(['ENOENT', 'ENOTDIR']);
-
 type Watched = WatchTarget & { real: string };
 
 export function mapChange(targets: readonly Watched[], path: string): string[] {
@@ -256,11 +254,58 @@ export function mapChange(targets: readonly Watched[], path: string): string[] {
 
 type Handle = { close(): unknown };
 
-export type NativeWatcher = FileWatcher & { recheck(paths: readonly string[]): void };
+export type NativeWatcher = FileWatcher & {
+  blind: readonly WatchTarget[];
+  recheck(paths: readonly string[]): void;
+};
 
 function codeOf(error: unknown): string {
   return String((Object(error) as { code?: unknown }).code);
 }
+
+async function realOf(fs: KernelFs, path: string): Promise<string> {
+  let at = path;
+  let rest = '';
+  for (;;) {
+    const real = await fs.realpath(at).catch(() => undefined);
+    if (real !== undefined) return `${real === '/' && rest ? '' : real}${rest}`;
+    if (at === '/') return path;
+    rest = `/${basename(at)}${rest}`;
+    at = dirname(at);
+  }
+}
+
+const PEERS_PROBE = '/proc/sys/kernel/slicc_meta_transactions';
+const peerKernels = new WeakMap<KernelClient, Promise<boolean>>();
+
+async function probePeers(client: KernelClient): Promise<boolean> {
+  const decoder = new TextDecoder();
+  let text = '';
+  const probe = await client.spawn(['cat', PEERS_PROBE], {
+    onStdout: (bytes) => {
+      text += decoder.decode(bytes, { stream: true });
+    },
+  });
+  if ((await probe.exited) !== 0) return false;
+  return (
+    text
+      .trim()
+      .split(/\s+/)
+      .map(Number)
+      .reduce((sum, count) => sum + count, 0) > 0
+  );
+}
+
+export function hearsPeers(client: KernelClient): Promise<boolean> {
+  let known = peerKernels.get(client);
+  if (!known) {
+    known = probePeers(client).catch(() => false);
+    peerKernels.set(client, known);
+  }
+  return known;
+}
+
+type Entry = Watched & { main: Handle | undefined; alias: Handle | undefined };
 
 export async function nativeWatch(
   fs: KernelFs,
@@ -270,18 +315,15 @@ export async function nativeWatch(
 ): Promise<NativeWatcher | undefined> {
   const watch = fs.watch?.bind(fs);
   if (!watch) return undefined;
-  const live: Watched[] = [];
-  const handles: Handle[] = [];
-  const waiting = new Map<number, { target: WatchTarget; handle: Handle | undefined }>();
-  const dirty = new Set<number>();
+  const entries: Entry[] = [];
+  const dirty = new Set<Entry>();
   let settling = false;
   let settled = Promise.resolve();
   let open = true;
   const recheck = (paths: readonly string[] | undefined) => {
     if (!open) return;
-    for (const [id, { target }] of waiting)
-      if (!paths || paths.some((at) => inside(at, target.path) || inside(target.path, at)))
-        dirty.add(id);
+    for (const entry of entries)
+      if (!paths || paths.some((at) => inside(at, entry.path))) dirty.add(entry);
     if (dirty.size > 0) kick();
   };
   const report = (change: { paths: string[] } | { overflow: true }) => {
@@ -291,56 +333,35 @@ export async function nativeWatch(
       recheck(undefined);
       return;
     }
-    const paths = [...new Set(change.paths.flatMap((path) => mapChange(live, path)))];
+    const paths = [...new Set(change.paths.flatMap((path) => mapChange(entries, path)))];
     if (paths.length) onChange({ kind: 'paths', paths });
     recheck(change.paths);
   };
-  const heard = (change: { paths: string[] } | { overflow: true }) =>
-    recheck('paths' in change ? change.paths : undefined);
-  const attach = async (target: WatchTarget): Promise<boolean> => {
-    const real = await fs.realpath(target.path).catch(() => target.path);
-    const recursive = { recursive: target.recursive === true };
-    const opened: Handle[] = [];
+  const opened = async (path: string, recursive: boolean) => {
     try {
-      opened.push(await watch([target.path], recursive, report));
-      if (real !== target.path) opened.push(await watch([real], recursive, report));
+      return await watch([path], { recursive }, report);
     } catch (error) {
-      for (const handle of opened) await handle.close();
-      if (FALLBACK.has(codeOf(error))) return false;
+      if (codeOf(error) !== 'ENOSYS' && !(await fs.exists(path).catch(() => false)))
+        return undefined;
       throw error;
     }
-    handles.push(...opened);
-    live.push({ ...target, real });
-    return true;
   };
-  const wait = async (id: number, target: WatchTarget) => {
-    const entry = { target, handle: undefined as Handle | undefined };
-    waiting.set(id, entry);
-    entry.handle = await watch([target.path], { recursive: true }, heard).catch(
-      (error: unknown) => {
-        if (codeOf(error) === 'ENOSYS') throw error;
-        return undefined;
-      }
-    );
-    if (await fs.exists(target.path).catch(() => false)) dirty.add(id);
-  };
-  const settle = async (id: number) => {
-    const entry = waiting.get(id);
-    if (!entry || !open) return;
-    const { path } = entry.target;
-    if (!(await fs.exists(path).catch(() => false)) || !(await attach(entry.target))) return;
-    waiting.delete(id);
-    void entry.handle?.close();
-    const found = await exclusive(() => snapshot(fs, '/', [entry.target]));
-    const paths = [...found.keys()].flatMap((at) => mapChange(live, at));
-    if (open && paths.length) onChange({ kind: 'paths', paths: [...new Set(paths)] });
+  const settle = async (entry: Entry) => {
+    const recursive = entry.recursive === true;
+    entry.main ??= await opened(entry.path, recursive);
+    const real = await realOf(fs, entry.path);
+    if (real === entry.real && (entry.alias || real === entry.path)) return;
+    const was = entry.alias;
+    entry.real = real;
+    entry.alias = real === entry.path ? undefined : await opened(real, recursive);
+    await was?.close();
   };
   const drain = async () => {
     try {
       while (open && dirty.size > 0) {
-        const id = dirty.values().next().value as number;
-        dirty.delete(id);
-        await settle(id).catch(() => undefined);
+        const entry = dirty.values().next().value as Entry;
+        dirty.delete(entry);
+        await settle(entry).catch(() => undefined);
       }
     } finally {
       settling = false;
@@ -353,24 +374,26 @@ export async function nativeWatch(
   };
   const closeAll = async () => {
     open = false;
-    for (const handle of handles.splice(0)) await handle.close();
-    for (const entry of waiting.values()) await entry.handle?.close();
-    waiting.clear();
+    for (const entry of entries.splice(0)) {
+      await entry.main?.close();
+      await entry.alias?.close();
+    }
   };
   try {
-    for (const [id, target] of targets.entries()) {
-      const resolved = { ...target, path: resolve(cwd, target.path) };
-      const present = await fs.exists(resolved.path).catch(() => false);
-      if (!present || !(await attach(resolved))) await wait(id, resolved);
+    for (const target of targets) {
+      const path = resolve(cwd, target.path);
+      const entry: Entry = { ...target, path, real: path, main: undefined, alias: undefined };
+      entries.push(entry);
+      await settle(entry);
     }
   } catch (error) {
     await closeAll();
     if (codeOf(error) === 'ENOSYS') return undefined;
     throw error;
   }
-  if (dirty.size > 0) kick();
   return {
     mode: 'native',
+    blind: targets.filter((_, index) => !entries[index]?.main),
     recheck,
     async stop(_context: Context) {
       await closeAll();

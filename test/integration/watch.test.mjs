@@ -137,3 +137,122 @@ test('watch: polling a tree slower to scan than its interval never overlaps scan
   assert.equal(seen.after, 0);
   assert.equal(seen.heard, true);
 });
+
+test('watch: a missing target under a symlinked directory hears a creation made through the real path', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'watch under a symlink', async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const kernel = await bootKernel();
+    const client = await attachKernel(await kernel.connect());
+    await client.fs.mkdir('/home/s/real');
+    await client.fs.symlink('/home/s/real', '/home/s/link');
+    const env = new SliccKernelEnv(client, { cwd: '/' });
+    const heard = [];
+    let wake = () => {};
+    const result = await env.watch(
+      [{ path: '/home/s/link/cone/.slicc', recursive: true }],
+      (change) => {
+        if (change.kind === 'paths') heard.push(...change.paths);
+        wake();
+      },
+      BACKGROUND_CONTEXT
+    );
+    const until = (path) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no change at ${path}: ${heard}`)), 5000);
+        wake = () => {
+          if (!heard.includes(path)) return;
+          clearTimeout(timer);
+          resolve();
+        };
+        wake();
+      });
+    await client.fs.mkdir('/home/s/real/cone/.slicc/watches');
+    await until('/home/s/link/cone/.slicc/watches');
+    await client.fs.writeFile('/home/s/real/cone/.slicc/watches/a.json', '{}');
+    await until('/home/s/link/cone/.slicc/watches/a.json');
+    await result.value.stop(BACKGROUND_CONTEXT);
+    return { mode: result.value.mode };
+  });
+  assert.equal(seen.mode, 'native');
+});
+
+test('watch: on a kernel whose client watches hear other kernels, trees are not rescanned and another tab is heard', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'watch another kernel', async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const kernel = await bootKernel();
+    const client = await attachKernel(await kernel.connect());
+    let probe = '';
+    const cat = await client.spawn(['cat', '/proc/sys/kernel/slicc_meta_transactions'], {
+      onStdout: (bytes) => {
+        probe += new TextDecoder().decode(bytes);
+      },
+    });
+    if ((await cat.exited) !== 0) probe = undefined;
+    if (probe === undefined) return { skip: true };
+    const other = await attachKernel(await (await bootKernel()).connect());
+    for (let i = 0; i < 100; i++) {
+      let shared = '';
+      const read = await client.spawn(['cat', '/proc/sys/kernel/slicc_shared_root'], {
+        onStdout: (bytes) => {
+          shared += new TextDecoder().decode(bytes);
+        },
+      });
+      await read.exited;
+      if (shared.trim() === '1') break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await client.fs.mkdir('/home/p/here');
+    const counts = { readdir: 0 };
+    const fs = Object.create(client.fs);
+    fs.readdir = (path) => {
+      counts.readdir += 1;
+      return client.fs.readdir(path);
+    };
+    const env = new SliccKernelEnv({ ...client, fs }, { cwd: '/' });
+    const heard = [];
+    let wake = () => {};
+    const result = await env.watch(
+      [
+        { path: '/home/p/here', recursive: true },
+        { path: '/home/p/missing', recursive: true },
+      ],
+      (change) => {
+        if (change.kind === 'paths') heard.push(...change.paths);
+        wake();
+      },
+      BACKGROUND_CONTEXT
+    );
+    const until = (path) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no change at ${path}: ${heard}`)), 5000);
+        wake = () => {
+          if (!heard.includes(path)) return;
+          clearTimeout(timer);
+          resolve();
+        };
+        wake();
+      });
+    const idle = counts.readdir;
+    await other.fs.mkdir('/home/p/missing/sub');
+    await until('/home/p/missing/sub');
+    await other.fs.writeFile('/home/p/here/b.txt', 'b');
+    await until('/home/p/here/b.txt');
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await result.value.stop(BACKGROUND_CONTEXT);
+    return { mode: result.value.mode, rescans: counts.readdir - idle };
+  });
+  if (seen.skip) {
+    t.skip('this kernel does not pass other kernels’ changes to client watches');
+    return;
+  }
+  assert.equal(seen.mode, 'native');
+  assert.equal(seen.rescans, 0);
+});
