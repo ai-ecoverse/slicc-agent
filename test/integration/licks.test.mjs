@@ -15,6 +15,14 @@ const helpers = () => {
     await writable.write(text);
     await writable.close();
   };
+  window.writeNoticed = async (path, text) => {
+    await window.write(path, text);
+    const { postFsNotice } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/meta.js');
+    const paths = [path];
+    for (let at = path; at.lastIndexOf('/') > 0; )
+      paths.push((at = at.slice(0, at.lastIndexOf('/'))));
+    postFsNotice({ paths });
+  };
   window.licks = () => window.agent.messages().filter((message) => message.role === 'lick');
   window.agentWait = (check, what) =>
     when(
@@ -97,7 +105,7 @@ test('licks reach the cone through the production worker: a webhook, a file watc
     JSON.stringify(hostile)
   );
   await count(2);
-  await page.evaluate(() => window.write('/home/notes/today.md', '# today'));
+  await page.evaluate(() => window.writeNoticed('/home/notes/today.md', '# today'));
   await count(3);
   await page.evaluate(async () => {
     const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
