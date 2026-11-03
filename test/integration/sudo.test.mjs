@@ -564,7 +564,7 @@ test('a sudo asked right after a restart reaches the new worker, while the one w
   assert.deepEqual(seen, { old: 'deny', answer: 'once', first: ['withdrawn', 'restart'] });
 });
 
-test("with the agent policy, the judge's deny of the owner's own sudo asks the owner while they're there, with its reason and only Allow once; with nobody to ask, for a scoop or with too little time left it still denies, and says the judge denied it", async (t) => {
+test("a judge deny of the owner's sudo asks an attached owner device, once without Always; NOPASSWD skips the judge; else it is the judge's deny", async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
     worker: 'main-worker.js',
@@ -574,19 +574,18 @@ test("with the agent policy, the judge's deny of the owner's own sudo asks the o
     },
   });
   const seen = await staged(page, 'a judge deny asks the owner', async () => {
-    const { owner, ask, setTable, until, newest, sudo, tags, replies } = globalThis.t;
+    const { owner, ask, judged, setTable, until, newest, sudo, tags, replies, kernel } =
+      globalThis.t;
     const risky = { low: 0.05, aligned: 0.9 };
     setTable({
       '/usr/bin/cat /etc/hostname': risky,
       '/usr/bin/cat /etc/passwd': risky,
       '/usr/bin/cat /etc/group': risky,
-      '/usr/bin/cat /etc/shells': risky,
       '/usr/bin/cat /etc/hosts': risky,
     });
     let local = await owner.connect();
     const model = createAgentModel(local);
     await model.agent.ready();
-    await local.prompt('Check how the MCP sign-in is stored with sudo, without printing it.');
     await local.control.approvalPolicySet({ sudo: { approver: 'agent' } }, BACKGROUND_CONTEXT);
     await until(() => local.approvalPolicy?.value?.sudo?.approver === 'agent', 'the policy');
     const running = sudo(['cat', '/etc/hostname'], tags.cone);
@@ -604,6 +603,19 @@ test("with the agent policy, the judge's deny of the owner's own sudo asks the o
     const decided = local.approvals.value.find((item) => item.id === asked.id);
     const again = await sudo(['-n', 'cat', '/etc/hostname'], tags.cone);
     const sudoers = await globalThis.t.kernel.run(['ls', '/etc/sudoers.d'], {});
+    const rule = 'NOPASSWD cone (root) Cmnd /usr/bin/cat /etc/hostname';
+    await kernel.run(
+      ['bash', '-c', `echo '${rule}' > /etc/sudoers.d/cone && chmod 440 /etc/sudoers.d/cone`],
+      {}
+    );
+    const before = (await judged()).length;
+    const items = local.approvals.value.length;
+    const granted = await sudo(['cat', '/etc/hostname'], tags.cone);
+    const nopasswd = {
+      status: granted.status,
+      judged: (await judged()).length - before,
+      filed: local.approvals.value.length - items,
+    };
     const short = await ask({
       kind: 'sudo',
       agentId: 'cone',
@@ -645,6 +657,7 @@ test("with the agent policy, the judge's deny of the owner's own sudo asks the o
       decided: pick(decided),
       again: again.stderr,
       sudoers: sudoers.stdout,
+      nopasswd,
       hurried: pick(hurried),
       scooped: { status: scooped.status, stderr: scooped.stderr, item: pick(byScoop) },
       alone: { status: alone.status, stderr: alone.stderr, item: pick(unattended) },
@@ -677,6 +690,7 @@ test("with the agent policy, the judge's deny of the owner's own sudo asks the o
     verdict: 'deny',
   });
   assert.match(seen.again, /a password is required/);
+  assert.deepEqual(seen.nopasswd, { status: 0, judged: 0, filed: 0 });
   assert.doesNotMatch(seen.sudoers, /cone/);
   const denied = {
     state: 'rejected',

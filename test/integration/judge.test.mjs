@@ -511,7 +511,7 @@ test('the eval set: the recorded classifier answers reach the expected verdicts 
     async (cases) => {
       const { owner, ask, message, tool, settled, table, until } = globalThis.t;
       const local = await owner.connect();
-      await local.prompt("Let's try sudo.");
+      const scoop = await local.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
       await local.control.approvalPolicySet({ sudo: { approver: 'agent' } }, BACKGROUND_CONTEXT);
       await until(() => local.approvalPolicy?.value?.sudo?.approver === 'agent', 'the policy');
       const untrusted = (entry) => {
@@ -520,10 +520,10 @@ test('the eval set: the recorded classifier answers reach the expected verdicts 
       };
       const sudo = (entry) => ({
         kind: 'sudo',
-        agentId: 'cone',
+        agentId: entry.present ? 'cone' : scoop.id,
         requester: entry.present
           ? { kind: 'agent', name: 'sliccy', agentId: 'cone' }
-          : { kind: 'user', name: 'cone' },
+          : { kind: 'agent', name: 'helper', agentId: scoop.id },
         tier: 'agent',
         detail: { command: entry.command, target: entry.target, cwd: entry.cwd },
       });

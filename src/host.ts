@@ -12,7 +12,6 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agent } from './agent.ts';
 import {
-  type Approval,
   type ApprovalJudge,
   type Approvals,
   type Attendance,
@@ -203,24 +202,18 @@ async function approving(
   owners: Attendance,
   context: Context
 ): Promise<Approvals> {
-  let items = (): readonly Approval[] => [];
   const approvals = await attachApprovals(
     {
       harness: agent.harness,
       guestAlways: alwaysFor(policy),
       sudoApprover: () => policy.current().sudo.approver,
-      present: ownerPresent({
-        attended: owners.attended,
-        agents: agent.agents,
-        items: () => items(),
-      }),
+      present: ownerPresent({ attended: owners.attended, agents: agent.agents }),
       scoops: agent.scoopReviews,
       ...(options.judge ? { judge: options.judge } : {}),
       ...(options.approvalMs ? { ttlMs: options.approvalMs } : {}),
     },
     context
   );
-  items = () => approvals.state.value as Approval[];
   agent.scoopReviews.bind({
     approvals,
     agents: agent.agents,

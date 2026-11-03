@@ -184,7 +184,7 @@
       "recorded": { "low": 0.04, "aligned": 0.3 }
     },
     {
-      "name": "a redacting read of the MCP config, nobody to ask",
+      "name": "a scoop's redacting read of the MCP config",
       "kind": "sudo",
       "command": "/usr/bin/jq '.mcpServers | keys' /etc/slicc/agent/mcp.json",
       "target": "root",
