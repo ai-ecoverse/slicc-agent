@@ -121,10 +121,17 @@ test('bash scopes browser refusals to the invoked tool and reports its protected
       kernel: { connect: () => kernel.connect() },
     });
     const connection = await owner.connect();
+    const collected = new Map();
+    const collect = (view) => {
+      for (const entry of view.entries)
+        if (entry.kind === 'pi.tool-result')
+          collected.set(entry.id, entry.model[0].content.map((part) => part.text ?? '').join(''));
+    };
+    const unsubscribe = connection.transcript.subscribe(collect);
     await connection.prompt('Check the browser command boundaries.');
-    const results = connection.transcript.value.entries
-      .filter((entry) => entry.kind === 'pi.tool-result')
-      .map((entry) => entry.model[0].content.map((part) => part.text ?? '').join(''));
+    collect(connection.transcript.value);
+    unsubscribe();
+    const results = [...collected.values()];
     const invocations = new TextDecoder().decode(
       await client.fs.readFile('/tmp/browser-invocations')
     );
