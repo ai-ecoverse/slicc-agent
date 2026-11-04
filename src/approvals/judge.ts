@@ -205,13 +205,15 @@ export function verdictOf(result: ClassifierResult, model: string): Judgement {
     return { error: result.errorMessage || `the judge stopped: ${result.stopReason}` };
   const { level: chosen, aligned: fit, always: more } = result.answers;
   const level = chosen?.type === 'choice' ? levelOf(chosen.probabilities) : undefined;
+  const routine = chosen?.type === 'choice' ? unit(chosen.probabilities.routine) : undefined;
   const aligned = fit?.type === 'bool' ? unit(fit.probability) : undefined;
   const replay = more?.type === 'bool' ? unit(more.probability) : undefined;
-  if (level === undefined || aligned === undefined)
+  if (level === undefined || routine === undefined || aligned === undefined)
     return { error: 'the judge gave no usable answer' };
   return {
     verdict: {
       level,
+      routine,
       aligned,
       ...(more ? { always: replay !== undefined && 1 - replay >= JUDGE_ALWAYS } : {}),
       reason: fallbackReason(level, aligned),

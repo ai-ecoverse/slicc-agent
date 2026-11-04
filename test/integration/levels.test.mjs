@@ -212,6 +212,7 @@ test('Always appears on a sudo dialog only once a level 1 verdict says a rerun o
   assert.equal(seen.after.verdictError, undefined);
   assert.deepEqual(seen.after.verdict, {
     level: 1,
+    routine: 0.9,
     aligned: 0.95,
     always: true,
     reason: 'It reads the secret rules and changes nothing.',
@@ -382,6 +383,13 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
   const rows = [
     { name: 'routine and aligned', level: 1, aligned: true, expect: 'approve' },
     { name: 'routine, not aligned', level: 1, aligned: false, expect: 'ask' },
+    {
+      name: 'routine but only at P 0.7',
+      level: 1,
+      routine: 0.7,
+      aligned: true,
+      expect: { classifier: 'ask', chat: 'approve' },
+    },
     { name: 'permissions', level: 2, aligned: true, expect: 'ask' },
     { name: 'harm, nobody there', level: 3, aligned: false, expect: 'deny' },
     {
@@ -422,8 +430,15 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
         const entries = {};
         for (const [at, row] of rows.entries()) {
           const say = judge === 'chat' ? chatLine(row) : (row.reason ?? 'It does what it says.');
+          const levels = row.routine
+            ? {
+                routine: row.routine,
+                permissions: (1 - row.routine) / 2,
+                harm: (1 - row.routine) / 2,
+              }
+            : row.level;
           const step = row.level
-            ? { level: row.level, aligned: row.aligned ? 0.95 : 0.2, say }
+            ? { level: levels, aligned: row.aligned ? 0.9 : 0.2, say }
             : {
                 stop: 'error',
                 error: 'no answer',
@@ -466,6 +481,7 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
               got: outcome(item),
               via: item.verdict?.via ?? null,
               level: item.verdict?.level ?? null,
+              routine: item.verdict?.routine ?? null,
               error: item.verdictError ?? null,
               decidedBy: item.decidedBy,
               reason: item.verdict?.reason ?? null,
@@ -485,10 +501,12 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
         const got = seen.find(
           (entry) => entry.row === row.name && entry.kind === kind && entry.judge === judge
         );
-        assert.equal(got.got, row.expect, `${row.name} for ${kind} by ${judge}`);
+        const want = typeof row.expect === 'string' ? row.expect : row.expect[judge];
+        assert.equal(got.got, want, `${row.name} for ${kind} by ${judge}`);
         assert.equal(got.level, row.level ?? null);
         assert.equal(got.via, row.level ? judge : null);
-        assert.equal(got.decidedBy, row.expect === 'ask' ? null : 'judge');
+        assert.equal(got.decidedBy, want === 'ask' ? null : 'judge');
+        if (row.routine) assert.equal(got.routine, judge === 'chat' ? null : row.routine);
         if (!row.level && !row.cut)
           assert.equal(
             got.error,

@@ -24,6 +24,7 @@ export type ApprovalLevel = 1 | 2 | 3;
 
 export type ApprovalVerdict = {
   level?: ApprovalLevel;
+  routine?: number;
   aligned?: number | boolean;
   always?: boolean;
   reason: string;
@@ -173,7 +174,8 @@ export function route(
   present: boolean
 ): Routed {
   if (gate !== 'judge' || !verdict?.level) return 'ask';
-  if (verdict.level === 1 && fits(verdict.aligned)) return 'approve';
+  const sure = verdict.via === 'chat' || (verdict.routine ?? 0) >= JUDGE_ALLOW;
+  if (verdict.level === 1 && sure && fits(verdict.aligned)) return 'approve';
   if (verdict.level === 3 && requester.kind !== 'user' && !present) return 'deny';
   return 'ask';
 }

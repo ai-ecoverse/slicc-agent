@@ -211,6 +211,7 @@ test("the judge approves a routine request that serves the owner's intent and, w
     { ...seen.viewerRecord.verdict },
     {
       level: 1,
+      routine: 0.96,
       aligned: 0.93,
       reason: 'It fixes a typo the owner asked about.',
       via: 'classifier',
@@ -386,6 +387,7 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
   const { reason: _late, ...late } = seen.late.verdict;
   assert.deepEqual(late, {
     level: 1,
+    routine: 0.97,
     aligned: 0.95,
     via: 'classifier',
     decision: 'allow',
@@ -394,6 +396,7 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
   const { reason: _unsure, ...unsure } = seen.unsure.verdict;
   assert.deepEqual(unsure, {
     level: 1,
+    routine: 0.9,
     aligned: 0.4,
     via: 'classifier',
     decision: 'unsure',
