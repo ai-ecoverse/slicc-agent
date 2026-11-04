@@ -482,6 +482,7 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
               via: item.verdict?.via ?? null,
               level: item.verdict?.level ?? null,
               routine: item.verdict?.routine ?? null,
+              decision: item.verdict?.decision ?? null,
               error: item.verdictError ?? null,
               decidedBy: item.decidedBy,
               reason: item.verdict?.reason ?? null,
@@ -507,6 +508,10 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
         assert.equal(got.via, row.level ? judge : null);
         assert.equal(got.decidedBy, want === 'ask' ? null : 'judge');
         if (row.routine) assert.equal(got.routine, judge === 'chat' ? null : row.routine);
+        assert.equal(
+          got.decision,
+          row.level ? (row.level === 3 ? 'deny' : want === 'approve' ? 'allow' : 'unsure') : null
+        );
         if (!row.level && !row.cut)
           assert.equal(
             got.error,
