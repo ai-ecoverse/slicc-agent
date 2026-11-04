@@ -36,6 +36,7 @@ const SCRIPTS = {
   'cgi-bin/fail': ['#!/bin/sh', 'echo broken >&2', 'exit 3'].join('\n'),
   'cgi-bin/early': ['#!/bin/sh', "printf 'Status: 103 Early Hints\\n\\n'"].join('\n'),
   'cgi-bin/open': ['#!/bin/sh', 'echo planted'].join('\n'),
+  'cgi-bin/slow': ['#!/bin/sh', 'sleep 2', 'echo slow'].join('\n'),
 };
 
 const helpers = () => {
@@ -135,6 +136,8 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
       ],
       body: JSON.stringify({ text: 'hello' }),
     });
+    if (add.status !== 201)
+      throw new Error(`add answered ${add.status}: ${JSON.stringify(add.body)}`);
     const again = await window.cgi({ path: 'list' });
     await when(
       [heard(window.agent, 'messages')],
@@ -148,6 +151,7 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
     const dots = await window.cgi({ path: '..%2Fnotes.shtml' });
     const hidden = await window.cgi({ path: '.list' });
     const missing = await window.cgi({ path: 'nothing' });
+    const crowd = await Promise.all(Array.from({ length: 8 }, () => window.cgi({ path: 'slow' })));
     const outsider = await window.sh(
       'agent send cone --lick=sprinkle --source notes "not from the sprinkle"',
       'cone'
@@ -161,6 +165,8 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
       early: early.status,
       head: { status: head.status, notes: head.headers['x-notes'], body: head.body },
       open,
+      crowd: crowd.map((reply) => reply.status).sort(),
+      retry: crowd.find((reply) => reply.status === 503)?.headers['retry-after'],
       dots: dots.status,
       hidden: hidden.status,
       missing: missing.status,
@@ -199,6 +205,8 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
   assert.equal(seen.open.status, 403);
   assert.match(seen.open.body, /cgi-bin\/open is refused: its group or others can write it/);
   assert.deepEqual([seen.dots, seen.hidden, seen.missing], [404, 404, 404]);
+  assert.deepEqual(seen.crowd, [200, 200, 200, 200, 503, 503, 503, 503]);
+  assert.equal(seen.retry, '1');
   assert.deepEqual(seen.outsider, {
     status: 2,
     stderr:

@@ -340,7 +340,6 @@ export function cgiRunner(
       sprinkle: site.id,
       user: kernel.user,
     });
-    count(site.id, 1);
     const ended = (code: number | undefined) => {
       count(site.id, -1);
       log(fs, site.folder, script, run.end(code));
@@ -382,12 +381,13 @@ export function cgiRunner(
       return cgiReply(503, `${site.id} runs ${limits.parallel} scripts already`, [
         ['Retry-After', '1'],
       ]);
+    count(site.id, 1);
     const fs = kernel.client.fs;
-    const found = await uidOf(fs, kernel.user).then(
-      (uid) => locate(fs, site.folder, parts.script, uid),
-      (error: Error): Found => ({ status: 403, reason: error.message })
-    );
+    const found = await uidOf(fs, kernel.user)
+      .then((uid) => locate(fs, site.folder, parts.script, uid))
+      .catch((error: Error): Found => ({ status: 403, reason: error.message }));
     if (!('status' in found)) return found.path;
+    count(site.id, -1);
     if (found.status === 403) log(fs, site.folder, parts.script, found.reason);
     return cgiReply(found.status, found.reason);
   };
