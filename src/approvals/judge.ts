@@ -393,6 +393,8 @@ export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
     clock.done();
     if (!asked) return { error: clock.late() ? JUDGE_LATE : "the judge didn't answer" };
     const cost = asked.answer.usage?.cost.total ?? null;
+    const { stopReason } = asked.answer;
+    if (stopReason !== 'stop') return { error: `the judge stopped: ${stopReason}`, cost };
     const verdict = await chatVerdict(item, asked.text, nameOf(chat));
     return verdict ? { verdict, cost } : { error: 'the judge gave no usable answer', cost };
   };

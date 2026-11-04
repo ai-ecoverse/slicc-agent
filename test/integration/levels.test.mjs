@@ -393,6 +393,7 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
     },
     { name: 'harm, the owner there', level: 3, aligned: false, present: true, expect: 'ask' },
     { name: 'no verdict', expect: 'ask' },
+    { name: 'a chat answer cut off at the token limit', cut: true, expect: 'ask' },
   ];
   const seen = await staged(
     page,
@@ -407,8 +408,8 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
         return item.state === 'pending' && item.tier === 'user' ? 'ask' : item.state;
       };
       const chatLine = (row) =>
-        row.level
-          ? `level: ${row.level}\naligned: ${row.aligned ? 'yes' : 'no'}\nalways: no\nreason: ${row.reason ?? 'It does what it says.'}`
+        row.level || row.cut
+          ? `level: ${row.level ?? 1}\naligned: ${row.aligned || row.cut ? 'yes' : 'no'}\nalways: no\nreason: ${row.reason ?? 'It does what it says.'}`
           : 'This looks fine to me.';
       const out = [];
       for (const judge of ['classifier', 'chat']) {
@@ -423,7 +424,12 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
           const say = judge === 'chat' ? chatLine(row) : (row.reason ?? 'It does what it says.');
           const step = row.level
             ? { level: row.level, aligned: row.aligned ? 0.95 : 0.2, say }
-            : { stop: 'error', error: 'no answer', say };
+            : {
+                stop: 'error',
+                error: 'no answer',
+                say,
+                ...(row.cut && judge === 'chat' ? { sayStop: 'length' } : {}),
+              };
           entries[`/usr/bin/true ${judge}-${at}`] = step;
           entries[`bash: ${judge}-${at}`] = step;
         }
@@ -483,11 +489,13 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
         assert.equal(got.level, row.level ?? null);
         assert.equal(got.via, row.level ? judge : null);
         assert.equal(got.decidedBy, row.expect === 'ask' ? null : 'judge');
-        if (!row.level)
+        if (!row.level && !row.cut)
           assert.equal(
             got.error,
             judge === 'chat' ? 'the judge gave no usable answer' : 'no answer'
           );
+        if (row.cut)
+          assert.equal(got.error, judge === 'chat' ? 'the judge stopped: length' : 'no answer');
         if (row.reason) assert.equal(got.reason, row.reason);
       }
 });

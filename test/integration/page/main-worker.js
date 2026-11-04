@@ -367,7 +367,9 @@ async function judgeSay(context, options, model) {
     return fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' });
   if (step.sayError)
     return fauxAssistantMessage([], { stopReason: 'error', errorMessage: step.sayError });
-  return fauxAssistantMessage(step.say ?? 'Faux reason.');
+  return fauxAssistantMessage(step.say ?? 'Faux reason.', {
+    ...(step.sayStop ? { stopReason: step.sayStop } : {}),
+  });
 }
 self.addEventListener('message', ({ data }) => {
   data?.judgeSaid?.postMessage(
