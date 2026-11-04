@@ -369,7 +369,7 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
       missing,
       listed,
       line: await until(() => {
-        const text = find(document, '.verdict')?.textContent.replace(/\s+/g, ' ').trim();
+        const text = find(document, '.judged')?.textContent.replace(/\s+/g, ' ').trim();
         return text?.includes('Faux reason.') && text;
       }, 'the verdict line'),
       dialogText: dialog.textContent.replace(/\s+/g, ' '),
@@ -410,12 +410,15 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
   assert.equal(seen.filed.verdictError, "the judge can't read attachments");
   assert.deepEqual(seen.calls, ['judge/j-2', 'judge/j-2', 'judge/j-2']);
   assert.deepEqual(seen.listed, [
-    [seen.unsure.id, { decision: 'unsure', reason: 'Faux reason.' }],
+    [seen.unsure.id, { level: 1, aligned: false, decision: 'unsure', reason: 'Faux reason.' }],
     [seen.failed.id, null],
     [seen.filed.id, null],
     [seen.missing.id, null],
   ]);
-  assert.equal(seen.line, 'The automatic check wasn\u2019t sure: Faux reason.');
+  assert.equal(
+    seen.line,
+    'Routine. Faux reason. It isn\u2019t clear it serves what you asked for.'
+  );
   assert.match(seen.dialogText, /dark mode toggle/);
   assert.deepEqual(
     seen.notes.map((note) => [note.outcome, note.error ?? null]),

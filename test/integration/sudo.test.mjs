@@ -219,7 +219,12 @@ test("a cone's sudo waits in the agent's approvals, and every owner device answe
     expiresAt: seen.once.expiresAt,
     always: true,
     alwaysScope: 'cwd',
-    verdict: { decision: 'allow', reason: 'It is what the owner asked for.' },
+    verdict: {
+      level: 1,
+      aligned: true,
+      decision: 'allow',
+      reason: 'It is what the owner asked for.',
+    },
   });
   assert.deepEqual(seen.followerShown, seen.ownerShown);
   assert.equal(seen.once.answer, 'once');
@@ -701,7 +706,12 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     verdict: 'deny',
   });
   assert.deepEqual(seen.listed, {
-    verdict: { decision: 'deny', reason: 'It reads a file that holds secrets.' },
+    verdict: {
+      level: 3,
+      aligned: true,
+      decision: 'deny',
+      reason: 'It reads a file that holds secrets.',
+    },
     always: false,
   });
   assert.equal(seen.always, "Always isn't offered for this request.");

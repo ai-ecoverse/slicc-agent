@@ -1,5 +1,8 @@
 import { defineDoc } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
+import { fits, JUDGE_ALLOW } from './aligned.ts';
+
+export { fits, JUDGE_ALLOW };
 
 export type ApprovalKind = 'guest-message' | 'guest-tool' | 'sudo';
 
@@ -156,16 +159,11 @@ export const sudoApprover = (value: unknown): SudoApprover =>
 export const tierOf = (kind: ApprovalKind, tier: string, sudo: SudoApprover): string =>
   kind === 'sudo' ? sudo : tier;
 
-export const JUDGE_ALLOW = 0.8;
-
 export type Gate = 'person' | 'judge';
 
 export type Routed = 'approve' | 'deny' | 'ask';
 
 export const gateOf = (tier: string): Gate => (tier === 'agent' ? 'judge' : 'person');
-
-export const fits = (aligned: ApprovalVerdict['aligned']): boolean =>
-  aligned === true || (typeof aligned === 'number' && aligned >= JUDGE_ALLOW);
 
 export function route(
   verdict: ApprovalVerdict | undefined,

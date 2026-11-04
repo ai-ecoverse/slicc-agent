@@ -153,7 +153,7 @@ test('Always appears on a sudo dialog only once a level 1 verdict says a rerun o
     }, 'the read verdict');
     const listedAfter = await until(() => {
       const shown = model.approvals.list().find((approval) => approval.id === before.id);
-      return shown?.always && shown;
+      return shown?.always && shown.verdict?.reason.startsWith('It reads') && shown;
     }, 'Always in the dialog');
     const always = await decide(local, before.id, 'always');
     const readReply = await reading;
@@ -198,6 +198,9 @@ test('Always appears on a sudo dialog only once a level 1 verdict says a rerun o
   assert.equal(seen.before.verdict, undefined);
   assert.equal(seen.before.tier, 'user');
   assert.equal(seen.listedBefore.always, false);
+  assert.equal(seen.listedBefore.judging, true);
+  assert.equal(seen.listedBefore.verdict, undefined);
+  assert.equal(seen.listedBefore.verdictError, undefined);
   assert.deepEqual(seen.before.detail, {
     command: '/usr/bin/jq .rules /etc/slicc/secrets-policy.toml',
     target: 'root',
@@ -221,6 +224,13 @@ test('Always appears on a sudo dialog only once a level 1 verdict says a rerun o
     model: 'judge/j-1',
   });
   assert.equal(seen.listedAfter.always, true);
+  assert.equal(seen.listedAfter.judging, undefined);
+  assert.deepEqual(seen.listedAfter.verdict, {
+    level: 1,
+    aligned: true,
+    decision: 'allow',
+    reason: 'It reads the secret rules and changes nothing.',
+  });
   assert.equal(seen.always, 'approved');
   assert.equal(seen.readReply, 'always');
   assert.equal(seen.once.verdict.level, 1);
@@ -330,11 +340,12 @@ test("no verdict: a check that doesn't answer in time or has no model leaves a v
   const page = await chrome.page(t);
   await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
   const seen = await staged(page, 'no verdict', async () => {
-    const { owner, write, landed, sudo, command, decide, table } = globalThis.t;
+    const { owner, write, until, landed, sudo, command, decide, table } = globalThis.t;
     const slow = ['ls', '/root'];
     const missing = ['ls', '/etc'];
     table({ [command(slow)]: { hold: true, sayDelay: 60_000 } });
     const local = await owner.connect();
+    const model = createAgentModel(local);
     const started = Date.now();
     const waiting = sudo(slow);
     const late = await landed(
@@ -342,6 +353,11 @@ test("no verdict: a check that doesn't answer in time or has no model leaves a v
       'the timeout'
     );
     const took = Date.now() - started;
+    const lateShown = await until(
+      () =>
+        model.approvals.list().find((approval) => approval.id === late.id && approval.verdictError),
+      'the no-verdict dialog'
+    );
     const lateAlways = await decide(local, late.id, 'always');
     await decide(local, late.id, 'once');
     const lateReply = await waiting;
@@ -356,13 +372,17 @@ test("no verdict: a check that doesn't answer in time or has no model leaves a v
     await asking;
     await local.close();
     await owner.release();
-    return { late, took, lateAlways, lateReply, none, noneAlways };
+    return { late, took, lateShown, lateAlways, lateReply, none, noneAlways };
   });
   assert.equal(seen.late.verdict, undefined);
   assert.equal(seen.late.verdictError, "the check didn't answer in time");
   assert.equal(seen.late.judging, undefined);
   assert.equal(seen.late.always, false);
   assert.ok(seen.took >= 14_000);
+  assert.equal(seen.lateShown.verdictError, "the check didn't answer in time");
+  assert.equal(seen.lateShown.verdict, undefined);
+  assert.equal(seen.lateShown.judging, undefined);
+  assert.equal(seen.lateShown.always, false);
   assert.equal(seen.lateAlways, "Always isn't offered for this request.");
   assert.equal(seen.lateReply, 'once');
   assert.equal(seen.none.verdict, undefined);
@@ -554,6 +574,13 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
       const found = (await globalThis.t.items()).find((entry) => entry.id === asked.id);
       return found?.verdict?.reason === 'It would delete the work.' && found;
     }, 'the advice on a person-gated guest call');
+    const advisedShown = await until(
+      () =>
+        createAgentModel(local)
+          .approvals.list()
+          .find((approval) => approval.id === asked.id),
+      'the advised guest call in the dialog'
+    );
     const usage = await until(
       () => (local.monitor.value.usage?.cost ?? 0) > 0.029 && local.monitor.value.usage,
       'both calls in the spend'
@@ -561,7 +588,7 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
     await local.control.monitorClose(lease, BACKGROUND_CONTEXT);
     await local.close();
     await owner.release();
-    return { approved, fallback, advised, usage, secret };
+    return { approved, fallback, advised, advisedShown, usage, secret };
   });
   const reason = seen.approved.verdict.reason;
   assert.equal(seen.approved.state, 'approved');
@@ -580,6 +607,12 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
   assert.equal(seen.advised.decidedBy, null);
   assert.equal(seen.advised.verdict.level, 3);
   assert.equal(seen.advised.always, false);
+  assert.deepEqual(seen.advisedShown.verdict, {
+    level: 3,
+    aligned: false,
+    decision: 'deny',
+    reason: 'It would delete the work.',
+  });
   assert.ok(Math.abs(seen.usage.cost - 0.03) < 1e-9);
 });
 
