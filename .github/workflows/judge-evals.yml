@@ -18,8 +18,6 @@ jobs:
     timeout-minutes: 15
     env:
       LEFTHOOK: '0'
-      CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -31,3 +29,6 @@ jobs:
       - run: npm ci
 
       - run: node evals/judge.mjs --model cloudflare-workers-ai/@cf/cloudflare/clef
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
