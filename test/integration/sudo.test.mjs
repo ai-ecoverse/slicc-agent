@@ -154,9 +154,9 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
   );
 }
 
-test("a cone's sudo waits in the agent's approvals, and every owner device answers it with the owner's powers, Always included, even without Control", async (t) => {
+test("a cone's sudo waits in the agent's approvals, and every owner device answers it with the owner's powers, Always included once a level 1 verdict offers it, even without Control", async (t) => {
   const page = await chrome.page(t);
-  await boot(page);
+  await boot(page, { query: '?judge-level=1' });
   const seen = await staged(page, "a cone's sudo on every device", async () => {
     const { owner, asked, follow, until, newest, pending, sudo, tags } = globalThis.t;
     const local = await owner.connect();
@@ -169,8 +169,11 @@ test("a cone's sudo waits in the agent's approvals, and every owner device answe
     await pending(local, 1);
     const id = newest(local).id;
     await until(
-      () => [mine, theirs].every((model) => model.approvals.list().some((a) => a.id === id)),
-      'both pages to list it'
+      () =>
+        [mine, theirs].every((model) =>
+          model.approvals.list().some((a) => a.id === id && a.always)
+        ),
+      'both pages to list it with Always'
     );
     const ownerShown = mine.approvals.list().find((approval) => approval.id === id);
     const followerShown = theirs.approvals.list().find((approval) => approval.id === id);
@@ -180,7 +183,10 @@ test("a cone's sudo waits in the agent's approvals, and every owner device answe
     const second = sudo(['ls', '/root'], tags.cone);
     await pending(local, 1);
     const again = newest(local).id;
-    await until(() => watching.approvals.list().some((a) => a.id === again), 'the second ask');
+    await until(
+      () => watching.approvals.list().some((a) => a.id === again && a.always),
+      'the second ask'
+    );
     const viewShown = watching.approvals.list().find((approval) => approval.id === again);
     await watching.approvals.decide(again, 'always');
     const secondRan = await second;
@@ -213,6 +219,7 @@ test("a cone's sudo waits in the agent's approvals, and every owner device answe
     expiresAt: seen.once.expiresAt,
     always: true,
     alwaysScope: 'cwd',
+    verdict: { decision: 'allow', reason: 'It is what the owner asked for.' },
   });
   assert.deepEqual(seen.followerShown, seen.ownerShown);
   assert.equal(seen.once.answer, 'once');
@@ -367,12 +374,12 @@ test("a scoop's sudo tells its cone with a lick that has no actions", async (t) 
   assert.doesNotMatch(seen.lick, /actions=/);
 });
 
-test("with the judge on, sudo waits for a person by default, even when asked for on the agent tier, and the judge decides it only when the owner's policy says agent", async (t) => {
+test("with the judge on, sudo waits for a person by default with the verdict as advice, even when asked for on the agent tier, and the judge decides it only when the owner's policy says agent", async (t) => {
   const page = await chrome.page(t);
-  const allow = encodeURIComponent(JSON.stringify({ low: 0.99, aligned: 0.99 }));
+  const allow = encodeURIComponent(JSON.stringify({ level: 1, aligned: 0.99, always: true }));
   await boot(page, {
     worker: 'main-worker.js',
-    query: `?judge&judge-step=${allow}&judge-step=${allow}&judge-step=${allow}&answer=Noted.&answer=Noted.`,
+    query: `?judge&judge-step=${allow}&judge-step=${allow}&judge-step=${allow}&judge-step=${allow}&answer=Noted.&answer=Noted.`,
     files: {
       '/home/.pi/agent/settings.json': JSON.stringify({ approvals: { judgeModel: 'judge/j-1' } }),
     },
@@ -405,10 +412,19 @@ test("with the judge on, sudo waits for a person by default, even when asked for
       always: true,
       detail: { command: '/usr/bin/ls /root', target: 'root', cwd: '/' },
     });
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await until(
+      () =>
+        [kernelItem.id, forced.id].every(
+          (id) => local.approvals.value.find((i) => i.id === id)?.verdict
+        ),
+      'both verdicts as advice'
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     const waiting = [kernelItem.id, forced.id].map((id) => {
-      const { state, tier, decidedBy, verdict } = local.approvals.value.find((i) => i.id === id);
-      return { state, tier, decidedBy, verdict: verdict ?? null };
+      const { state, tier, decidedBy, verdict, always } = local.approvals.value.find(
+        (i) => i.id === id
+      );
+      return { state, tier, decidedBy, level: verdict?.level ?? null, always };
     });
     const listed = [kernelItem.id, forced.id].every((id) =>
       model.approvals.list().some((approval) => approval.id === id)
@@ -430,8 +446,8 @@ test("with the judge on, sudo waits for a person by default, even when asked for
     const scoop = await local.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
     const scoopTag = JSON.stringify({ kind: 'agent', agentId: scoop.id });
     setTable({
-      '/usr/bin/ls /tmp': { low: 0.5, aligned: 0.5 },
-      '/usr/bin/ls /etc': { low: 0.99, aligned: 0.99 },
+      '/usr/bin/ls /tmp': { level: 1, aligned: 0.5 },
+      '/usr/bin/ls /etc': { level: 1, aligned: 0.99 },
     });
     const licks = () =>
       local.transcript.value.entries
@@ -467,22 +483,22 @@ test("with the judge on, sudo waits for a person by default, even when asked for
       quiet,
     };
   });
-  assert.equal(seen.calls, 1);
+  assert.equal(seen.calls, 3);
   assert.deepEqual(seen.waiting, [
-    { state: 'pending', tier: 'user', decidedBy: null, verdict: null },
-    { state: 'pending', tier: 'user', decidedBy: null, verdict: null },
+    { state: 'pending', tier: 'user', decidedBy: null, level: 1, always: true },
+    { state: 'pending', tier: 'user', decidedBy: null, level: 1, always: true },
   ]);
   assert.equal(seen.listed, true);
   assert.equal(seen.status, 0);
   assert.deepEqual(seen.decided, ['owner', 'owner']);
   assert.equal(seen.judgedRun, 0);
   assert.deepEqual(seen.byJudge, { tier: 'agent', decidedBy: 'judge', answer: 'once' });
-  assert.deepEqual(seen.context, { target: 'root', cwd: '/' });
+  assert.deepEqual(seen.context, { stdin: 'none', writable: true, rootOnly: true });
   assert.equal(seen.allowed, 0);
   assert.equal(seen.escalated, 'unsure');
   assert.match(seen.lick, /helper asked to run \/usr\/bin\/ls \/tmp/);
   assert.equal(seen.quiet, false);
-  assert.equal(seen.after, 2);
+  assert.equal(seen.after, 4);
 });
 
 test('a sudo the kernel lets expire is recorded as timed out, not withdrawn', async (t) => {
@@ -564,7 +580,7 @@ test('a sudo asked right after a restart reaches the new worker, while the one w
   assert.deepEqual(seen, { old: 'deny', answer: 'once', first: ['withdrawn', 'restart'] });
 });
 
-test("a judge deny of the owner's sudo asks an attached owner device, once without Always; NOPASSWD skips the judge; else it is the judge's deny", async (t) => {
+test("a level 3 verdict on the owner's sudo asks an attached owner device, for a cone or a scoop, once without Always; NOPASSWD skips the judge; else it is the judge's deny in its own words", async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
     worker: 'main-worker.js',
@@ -576,7 +592,8 @@ test("a judge deny of the owner's sudo asks an attached owner device, once witho
   const seen = await staged(page, 'a judge deny asks the owner', async () => {
     const { owner, ask, judged, setTable, until, newest, sudo, tags, replies, kernel } =
       globalThis.t;
-    const risky = { low: 0.05, aligned: 0.9 };
+    const said = 'It reads a file that holds secrets.';
+    const risky = { low: 0.05, aligned: 0.9, say: said };
     setTable({
       '/usr/bin/cat /etc/hostname': risky,
       '/usr/bin/cat /etc/passwd': risky,
@@ -593,7 +610,10 @@ test("a judge deny of the owner's sudo asks an attached owner device, once witho
       const item = newest(local);
       return item?.detail.command === '/usr/bin/cat /etc/hostname' && item.tier === 'user' && item;
     }, 'the judged request to reach the owner');
-    const listed = model.approvals.list().find((approval) => approval.id === asked.id);
+    const listed = await until(() => {
+      const shown = model.approvals.list().find((approval) => approval.id === asked.id);
+      return shown?.verdict?.reason === said && shown;
+    }, 'the verdict in the dialog');
     const always = await model.approvals.decide(asked.id, 'always').then(
       () => 'decided',
       (error) => error.message
@@ -629,11 +649,16 @@ test("a judge deny of the owner's sudo asks an attached owner device, once witho
       return item?.state !== 'pending' && item;
     }, 'the hurried request to settle');
     const scoop = await local.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
-    const scooped = await sudo(
+    const scooping = sudo(
       ['cat', '/etc/group'],
       JSON.stringify({ kind: 'agent', agentId: scoop.id })
     );
-    const byScoop = newest(local);
+    const byScoop = await until(() => {
+      const item = newest(local);
+      return item?.detail.command === '/usr/bin/cat /etc/group' && item.tier === 'user' && item;
+    }, 'the scoop’s request to reach the owner');
+    await model.approvals.decide(byScoop.id, 'deny');
+    const scooped = await scooping;
     await local.close();
     const alone = await sudo(['cat', '/etc/passwd'], tags.cone);
     local = await owner.connect();
@@ -676,7 +701,7 @@ test("a judge deny of the owner's sudo asks an attached owner device, once witho
     verdict: 'deny',
   });
   assert.deepEqual(seen.listed, {
-    verdict: { decision: 'deny', reason: 'it looks high-risk.' },
+    verdict: { decision: 'deny', reason: 'It reads a file that holds secrets.' },
     always: false,
   });
   assert.equal(seen.always, "Always isn't offered for this request.");
@@ -700,13 +725,20 @@ test("a judge deny of the owner's sudo asks an attached owner device, once witho
     verdict: 'deny',
   };
   assert.deepEqual({ ...seen.hurried, always: undefined }, { ...denied, always: undefined });
-  assert.deepEqual({ ...seen.scooped.item, always: undefined }, { ...denied, always: undefined });
+  assert.deepEqual(seen.scooped.item, {
+    state: 'pending',
+    tier: 'user',
+    decidedBy: null,
+    answer: null,
+    always: false,
+    verdict: 'deny',
+  });
   assert.deepEqual({ ...seen.alone.item, always: undefined }, { ...denied, always: undefined });
   const judged = {
     answer: 'deny',
-    message: 'sudo: denied by the approval judge: it looks high-risk.',
+    message: 'sudo: denied by the approval judge: It reads a file that holds secrets.',
   };
-  assert.deepEqual(seen.replies, ['once', judged, judged]);
+  assert.deepEqual(seen.replies, ['once', 'deny', judged]);
   for (const run of [seen.scooped, seen.alone]) {
     assert.notEqual(run.status, 0);
     assert.doesNotMatch(run.stderr, /withdrawn/);

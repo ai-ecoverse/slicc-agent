@@ -1,5 +1,5 @@
 import type { Context } from '@earendil-works/chord';
-import type { AssistantMessage, Message } from '@earendil-works/pi-ai';
+import type { Api, AssistantMessage, Message, Model } from '@earendil-works/pi-ai';
 import type { Models } from '@earendil-works/pi-ai/models';
 import type { EntryRecord } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
@@ -56,9 +56,9 @@ export function transcriptOf(entries: readonly EntryRecord[]): string {
     .join('\n');
 }
 
-export async function scrubbed(raw: string): Promise<string> {
+export async function scrubbed(raw: string, limit = TRANSCRIPT_LENGTH): Promise<string> {
   const redacted = redactSecrets(raw).text;
-  return (await scrubText(redacted)).slice(0, TRANSCRIPT_LENGTH);
+  return (await scrubText(redacted)).slice(0, limit);
 }
 
 export function scrubTranscript(entries: readonly EntryRecord[]): Promise<string> {
@@ -68,6 +68,30 @@ export function scrubTranscript(entries: readonly EntryRecord[]): Promise<string
 type Settings = (context: Context) => Promise<string | undefined>;
 
 export type Asked = { text: string; answer: AssistantMessage };
+
+export async function completeText(
+  models: Pick<Models, 'completeSimple'>,
+  found: Model<Api>,
+  text: string,
+  max: number,
+  options: { signal?: AbortSignal } = {}
+): Promise<Asked | undefined> {
+  const message = await models.completeSimple(
+    found,
+    {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() } as Message,
+      ],
+    },
+    { maxTokens: max, ...(options.signal ? { signal: options.signal } : {}) }
+  );
+  if (message.stopReason === 'error') return undefined;
+  const said = message.content
+    .map((part) => (part.type === 'text' ? part.text : ''))
+    .join('')
+    .trim();
+  return { text: said, answer: message };
+}
 
 function smallModel(models: Models, settings: Settings, key: Switch, prompt: string, max: number) {
   return async (
@@ -83,25 +107,7 @@ function smallModel(models: Models, settings: Settings, key: Switch, prompt: str
     const ref = chosen ?? (provider && rest.length ? { provider, modelId: rest.join('/') } : null);
     const found = ref ? models.getModel(ref.provider, ref.modelId) : undefined;
     if (!found || !transcript || !admit()) return undefined;
-    const message = await models.completeSimple(
-      found,
-      {
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text: `${prompt}\n\n${transcript}` }],
-            timestamp: Date.now(),
-          } as Message,
-        ],
-      },
-      { maxTokens: max }
-    );
-    if (message.stopReason === 'error') return undefined;
-    const said = message.content
-      .map((part) => (part.type === 'text' ? part.text : ''))
-      .join('')
-      .trim();
-    return { text: said, answer: message };
+    return completeText(models, found, `${prompt}\n\n${transcript}`, max);
   };
 }
 

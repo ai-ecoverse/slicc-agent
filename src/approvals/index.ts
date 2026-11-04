@@ -7,7 +7,13 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { Clock } from '../clock.ts';
-import { type ApprovalJudge, ASK_MIN_MS, type Judgement, routed } from './judge.ts';
+import {
+  type ApprovalJudge,
+  ASK_MIN_MS,
+  JUDGE_RESTARTED,
+  type Judgement,
+  type Reasoned,
+} from './judge.ts';
 import {
   APPROVAL_MS,
   type Approval,
@@ -16,14 +22,18 @@ import {
   type ApprovalState,
   ApprovalsDoc,
   type ApprovalsState,
+  alwaysOffered,
   cleanReason,
   type DecidedBy,
+  gateOf,
   guestKind,
   knownTier,
   MAX_DELAY,
   prune,
   REASONS,
+  type Routed,
   routable,
+  route,
   ruled,
   type Settle,
   scoopTier,
@@ -84,11 +94,20 @@ function mark(item: Approval, how: Settle, at: number) {
   item.state = how.state;
   item.decidedBy = how.by;
   item.decidedAt = at;
+  delete item.judging;
   if (how.reason) item.reason = how.reason;
 }
 
 const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
-  guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : draft.always === true;
+  guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : false;
+
+const judgedKind = (kind: ApprovalKind, tier: string) =>
+  kind === 'sudo' || tier === 'agent' || tier === 'user';
+
+function detailOf(draft: ApprovalDraft): ApprovalDraft['detail'] {
+  if (draft.kind !== 'sudo' || draft.always !== false) return draft.detail;
+  return { ...draft.detail, writable: false };
+}
 
 function fresh(
   draft: ApprovalDraft & { id?: string },
@@ -96,13 +115,16 @@ function fresh(
   ttl: number,
   options: ApprovalsAttach
 ): Approval {
+  const tier = tierOf(draft.kind, draft.tier, sudoApprover(options.sudoApprover?.()));
   const item = {
     ...draft,
-    tier: tierOf(draft.kind, draft.tier, sudoApprover(options.sudoApprover?.())),
+    detail: detailOf(draft),
+    tier,
     id: draft.id ?? `apr-${crypto.randomUUID()}`,
     state: 'pending',
     decidedBy: null,
     always: offered(options, draft),
+    ...(options.judge && judgedKind(draft.kind, tier) ? { judging: true } : {}),
     createdAt: at,
     expiresAt: draft.expiresAt ?? at + ttl,
   } as Approval;
@@ -124,45 +146,104 @@ const withdrawIn =
 
 type Judged = { judgement: Judgement; present: boolean };
 
-const judgedIn =
-  (id: string, { judgement, present }: Judged, now: () => number) =>
-  (doc: ApprovalsState) => {
-    const item = doc.items.find((entry) => entry.id === id);
-    if (item?.tier !== 'agent') return undefined;
-    const late = item.state === 'unanswered' && item.reason === REASONS.timeout && !item.verdict;
-    if (item.state !== 'pending' && !(late && judgement.verdict)) return undefined;
-    if (judgement.verdict) item.verdict = judgement.verdict;
-    if (late) return copy([item])[0] as Approval;
-    const outcome = routed(judgement.outcome, present && item.expiresAt - now() >= ASK_MIN_MS);
-    if (outcome === 'ask') {
-      item.tier = 'user';
-      if (judgement.outcome === 'deny') item.always = false;
-      return copy([item])[0] as Approval;
-    }
-    const at = now();
-    const ruling = ruled(
-      item,
-      judgement.outcome === 'approve' ? 'once' : 'deny',
-      null,
-      'judge',
-      at
-    );
-    if (ruling.answer) item.answer = ruling.answer;
-    if (ruling.settle) mark(item, ruling.settle, at);
+const routeOf = (item: Approval, { judgement, present }: Judged): Routed =>
+  route(judgement.verdict, item.requester, gateOf(item.tier), present);
+
+const judgedIn = (id: string, judged: Judged, now: () => number) => (doc: ApprovalsState) => {
+  const { judgement } = judged;
+  const item = doc.items.find((entry) => entry.id === id);
+  if (!item) return undefined;
+  const late = item.state === 'unanswered' && item.reason === REASONS.timeout && !item.verdict;
+  if (item.state !== 'pending' && !(late && judgement.verdict)) return undefined;
+  delete item.judging;
+  if (judgement.verdict) item.verdict = judgement.verdict;
+  else item.verdictError = judgement.error ?? 'the judge gave no verdict';
+  if (late) return copy([item])[0] as Approval;
+  const routed = routeOf(item, judged);
+  if (routed === 'ask') {
+    item.tier = 'user';
+    if (item.kind === 'sudo') item.always = alwaysOffered(item);
     return copy([item])[0] as Approval;
-  };
+  }
+  const at = now();
+  const ruling = ruled(item, routed === 'approve' ? 'once' : 'deny', null, 'judge', at);
+  if (ruling.answer) item.answer = ruling.answer;
+  if (ruling.settle) mark(item, ruling.settle, at);
+  return copy([item])[0] as Approval;
+};
+
+const reasonIn = (id: string, reasoned: Reasoned) => (doc: ApprovalsState) => {
+  const item = doc.items.find((entry) => entry.id === id);
+  if (item?.verdict && reasoned.reason) item.verdict.reason = reasoned.reason;
+};
+
+const withReason = (judgement: Judgement, reasoned: Reasoned): Judgement => ({
+  ...judgement,
+  ...(judgement.verdict && reasoned.reason
+    ? { verdict: { ...judgement.verdict, reason: reasoned.reason } }
+    : {}),
+  cost:
+    judgement.cost == null && reasoned.cost == null
+      ? null
+      : (judgement.cost ?? 0) + (reasoned.cost ?? 0),
+});
 
 async function judgedBy(
   judge: ApprovalJudge,
   present: ApprovalsAttach['present'],
   item: Approval,
-  using: Context
+  using: Context,
+  now: () => number
 ): Promise<Judged> {
   const judgement = await judge
     .judge(item, using)
-    .catch((error: unknown): Judgement => ({ outcome: 'ask', error: String(error) }));
-  if (judgement.outcome !== 'deny' || !present) return { judgement, present: false };
-  return { judgement, present: await present(item, using).catch(() => false) };
+    .catch((error: unknown): Judgement => ({ error: String(error) }));
+  if (judgement.verdict?.level !== 3 || !present || item.tier !== 'agent')
+    return { judgement, present: false };
+  const there = await present(item, using).catch(() => false);
+  return { judgement, present: there && item.expiresAt - now() >= ASK_MIN_MS };
+}
+
+type Serial = <R>(change: (doc: ApprovalsState) => R, using: Context) => Promise<R>;
+
+function judgeRunner(run: {
+  serial: Serial;
+  present: ApprovalsAttach['present'];
+  now: () => number;
+  closed: () => boolean;
+}) {
+  const { serial, now } = run;
+  return async (judge: ApprovalJudge, item: Approval, using: Context) => {
+    const signal = using.abortSignal;
+    let gone = false;
+    const abort = () => {
+      gone = true;
+      void serial(
+        withdrawIn((entry) => entry.id === item.id && entry.tier === 'agent', REASONS.aborted, now),
+        BACKGROUND_CONTEXT
+      ).catch(() => undefined);
+    };
+    if (signal?.aborted) return abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    let judged = await judgedBy(judge, run.present, item, using, now);
+    const pending = judged.judgement.reason;
+    const ready = pending ? await Promise.race([pending, Promise.resolve(undefined)]) : undefined;
+    const early =
+      ready ?? (pending && routeOf(item, judged) === 'deny' ? await pending : undefined);
+    if (early) judged = { ...judged, judgement: withReason(judged.judgement, early) };
+    signal?.removeEventListener('abort', abort);
+    if (gone || run.closed()) return;
+    const after = await serial(judgedIn(item.id, judged, now), BACKGROUND_CONTEXT).catch(
+      () => undefined
+    );
+    if (!after) return;
+    const reasoned = early ? {} : ((await pending) ?? {});
+    const final = withReason(judged.judgement, reasoned);
+    if (reasoned.reason && !run.closed())
+      await serial(reasonIn(item.id, reasoned), BACKGROUND_CONTEXT).catch(() => undefined);
+    const recorded = final.verdict ? { ...after, verdict: final.verdict } : after;
+    await judge.record?.(recorded, final, BACKGROUND_CONTEXT).catch(() => undefined);
+  };
 }
 
 function following(
@@ -243,6 +324,10 @@ export async function attachApprovals(
       else if (item.expiresAt <= now())
         settle(item, { state: 'unanswered', by: 'host', reason: REASONS.timeout });
       else if (options.judge && item.tier === 'agent') item.tier = 'user';
+      if (item.state === 'pending' && item.judging) {
+        delete item.judging;
+        item.verdictError = JUDGE_RESTARTED;
+      }
     }
   }, context);
   const state = replicatedState<Approval[]>(startup.items);
@@ -300,27 +385,12 @@ export async function attachApprovals(
   for (const item of startup.items) toScoop(item);
   const withdrawWhere = (match: (item: Approval) => boolean, reason: string | undefined) =>
     withdrawIn(match, reason, now);
-  const judging = async (judge: ApprovalJudge, item: Approval, using: Context) => {
-    const signal = using.abortSignal;
-    let gone = false;
-    const abort = () => {
-      gone = true;
-      void serial(
-        withdrawWhere((entry) => entry.id === item.id && entry.tier === 'agent', REASONS.aborted),
-        BACKGROUND_CONTEXT
-      ).catch(() => undefined);
-    };
-    if (signal?.aborted) return abort();
-    signal?.addEventListener('abort', abort, { once: true });
-    const judged = await judgedBy(judge, options.present, item, using);
-    signal?.removeEventListener('abort', abort);
-    if (gone || closed) return;
-    const after = await serial(judgedIn(item.id, judged, now), BACKGROUND_CONTEXT).catch(
-      () => undefined
-    );
-    if (after)
-      await judge.record?.(after, judged.judgement, BACKGROUND_CONTEXT).catch(() => undefined);
-  };
+  const judging = judgeRunner({
+    serial,
+    present: options.present,
+    now,
+    closed: () => closed,
+  });
   return {
     state,
     async request(draft, using) {
@@ -335,8 +405,8 @@ export async function attachApprovals(
         doc.items.push(item);
         return copy([item])[0] as Approval;
       }, using);
-      if (created && options.judge && made.state === 'pending' && made.tier === 'agent')
-        void judging(options.judge, made, using);
+      if (created && options.judge && made.state === 'pending' && judgedKind(made.kind, made.tier))
+        void judging(options.judge, made, made.tier === 'agent' ? using : BACKGROUND_CONTEXT);
       if (created) toScoop(made);
       return made;
     },

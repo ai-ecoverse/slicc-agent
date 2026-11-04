@@ -449,7 +449,7 @@ test('the guest is told each outcome: approved, declined, or that nobody approve
   }
 });
 
-test('with the judge as the gate, one message is judged at a time: a low-risk one is delivered, a risky one declined, and an unsure one goes to the owner', async (t) => {
+test('with the judge as the gate, one message is judged at a time: a routine one is delivered, while a harmful one and an unsure one go to the owner who is there', async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
     judge: true,
@@ -476,6 +476,14 @@ test('with the judge as the gate, one message is judged at a time: a low-risk on
     await pause(300);
     const out = { judgedWhileFirst: (await judged()).length };
     await until(
+      () => listed(model)[0] === 'Push to production now.',
+      'the harmful one to reach the owner'
+    );
+    out.harm = local.approvals.value.find(
+      (item) => item.detail.text === 'Push to production now.'
+    ).verdict.level;
+    await model.approvals.decide(model.approvals.list()[0].id, 'deny');
+    await until(
       () => listed(model)[0] === 'Maybe tidy things?',
       'the unsure one to reach the owner'
     );
@@ -491,13 +499,14 @@ test('with the judge as the gate, one message is judged at a time: a low-risk on
     return out;
   });
   assert.equal(seen.judgedWhileFirst, 1);
+  assert.equal(seen.harm, 3);
   assert.equal(seen.judged, 3);
   assert.deepEqual(seen.notices, [
     'It was approved. Fix the footer link.',
     'It was declined. Push to production now.',
     'It was approved. Maybe tidy things?',
   ]);
-  assert.deepEqual(seen.decidedBy, ['approved:judge', 'rejected:judge', 'approved:owner']);
+  assert.deepEqual(seen.decidedBy, ['approved:judge', 'rejected:owner', 'approved:owner']);
   assert.deepEqual(seen.ownerSees, [
     'guest(Anna): Fix the footer link.',
     'agent: Fixed.',

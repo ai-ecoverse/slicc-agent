@@ -7,8 +7,8 @@ import { launch } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-async function boot(page, directory, approver = 'user') {
-  const query = new URLSearchParams({ 'sudo-approver': approver });
+async function boot(page, directory, approver = 'user', extra = {}) {
+  const query = new URLSearchParams({ 'sudo-approver': approver, ...extra });
   if (directory) query.set('directory', directory);
   await page.goto('/');
   await page.evaluate(async (query) => {
@@ -88,7 +88,7 @@ async function boot(page, directory, approver = 'user') {
       throw new Error(`timed out waiting for ${what}`);
     };
     const record = (connection, id) => connection.approvals.value.find((item) => item.id === id);
-    const listed = (model, id) => model.approvals.list().some((approval) => approval.id === id);
+    const listed = (model, id) => model.approvals.list().find((approval) => approval.id === id);
     const ended = (model) => {
       const seen = [];
       model.approvals.on('ended', (detail) => seen.push(detail));
@@ -201,7 +201,7 @@ test('an unknown tier is a deny, and a person saying no stays apart from nobody 
     const said = await ask(message());
     const ignored = await ask(message({ expiresAt: Date.now() + 1500 }));
     await until(() => listed(model, said.id) && listed(model, ignored.id), 'both to be listed');
-    const unknownListed = listed(model, unknown.id);
+    const unknownListed = Boolean(listed(model, unknown.id));
     await model.approvals.decide(said.id, 'deny');
     await until(() => record(local, ignored.id)?.state === 'unanswered', 'the timeout');
     await until(() => endedHere.length, 'the expiry to end it');
@@ -222,9 +222,9 @@ test('an unknown tier is a deny, and a person saying no stays apart from nobody 
   assert.deepEqual(seen.endedHere, [{ id: seen.ids[2], reason: 'expired' }]);
 });
 
-test('nothing a guest triggered can be allowed always, while sudo can', async (t) => {
+test('nothing a guest triggered can be allowed always, while sudo can once a level 1 verdict offers it', async (t) => {
   const page = await chrome.page(t);
-  await boot(page);
+  await boot(page, undefined, 'user', { 'judge-level': '1' });
   const seen = await page.evaluate(async () => {
     const { owner, ask, until, record, listed, failed, guest } = globalThis.t;
     const local = await owner.connect();
@@ -246,7 +246,10 @@ test('nothing a guest triggered can be allowed always, while sudo can', async (t
       always: true,
       detail: { command: 'ls /root', target: 'root' },
     });
-    await until(() => listed(model, tool.id) && listed(model, sudo.id), 'both to be listed');
+    await until(
+      () => listed(model, tool.id) && listed(model, sudo.id)?.always,
+      'both to be listed, sudo with Always'
+    );
     const shown = model.approvals.list().map(({ id, kind, always }) => ({ id, kind, always }));
     const always = await failed(model.approvals.decide(tool.id, 'always'));
     const stillPending = record(local, tool.id).state;
@@ -297,7 +300,7 @@ test('only a person can answer always', async (t) => {
     return rows;
   });
   for (const row of seen) {
-    assert.equal(row.before.always, true);
+    assert.equal(row.before.always, false);
     assert.equal(row.before.state, 'pending');
     assert.equal(row.before.tier, 'agent');
     assert.deepEqual(row.result, {
@@ -312,9 +315,9 @@ test('only a person can answer always', async (t) => {
   }
 });
 
-test('an owner can answer always', async (t) => {
+test('an owner can answer always once a level 1 verdict offers it', async (t) => {
   const page = await chrome.page(t);
-  await boot(page);
+  await boot(page, undefined, 'user', { 'judge-level': '1' });
   const seen = await page.evaluate(async () => {
     const { owner, ask, until, record, listed } = globalThis.t;
     const local = await owner.connect();
@@ -327,7 +330,7 @@ test('an owner can answer always', async (t) => {
       always: true,
       detail: { command: 'ls /root', target: 'root' },
     });
-    await until(() => listed(model, item.id), 'the approval');
+    await until(() => listed(model, item.id)?.always, 'the approval with Always');
     const offered = model.approvals.list().find(({ id }) => id === item.id).always;
     const before = structuredClone(record(local, item.id));
     await model.approvals.decide(item.id, 'always');

@@ -10,6 +10,7 @@ import {
   cleanReason,
   REASONS,
   type SudoDetail,
+  type SudoStdin,
 } from './record.ts';
 
 export type SudoAnswer = 'once' | 'always' | 'deny';
@@ -34,6 +35,8 @@ export interface SudoRequest {
   createdAt?: number;
   expiresAt: number;
   always?: boolean;
+  stdin?: SudoStdin;
+  rootOnly?: Record<string, boolean>;
 }
 
 export type SudoAsked = { id: string; error: null } | { id: null; error: string };
@@ -111,6 +114,25 @@ export function sudoRequester(
   return { requester: { kind: 'user', name }, agentId: '' };
 }
 
+const STDIN: readonly unknown[] = ['tty', 'none', 'pipe', 'file'];
+
+function rootOnlyOf(value: unknown): Record<string, boolean> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const kept = Object.entries(value).filter(
+    (entry): entry is [string, boolean] => typeof entry[1] === 'boolean'
+  );
+  return Object.fromEntries(kept);
+}
+
+function kernelFacts(request: SudoRequest): Partial<SudoDetail> {
+  const rootOnly = rootOnlyOf(request.rootOnly);
+  return {
+    ...(STDIN.includes(request.stdin) ? { stdin: request.stdin } : {}),
+    ...(rootOnly ? { rootOnly } : {}),
+    ...(typeof request.always === 'boolean' ? { writable: request.always } : {}),
+  };
+}
+
 export function sudoDetail(request: SudoRequest): SudoDetail {
   const command = [request.path || request.argv[0], ...request.argv.slice(1)]
     .map((word) => shellWord(String(word)))
@@ -120,6 +142,7 @@ export function sudoDetail(request: SudoRequest): SudoDetail {
     ...(text(request.target) ? { target: request.target } : {}),
     ...(text(request.cwd) ? { cwd: request.cwd } : {}),
     ...(request.always === true ? { alwaysScope: 'cwd' as const } : {}),
+    ...kernelFacts(request),
   };
 }
 
@@ -180,7 +203,7 @@ export function createSudo(options: SudoAttach): AgentSudo & { close(): void } {
           agentId,
           requester,
           tier: 'user',
-          always: request.always === true,
+          always: request.always !== false,
           expiresAt: request.expiresAt,
           detail,
         },

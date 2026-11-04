@@ -1,5 +1,5 @@
 import type { Context } from '@earendil-works/chord';
-import type { EntryRecord } from '@earendil-works/pi-durable';
+import type { EntryRecord, ModelRef } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { answerText } from '../agent.ts';
 import type { AgentsState } from '../agents.ts';
@@ -85,7 +85,11 @@ export interface IntentSources {
       agentId: string,
       context: Context
     ): Promise<
-      { context(context: Context): Promise<{ entries: readonly EntryRecord[] }> } | undefined
+      | {
+          context(context: Context): Promise<{ entries: readonly EntryRecord[] }>;
+          agent?(context: Context): Promise<{ model?: ModelRef | null }>;
+        }
+      | undefined
     >;
   };
   memories?: () => readonly MemoryEntry[] | undefined;
@@ -95,13 +99,17 @@ export function ownerIntent(sources: IntentSources) {
   return async (item: Approval, context: Context): Promise<OwnerIntent | null> => {
     const read = await sources.env.readTextFile(POLICY_FILE, context);
     if (!read.ok) return null;
-    const cone = coneOf(sources.agents.state(), item.agentId);
+    const state = sources.agents.state();
+    const cone = coneOf(state, item.agentId);
     const conversation = cone ? await sources.agents.conversation(cone, context) : undefined;
     const entries = conversation ? (await conversation.context(context)).entries : [];
+    const talking = conversation ?? (await sources.agents.conversation(state.active, context));
+    const model = (await talking?.agent?.(context).catch(() => undefined))?.model;
     return {
       policy: clip(read.value, POLICY_LIMIT),
       messages: ownerMessages(entries),
       memory: ownerMemory(sources.memories?.() ?? [], cone),
+      ...(model ? { model } : {}),
     };
   };
 }

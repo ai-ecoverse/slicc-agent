@@ -334,7 +334,51 @@ const said = async (context, ...rest) => {
     sayStats.active -= 1;
   }
 };
+const spoken = [];
+const sayings = params.getAll('judge-say').map((step) => JSON.parse(step));
+const judging = (context) =>
+  context.messages.length === 1 &&
+  JSON.stringify(context.messages[0].content).includes(
+    'You review a request on behalf of the owner'
+  );
+const pause = (ms, signal) =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+async function judgeSay(context, options, model) {
+  const text = context.messages[0].content.map((part) => part.text ?? '').join('');
+  const state = JSON.parse(text.slice(text.indexOf('\n\n{') + 2));
+  const told = inner(state.request.untrusted);
+  const key = told.split('\n')[0];
+  const whole = text.includes('Answer in exactly four lines');
+  spoken.push({ key, whole, text, state, model: `${model.provider}/${model.id}` });
+  for (const wake of judgedWakes.splice(0)) wake();
+  const entry = judgeTable[told] ?? judgeTable[key];
+  const step = entry?.say !== undefined || entry?.sayError ? entry : (sayings.shift() ?? {});
+  if (step.sayDelay) await pause(step.sayDelay, options?.signal);
+  if (options?.signal?.aborted)
+    return fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' });
+  if (step.sayError)
+    return fauxAssistantMessage([], { stopReason: 'error', errorMessage: step.sayError });
+  return fauxAssistantMessage(step.say ?? 'Faux reason.', {
+    ...(step.sayStop ? { stopReason: step.sayStop } : {}),
+  });
+}
+self.addEventListener('message', ({ data }) => {
+  data?.judgeSaid?.postMessage(
+    spoken.map(({ key, whole, text, model }) => ({ key, whole, text, model }))
+  );
+});
 const dispatch = (context, ...rest) => {
+  if (judging(context)) return judgeSay(context, rest[0], rest[2]);
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
   if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
   if (params.has('scoop-say') && JSON.stringify(context).includes('You are the scoop'))
@@ -642,20 +686,41 @@ const judgedAt = (count) =>
 let judgeTable = {};
 const judgeSteps = params.getAll('judge-step').map((step) => JSON.parse(step));
 const inner = (fenced) => fenced.split('\n').slice(1, -1).join('\n');
-const answers = (low, aligned) => ({
-  risk: {
-    type: 'choice',
-    choice: low >= 0.5 ? 'low' : 'high',
-    probabilities: { low, high: 1 - low },
-    confidence: Math.max(low, 1 - low),
-  },
-  aligned: { type: 'bool', probability: aligned },
-});
+const LEVEL_NAMES = ['routine', 'permissions', 'harm'];
+const levelsOf = (step) => {
+  if (typeof step.level === 'number')
+    return Object.fromEntries(
+      LEVEL_NAMES.map((name, at) => [name, at + 1 === step.level ? 0.9 : 0.05])
+    );
+  if (step.level) return step.level;
+  return { routine: step.low, permissions: 0, harm: 1 - step.low };
+};
+const answers = (step, questions) => {
+  const probabilities = levelsOf(step);
+  const choice = LEVEL_NAMES.reduce((a, b) => (probabilities[b] > probabilities[a] ? b : a));
+  const more = step.more ?? (step.always === true ? 0.05 : 0.9);
+  return {
+    level: {
+      type: 'choice',
+      choice,
+      probabilities,
+      confidence: probabilities[choice],
+    },
+    aligned: { type: 'bool', probability: step.aligned },
+    ...(questions.always ? { always: { type: 'bool', probability: more } } : {}),
+  };
+};
 async function classify(model, context, options) {
-  const seen = { model: `${model.provider}/${model.id}`, state: context.state, aborted: false };
+  const seen = {
+    model: `${model.provider}/${model.id}`,
+    state: context.state,
+    questions: Object.keys(context.questions),
+    aborted: false,
+  };
   judged.push(seen);
   for (const wake of judgedWakes.splice(0)) wake();
-  const step = judgeTable[inner(context.state.request.untrusted)] ?? judgeSteps.shift() ?? {};
+  const told = inner(context.state.request.untrusted);
+  const step = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? judgeSteps.shift() ?? {};
   const base = { api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
   if (step.hold) {
     await new Promise((resolve) => {
@@ -667,7 +732,7 @@ async function classify(model, context, options) {
   }
   if (step.delay) await new Promise((resolve) => setTimeout(resolve, step.delay));
   if (step.stop) return { ...base, answers: {}, stopReason: step.stop, errorMessage: step.error };
-  if (step.low === undefined) throw new Error('no judge answer queued');
+  if (step.low === undefined && step.level === undefined) throw new Error('no judge answer queued');
   const usage = {
     input: 100,
     output: 2,
@@ -676,7 +741,7 @@ async function classify(model, context, options) {
     totalTokens: 102,
     cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
   };
-  return { ...base, answers: answers(step.low, step.aligned), usage, stopReason: 'stop' };
+  return { ...base, answers: answers(step, context.questions), usage, stopReason: 'stop' };
 }
 const classifier = (id) => ({
   type: 'classifier',
@@ -738,6 +803,7 @@ const clef = triaged
 const aborts = new Map();
 self.addEventListener('message', ({ data }) => {
   data?.judged?.postMessage(judged);
+  if (data?.items) void running.then((host) => data.items.postMessage(host.approvals.state.value));
   if (data?.judgeTable) judgeTable = data.judgeTable;
   if (data?.abort) aborts.get(data.abort)?.abort();
   if (data?.close)

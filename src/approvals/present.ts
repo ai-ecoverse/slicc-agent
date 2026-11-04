@@ -21,14 +21,9 @@ export function attendance(): Attendance {
 
 export interface PresenceSources {
   attended(): boolean;
-  agents: Pick<IntentSources['agents'], 'state'>;
+  agents?: Pick<IntentSources['agents'], 'state'>;
 }
 
 export function ownerPresent(sources: PresenceSources) {
-  return async (item: Approval, _context: Context): Promise<boolean> => {
-    if (item.kind !== 'sudo' || !sources.attended()) return false;
-    const { requester } = item;
-    if (requester.kind === 'user') return true;
-    return requester.kind === 'agent' && Boolean(sources.agents.state().cones[item.agentId]);
-  };
+  return async (_item: Approval, _context: Context): Promise<boolean> => sources.attended();
 }
