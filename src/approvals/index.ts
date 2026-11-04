@@ -101,7 +101,8 @@ function mark(item: Approval, how: Settle, at: number) {
 const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
   guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : false;
 
-const judgedKind = (kind: ApprovalKind, tier: string) => kind === 'sudo' || tier === 'agent';
+const judgedKind = (kind: ApprovalKind, tier: string) =>
+  kind === 'sudo' || tier === 'agent' || tier === 'user';
 
 function detailOf(draft: ApprovalDraft): ApprovalDraft['detail'] {
   if (draft.kind !== 'sudo' || draft.always !== false) return draft.detail;

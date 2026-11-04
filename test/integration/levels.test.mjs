@@ -492,7 +492,7 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
       }
 });
 
-test("the check's reason is the chat model's own words, capped, cleaned and scrubbed; when that call fails the level stands with a plain reason, and both calls are paid for", async (t) => {
+test("the check's reason is the chat model's own words, capped, cleaned and scrubbed; when that call fails the level stands with a plain reason; a person-gated guest call gets the verdict as advice; and every call is paid for", async (t) => {
   const page = await chrome.page(t);
   await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
   const seen = await staged(page, 'the reason text', async () => {
@@ -502,6 +502,7 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
     table({
       'bash: talkative': { level: 1, aligned: 0.95, say: long },
       'bash: silent': { level: 2, aligned: 0.95, sayError: 'the model is down' },
+      'bash: advised': { level: 3, aligned: 0.1, say: 'It would delete the work.' },
     });
     const local = await owner.connect();
     const { lease } = await local.control.monitorOpen(null, true, BACKGROUND_CONTEXT);
@@ -523,14 +524,19 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
       async () => (await globalThis.t.items()).find((entry) => entry.id === silent.id),
       'the silent verdict'
     );
+    const asked = await ask(draft('advised'));
+    const advised = await until(async () => {
+      const found = (await globalThis.t.items()).find((entry) => entry.id === asked.id);
+      return found?.verdict?.reason === 'It would delete the work.' && found;
+    }, 'the advice on a person-gated guest call');
     const usage = await until(
-      () => (local.monitor.value.usage?.tokens ?? 0) > 2 * 102 + 100 && local.monitor.value.usage,
+      () => (local.monitor.value.usage?.cost ?? 0) > 0.029 && local.monitor.value.usage,
       'both calls in the spend'
     );
     await local.control.monitorClose(lease, BACKGROUND_CONTEXT);
     await local.close();
     await owner.release();
-    return { approved, fallback, usage, secret };
+    return { approved, fallback, advised, usage, secret };
   });
   const reason = seen.approved.verdict.reason;
   assert.equal(seen.approved.state, 'approved');
@@ -544,5 +550,10 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
   assert.equal(seen.fallback.verdict.reason, 'it changes who may do what.');
   assert.equal(seen.fallback.state, 'pending');
   assert.equal(seen.fallback.tier, 'user');
-  assert.ok(Math.abs(seen.usage.cost - 0.02) < 1e-9);
+  assert.equal(seen.advised.state, 'pending');
+  assert.equal(seen.advised.tier, 'user');
+  assert.equal(seen.advised.decidedBy, null);
+  assert.equal(seen.advised.verdict.level, 3);
+  assert.equal(seen.advised.always, false);
+  assert.ok(Math.abs(seen.usage.cost - 0.03) < 1e-9);
 });
