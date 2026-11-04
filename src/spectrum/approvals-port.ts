@@ -8,7 +8,8 @@ import type {
   GuestToolApproval,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { fits, type Approval as Item } from '../approvals/record.ts';
+import { fits } from '../approvals/aligned.ts';
+import type { Approval as Item } from '../approvals/record.ts';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
 
