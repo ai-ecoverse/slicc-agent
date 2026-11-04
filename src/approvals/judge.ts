@@ -89,7 +89,7 @@ const MORE =
   "Could a later run of exactly this command line do more than this one, because of input, files or code the person can't see in the dialog?";
 
 const SUDO_FACTS =
-  'request.sudo has what the kernel knows: the target user, the directory, stdin (tty, none, pipe or file), rootOnly (for each path on the line, whether only root can change it) and writable (whether the line can be recorded as a rule).';
+  'request.sudo has what the kernel knows that the requester cannot choose: stdin (tty, none, pipe or file), writable (whether the line can be recorded as a rule) and rootOnly (whether only root can change the directory and every path on the line). The command, the target user, the directory and, for each path, whether only root can change it, are inside request.untrusted, because the requester chose them.';
 
 export const JUDGE_QUESTIONS: Record<string, ClassifierQuestion> = {
   level: {
@@ -128,30 +128,39 @@ export function fenced(text: string, nonce: string): string {
   return `<${tag}>\n${clean}\n</${tag}>`;
 }
 
+function sudoText(detail: Extract<Approval, { kind: 'sudo' }>['detail']): string {
+  const paths = Object.entries(detail.rootOnly ?? {}).map(
+    ([path, only]) => `path ${JSON.stringify(path)}: ${only ? 'root-only' : 'changeable'}`
+  );
+  return [
+    detail.command,
+    `target: ${JSON.stringify(detail.target ?? 'root')}`,
+    ...(detail.cwd === undefined ? [] : [`cwd: ${JSON.stringify(detail.cwd)}`]),
+    ...paths,
+  ].join('\n');
+}
+
 export function untrustedOf(item: Approval): string {
   if (item.kind === 'guest-message') return item.detail.text;
   if (item.kind === 'guest-tool') return `${item.detail.tool}: ${item.detail.summary}`;
-  return item.detail.command;
+  return sudoText(item.detail);
 }
 
 export type SudoFacts = {
-  target: string;
-  cwd: string | null;
   stdin: string | null;
-  rootOnly: Record<string, boolean> | null;
   writable: boolean | null;
+  rootOnly: boolean | null;
 };
 
 export function sudoContext(item: Approval): { sudo?: SudoFacts } {
   if (item.kind !== 'sudo') return {};
-  const { target, cwd, stdin, rootOnly, writable } = item.detail;
+  const { stdin, rootOnly, writable } = item.detail;
+  const facts = rootOnly ? Object.values(rootOnly) : [];
   return {
     sudo: {
-      target: target ?? 'root',
-      cwd: cwd ?? null,
       stdin: stdin ?? null,
-      rootOnly: rootOnly ?? null,
       writable: writable ?? null,
+      rootOnly: facts.length ? facts.every(Boolean) : null,
     },
   };
 }

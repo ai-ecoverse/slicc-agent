@@ -493,13 +493,7 @@ test("with the judge on, sudo waits for a person by default with the verdict as 
   assert.deepEqual(seen.decided, ['owner', 'owner']);
   assert.equal(seen.judgedRun, 0);
   assert.deepEqual(seen.byJudge, { tier: 'agent', decidedBy: 'judge', answer: 'once' });
-  assert.deepEqual(seen.context, {
-    target: 'root',
-    cwd: '/',
-    stdin: 'none',
-    rootOnly: { '/': true, '/root': true },
-    writable: true,
-  });
+  assert.deepEqual(seen.context, { stdin: 'none', writable: true, rootOnly: true });
   assert.equal(seen.allowed, 0);
   assert.equal(seen.escalated, 'unsure');
   assert.match(seen.lick, /helper asked to run \/usr\/bin\/ls \/tmp/);

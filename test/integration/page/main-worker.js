@@ -356,11 +356,12 @@ const pause = (ms, signal) =>
 async function judgeSay(context, options, model) {
   const text = context.messages[0].content.map((part) => part.text ?? '').join('');
   const state = JSON.parse(text.slice(text.indexOf('\n\n{') + 2));
-  const key = inner(state.request.untrusted);
+  const told = inner(state.request.untrusted);
+  const key = told.split('\n')[0];
   const whole = text.includes('Answer in exactly four lines');
   spoken.push({ key, whole, text, state, model: `${model.provider}/${model.id}` });
   for (const wake of judgedWakes.splice(0)) wake();
-  const entry = judgeTable[key];
+  const entry = judgeTable[told] ?? judgeTable[key];
   const step = entry?.say !== undefined || entry?.sayError ? entry : (sayings.shift() ?? {});
   if (step.sayDelay) await pause(step.sayDelay, options?.signal);
   if (options?.signal?.aborted)
@@ -718,7 +719,8 @@ async function classify(model, context, options) {
   };
   judged.push(seen);
   for (const wake of judgedWakes.splice(0)) wake();
-  const step = judgeTable[inner(context.state.request.untrusted)] ?? judgeSteps.shift() ?? {};
+  const told = inner(context.state.request.untrusted);
+  const step = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? judgeSteps.shift() ?? {};
   const base = { api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
   if (step.hold) {
     await new Promise((resolve) => {
