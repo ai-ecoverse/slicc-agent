@@ -142,11 +142,27 @@ async function start() {
     ...(clock ? { now: clock.now, setTimer: clock.setTimer } : {}),
   };
   if (params.has('native')) return hostAgent(agent);
+  const level = Number(params.get('judge-level'));
+  const judge = level
+    ? {
+        judge: async () => ({
+          verdict: {
+            level,
+            aligned: true,
+            always: true,
+            reason: 'It is what the owner asked for.',
+            via: 'classifier',
+            decision: level === 1 ? 'allow' : 'unsure',
+          },
+        }),
+      }
+    : undefined;
   return hostAgent(agent, {
     approvals: await attachApprovals({
       harness,
       ...ttlMs,
       sudoApprover: () => params.get('sudo-approver'),
+      ...(judge ? { judge } : {}),
     }),
   });
 }

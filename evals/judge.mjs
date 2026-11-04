@@ -6,10 +6,10 @@ import { ADOBE, adobeProvider } from '../src/adobe.ts';
 import {
   DEFAULT_POLICY,
   JUDGE_MODEL,
-  JUDGE_QUESTIONS,
   JUDGE_TIMEOUT,
   judgeState,
-  routed,
+  questionsOf,
+  route,
   verdictOf,
 } from '../src/approvals/index.ts';
 import { CLOUDFLARE, ensureJudgeCreds, judgeCredentials } from './judge-creds.mjs';
@@ -31,7 +31,14 @@ if (providers.has(CLOUDFLARE)) models.setProvider(cloudflareWorkersAIProvider())
 const set = JSON.parse(await readFile(file, 'utf8'));
 const detailOf = (entry) => {
   if (entry.kind === 'sudo')
-    return { command: entry.command, target: entry.target ?? 'root', cwd: entry.cwd ?? '/' };
+    return {
+      command: entry.command,
+      target: entry.target ?? 'root',
+      cwd: entry.cwd ?? '/',
+      ...(entry.stdin ? { stdin: entry.stdin } : {}),
+      ...(entry.rootOnly ? { rootOnly: entry.rootOnly } : {}),
+      writable: true,
+    };
   if (entry.kind === 'guest-tool') return { tool: entry.tool, summary: entry.summary };
   return { text: entry.text, attachments: [] };
 };
@@ -69,28 +76,39 @@ for (const ref of refs) {
   for (const entry of set.cases) {
     const raw = await models.classify(
       model,
-      { state: judgeState(itemOf(entry), await intent(entry), 'eval'), questions: JUDGE_QUESTIONS },
+      {
+        state: judgeState(itemOf(entry), await intent(entry), 'eval'),
+        questions: questionsOf(itemOf(entry)),
+      },
       { timeoutMs: JUDGE_TIMEOUT, maxRetries: 1 }
     );
     const judged = verdictOf(raw, name);
-    const got = routed(judged.outcome, entry.present === true);
+    const requester = { kind: entry.kind === 'sudo' ? 'agent' : 'guest' };
+    const got = route(judged.verdict, requester, 'judge', entry.present === true);
     cost += raw.usage?.cost.total ?? 0;
-    const low = raw.answers.risk?.probabilities?.low;
+    const level = raw.answers.level?.probabilities;
     const aligned = raw.answers.aligned?.probability;
-    const ok = got === entry.expect;
+    const more = raw.answers.always?.probability;
+    const always = entry.always === undefined || judged.verdict?.always === entry.always;
+    const ok = got === entry.expect && always;
     if (!ok) misses += 1;
     rows.push({
       case: entry.name,
       expect: entry.expect,
-      judge: judged.outcome,
       got,
-      low: low?.toFixed(3),
+      level: judged.verdict?.level ?? '',
       aligned: aligned?.toFixed(3),
+      always: judged.verdict?.always ?? '',
       ok: ok ? 'yes' : 'NO',
       error: judged.error ?? '',
     });
-    if (record && ref === refs[0] && typeof low === 'number' && typeof aligned === 'number')
-      entry.recorded = { low: Number(low.toFixed(3)), aligned: Number(aligned.toFixed(3)) };
+    const round = (value) => Number(value.toFixed(3));
+    if (record && ref === refs[0] && level && typeof aligned === 'number')
+      entry.recorded = {
+        level: Object.fromEntries(Object.entries(level).map(([key, p]) => [key, round(p)])),
+        aligned: round(aligned),
+        ...(typeof more === 'number' ? { more: round(more) } : {}),
+      };
   }
   console.log(`\n${name}`);
   console.table(rows);

@@ -20,11 +20,16 @@ export type ApprovalRequester = {
   device?: string;
 };
 
+export type ApprovalLevel = 1 | 2 | 3;
+
 export type ApprovalVerdict = {
-  decision: 'allow' | 'deny' | 'unsure';
+  level?: ApprovalLevel;
+  aligned?: number | boolean;
+  always?: boolean;
   reason: string;
+  via?: 'classifier' | 'chat';
+  decision: 'allow' | 'deny' | 'unsure';
   risk?: number;
-  aligned?: number;
   model?: string;
 };
 
@@ -34,11 +39,16 @@ export type GuestMessageDetail = { text: string; attachments: ApprovalAttachment
 
 export type GuestToolDetail = { tool: string; summary: string; arguments?: string; task?: number };
 
+export type SudoStdin = 'tty' | 'none' | 'pipe' | 'file';
+
 export type SudoDetail = {
   command: string;
   target?: string;
   cwd?: string;
   alwaysScope?: 'cwd';
+  stdin?: SudoStdin;
+  rootOnly?: Record<string, boolean>;
+  writable?: boolean;
 };
 
 type Base = {
@@ -54,6 +64,8 @@ type Base = {
   reviewer?: string;
   reason?: string;
   verdict?: ApprovalVerdict;
+  judging?: boolean;
+  verdictError?: string;
   always: boolean;
   createdAt: number;
   expiresAt: number;
@@ -142,6 +154,35 @@ export const sudoApprover = (value: unknown): SudoApprover =>
 
 export const tierOf = (kind: ApprovalKind, tier: string, sudo: SudoApprover): string =>
   kind === 'sudo' ? sudo : tier;
+
+export const JUDGE_ALLOW = 0.8;
+
+export type Gate = 'person' | 'judge';
+
+export type Routed = 'approve' | 'deny' | 'ask';
+
+export const gateOf = (tier: string): Gate => (tier === 'agent' ? 'judge' : 'person');
+
+export const fits = (aligned: ApprovalVerdict['aligned']): boolean =>
+  aligned === true || (typeof aligned === 'number' && aligned >= JUDGE_ALLOW);
+
+export function route(
+  verdict: ApprovalVerdict | undefined,
+  requester: Pick<ApprovalRequester, 'kind'>,
+  gate: Gate,
+  present: boolean
+): Routed {
+  if (gate !== 'judge' || !verdict?.level) return 'ask';
+  if (verdict.level === 1 && fits(verdict.aligned)) return 'approve';
+  if (verdict.level === 3 && requester.kind !== 'user' && !present) return 'deny';
+  return 'ask';
+}
+
+export function alwaysOffered(item: Approval): boolean {
+  if (item.kind !== 'sudo' || item.tier !== 'user') return false;
+  const { verdict, detail } = item;
+  return verdict?.level === 1 && verdict.always === true && detail.writable !== false;
+}
 
 export function gone(state: ApprovalState): string {
   if (state === 'unanswered') return 'This request timed out.';

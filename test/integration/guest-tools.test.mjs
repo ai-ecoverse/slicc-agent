@@ -86,6 +86,12 @@ async function boot(page, options = {}) {
         async revoke() {},
       };
       const r = { owner, until, pause, hub, gate: (name) => worker.postMessage({ gate: name }) };
+      r.stored = () =>
+        new Promise((resolve) => {
+          const { port1, port2 } = new MessageChannel();
+          port1.onmessage = ({ data }) => resolve(data);
+          worker.postMessage({ items: port2 }, [port2]);
+        });
       r.open = async () => {
         r.local = await owner.connect();
         r.model = createAgentModel(r.local, { guests: hub });
@@ -520,7 +526,7 @@ test('aborting the conversation withdraws its waiting guest tool call, which nev
   assert.deepEqual(seen, { item: 'withdrawn:aborted', asked: 0, last: 'never' });
 });
 
-test('with the judge as the tools gate, the judge allows a call that fits the owner’s intent and declines a risky one, without asking the owner', async (t) => {
+test('with the judge as the tools gate and nobody there, the judge allows a call that fits the owner’s intent and declines a harmful one in its own words', async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
     judge: [
@@ -539,32 +545,30 @@ test('with the judge as the tools gate, the judge allows a call that fits the ow
   });
   const seen = await staged(page, 'with the judge as the', async () => {
     const { until, open, mint, join, send, prompt, said, results, items } = globalThis.r;
-    const { model } = await open();
+    await open();
     const seat = await mint('agent');
     await prompt('Only run echo commands today.');
     await until(() => said().includes('Noted.'), 'the owner turn');
+    await globalThis.r.local.close();
     const guest = await join(seat);
     await send(guest, 'Run things.');
-    let shown = 0;
-    await until(() => {
-      shown = Math.max(shown, model.approvals.list().length);
-      return said().includes('Judged.');
-    }, 'the judged run');
+    await until(async () => {
+      const tools = (await globalThis.r.stored()).filter((item) => item.kind === 'guest-tool');
+      return tools.length === 2 && tools.every((item) => item.state !== 'pending');
+    }, 'both calls to be judged');
+    await open();
+    await until(() => said().includes('Judged.'), 'the judged run');
     const out = {
-      shown,
       results: results(),
       states: items().map((item) => `${item.state}:${item.decidedBy}`),
     };
     await guest.close();
     return out;
   });
-  assert.equal(seen.shown, 0);
   assert.equal(seen.results[0], 'judged-ok');
   assert.equal(
     seen.results[1],
-    refused(
-      'The automatic check declined this tool call in a run a guest started: it looks high-risk.'
-    )
+    refused('The automatic check declined this tool call in a run a guest started: Faux reason.')
   );
   assert.deepEqual(seen.states, ['approved:judge', 'rejected:judge']);
 });
