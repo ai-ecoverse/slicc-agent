@@ -8,7 +8,7 @@ import type {
   GuestToolApproval,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { Approval as Item } from '../approvals/record.ts';
+import { fits, type Approval as Item } from '../approvals/record.ts';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
 
@@ -49,8 +49,23 @@ function requesterOf(item: Item): ApprovalRequester {
   };
 }
 
-const verdictOf = (item: Item) =>
-  item.verdict ? { verdict: { decision: item.verdict.decision, reason: item.verdict.reason } } : {};
+function verdictOf(item: Item) {
+  const { verdict, judging, verdictError } = item;
+  return {
+    ...(verdict
+      ? {
+          verdict: {
+            ...(verdict.level ? { level: verdict.level } : {}),
+            ...(verdict.aligned === undefined ? {} : { aligned: fits(verdict.aligned) }),
+            decision: verdict.decision,
+            reason: verdict.reason,
+          },
+        }
+      : {}),
+    ...(judging ? { judging: true } : {}),
+    ...(verdictError ? { verdictError } : {}),
+  };
+}
 
 export function shown(item: Item, agentName: string | undefined): Approval {
   const base = {
