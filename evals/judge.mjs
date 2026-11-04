@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { argv, env, exit } from 'node:process';
 import { createModels } from '@earendil-works/pi-ai/models';
+import { cloudflareWorkersAIProvider } from '@earendil-works/pi-ai/providers/cloudflare-workers-ai';
 import { ADOBE, adobeProvider } from '../src/adobe.ts';
 import {
   DEFAULT_POLICY,
@@ -11,13 +12,9 @@ import {
   routed,
   verdictOf,
 } from '../src/approvals/index.ts';
+import { CLOUDFLARE, ensureJudgeCreds, judgeCredentials } from './judge-creds.mjs';
 
 const file = new URL('./judge.json', import.meta.url);
-const token = env.SLICC_ADOBE_IMS_TOKEN;
-if (!token) {
-  console.error('evals/judge.mjs: set SLICC_ADOBE_IMS_TOKEN to run the live judge evals');
-  exit(2);
-}
 const named = argv.flatMap((arg, i) => (argv[i - 1] === '--model' ? [arg] : []));
 const record = argv.includes('--record');
 const refs = (named.length ? named : [`${JUDGE_MODEL.provider}/${JUDGE_MODEL.modelId}`]).map(
@@ -26,14 +23,11 @@ const refs = (named.length ? named : [`${JUDGE_MODEL.provider}/${JUDGE_MODEL.mod
     return { provider, modelId: rest.join('/') };
   }
 );
-const credentials = {
-  read: async (id) => (id === ADOBE ? { type: 'api_key', key: token } : undefined),
-  list: async () => [{ providerId: ADOBE, type: 'api_key' }],
-  modify: async () => undefined,
-  delete: async () => undefined,
-};
-const models = createModels({ credentials });
-models.setProvider(adobeProvider());
+const providers = new Set(refs.map((ref) => ref.provider));
+ensureJudgeCreds(providers, env);
+const models = createModels({ credentials: judgeCredentials(env) });
+if (providers.has(ADOBE)) models.setProvider(adobeProvider());
+if (providers.has(CLOUDFLARE)) models.setProvider(cloudflareWorkersAIProvider());
 const set = JSON.parse(await readFile(file, 'utf8'));
 const detailOf = (entry) => {
   if (entry.kind === 'sudo')
