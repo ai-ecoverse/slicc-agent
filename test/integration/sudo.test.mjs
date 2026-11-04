@@ -496,8 +496,8 @@ test("with the judge on, sudo waits for a person by default with the verdict as 
   assert.deepEqual(seen.context, {
     target: 'root',
     cwd: '/',
-    stdin: null,
-    rootOnly: null,
+    stdin: 'none',
+    rootOnly: { '/': true, '/root': true },
     writable: true,
   });
   assert.equal(seen.allowed, 0);
