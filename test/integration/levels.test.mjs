@@ -220,7 +220,6 @@ test('Always appears on a sudo dialog only once a level 1 verdict says a rerun o
     always: true,
     reason: 'It reads the secret rules and changes nothing.',
     via: 'classifier',
-    decision: 'allow',
     model: 'judge/j-1',
   });
   assert.equal(seen.listedAfter.always, true);
@@ -228,7 +227,6 @@ test('Always appears on a sudo dialog only once a level 1 verdict says a rerun o
   assert.deepEqual(seen.listedAfter.verdict, {
     level: 1,
     aligned: true,
-    decision: 'allow',
     reason: 'It reads the secret rules and changes nothing.',
   });
   assert.equal(seen.always, 'approved');
@@ -240,7 +238,7 @@ test('Always appears on a sudo dialog only once a level 1 verdict says a rerun o
   assert.equal(seen.refused, "Always isn't offered for this request.");
   assert.equal(seen.sortReply, 'once');
   assert.equal(seen.permissions.verdict.level, 2);
-  assert.equal(seen.permissions.verdict.decision, 'unsure');
+  assert.equal(seen.permissions.verdict.aligned, 0.95);
   assert.equal(seen.permissions.always, false);
   assert.equal(seen.kernelSays.verdict.level, 1);
   assert.equal(seen.kernelSays.verdict.always, true);
@@ -319,7 +317,7 @@ test('rm -rf / at level 3 asks a person who is there and is never denied for the
   assert.equal(seen.asked.tier, 'user');
   assert.equal(seen.asked.always, false);
   assert.equal(seen.asked.verdict.level, 3);
-  assert.equal(seen.asked.verdict.decision, 'deny');
+  assert.equal(seen.asked.verdict.aligned, 0.1);
   assert.equal(seen.presentReply, 'deny');
   assert.equal(seen.personItem.state, 'pending');
   assert.equal(seen.personItem.tier, 'user');
@@ -496,7 +494,8 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
               via: item.verdict?.via ?? null,
               level: item.verdict?.level ?? null,
               routine: item.verdict?.routine ?? null,
-              decision: item.verdict?.decision ?? null,
+              aligned: item.verdict?.aligned ?? null,
+              legacy: 'decision' in (item.verdict ?? {}),
               error: item.verdictError ?? null,
               decidedBy: item.decidedBy,
               reason: item.verdict?.reason ?? null,
@@ -523,9 +522,10 @@ test('one routing table: the same verdicts route sudo and a guest’s tool call 
         assert.equal(got.decidedBy, want === 'ask' ? null : 'judge');
         if (row.routine) assert.equal(got.routine, judge === 'chat' ? null : row.routine);
         assert.equal(
-          got.decision,
-          row.level ? (row.level === 3 ? 'deny' : want === 'approve' ? 'allow' : 'unsure') : null
+          got.aligned,
+          row.level ? (judge === 'chat' ? row.aligned : row.aligned ? 0.9 : 0.2) : null
         );
+        assert.equal(got.legacy, false);
         if (!row.level && !row.cut)
           assert.equal(
             got.error,
@@ -610,7 +610,6 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
   assert.deepEqual(seen.advisedShown.verdict, {
     level: 3,
     aligned: false,
-    decision: 'deny',
     reason: 'It would delete the work.',
   });
   assert.ok(Math.abs(seen.usage.cost - 0.03) < 1e-9);

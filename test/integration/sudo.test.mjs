@@ -222,7 +222,6 @@ test("a cone's sudo waits in the agent's approvals, and every owner device answe
     verdict: {
       level: 1,
       aligned: true,
-      decision: 'allow',
       reason: 'It is what the owner asked for.',
     },
   });
@@ -483,7 +482,7 @@ test("with the judge on, sudo waits for a person by default with the verdict as 
       after,
       context,
       allowed: allowed.status,
-      escalated: escalated.verdict?.decision ?? null,
+      escalated: escalated.verdict?.aligned ?? null,
       lick,
       quiet,
     };
@@ -500,7 +499,7 @@ test("with the judge on, sudo waits for a person by default with the verdict as 
   assert.deepEqual(seen.byJudge, { tier: 'agent', decidedBy: 'judge', answer: 'once' });
   assert.deepEqual(seen.context, { stdin: 'none', writable: true, rootOnly: true });
   assert.equal(seen.allowed, 0);
-  assert.equal(seen.escalated, 'unsure');
+  assert.equal(seen.escalated, 0.5);
   assert.match(seen.lick, /helper asked to run \/usr\/bin\/ls \/tmp/);
   assert.equal(seen.quiet, false);
   assert.equal(seen.after, 4);
@@ -677,7 +676,7 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
       decidedBy,
       answer: answer ?? null,
       always,
-      verdict: verdict?.decision ?? null,
+      verdict: verdict?.level ?? null,
     });
     const result = {
       asked: pick(asked),
@@ -703,13 +702,12 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     decidedBy: null,
     answer: null,
     always: false,
-    verdict: 'deny',
+    verdict: 3,
   });
   assert.deepEqual(seen.listed, {
     verdict: {
       level: 3,
       aligned: true,
-      decision: 'deny',
       reason: 'It reads a file that holds secrets.',
     },
     always: false,
@@ -722,7 +720,7 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     decidedBy: 'owner',
     answer: 'once',
     always: false,
-    verdict: 'deny',
+    verdict: 3,
   });
   assert.match(seen.again, /a password is required/);
   assert.deepEqual(seen.nopasswd, { status: 0, judged: 0, filed: 0 });
@@ -732,7 +730,7 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     tier: 'agent',
     decidedBy: 'judge',
     answer: null,
-    verdict: 'deny',
+    verdict: 3,
   };
   assert.deepEqual({ ...seen.hurried, always: undefined }, { ...denied, always: undefined });
   assert.deepEqual(seen.scooped.item, {
@@ -741,7 +739,7 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     decidedBy: null,
     answer: null,
     always: false,
-    verdict: 'deny',
+    verdict: 3,
   });
   assert.deepEqual({ ...seen.alone.item, always: undefined }, { ...denied, always: undefined });
   const judged = {

@@ -14,7 +14,7 @@ import type { Models } from '@earendil-works/pi-ai/models';
 import type { Conversation, ModelRef } from '@earendil-works/pi-durable';
 import { completeText, scrubbed } from '../titles/generate.ts';
 import { spend } from '../titles/labels.ts';
-import { type Approval, type ApprovalLevel, type ApprovalVerdict, fits, route } from './record.ts';
+import { type Approval, type ApprovalLevel, type ApprovalVerdict, fits } from './record.ts';
 
 export const JUDGE_KIND = 'slicc.approval-verdict';
 export const JUDGE_MODEL: ModelRef = { provider: 'adobe', modelId: 'clef' };
@@ -201,20 +201,6 @@ export function fallbackReason(level: ApprovalLevel, aligned: ApprovalVerdict['a
   return fits(aligned) ? VERDICT_REASONS.routine : VERDICT_REASONS.routineUnaligned;
 }
 
-const DECISIONS = { approve: 'allow', deny: 'deny', ask: 'unsure' } as const;
-
-export function decisionOf(
-  verdict: Omit<ApprovalVerdict, 'decision' | 'reason'>
-): ApprovalVerdict['decision'] {
-  const routed = route(
-    { ...verdict, reason: '', decision: 'unsure' },
-    { kind: 'agent' },
-    'judge',
-    false
-  );
-  return DECISIONS[routed];
-}
-
 export function verdictOf(result: ClassifierResult, model: string): Judgement {
   if (result.stopReason !== 'stop')
     return { error: result.errorMessage || `the judge stopped: ${result.stopReason}` };
@@ -233,7 +219,6 @@ export function verdictOf(result: ClassifierResult, model: string): Judgement {
       ...(more ? { always: replay !== undefined && 1 - replay >= JUDGE_ALWAYS } : {}),
       reason: fallbackReason(level, aligned),
       via: 'classifier',
-      decision: decisionOf({ level, routine, aligned, via: 'classifier' }),
       model,
     },
   };
@@ -302,7 +287,6 @@ export async function chatVerdict(
     ...(item.kind === 'sudo' ? { always } : {}),
     reason: (await cleanVerdictReason(answer.reason)) ?? fallbackReason(level, aligned),
     via: 'chat',
-    decision: decisionOf({ level, aligned, via: 'chat' }),
     model,
   };
 }
