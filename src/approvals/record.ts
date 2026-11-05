@@ -32,7 +32,6 @@ export type ApprovalVerdict = {
   always?: boolean;
   reason: string;
   via?: 'classifier' | 'chat';
-  decision: 'allow' | 'deny' | 'unsure';
   risk?: number;
   model?: string;
 };

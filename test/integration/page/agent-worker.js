@@ -152,7 +152,6 @@ async function start() {
             always: true,
             reason: 'It is what the owner asked for.',
             via: 'classifier',
-            decision: level === 1 ? 'allow' : 'unsure',
           },
         }),
       }

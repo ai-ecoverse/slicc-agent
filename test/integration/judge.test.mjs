@@ -215,7 +215,6 @@ test("the judge approves a routine request that serves the owner's intent and, w
       aligned: 0.93,
       reason: 'It fixes a typo the owner asked about.',
       via: 'classifier',
-      decision: 'allow',
       model: 'judge/j-1',
     }
   );
@@ -228,11 +227,17 @@ test("the judge approves a routine request that serves the owner's intent and, w
   assert.ok(Math.abs(seen.usage.cost - 0.03) < 1e-9);
   assert.ok(seen.usage.tokens > 3 * 102);
   assert.deepEqual(
-    seen.notes.map((note) => [note.approval, note.outcome, note.decision, note.level, note.model]),
+    seen.notes.map((note) => [
+      note.approval,
+      note.outcome,
+      'decision' in note,
+      note.level,
+      note.model,
+    ]),
     [
-      [seen.approved.id, 'approved', 'allow', 1, 'judge/j-1'],
-      [seen.denied.id, 'rejected', 'deny', 3, 'judge/j-1'],
-      [seen.fenced.id, 'rejected', 'deny', 3, 'judge/j-1'],
+      [seen.approved.id, 'approved', false, 1, 'judge/j-1'],
+      [seen.denied.id, 'rejected', false, 3, 'judge/j-1'],
+      [seen.fenced.id, 'rejected', false, 3, 'judge/j-1'],
     ]
   );
   assert.equal(seen.notes[0].reason, 'It fixes a typo the owner asked about.');
@@ -390,7 +395,6 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
     routine: 0.97,
     aligned: 0.95,
     via: 'classifier',
-    decision: 'allow',
     model: 'judge/j-2',
   });
   const { reason: _unsure, ...unsure } = seen.unsure.verdict;
@@ -399,7 +403,6 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
     routine: 0.9,
     aligned: 0.4,
     via: 'classifier',
-    decision: 'unsure',
     model: 'judge/j-2',
   });
   assert.equal(seen.failed.verdict, undefined);
@@ -410,7 +413,7 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
   assert.equal(seen.filed.verdictError, "the judge can't read attachments");
   assert.deepEqual(seen.calls, ['judge/j-2', 'judge/j-2', 'judge/j-2']);
   assert.deepEqual(seen.listed, [
-    [seen.unsure.id, { level: 1, aligned: false, decision: 'unsure', reason: 'Faux reason.' }],
+    [seen.unsure.id, { level: 1, aligned: false, reason: 'Faux reason.' }],
     [seen.failed.id, null],
     [seen.filed.id, null],
     [seen.missing.id, null],

@@ -58,7 +58,6 @@ function verdictOf(item: Item) {
           verdict: {
             ...(verdict.level ? { level: verdict.level } : {}),
             ...(verdict.aligned === undefined ? {} : { aligned: fits(verdict.aligned) }),
-            decision: verdict.decision,
             reason: verdict.reason,
           },
         }
