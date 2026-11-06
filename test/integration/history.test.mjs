@@ -1,0 +1,174 @@
+import assert from 'node:assert/strict';
+import { after, test } from 'node:test';
+import { launch, staged } from './chrome.mjs';
+
+const chrome = await launch();
+after(() => chrome.close());
+
+const TURNS = 60;
+const answers = Array.from({ length: TURNS + 1 }, (_, n) => `answer=A${n + 1}`).join('&');
+const questions = (count) => Array.from({ length: count }, (_, n) => `Q${n + 1}`);
+const pairs = (count) => questions(count).flatMap((q, n) => [q, `A${n + 1}`]);
+
+test('a background cone longer than the view window pages back to its first entry, in the chat and through remote history, with nothing lost or doubled at any boundary', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(() => import('/dist-test/page.js'));
+  const seen = await staged(
+    page,
+    'a cone longer than the window pages back',
+    async (turns, answers) => {
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/agent-worker.js?${answers}`, { type: 'module' }),
+      });
+      const connection = await owner.connect();
+      const created = await connection.control.createCone('long', BACKGROUND_CONTEXT);
+      const cone = created.id;
+      const ask = async (text) => {
+        const sent = await connection.control.send(
+          { text, whenBusy: 'followUp', requestId: null, agentId: cone },
+          BACKGROUND_CONTEXT
+        );
+        const settled = await connection.control.wait(sent.submissionId, BACKGROUND_CONTEXT);
+        if (settled.status !== 'done') throw new Error(`${text}: ${settled.status}`);
+      };
+      for (let n = 1; n <= turns; n++) await ask(`Q${n}`);
+      const model = createAgentModel(connection);
+      const { agent } = model;
+      await agent.ready();
+      const texts = () =>
+        agent
+          .messages(cone)
+          .map((message) => message.text ?? message.parts?.find((p) => p.type === 'text')?.text);
+      await when([changed, every(100)], () => texts().at(-1) === `A${turns}`, 'the last answer');
+      const windowed = texts().length;
+      const window = connection.views.value[cone].entries.length;
+      const olderBefore = agent.hasOlder(cone);
+      const unread = () => agent.list().find((row) => row.id === cone)?.unread;
+      const unreadBefore = unread();
+      const pages = [];
+      for (let guard = 0; guard < 20; guard++) {
+        const first = agent.messages(cone)[0].id;
+        const got = await agent.older(cone, first);
+        pages.push(got.length);
+        if (!got.length) break;
+        const ids = agent.messages(cone).map((message) => message.id);
+        if (got.at(-1).id !== ids[ids.indexOf(first) - 1])
+          throw new Error('a page is not contiguous');
+      }
+      const paged = texts();
+      const unreadPaged = unread();
+      const ids = agent.messages(cone).map((message) => message.id);
+      const remote = remoteControl(connection, { agent: () => cone });
+      const watched = await remote.watch();
+      const history = [];
+      let before = watched.history;
+      const cursors = [];
+      while (before !== null) {
+        const got = await remote.history({ before, limit: 7 });
+        history.unshift(...got.events);
+        cursors.push(got.before);
+        before = got.more ? got.before : null;
+      }
+      await ask(`Q${turns + 1}`);
+      const live = [];
+      const iterator = watched.events[Symbol.asyncIterator]();
+      while (!live.some((event) => event.t === 'text' && event.delta === `A${turns + 1}`))
+        live.push((await iterator.next()).value);
+      await iterator.return();
+      await when(
+        [changed, every(100)],
+        () => texts().at(-1) === `A${turns + 1}`,
+        'the answer after paging'
+      );
+      const final = texts();
+      await owner.release();
+      return {
+        window,
+        windowed,
+        olderBefore,
+        olderAfter: agent.hasOlder(cone),
+        unreadBefore,
+        unreadPaged,
+        pages,
+        paged,
+        unique: new Set(ids).size === ids.length,
+        history: history.map((event) => [event.t, event.text ?? event.delta, event.delivered]),
+        historyIds: history
+          .map((event) => event.id)
+          .filter((id, at, all) => all.indexOf(id) !== at),
+        cursors: cursors.length,
+        shared: live.filter((event) => history.some((old) => old.id && old.id === event.id)).length,
+        live: live
+          .map((event) => [event.t, event.text ?? event.delta])
+          .filter(([t]) => t !== 'run'),
+        final,
+      };
+    },
+    TURNS,
+    answers
+  );
+  assert.ok(seen.window <= 100, `window ${seen.window}`);
+  assert.ok(seen.windowed < TURNS * 2, `the window shows ${seen.windowed} messages`);
+  assert.equal(seen.olderBefore, true);
+  assert.equal(seen.olderAfter, false);
+  assert.equal(seen.unreadPaged, seen.unreadBefore);
+  assert.equal(seen.pages.at(-1), 0);
+  assert.ok(seen.pages.length >= 2, `pages ${seen.pages}`);
+  assert.deepEqual(seen.paged, pairs(TURNS));
+  assert.equal(seen.unique, true);
+  assert.deepEqual(
+    seen.history,
+    questions(TURNS).flatMap((q, n) => [
+      ['user', q, 'run'],
+      ['text', `A${n + 1}`, null],
+    ])
+  );
+  assert.deepEqual(seen.historyIds, []);
+  assert.equal(seen.shared, 0);
+  assert.ok(seen.cursors >= Math.floor((TURNS * 2) / 7), `cursors ${seen.cursors}`);
+  assert.deepEqual(seen.live, [
+    ['user', `Q${TURNS + 1}`],
+    ['text', `A${TURNS + 1}`],
+  ]);
+  assert.deepEqual(seen.final, pairs(TURNS + 1));
+  assert.deepEqual(page.errors, []);
+});
+
+test('remote history refuses a malformed cursor and reports the start of a short conversation', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(() => import('/dist-test/page.js'));
+  const seen = await staged(page, 'remote history edges', async () => {
+    const owner = await startTracked({
+      worker: () => new Worker('/dist-test/agent-worker.js?answer=Only.', { type: 'module' }),
+    });
+    const connection = await owner.connect();
+    const remote = remoteControl(connection);
+    const empty = await remote.watch();
+    const none = await remote.history({ before: null });
+    await connection.prompt('Just one');
+    const all = await remote.history({ before: null, limit: 500 });
+    const bad = await remote.history({ before: 'e12' }).then(
+      () => null,
+      (error) => error.code
+    );
+    const iterator = empty.events[Symbol.asyncIterator]();
+    await iterator.return();
+    await owner.release();
+    return {
+      emptyHistory: empty.history,
+      none,
+      all: all.events.map((event) => event.t),
+      more: all.more,
+      before: all.before,
+      bad,
+    };
+  });
+  assert.equal(seen.emptyHistory, null);
+  assert.deepEqual(seen.none, { events: [], before: null, more: false });
+  assert.deepEqual(seen.all, ['user', 'text']);
+  assert.equal(seen.more, false);
+  assert.equal(seen.before, null);
+  assert.equal(seen.bad, 'EINVAL');
+});

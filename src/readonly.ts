@@ -51,7 +51,9 @@ export function viewPages(): AgentPages {
 export const pageAnswer = (name: string): Answer =>
   (viewPages() as unknown as Record<string, Answer>)[name] as Answer;
 
-export function viewRemote(remote: AgentRemote): Pick<AgentRemote, 'watch' | 'next' | 'close'> {
+export function viewRemote(
+  remote: AgentRemote
+): Pick<AgentRemote, 'watch' | 'history' | 'next' | 'close'> {
   const mine = new Set<string>();
   return {
     async watch(request, context) {
@@ -59,6 +61,7 @@ export function viewRemote(remote: AgentRemote): Pick<AgentRemote, 'watch' | 'ne
       if (opened.ok) mine.add(opened.stream);
       return opened;
     },
+    history: (request, context) => remote.history(request, context),
     async next(stream, waitMs, context) {
       if (!mine.has(stream)) return { events: [], done: true };
       const batch = await remote.next(stream, waitMs, context);

@@ -13,7 +13,7 @@ import type {
   UserMessage,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { ConversationView } from '@earendil-works/pi-durable';
+import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
 import type { AgentConnection } from '../client.ts';
 import { contextRatio, contextTokens } from '../context.ts';
 import { shrink } from '../images/fit.ts';
@@ -24,11 +24,14 @@ import { shownLabel } from '../titles/shown.ts';
 import { attempt, warn } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { IDLE_IMPORT, importProfile, type ShownImport } from './import-port.ts';
+import { Kept } from './kept.ts';
 import { CONNECT_IT, isBusy, providerName, queued, toMessages } from './messages.ts';
 import { readUrl, sendAttachments } from './outgoing.ts';
 import { merged, proposalNotices, proposalQueue } from './proposals.ts';
 
 export const CONE = 'cone';
+export const OLDER_PAGE = 100;
+export const OLDER_PAGES = 40;
 
 const thinking: Record<string, Thinking> = {
   off: 'off',
@@ -72,6 +75,13 @@ function sameHold(a: AgentHold | null, b: AgentHold | null): boolean {
   return a === b || (a !== null && b !== null && a.reason === b.reason && a.held === b.held);
 }
 
+interface Held {
+  conversation: number;
+  kept: Kept;
+  filling: boolean;
+  failed: boolean;
+}
+
 interface Pending {
   agentId: string;
   message: UserMessage;
@@ -88,7 +98,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   #creating = new Map<string, Promise<string | null>>();
   #hold: AgentHold | null = null;
   readonly #outbox = new Map<string, Pending>();
-  readonly #notices = new Map<string, { at: number; message: SystemMessage }[]>();
+  readonly #notices = new Map<string, { after: string | null; message: SystemMessage }[]>();
+  readonly #paging = new Map<string, Held>();
   readonly #unread = new Map<string, number>();
   readonly #seen = new Map<string, Set<string>>();
   readonly #queuedAt = new Map<string, Map<string, { at: number; seen: boolean }>>();
@@ -171,6 +182,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
         this.#seen.delete(id);
         this.#unread.delete(id);
         this.#queuedAt.delete(id);
+        this.#paging.delete(id);
       }
     if (unread) this.emit('agents', this.list());
   }
@@ -191,6 +203,13 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return true;
   }
 
+  #saw(agentId: string, messages: readonly Message[], first: string | undefined): void {
+    const seen = this.#seen.get(agentId);
+    const at = messages.findIndex((message) => message.id === first);
+    if (!seen || at <= 0) return;
+    for (const id of answers(messages.slice(0, at))) seen.add(id);
+  }
+
   notify(text: string, agentId: string = this.active()): void {
     this.#note(agentId, { kind: 'notice', text });
   }
@@ -201,7 +220,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   ): void {
     const notes = this.#notices.get(agentId) ?? [];
     notes.push({
-      at: this.#messages.get(agentId)?.length ?? 0,
+      after: this.#messages.get(agentId)?.at(-1)?.id ?? null,
       message: { id: `n${crypto.randomUUID()}`, role: 'system', ...shown, createdAt: Date.now() },
     });
     this.#notices.set(agentId, notes);
@@ -235,12 +254,59 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return (text) => this.notify(text, agentId);
   }
 
-  #update(agentId: string): boolean {
+  #paged(): boolean {
+    return !this.#connection.guest && typeof this.#connection.control.entries === 'function';
+  }
+
+  #transcript(agentId: string, view: ConversationView): Held {
+    const conversation = Number(view.conversation.id);
+    const known = this.#paging.get(agentId);
+    if (known?.conversation === conversation) return known;
+    const kept = new Kept(async (query, limit) => {
+      const page = await this.#connection.control.entries(
+        { ...query, agentId, conversation, limit },
+        BACKGROUND_CONTEXT
+      );
+      return page.conversation === conversation ? page : { entries: [], more: false };
+    }, OLDER_PAGE);
+    const held = { conversation, kept, filling: false, failed: false };
+    this.#paging.set(agentId, held);
+    return held;
+  }
+
+  #entries(agentId: string, view: ConversationView): readonly EntryRecord[] {
+    if (!this.#paged()) return view.entries;
+    const held = this.#transcript(agentId, view);
+    const entries = held.kept.merge(view);
+    if (held.kept.gap) this.#fill(agentId, held);
+    const fresh = new Map(view.entries.map((entry) => [entry.id, entry]));
+    return entries.map((entry) => fresh.get(entry.id) ?? entry);
+  }
+
+  #fill(agentId: string, held: Held): void {
+    if (held.filling || held.failed) return;
+    held.filling = true;
+    const run = async () => {
+      for (let page = 0; page < OLDER_PAGES && held.kept.gap; page++) await held.kept.fillGap();
+    };
+    run()
+      .catch(() => {
+        held.failed = true;
+      })
+      .finally(() => {
+        held.filling = false;
+        if (this.#paging.get(agentId) === held) this.#update(agentId);
+      });
+  }
+
+  #update(agentId: string, older = false): boolean {
     const view = this.#view(agentId);
     if (!view) return false;
     const before = this.#messages.get(agentId) ?? [];
-    const after = this.#labelled(toMessages(view, this.#connection.deliveries.value));
+    const shown = { ...view, entries: this.#entries(agentId, view) };
+    const after = this.#labelled(toMessages(shown, this.#connection.deliveries.value));
     this.#messages.set(agentId, after);
+    if (older) this.#saw(agentId, after, before[0]?.id);
     if (before.length !== after.length) this.emit('messages', agentId);
     else {
       const changed = after.filter(
@@ -337,9 +403,17 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const shown = this.#messages.get(agentId) ?? [];
     const notes = this.#notices.get(agentId);
     if (!notes) return shown;
-    const at = (index: number) => notes.filter((note) => note.at === index).map((n) => n.message);
-    const late = notes.filter((note) => note.at >= shown.length).map((note) => note.message);
-    return [...shown.flatMap((message, index) => [...at(index), message]), ...late];
+    const ids = new Set(shown.map((message) => message.id));
+    const after = (id: string | null) =>
+      notes.filter((note) => note.after === id).map((note) => note.message);
+    const late = notes
+      .filter((note) => note.after !== null && !ids.has(note.after))
+      .map((note) => note.message);
+    return [
+      ...after(null),
+      ...shown.flatMap((message) => [message, ...after(message.id)]),
+      ...late,
+    ];
   }
 
   async send(agentId: string, input: string | Outgoing): Promise<void> {
@@ -495,9 +569,10 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
 
   resolveLick(agentId: string, messageId: string, state: 'confirmed' | 'dismissed'): void {
     const message = this.messages(agentId).find((candidate) => candidate.id === messageId);
-    const entry = this.#view(agentId)?.entries.find(
-      (candidate) => `e${candidate.id}` === messageId
-    );
+    const view = this.#view(agentId);
+    const entry = view
+      ? this.#entries(agentId, view).find((candidate) => `e${candidate.id}` === messageId)
+      : undefined;
     const lick = message?.role === 'lick' && entry ? entryLick(entry) : undefined;
     if (lick)
       attempt(
@@ -558,8 +633,34 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     this.#configure(agentId, { thinkingLevel: level });
   }
 
-  async older(): Promise<readonly Message[]> {
-    return [];
+  hasOlder(agentId: string = this.active()): boolean {
+    const view = this.#view(agentId);
+    if (!view || !this.#paged()) return false;
+    const held = this.#transcript(agentId, view);
+    held.kept.merge(view);
+    return held.kept.earlier;
+  }
+
+  async older(agentId: string = this.active(), before?: string): Promise<readonly Message[]> {
+    const view = this.#view(agentId);
+    if (!view || !this.#paged()) return [];
+    if (!this.#messages.has(agentId)) this.#update(agentId);
+    const held = this.#transcript(agentId, view);
+    const listed = () => this.#messages.get(agentId) ?? [];
+    const anchor = listed().find((message) => message.id === before)?.id ?? listed()[0]?.id;
+    const prior = () => {
+      const list = listed();
+      const at = list.findIndex((message) => message.id === anchor);
+      return at < 0 ? [] : list.slice(0, at);
+    };
+    const start = prior().length;
+    for (let page = 0; page < OLDER_PAGES && held.kept.earlier; page++) {
+      await held.kept.loadEarlier();
+      if (this.#paging.get(agentId) !== held) return [];
+      this.#update(agentId, true);
+      if (prior().length > start) break;
+    }
+    return prior();
   }
 
   #fetchCommands(agentId: string): void {

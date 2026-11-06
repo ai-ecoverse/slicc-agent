@@ -80,7 +80,7 @@ import {
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import { slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
+import { type Slimmer, slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
 import { type LabelsRuntime, visibleLabels, watchLabel } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
@@ -173,18 +173,31 @@ const idleVault = replicatedState<VaultState>({
 
 function gatedControls(
   control: AgentControl,
-  shown: (entry: number) => boolean,
+  slims: Pick<Slimmer, 'entries' | 'shown'>,
   views: () => readonly ConversationView[],
   labels: ReplicatedState<Record<string, string>>
 ) {
+  const { shown } = slims;
+  const paged = new Set<number>();
+  const entries: AgentControl['entries'] = async (request, using) => {
+    const page = await control.entries(request, using);
+    const slimmed = await slims.entries(page.entries);
+    for (const entry of slimmed) paged.add(Number(entry.id));
+    return { ...page, entries: slimmed };
+  };
   const visible = (entry: number) =>
-    views().some((view) => view.entries.some((item) => item.id === entry));
+    paged.has(entry) || views().some((view) => view.entries.some((item) => item.id === entry));
   const gated =
     (allowed: (entry: number) => boolean): AgentControl['image'] =>
     async (ref, using) =>
       allowed(ref.entry) ? control.image(ref, using) : { data: null, mimeType: null };
-  const trusted: AgentControl = { ...control, image: gated(shown) };
-  const viewed: AgentControl = { ...control, image: gated(visible), toolLabel: watchLabel(labels) };
+  const trusted: AgentControl = { ...control, image: gated(shown), entries };
+  const viewed: AgentControl = {
+    ...control,
+    image: gated(visible),
+    toolLabel: watchLabel(labels),
+    entries,
+  };
   return { trusted, viewed };
 }
 
@@ -380,7 +393,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     ...(options.licks ? { licks: options.licks.licks } : {}),
   });
   const settings = options.settings ?? noSettings;
-  const { trusted, viewed } = gatedControls(control, slims.shown, shownViews, labels.state);
+  const { trusted, viewed } = gatedControls(control, slims, shownViews, labels.state);
   const host = serveAgent({
     trusted,
     viewed,
