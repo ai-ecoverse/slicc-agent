@@ -599,9 +599,9 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
   assert.match(reason, /^It reads the file \[redacted\] and then keeps going/);
   assert.ok(!reason.includes(seen.secret));
   assert.equal(seen.fallback.verdict.level, 2);
-  assert.match(
+  assert.equal(
     seen.fallback.verdict.reason,
-    /^The check leaned toward a change in who may do what/
+    'The check leaned toward a change in who may do what.'
   );
   assert.equal(seen.fallback.state, 'pending');
   assert.equal(seen.fallback.tier, 'user');
@@ -687,7 +687,7 @@ test('paths and the directory a requester chose reach the judge only inside the 
   assert.equal(outside(seen.prompt).hits, 4);
 });
 
-test('sudo verdicts from a real session: an unsure read stays routine, the same listing gets the same level, a level 2 names what changes permissions or says nothing does, harm stays harm, and Always means the same from either judge', async (t) => {
+test('sudo verdicts from a real session: an unsure read stays routine, the same listing gets the same level, a level 2 gets a plain reason that claims nothing about the command, harm stays harm, and Always means the same from either judge', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
   const rows = [
@@ -796,11 +796,8 @@ test('sudo verdicts from a real session: an unsure read stays routine, the same 
   );
   assert.equal(seen.verdicts[0].reason, 'It looks like routine work.');
   assert.equal(seen.verdicts[1].reason, seen.verdicts[2].reason);
-  assert.equal(seen.verdicts[4].reason, 'It runs `chown`, which changes who owns files.');
-  assert.match(
-    seen.verdicts[5].reason,
-    /^The check leaned toward a change in who may do what, but nothing in the request changes/
-  );
+  assert.equal(seen.verdicts[4].reason, 'The check leaned toward a change in who may do what.');
+  assert.equal(seen.verdicts[5].reason, seen.verdicts[4].reason);
   assert.equal(
     seen.verdicts[6].reason,
     'It could harm the system or the work in a way that is hard to undo.'
