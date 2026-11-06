@@ -501,14 +501,23 @@ async function stop(core: Core, id: string, fromAgent: boolean, context: Context
   };
 }
 
-async function rename(core: Core, id: string, name: string, context: Context): Promise<Answer> {
+async function rename(
+  core: Core,
+  id: string,
+  name: string,
+  taints: readonly InheritedTaint[],
+  context: Context
+): Promise<Answer> {
   const { agents } = await core.host;
   const record = agents.state().scoops[id];
   if (!record || !live(record)) return missing(id);
   const wanted = name.trim();
   if (!wanted) return { code: 2, out: 'subagent: rename needs a non-empty name\n' };
-  await agents.update((_tx, state) => {
+  await agents.update(async (tx, state) => {
     (state.scoops[id] as ScoopRecord).name = wanted;
+    if (!taints.length) return;
+    const doc = await tx.doc(GuestTaintDoc, record.conversation as ConversationId);
+    doc.taints = distinctTaints([...doc.taints, ...taints]);
   }, context);
   return { code: 0, out: `${record.folder} is now called ${wanted}\n` };
 }
@@ -694,7 +703,8 @@ export function createScoops(host: Promise<ScoopsHost>, tasks: () => ScoopTasks)
     feed: (id: string, prompt: string, options: FeedOptions, context: Context) =>
       feed(core, id, prompt, options, context),
     stop: (id: string, fromAgent: boolean, context: Context) => stop(core, id, fromAgent, context),
-    rename: (id: string, name: string, context: Context) => rename(core, id, name, context),
+    rename: (id: string, name: string, taints: readonly InheritedTaint[], context: Context) =>
+      rename(core, id, name, taints, context),
     rewound: (coneId: string, fork: Conversation, context: Context) =>
       rewound(core, coneId, fork, context),
     list: (coneId: string | null, context: Context) => list(core, coneId, context),

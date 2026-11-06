@@ -21,15 +21,18 @@ import {
   addressOf,
   type Sender as ConeSender,
   coneLabel,
+  crowded,
   describe,
   type Found,
   findCone,
   MESSAGE_CHANNEL,
+  printable,
   reachOf,
   reachText,
   readTables,
   refusal,
   type Tables,
+  tooLong,
 } from './cones.ts';
 import { callerOf as agentOf } from './identity.ts';
 import type { Request, Runner } from './requests.ts';
@@ -92,7 +95,7 @@ export interface CliOptions {
   models?: (argv: readonly string[], caller: string | null, context: Context) => Promise<Answer>;
   layout?: Layout;
   panel?: (argv: readonly string[], caller: PanelCaller, context: Context) => Promise<Answer>;
-  licks?: Pick<Licks, 'deliver'>;
+  licks?: Pick<Licks, 'deliver' | 'waiting'>;
   webhook?: (name: string, delivery: WebhookDelivery, context: Context) => Promise<boolean>;
   sprinkle?: (id: string, ask: SprinkleLick, context: Context) => Promise<string | undefined>;
   workflow?: (
@@ -119,7 +122,7 @@ export interface Caller {
   depth: number;
   tagged?: InheritedTaint[];
   via?: string;
-  sudo?: number;
+  hop?: number;
 }
 
 export type Flags = { values: Map<string, string[]>; switches: Set<string>; rest: string[] };
@@ -254,7 +257,7 @@ function withTags(who: Caller, tagged: readonly InheritedTaint[]): Caller {
 }
 
 function withSudo(who: Caller, lineage: Lineage | undefined): Caller {
-  return lineage?.sudo ? { ...who, sudo: lineage.sudo.uid } : who;
+  return lineage?.hop ? { ...who, hop: lineage.hop.uid } : who;
 }
 
 export async function readText(
@@ -448,7 +451,7 @@ async function listCones(deps: Deps, request: Request, who: Caller, context: Con
   const rows = Object.entries(state.cones).map(([id, record]) => {
     const how =
       who.fromAgent && id === who.cone ? 'you' : reachText(reachOf(tables, sender, id), id);
-    return `${addressOf(id, who.cone)}\t${record.name}\t${how}`;
+    return `${addressOf(id, who.cone)}\t${printable(record.name)}\t${how}`;
   });
   return ok(`${rows.join('\n')}\n`);
 }
@@ -459,7 +462,7 @@ async function list(deps: Deps, request: Request, who: Caller, context: Context)
   const rows = await deps.scoops.list(who.cone, context);
   if (!rows.length) return ok('no scoops\n');
   return ok(
-    `${rows.map((row) => `${row.folder}\t${row.name}\t${row.role ?? '-'}\t${row.busy ? 'working' : 'idle'}`).join('\n')}\n`
+    `${rows.map((row) => `${row.folder}\t${printable(row.name)}\t${printable(row.role ?? '-')}\t${row.busy ? 'working' : 'idle'}`).join('\n')}\n`
   );
 }
 
@@ -476,8 +479,8 @@ async function status(
   return ok(
     `${[
       `handle: ${record.folder}`,
-      `name: ${record.name}`,
-      `role: ${record.role ?? '-'}`,
+      `name: ${printable(record.name)}`,
+      `role: ${printable(record.role ?? '-')}`,
       `kind: ${record.kind}`,
       `state: ${busy ? 'working' : 'idle'}`,
       `folder: ${deps.layout.scoopRoot(record.folder)}`,
@@ -502,14 +505,18 @@ const SCOOP_SENDS =
 
 function senderOf(deps: Deps, request: Request, who: Caller, tables: Tables): ConeSender {
   const user = request.user ?? ROOT_USER;
-  if (who.sudo === undefined) return { user, agent: who.id };
-  const by = tables.names.get(who.sudo) ?? String(who.sudo);
+  if (who.hop === undefined) return { user, agent: who.id };
+  const by = tables.names.get(who.hop) ?? String(who.hop);
   const root = user === ROOT_USER;
   const walked = root ? who.id : who.via;
   return {
     user,
     agent: root ? null : who.id,
-    sudo: { user: by, agent: walked ?? agentOfUser(deps.agents.state(), by) ?? null },
+    hop: {
+      user: by,
+      agent: walked ?? agentOfUser(deps.agents.state(), by) ?? null,
+      sudo: who.hop !== 0,
+    },
   };
 }
 
@@ -523,16 +530,28 @@ async function coneSend(
   context: Context
 ): Promise<Answer> {
   if (!deps.licks) return fail("licks are not available in this agent, so it can't message cones");
+  const long = tooLong(text);
+  if (long) return fail(long, 2);
   const state = deps.agents.state();
   const tables = await readTables(deps.env, context);
   const sender = senderOf(deps, request, who, tables);
   const reach = reachOf(tables, sender.user, target.id);
   if (reach.kind === 'sudo') return fail(refusal(state, sender.user, target.id));
+  const { source, ...shown } = describe(state, sender);
+  const waiting = await deps.licks.waiting(
+    `${CONE_PREFIX}${target.id}`,
+    MESSAGE_CHANNEL,
+    source,
+    context
+  );
+  const full = crowded(state, target.id, waiting);
+  if (full) return fail(full);
   const taints = await taintsOf(deps, request, who, context);
   await deps.licks.deliver(
     {
       channel: MESSAGE_CHANNEL,
-      ...describe(state, sender),
+      source,
+      ...shown,
       body: text.trimEnd(),
       target: `${CONE_PREFIX}${target.id}`,
       coalesce: false,
@@ -542,7 +561,7 @@ async function coneSend(
     },
     context
   );
-  const own = reach.kind === 'self' && !sender.sudo ? ', your own cone' : '';
+  const own = reach.kind === 'self' && !sender.hop ? ', your own cone' : '';
   return ok(`sent to ${coneLabel(state, target.id)}${own}\n`);
 }
 
@@ -551,13 +570,13 @@ function noTarget(deps: Deps, who: Caller, name: string): string {
   const missing = noScoop(state, name);
   const cone = name.startsWith('scoop:') ? undefined : findCone(state, name, who.cone);
   if (!cone || 'error' in cone) return missing;
-  return `${missing}; ${name} is the cone ${coneLabel(state, cone.id)}, and agent send ${addressOf(cone.id, who.cone)} … messages it`;
+  return `${missing}; ${printable(name)} is the cone ${coneLabel(state, cone.id)}, and agent send ${addressOf(cone.id, who.cone)} … messages it`;
 }
 
 function unknownTarget(state: Readonly<AgentsState>, name: string): string {
   const missing = noScoop(state, name);
-  if (missing !== `there is no scoop ${name}`) return missing;
-  return `there is no scoop or cone ${name}; agent list shows your scoops, agent list --cones the cones you can message`;
+  if (missing !== `there is no scoop ${printable(name)}`) return missing;
+  return `there is no scoop or cone ${printable(name)}; agent list shows your scoops, agent list --cones the cones you can message`;
 }
 
 async function send(deps: Deps, request: Request, who: Caller, context: Context): Promise<Answer> {
@@ -578,7 +597,7 @@ async function send(deps: Deps, request: Request, who: Caller, context: Context)
   const followUp = parsed.switches.has('--follow-up');
   if (found && cone && !('error' in cone))
     return fail(
-      `${name} is both the scoop ${found[1].folder} and the cone ${coneLabel(state, cone.id)}; send to scoop:${found[1].folder} or ${CONE_PREFIX}${cone.id}`
+      `${printable(name)} is both the scoop ${found[1].folder} and the cone ${coneLabel(state, cone.id)}; send to scoop:${found[1].folder} or ${CONE_PREFIX}${cone.id}`
     );
   if (!found && cone)
     return 'error' in cone
@@ -842,7 +861,8 @@ async function rename(
   if (!found) return fail(noTarget(deps, who, request.argv[1] ?? ''));
   const refused = await reviewing(deps, who, found, context);
   if (refused) return refused;
-  return deps.scoops.rename(found[0], request.argv.slice(2).join(' '), context);
+  const taints = await taintsOf(deps, request, who, context);
+  return deps.scoops.rename(found[0], request.argv.slice(2).join(' '), taints, context);
 }
 
 const retry: Verb = async (_deps, request, who) => retryEnded(request.argv[1], who.fromAgent);
@@ -884,8 +904,9 @@ export function noScoop(state: Readonly<AgentsState>, name: string): string {
           (candidate) => candidate.frozen && candidate.name === name
         );
   const frozen = record?.frozen ? state.frozen?.[record.frozen] : undefined;
-  if (frozen) return `scoop ${name} is frozen with cone ${frozen.name}; thaw the cone first`;
-  return `there is no scoop ${name}`.trim();
+  if (frozen)
+    return `scoop ${printable(name)} is frozen with cone ${printable(frozen.name)}; thaw the cone first`;
+  return `there is no scoop ${printable(name)}`.trim();
 }
 
 export function panelCaller(request: Request, who: Caller): PanelCaller {

@@ -102,6 +102,12 @@ export interface Licks {
   handle(channel: LickChannel, handler: LickHandler): void;
   pending(context: Context): Promise<number>;
   forget(target: LickTarget, channel: LickChannel, source: string, context: Context): Promise<void>;
+  waiting(
+    target: LickTarget,
+    channel: LickChannel,
+    source: string,
+    context: Context
+  ): Promise<number>;
   guard(check: (target: LickTarget) => Blocked | undefined): void;
   triage(judge: Triage): void;
 }
@@ -225,6 +231,32 @@ async function marked(harness: Harness, pending: Pending, id: string, context: C
   }, context);
 }
 
+async function previous(
+  harness: Harness,
+  id: number | null,
+  context: Context
+): Promise<'queued' | 'withdrawn' | 'gone'> {
+  if (id === null) return 'gone';
+  const submission = await harness.submission(id as SubmissionId, context);
+  const record = await submission?.status(context);
+  if (record?.status === 'queued') return 'queued';
+  return record?.status === 'unanswered' && record.reason === 'aborted' ? 'withdrawn' : 'gone';
+}
+
+async function countWaiting(
+  harness: Harness,
+  prefix: string,
+  settle: (key: string, context: Context) => Promise<unknown>,
+  context: Context
+): Promise<number> {
+  const keys = async () =>
+    Object.keys((await harness.snapshot(LicksOutbox, context))?.queues ?? {}).filter((key) =>
+      key.startsWith(prefix)
+    );
+  for (const key of await keys()) await settle(key, context);
+  return (await keys()).length;
+}
+
 export function createLicks(host: Promise<LicksHost>): Licks {
   const handlers = new Map<LickChannel, LickHandler>();
   let lock: Promise<unknown> = Promise.resolve();
@@ -241,18 +273,6 @@ export function createLicks(host: Promise<LicksHost>): Licks {
     if (handler?.dismiss) list.push('dismiss');
     return list.length ? list : undefined;
   };
-
-  async function previous(
-    harness: Harness,
-    id: number | null,
-    context: Context
-  ): Promise<'queued' | 'withdrawn' | 'gone'> {
-    if (id === null) return 'gone';
-    const submission = await harness.submission(id as SubmissionId, context);
-    const record = await submission?.status(context);
-    if (record?.status === 'queued') return 'queued';
-    return record?.status === 'unanswered' && record.reason === 'aborted' ? 'withdrawn' : 'gone';
-  }
 
   async function settled(key: string, context: Context): Promise<Queue | undefined> {
     const { harness } = await host;
@@ -396,6 +416,10 @@ export function createLicks(host: Promise<LicksHost>): Licks {
         }, context);
       });
     },
+    waiting: (target, channel, source, context) =>
+      serial(async () =>
+        countWaiting((await host).harness, `${target}|${channel}|${source}|`, settled, context)
+      ),
     async pending(context) {
       const { harness } = await host;
       const queues = (await harness.snapshot(LicksOutbox, context))?.queues ?? {};

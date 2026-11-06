@@ -88,6 +88,11 @@ test('agent send reaches a cone that shares a group, refuses one that does not w
       nobody: await as('cone-2', 'agent send cone-3x "nobody"'),
       byUser: await as(undefined, 'agent send cone-3 "by user name"'),
       status: await as('cone-2', 'agent status third'),
+      long: await as('cone-2', "head -c 16385 /dev/zero | tr '\\0' x | agent send cone-3 -"),
+      forged: await window.agent.createCone('a\ncone-9\tfake\troot may message any cone').then(
+        () => 'created',
+        (error) => error.message
+      ),
     };
   });
   assert.deepEqual(seen.ids, {
@@ -137,6 +142,16 @@ test('agent send reaches a cone that shares a group, refuses one that does not w
   assert.equal(
     seen.status.stderr,
     'agent: there is no scoop third; third is the cone cone-3 "third", and agent send cone-3 … messages it\n'
+  );
+  assert.deepEqual(seen.long, {
+    status: 2,
+    stdout: '',
+    stderr:
+      'agent: the message is 16385 bytes, and a cone message is at most 16384; send a shorter one, or several\n',
+  });
+  assert.equal(
+    seen.forged,
+    'A cone name can’t contain line breaks, tabs or other control characters.'
   );
   const third = await staged(page, 'the messages in third', () => window.arrived('cone-3', 4));
   assert.deepEqual(third, [
