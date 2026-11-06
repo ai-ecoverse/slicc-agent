@@ -20,7 +20,11 @@ import {
 } from '../../../src/index.ts';
 
 const params = new URL(self.location.href).searchParams;
-const faux = fauxProvider();
+const faux = fauxProvider(
+  params.has('tps')
+    ? { tokensPerSecond: Number(params.get('tps')), tokenSize: { min: 1, max: 1 } }
+    : {}
+);
 const models = createModels();
 models.setProvider(faux.provider);
 const script = params

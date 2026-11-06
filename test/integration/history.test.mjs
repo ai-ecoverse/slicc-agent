@@ -172,3 +172,112 @@ test('remote history refuses a malformed cursor and reports the start of a short
   assert.equal(seen.before, null);
   assert.equal(seen.bad, 'EINVAL');
 });
+
+test('a watch opened while an answer streams starts with the answer so far, whole, then sends only the rest', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(() => import('/dist-test/page.js'));
+  const long = Array.from({ length: 80 }, (_, n) => `word${n}`).join(' ');
+  const seen = await staged(
+    page,
+    'a watch opened mid-answer',
+    async (long) => {
+      const owner = await startTracked({
+        worker: () =>
+          new Worker(`/dist-test/agent-worker.js?tps=40&answer=${encodeURIComponent(long)}`, {
+            type: 'module',
+          }),
+      });
+      const connection = await owner.connect();
+      await connection.control.send(
+        { text: 'Talk', whenBusy: 'followUp', requestId: null },
+        BACKGROUND_CONTEXT
+      );
+      const partial = () =>
+        connection.transcript.value?.docs['pi.live']?.generation?.message?.content?.find(
+          (block) => block.type === 'text'
+        )?.text ?? '';
+      await when([changed, every(20)], () => partial().length > 40, 'a partial answer');
+      const before = partial().length;
+      const watched = await remoteControl(connection).watch();
+      const events = [];
+      const iterator = watched.events[Symbol.asyncIterator]();
+      while (!events.some((event) => event.t === 'run' && event.state === 'end'))
+        events.push((await iterator.next()).value);
+      await iterator.return();
+      await owner.release();
+      return { before, events };
+    },
+    long
+  );
+  const texts = seen.events.filter((event) => event.t === 'text');
+  assert.equal(seen.events[0].t, 'text');
+  assert.ok(seen.events[0].delta.length >= seen.before, `${seen.events[0].delta.length}`);
+  assert.ok(long.startsWith(seen.events[0].delta));
+  assert.ok(seen.events[0].delta.length < long.length);
+  assert.deepEqual([...new Set(texts.map((event) => event.id))], [texts[0].id]);
+  assert.equal(texts.map((event) => event.delta).join(''), long);
+});
+
+test('when the view jumps past what the chat holds, the chat fills the gap itself, without older()', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(() => import('/dist-test/page.js'));
+  const seen = await staged(
+    page,
+    'the chat fills a gap',
+    async (turns, answers) => {
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/agent-worker.js?${answers}`, { type: 'module' }),
+      });
+      const connection = await owner.connect();
+      const real = connection.views;
+      const heard = new Set();
+      let frozen = null;
+      real.subscribe(() => {
+        if (!frozen) for (const listener of heard) listener(real.value);
+      });
+      const views = {
+        get value() {
+          return frozen ?? real.value;
+        },
+        subscribe(listener) {
+          heard.add(listener);
+          return () => heard.delete(listener);
+        },
+      };
+      const { agent } = createAgentModel({ ...connection, views });
+      await agent.ready();
+      const cone = agent.active();
+      const texts = () =>
+        agent
+          .messages(cone)
+          .map((message) => message.text ?? message.parts?.find((p) => p.type === 'text')?.text);
+      for (let n = 1; n <= 3; n++) await connection.prompt(`Q${n}`);
+      await when([changed, every(50)], () => texts().at(-1) === 'A3', 'three turns');
+      frozen = real.value;
+      for (let n = 4; n <= turns; n++) await connection.prompt(`Q${n}`);
+      const jumped = real.value[cone];
+      frozen = null;
+      for (const listener of heard) listener(real.value);
+      await when([changed, every(50)], () => texts().length === turns * 2, 'the gap filled');
+      const ids = agent.messages(cone).map((message) => message.id);
+      await owner.release();
+      return {
+        before: jumped.before,
+        window: jumped.entries.length,
+        texts: texts(),
+        unique: new Set(ids).size === ids.length,
+        older: agent.hasOlder(cone),
+      };
+    },
+    TURNS,
+    answers
+  );
+  assert.ok(seen.before > 6, `the window starts after entry ${seen.before}`);
+  assert.ok(seen.window < TURNS * 2);
+  assert.deepEqual(seen.texts, pairs(TURNS));
+  assert.equal(seen.unique, true);
+  assert.equal(seen.older, false);
+  assert.deepEqual(page.errors, []);
+});

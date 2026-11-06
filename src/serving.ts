@@ -194,6 +194,11 @@ export type Root = <R>(
   options: { signal?: AbortSignal }
 ) => Promise<R>;
 
+export function offers(handle: Remote, name: string): boolean {
+  const shape = (handle as { shape?: { members: readonly string[] } }).shape;
+  return shape?.members.includes(name) ?? false;
+}
+
 export function bound<T extends object>(
   handle: Remote,
   root: Root,

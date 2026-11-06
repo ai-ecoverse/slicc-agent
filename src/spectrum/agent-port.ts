@@ -220,7 +220,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   ): void {
     const notes = this.#notices.get(agentId) ?? [];
     notes.push({
-      after: this.#messages.get(agentId)?.at(-1)?.id ?? null,
+      after:
+        this.#messages.get(agentId)?.findLast((message) => /^e\d+$/.test(message.id))?.id ?? null,
       message: { id: `n${crypto.randomUUID()}`, role: 'system', ...shown, createdAt: Date.now() },
     });
     this.#notices.set(agentId, notes);
@@ -255,7 +256,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
   }
 
   #paged(): boolean {
-    return !this.#connection.guest && typeof this.#connection.control.entries === 'function';
+    return !this.#connection.guest && this.#connection.history === true;
   }
 
   #transcript(agentId: string, view: ConversationView): Held {
