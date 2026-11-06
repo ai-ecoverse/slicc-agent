@@ -16,6 +16,7 @@ export const LICK_CHANNELS = [
   'scoop-idle',
   'scoop-wait',
   'sudo-request',
+  'cone-message',
 ] as const;
 
 export type LickChannel = (typeof LICK_CHANNELS)[number];

@@ -38,6 +38,7 @@ export interface LickEvent {
   summary?: string;
   report?: string;
   taints?: readonly InheritedTaint[];
+  followUp?: boolean;
 }
 
 function card(event: LickEvent): Pick<Lick, 'summary' | 'report'> {
@@ -52,6 +53,7 @@ type Pending = {
   items: string[];
   body: string | null;
   taints?: InheritedTaint[];
+  followUp?: boolean;
 };
 
 function tainted(taints: readonly InheritedTaint[]): Pick<Pending, 'taints'> {
@@ -191,6 +193,7 @@ function fresh(event: LickEvent, now: number, listed: LickAction[] | undefined):
     items: [...new Set(event.items ?? [])],
     body: event.body ?? null,
     ...tainted(event.taints ?? []),
+    ...(event.followUp ? { followUp: true } : {}),
   };
 }
 
@@ -278,7 +281,7 @@ export function createLicks(host: Promise<LicksHost>): Licks {
       {
         type: 'input',
         content: formatLick(lick),
-        whenBusy: 'steer',
+        whenBusy: queue.pending.followUp ? 'followUp' : 'steer',
         requestId: `lick:${lick.id}`,
       },
       context

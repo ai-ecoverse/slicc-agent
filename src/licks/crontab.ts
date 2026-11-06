@@ -199,8 +199,8 @@ function clock(at: number): string {
 
 export function cronText(run: CronRun, at: number): string {
   if (!run.missed) return `${run.job} fired at ${clock(at)}`;
-  const more = run.missed > 1 ? `${run.missed} more fires were` : '1 more fire was';
-  return `${run.job} was due at ${clock(at)}; ${more} missed while seven was closed`;
+  const more = run.missed > 1 ? `${run.missed} more runs were` : '1 more run was';
+  return `${run.job} was due at ${clock(at)}; ${more} folded into this one`;
 }
 
 export function cronLick(run: CronRun, target: LickTarget, message: string): LickEvent {

@@ -1,8 +1,14 @@
 #!/bin/bash
 dir=/var/lib/slicc/agent/requests
-if [ -n "${USER:-}" ] && [ -d "$dir/$USER/in" ]; then dir="$dir/$USER"; fi
 as="${0##*/}"
 case "$as" in subagent|memory|gelatiere|freezer|models|panel) ;; *) as=agent ;; esac
+if [ -n "${USER:-}" ] && [ -d "$dir/$USER" ]; then
+  if [ ! -w "$dir/$USER/in" ]; then
+    echo "$as: can't write to $dir/$USER/in: USER=$USER doesn't choose who you are; sudo -u <user> $as … does" >&2
+    exit 1
+  fi
+  dir="$dir/$USER"
+fi
 [ -d "$dir/in" ] && [ -d "$dir/out" ] || mkdir -p "$dir/in" "$dir/out" 2>/dev/null
 who="${SLICC_AGENT:-}"
 if [ -z "$who" ] && [ -n "${SLICC_TAB:-}" ]; then who="tab:$SLICC_TAB"; fi

@@ -146,7 +146,7 @@ test('a ~/.slicc/crontab line moves into the kernel crontab and comes back as on
   assert.equal(missed.title, 'standup');
   assert.match(
     missed.text,
-    /^standup was due at \d{4}-\d\d-\d\d 14:00; 2 more fires were missed while seven was closed$/
+    /^standup was due at \d{4}-\d\d-\d\d 14:00; 2 more runs were folded into this one$/
   );
   assert.equal(missed.count, 3);
   assert.equal(refused.title, 'Invalid ~/.slicc/crontab');

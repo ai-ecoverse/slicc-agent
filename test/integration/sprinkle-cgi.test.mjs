@@ -210,7 +210,7 @@ test('a sprinkle runs its own cgi-bin scripts as its owner: sh and jsh, CGI/1.1 
   assert.deepEqual(seen.outsider, {
     status: 2,
     stderr:
-      "agent: --lick=sprinkle is the agent's own channel; a process may send --lick=cron or --lick=webhook\n",
+      "agent: --lick=sprinkle is the agent's own channel; a process may send --lick=cron or --lick=webhook; to message a cone, leave out --lick: agent send <cone> …\n",
   });
   assert.match(seen.log, /\] add: agent 0 \n/);
   assert.match(seen.log, /\] fail: broken\n.*\] fail: exited 3\n/s);
