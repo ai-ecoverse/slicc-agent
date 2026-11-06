@@ -4,6 +4,7 @@ import { base64 } from './images/fit.ts';
 
 export const KEEP = 48 * 1024;
 export const THUMB_EDGE = 256;
+export const THUMB_WAIT_MS = 2000;
 
 export interface Picture {
   data: string;
@@ -61,7 +62,11 @@ export interface Slimmer {
   dispose(): void;
 }
 
-export function slimmer(make: Thumbnail, ready: () => void): Slimmer {
+export function slimmer(
+  make: Thumbnail,
+  ready: () => void,
+  waitMs: number = THUMB_WAIT_MS
+): Slimmer {
   const made = new Map<string, Picture | null>();
   const making = new Map<string, Promise<unknown>>();
   const entries = new Set<number>();
@@ -134,8 +139,15 @@ export function slimmer(make: Thumbnail, ready: () => void): Slimmer {
     },
     async entries(records) {
       const first = records.map(entry);
-      if (!making.size) return first;
-      await Promise.all(making.values());
+      const ids = new Set(records.map((record) => `${record.id}:`));
+      const waiting = [...making].filter(([key]) => ids.has(key.slice(0, key.indexOf(':') + 1)));
+      if (!waiting.length) return first;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise((resolve) => {
+        timer = setTimeout(resolve, waitMs);
+      });
+      await Promise.race([Promise.all(waiting.map(([, pending]) => pending)), late]);
+      clearTimeout(timer);
       return records.map(entry);
     },
     shown: (entry) => entries.has(entry),

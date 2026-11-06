@@ -281,3 +281,137 @@ test('when the view jumps past what the chat holds, the chat fills the gap itsel
   assert.equal(seen.older, false);
   assert.deepEqual(page.errors, []);
 });
+
+test('a view-only seat gets the full image of an entry only from a view or its own page of the current conversation', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(() => import('/dist-test/page.js'));
+  const seen = await staged(
+    page,
+    'view-only images',
+    async (turns, answers) => {
+      const canvas = new OffscreenCanvas(256, 256);
+      const draw = canvas.getContext('2d');
+      const pixels = draw.createImageData(256, 256);
+      let seed = 7;
+      for (let at = 0; at < pixels.data.length; at++) {
+        seed ^= seed << 13;
+        seed ^= seed >>> 17;
+        seed ^= seed << 5;
+        pixels.data[at] = at % 4 === 3 ? 255 : seed & 255;
+      }
+      draw.putImageData(pixels, 0, 0);
+      const blob = await canvas.convertToBlob({ type: 'image/png' });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let text = '';
+      for (const byte of bytes) text += String.fromCharCode(byte);
+      const png = btoa(text);
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/agent-worker.js?${answers}`, { type: 'module' }),
+      });
+      const connection = await owner.connect();
+      const viewer = await owner.connect({ readOnly: true });
+      const other = await owner.connect({ readOnly: true });
+      const ask = async (text, attach) => {
+        const sent = await connection.control.send(
+          {
+            text,
+            whenBusy: 'followUp',
+            requestId: null,
+            ...(attach
+              ? {
+                  attachments: [
+                    { name: 'noise.png', mimeType: 'image/png', kind: 'image', data: png },
+                  ],
+                }
+              : {}),
+          },
+          BACKGROUND_CONTEXT
+        );
+        await connection.control.wait(sent.submissionId, BACKGROUND_CONTEXT);
+      };
+      const newest = async (kind) =>
+        (
+          await connection.control.entries({ agentId: 'cone', limit: 5 }, BACKGROUND_CONTEXT)
+        ).entries.find((entry) => entry.kind === kind);
+      const refOf = (entry) => ({
+        entry: entry.id,
+        message: 0,
+        part: entry.model[0].content.findIndex((block) => block.type === 'image'),
+      });
+      await ask('Q1', true);
+      const first = refOf(await newest('pi.user'));
+      const conversation = Number(connection.views.value.cone.conversation.id);
+      for (let n = 2; n < turns; n++) await ask(`Q${n}`);
+      await ask(`Q${turns}`, true);
+      const last = refOf(await newest('pi.user'));
+      const answer = await newest('pi.assistant');
+      const full = async (seat, ref) => (await seat.control.image(ref, BACKGROUND_CONTEXT)).data;
+      const read = async (seat, ref, at = conversation) =>
+        (
+          await seat.control.entries(
+            {
+              agentId: 'cone',
+              conversation: at,
+              maxEntryId: ref.entry,
+              order: 'descending',
+              limit: 1,
+            },
+            BACKGROUND_CONTEXT
+          )
+        ).entries.map((entry) => entry.id);
+      await when(
+        [changed, every(50)],
+        () => !viewer.views.value.cone.entries.some((item) => item.id === first.entry),
+        'the first image leaves the window'
+      );
+      const out = {
+        png,
+        first: first.entry,
+        last: last.entry,
+        unpaged: await full(viewer, first),
+        inView: await full(viewer, last),
+        paged: await read(viewer, first),
+      };
+      out.afterPage = await full(viewer, first);
+      out.otherSeat = await full(other, first);
+      out.pagedLast = await read(viewer, last);
+      const rewound = await connection.control.rewindAgent(
+        'cone',
+        `e${answer.id}`,
+        BACKGROUND_CONTEXT
+      );
+      out.rewound = rewound.done;
+      await when(
+        [changed, every(50)],
+        () => Number(viewer.views.value.cone.conversation.id) !== conversation,
+        'the fork'
+      );
+      const fork = Number(viewer.views.value.cone.conversation.id);
+      out.leftLast = await full(viewer, last);
+      out.staleFirst = await full(viewer, first);
+      out.staleRead = await read(viewer, first);
+      out.forkLast = await read(viewer, last, fork);
+      out.forkFirst = await read(viewer, first, fork);
+      out.again = await full(viewer, first);
+      await owner.release();
+      return out;
+    },
+    TURNS,
+    answers
+  );
+  assert.ok(seen.png.length > 48 * 1024, `${seen.png.length}`);
+  assert.equal(seen.unpaged, null);
+  assert.equal(seen.inView, seen.png);
+  assert.deepEqual(seen.paged, [seen.first]);
+  assert.equal(seen.afterPage, seen.png);
+  assert.equal(seen.otherSeat, null);
+  assert.deepEqual(seen.pagedLast, [seen.last]);
+  assert.equal(seen.rewound, true);
+  assert.equal(seen.leftLast, null);
+  assert.equal(seen.staleFirst, null);
+  assert.deepEqual(seen.staleRead, []);
+  assert.notDeepEqual(seen.forkLast, [seen.last]);
+  assert.deepEqual(seen.forkFirst, [seen.first]);
+  assert.equal(seen.again, seen.png);
+});

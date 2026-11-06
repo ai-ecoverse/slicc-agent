@@ -263,13 +263,17 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const conversation = Number(view.conversation.id);
     const known = this.#paging.get(agentId);
     if (known?.conversation === conversation) return known;
-    const kept = new Kept(async (query, limit) => {
-      const page = await this.#connection.control.entries(
-        { ...query, agentId, conversation, limit },
-        BACKGROUND_CONTEXT
-      );
-      return page.conversation === conversation ? page : { entries: [], more: false };
-    }, OLDER_PAGE);
+    const kept = new Kept(
+      async (query, limit) => {
+        const page = await this.#connection.control.entries(
+          { ...query, agentId, conversation, limit },
+          BACKGROUND_CONTEXT
+        );
+        return page.conversation === conversation ? page : { entries: [], more: false };
+      },
+      OLDER_PAGE,
+      OLDER_PAGE * OLDER_PAGES
+    );
     const held = { conversation, kept, filling: false, failed: false };
     this.#paging.set(agentId, held);
     return held;

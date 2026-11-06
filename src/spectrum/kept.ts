@@ -14,11 +14,13 @@ export type KeptLoader = (
 interface Gap {
   after: number;
   upTo: number;
+  left: number;
 }
 
 export class Kept {
   readonly #load: KeptLoader;
   readonly #size: number;
+  readonly #cap: number;
   #entries: EntryRecord[] = [];
   readonly #ids = new Set<number>();
   #start = false;
@@ -26,9 +28,10 @@ export class Kept {
   #earlier: Promise<void> | undefined;
   #filling: Promise<void> | undefined;
 
-  constructor(load: KeptLoader, size: number) {
+  constructor(load: KeptLoader, size: number, cap: number = Number.POSITIVE_INFINITY) {
     this.#load = load;
     this.#size = size;
+    this.#cap = cap;
   }
 
   get entries(): readonly EntryRecord[] {
@@ -62,7 +65,7 @@ export class Kept {
     const first = view.entries[0]?.id;
     if (view.before === undefined) this.#start = true;
     else if (newest !== undefined && first !== undefined && view.before > newest)
-      this.#gaps.push({ after: Number(newest), upTo: Number(first) });
+      this.#gaps.push({ after: Number(newest), upTo: Number(first), left: this.#cap });
     this.#add(view.entries);
     return this.#entries;
   }
@@ -84,18 +87,30 @@ export class Kept {
     return this.#earlier;
   }
 
+  #abandon(gap: Gap): void {
+    this.#entries = this.#entries.filter((entry) => {
+      const keep = entry.id > gap.after;
+      if (!keep) this.#ids.delete(Number(entry.id));
+      return keep;
+    });
+    this.#gaps = [];
+    this.#start = false;
+  }
+
   fillGap(): Promise<void> {
-    const gap = this.#gaps[0];
+    const gap = this.#gaps.at(-1);
     if (!gap) return Promise.resolve();
     this.#filling ??= (async () => {
       const page = await this.#load(
-        { minEntryId: gap.after + 1, maxEntryId: gap.upTo - 1, order: 'ascending' },
-        this.#size
+        { minEntryId: gap.after + 1, maxEntryId: gap.upTo - 1, order: 'descending' },
+        Math.min(this.#size, gap.left)
       );
       this.#add(page.entries);
-      const last = page.entries.at(-1);
-      if (!page.more || !last) this.#gaps.shift();
-      else gap.after = Number(last.id);
+      const oldest = page.entries.at(-1);
+      gap.left -= page.entries.length;
+      if (!page.more || !oldest) this.#gaps.pop();
+      else if (gap.left <= 0) this.#abandon(gap);
+      else gap.upTo = Number(oldest.id);
     })().finally(() => {
       this.#filling = undefined;
     });
