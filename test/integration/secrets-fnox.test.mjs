@@ -114,7 +114,10 @@ test('fnox secrets: a sealed secret is in the prompt with its placeholder and wh
   const system = systemOf(seen.requests);
   assert.ok(system.includes(`- GH_TOKEN = ${GH}: api.github.com, header authorization`), system);
   assert.ok(system.includes('When a secret you need is missing'), system);
-  assert.ok(system.includes('Add `--reveal` only when a tool needs the plaintext'), system);
+  assert.ok(
+    system.includes('Add `--reveal` to `sealed ask` only when a tool needs the plaintext'),
+    system
+  );
   assert.ok(system.includes(`- SHELLY = ${SHELLY}: in every bash`), system);
   assert.ok(system.includes('- LOCAL = $LOCAL: not sealed'), system);
   assert.ok(
@@ -209,5 +212,6 @@ test('fnox secrets: an empty config with no sealed secrets shows no secrets', as
   assert.ok(system.includes('No secrets are configured'));
   assert.ok(system.includes('`fnox set NAME --ask`'), system);
   assert.ok(system.includes('`sealed ask NAME`'), system);
+  assert.ok(system.includes('use it only for a missing secret'), system);
   assert.equal(seen.listed, 'The user listed secrets: none.');
 });
