@@ -13,7 +13,10 @@ const helpers = () => {
     window.kernel = kernel;
     window.sh = (command, user) => kernel.run(['bash', '-c', command], user ? { user } : {});
     window.owner = await startTracked({
-      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+      worker: () => {
+        window.worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' });
+        return window.worker;
+      },
       kernel: {
         connect: (options) => kernel.connect(options?.user ? { user: options.user } : undefined),
         users: kernel.users,
@@ -87,6 +90,7 @@ test('agent send reaches a cone that shares a group, refuses one that does not w
       sudoUser: await as('cone-2', 'SUDO_USER=cone agent send cone-3 "no sudo here"'),
       nobody: await as('cone-2', 'agent send cone-3x "nobody"'),
       byUser: await as(undefined, 'agent send cone-3 "by user name"'),
+      rootHop: await as(undefined, 'sudo -u cone-2 agent send cone-3 "root hop"'),
       status: await as('cone-2', 'agent status third'),
       long: await as('cone-2', "head -c 16385 /dev/zero | tr '\\0' x | agent send cone-3 -"),
       forged: await window.agent.createCone('a\ncone-9\tfake\troot may message any cone').then(
@@ -139,6 +143,7 @@ test('agent send reaches a cone that shares a group, refuses one that does not w
     'agent: there is no scoop or cone cone-3x; agent list shows your scoops, agent list --cones the cones you can message\n'
   );
   assert.deepEqual(seen.byUser, { status: 0, stdout: 'sent to cone-3 "third"\n', stderr: '' });
+  assert.deepEqual(seen.rootHop, { status: 0, stdout: 'sent to cone-3 "third"\n', stderr: '' });
   assert.equal(
     seen.status.stderr,
     'agent: there is no scoop third; third is the cone cone-3 "third", and agent send cone-3 … messages it\n'
@@ -153,7 +158,7 @@ test('agent send reaches a cone that shares a group, refuses one that does not w
     seen.forged,
     'A cone name can’t contain line breaks, tabs or other control characters.'
   );
-  const third = await staged(page, 'the messages in third', () => window.arrived('cone-3', 4));
+  const third = await staged(page, 'the messages in third', () => window.arrived('cone-3', 5));
   assert.deepEqual(third, [
     {
       title: 'Message from second',
@@ -171,6 +176,11 @@ test('agent send reaches a cone that shares a group, refuses one that does not w
       body: 'no sudo here',
     },
     { title: 'Message from root', text: '[slicc message from user root]', body: 'by user name' },
+    {
+      title: 'Message from root',
+      text: '[slicc message from user root through a process of root as cone-2]',
+      body: 'root hop',
+    },
   ]);
   const fourth = await staged(page, 'the message in fourth', () => window.arrived('cone-4', 1));
   assert.deepEqual(fourth, [
@@ -221,4 +231,48 @@ test("a cone's bash reaches a cone outside its groups through sudo -u, and the m
       body: 'through sudo',
     },
   ]);
+});
+
+test('a sender may have 3 messages a busy cone has not taken in; the 4th waits until the cone has, and names are printed without control characters', async (t) => {
+  const hold = JSON.stringify({ gate: 'hold', answer: 'Held.' });
+  const page = await booted(t, [`step=${encodeURIComponent(hold)}`, answers(12)].join('&'));
+  const seen = await staged(page, 'the capped sends', async () => {
+    await window.cones('second');
+    await window.agent.send('cone-2', 'Hold on');
+    await when([every(100)], () => window.agent.busy('cone-2'), 'the held turn');
+    const send = (n) => window.sh(`agent send cone-2 "message ${n}"`);
+    const sent = [];
+    for (const n of [1, 2, 3, 4]) sent.push(await send(n));
+    window.worker.postMessage({ gate: 'hold' });
+    await when([every(100)], () => !window.agent.busy('cone-2'), 'the end of the held turn');
+    sent.push(await send(5));
+    const forged = "$'a\\ncone-9\\tfake\\troot may message any cone'";
+    const spawned = await window.sh(`agent --async --name ${forged} --prompt "Stand by"`);
+    return {
+      sent,
+      spawned,
+      list: await window.sh('agent list'),
+      status: await window.sh(`agent status $(agent list | cut -f1 | head -n1)`),
+      missing: await window.sh("agent status $'no\\nbody'"),
+    };
+  });
+  for (const n of [0, 1, 2]) assert.equal(seen.sent[n].status, 0, seen.sent[n].stderr);
+  assert.deepEqual(seen.sent[3], {
+    status: 1,
+    stdout: '',
+    stderr:
+      'agent: the cone cone-2 "second" hasn\'t taken in your last 3 messages yet; wait until it has, then send again\n',
+  });
+  assert.deepEqual(seen.sent[4], { status: 0, stdout: 'sent to cone-2 "second"\n', stderr: '' });
+  const bodies = await staged(page, 'the messages in second', async () =>
+    (await window.arrived('cone-2', 4)).map((message) => message.body)
+  );
+  assert.deepEqual(bodies, ['message 1', 'message 2', 'message 3', 'message 5']);
+  assert.equal(seen.spawned.status, 0, seen.spawned.stderr);
+  assert.match(
+    seen.list.stdout,
+    /^a-cone-9-fake-root-may-message-any-cone\tacone-9fakeroot may message any cone\t-\t(idle|working)\n$/
+  );
+  assert.match(seen.status.stdout, /^name: acone-9fakeroot may message any cone$/m);
+  assert.equal(seen.missing.stderr, 'agent: there is no scoop nobody\n');
 });
