@@ -4,6 +4,7 @@ import { base64 } from './images/fit.ts';
 
 export const KEEP = 48 * 1024;
 export const THUMB_EDGE = 256;
+export const THUMB_WAIT_MS = 2000;
 
 export interface Picture {
   data: string;
@@ -56,25 +57,33 @@ export const thumbnail: Thumbnail = async (image) => {
 
 export interface Slimmer {
   slim(view: ConversationView): ConversationView;
+  entries(records: readonly EntryRecord[]): Promise<EntryRecord[]>;
   shown(entry: number): boolean;
   dispose(): void;
 }
 
-export function slimmer(make: Thumbnail, ready: () => void): Slimmer {
+export function slimmer(
+  make: Thumbnail,
+  ready: () => void,
+  waitMs: number = THUMB_WAIT_MS
+): Slimmer {
   const made = new Map<string, Picture | null>();
+  const making = new Map<string, Promise<unknown>>();
   const entries = new Set<number>();
   let closed = false;
   const thumb = (key: string, part: Part): Part => {
     const full = { mimeType: String(part.mimeType), size: decodedSize(part.data as string) };
     if (!made.has(key)) {
       made.set(key, null);
-      void make({ data: part.data as string, mimeType: full.mimeType })
+      const pending = make({ data: part.data as string, mimeType: full.mimeType })
         .catch(() => undefined)
         .then((picture) => {
+          making.delete(key);
           if (!picture || closed) return;
           made.set(key, picture);
           ready();
         });
+      making.set(key, pending);
     }
     const picture = made.get(key);
     return picture
@@ -127,6 +136,19 @@ export function slimmer(make: Thumbnail, ready: () => void): Slimmer {
         entries,
         docs: slimmed === queue ? view.docs : { ...view.docs, 'pi.inbox': slimmed as never },
       };
+    },
+    async entries(records) {
+      const first = records.map(entry);
+      const ids = new Set(records.map((record) => `${record.id}:`));
+      const waiting = [...making].filter(([key]) => ids.has(key.slice(0, key.indexOf(':') + 1)));
+      if (!waiting.length) return first;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise((resolve) => {
+        timer = setTimeout(resolve, waitMs);
+      });
+      await Promise.race([Promise.all(waiting.map(([, pending]) => pending)), late]);
+      clearTimeout(timer);
+      return records.map(entry);
     },
     shown: (entry) => entries.has(entry),
     dispose() {

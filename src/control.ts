@@ -22,6 +22,7 @@ import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import type { Monitor } from './monitor/index.ts';
+import { type EntriesPage, type EntriesRequest, entriesPage } from './remote/history.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
 import { SECRETS_COMMAND, secretsEntry } from './secrets/extension.ts';
 import type { SecretListing } from './secrets/names.ts';
@@ -376,6 +377,11 @@ async function contentOf(
   return scrubItems(await userParts(text, request.attachments, saver));
 }
 
+const pager =
+  (conversationFor: (agentId: string | null, context: Context) => Promise<Conversation>) =>
+  async (request: EntriesRequest, context: Context): Promise<EntriesPage> =>
+    entriesPage(await conversationFor(request.agentId, context), request, context);
+
 export function createAgentControl(
   harness: Harness,
   target: Conversation | Cones,
@@ -575,6 +581,7 @@ export function createAgentControl(
     agentCommands: async (agentId) => skills?.commandsFor(agentId) ?? [],
     toolLabel: async (agentId, callIds, context) =>
       labels ? labels.label(agentId, callIds, context) : null,
+    entries: pager(conversationFor),
     decide: noApprovals,
   };
 }

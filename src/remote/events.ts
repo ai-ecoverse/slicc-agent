@@ -82,6 +82,7 @@ function reasonOf(stopReason: string | undefined): EndReason {
 
 export class Mapper {
   readonly #thinking: boolean;
+  readonly #byEntry: boolean;
   readonly #emitted = new Map<string, number>();
   readonly #seen = new Set<number>();
   readonly #compactions = new Set<string>();
@@ -101,8 +102,9 @@ export class Mapper {
   endedReason: EndReason = 'stop';
   endedError: string | undefined;
 
-  constructor(thinking: boolean) {
+  constructor(thinking: boolean, byEntry = false) {
     this.#thinking = thinking;
+    this.#byEntry = byEntry;
   }
 
   #key(message: ModelMessage | undefined, entry?: number): string {
@@ -135,7 +137,9 @@ export class Mapper {
   }
 
   #assistant(message: ModelMessage, entry: EntryRecord): RemoteEvent[] {
-    const key = this.#key(message, entry.id);
+    const key = this.#byEntry
+      ? `${keyOf(message.timestamp, 0)}~e${entry.id}`
+      : this.#key(message, entry.id);
     const blocks = Array.isArray(message.content) ? message.content : [];
     const out = blocks.flatMap((block, at): RemoteEvent[] => {
       const id = `${key}.${at}`;
@@ -354,12 +358,12 @@ export function replayOf(
   entries: readonly EntryRecord[],
   partial: ModelMessage | undefined,
   thinking: boolean
-): RemoteEvent[] {
+): { events: RemoteEvent[]; partial: RemoteEvent[] } {
   const mapper = new Mapper(thinking);
-  const out: RemoteEvent[] = [];
-  for (const entry of entries) out.push(...mapper.entry(entry));
-  out.push(...mapper.partial(partial));
-  return out;
+  const events: RemoteEvent[] = [];
+  for (const entry of entries) events.push(...mapper.entry(entry));
+  const tail = mapper.partial(partial);
+  return { events: [...events, ...tail], partial: tail };
 }
 
 export function idOf(event: RemoteEvent): string | undefined {

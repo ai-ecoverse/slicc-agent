@@ -14,6 +14,7 @@ import type { ImportProgress, ImportResult } from './freezer/v6.ts';
 import type { GuestOpened, Proposed, ProposeRequest } from './guests/index.ts';
 import type { GuestDraft, GuestGates, GuestSeat } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
+import type { EntriesPage, EntriesRequest } from './remote/history.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
@@ -116,6 +117,7 @@ export interface AgentControl {
   image(ref: ImageRef, context: Context): Promise<StoredImage>;
   agentCommands(agentId: string, context: Context): Promise<Command[]>;
   toolLabel(agentId: string, callIds: string[], context: Context): Promise<string | null>;
+  entries(request: EntriesRequest, context: Context): Promise<EntriesPage>;
   guestOpen(draft: GuestDraft, context: Context): Promise<GuestOpened>;
   guestRevoke(id: string, context: Context): Promise<{ revoked: boolean }>;
   guestAlwaysForget(
@@ -317,6 +319,7 @@ export const CONTROL_METHODS = keys<AgentControl>({
   image: true,
   agentCommands: true,
   toolLabel: true,
+  entries: true,
   guestOpen: true,
   guestRevoke: true,
   guestAlwaysForget: true,
@@ -339,6 +342,7 @@ export const CONTROL_READS: readonly (keyof AgentControl & string)[] = [
   'monitorClose',
   'image',
   'toolLabel',
+  'entries',
 ];
 
 export const AgentControl: RemoteContract = contract('slicc.agent.control', {
@@ -409,12 +413,18 @@ export const AgentTranscript: RemoteContract = contract('slicc.agent.transcript'
 export const REMOTE_METHODS = keys<AgentRemote>({
   prompt: true,
   watch: true,
+  history: true,
   next: true,
   close: true,
   abort: true,
 });
 
-export const REMOTE_READS: readonly (keyof AgentRemote & string)[] = ['watch', 'next', 'close'];
+export const REMOTE_READS: readonly (keyof AgentRemote & string)[] = [
+  'watch',
+  'history',
+  'next',
+  'close',
+];
 
 export interface GuestShown {
   id: string;

@@ -80,7 +80,7 @@ import {
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import { slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
+import { type Slimmer, slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
 import { type LabelsRuntime, visibleLabels, watchLabel } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
@@ -171,20 +171,62 @@ const idleVault = replicatedState<VaultState>({
   held: 0,
 });
 
-function gatedControls(
+export function viewedImage(
   control: AgentControl,
-  shown: (entry: number) => boolean,
+  views: () => readonly ConversationView[],
+  paged: Map<number, { agentId: string | null; conversation: number }>
+): AgentControl['image'] {
+  const none = { data: null, mimeType: null };
+  const current = async (entry: number, using: Context) => {
+    const grant = paged.get(entry);
+    if (!grant) return false;
+    const page = await control.entries(
+      { ...grant, minEntryId: entry, maxEntryId: entry, limit: 1 },
+      using
+    );
+    if (page.conversation !== grant.conversation) paged.delete(entry);
+    return page.entries.some((item) => Number(item.id) === entry);
+  };
+  return async (ref, using) => {
+    const shown = views().some((view) => view.entries.some((item) => item.id === ref.entry));
+    const allowed = shown || (await current(ref.entry, using).catch(() => false));
+    return allowed ? control.image(ref, using) : none;
+  };
+}
+
+export function gatedControls(
+  control: AgentControl,
+  slims: Pick<Slimmer, 'entries' | 'shown'>,
   views: () => readonly ConversationView[],
   labels: ReplicatedState<Record<string, string>>
 ) {
-  const visible = (entry: number) =>
-    views().some((view) => view.entries.some((item) => item.id === entry));
-  const gated =
-    (allowed: (entry: number) => boolean): AgentControl['image'] =>
-    async (ref, using) =>
-      allowed(ref.entry) ? control.image(ref, using) : { data: null, mimeType: null };
-  const trusted: AgentControl = { ...control, image: gated(shown) };
-  const viewed: AgentControl = { ...control, image: gated(visible), toolLabel: watchLabel(labels) };
+  const slimmed: AgentControl['entries'] = async (request, using) => {
+    const page = await control.entries(request, using);
+    return { ...page, entries: await slims.entries(page.entries) };
+  };
+  const trusted: AgentControl = {
+    ...control,
+    image: async (ref, using) =>
+      slims.shown(ref.entry) ? control.image(ref, using) : { data: null, mimeType: null },
+    entries: slimmed,
+  };
+  const viewed = (): AgentControl => {
+    const paged = new Map<number, { agentId: string | null; conversation: number }>();
+    return {
+      ...control,
+      image: viewedImage(control, views, paged),
+      toolLabel: watchLabel(labels),
+      entries: async (request, using) => {
+        const page = await slimmed(request, using);
+        for (const entry of page.entries)
+          paged.set(Number(entry.id), {
+            agentId: request.agentId,
+            conversation: page.conversation,
+          });
+        return page;
+      },
+    };
+  };
   return { trusted, viewed };
 }
 
@@ -380,7 +422,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     ...(options.licks ? { licks: options.licks.licks } : {}),
   });
   const settings = options.settings ?? noSettings;
-  const { trusted, viewed } = gatedControls(control, slims.shown, shownViews, labels.state);
+  const { trusted, viewed } = gatedControls(control, slims, shownViews, labels.state);
   const host = serveAgent({
     trusted,
     viewed,
@@ -458,7 +500,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
 
 interface Served {
   trusted: AgentControl;
-  viewed: AgentControl;
+  viewed: () => AgentControl;
   transcript: Record<keyof AgentTranscript, ReplicatedState<unknown>>;
   viewMonitor: ReplicatedState<unknown>;
   sudo?: AgentSudo;
@@ -512,7 +554,7 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
 }
 
 const seated = (serving: Served, principal: AgentPrincipal): AgentControl => ({
-  ...(principal.seat === 'view' ? serving.viewed : serving.trusted),
+  ...(principal.seat === 'view' ? serving.viewed() : serving.trusted),
   decide: serving.decide({
     by: principal.seat === 'owner' ? 'owner' : 'follower',
     ...('device' in principal && principal.device ? { device: principal.device } : {}),
