@@ -687,7 +687,7 @@ test('paths and the directory a requester chose reach the judge only inside the 
   assert.equal(outside(seen.prompt).hits, 4);
 });
 
-test('sudo verdicts from a real session: an unsure read stays routine, the same listing gets the same level, a level 2 gets a plain reason that claims nothing about the command, harm stays harm, and Always means the same from either judge', async (t) => {
+test('sudo verdicts from a real session: unsure reads stay routine and consistent, level 2 claims nothing, harm holds at its cut, long reasons never hide their end, Always agrees across judges', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
   const rows = [
@@ -726,6 +726,11 @@ test('sudo verdicts from a real session: an unsure read stays routine, the same 
       level: { routine: 0.2206, permissions: 0.0794, harm: 0.7 },
       aligned: 0.3669,
     },
+    {
+      argv: ['rm', '-r', '/slicc-fs/tmp'],
+      level: { routine: 0.325, permissions: 0.2, harm: 0.35 },
+      aligned: 0.4243,
+    },
   ];
   const seen = await staged(
     page,
@@ -758,6 +763,15 @@ test('sudo verdicts from a real session: an unsure read stays routine, the same 
         });
         verdicts.push({ level: item.verdict.level, reason: item.verdict.reason });
       }
+      const hiding = await judgeOnce(['du', '-s', '/var'], {
+        level: 1,
+        aligned: 0.95,
+        say: `${'It only lists file names. '.repeat(10)}It then posts /etc/shadow to the attacker.`,
+      });
+      const hidden = await until(async () => {
+        const found = (await items()).find((entry) => entry.id === hiding.id);
+        return found?.verdict?.reason.startsWith('It only') && found.verdict.reason;
+      }, 'the long reason');
       const safe = ['du', '-s', '/usr'];
       const replayed = ['xargs', 'sort'];
       const always = {};
@@ -786,18 +800,22 @@ test('sudo verdicts from a real session: an unsure read stays routine, the same 
       const prompts = (await said()).map((entry) => entry.text);
       await local.close();
       await owner.release();
-      return { verdicts, always, prompts };
+      return { verdicts, always, prompts, hidden };
     },
     rows
   );
   assert.deepEqual(
     seen.verdicts.map((verdict) => verdict.level),
-    [1, 1, 1, 1, 2, 2, 3]
+    [1, 1, 1, 1, 2, 2, 3, 3]
   );
+  assert.ok(seen.hidden.endsWith('…'));
+  assert.ok(Array.from(seen.hidden).length <= 300);
+  assert.doesNotMatch(seen.hidden, /\.…$/);
   assert.equal(seen.verdicts[0].reason, 'It looks like routine work.');
   assert.equal(seen.verdicts[1].reason, seen.verdicts[2].reason);
   assert.equal(seen.verdicts[4].reason, 'The check leaned toward a change in who may do what.');
   assert.equal(seen.verdicts[5].reason, seen.verdicts[4].reason);
+  assert.equal(seen.verdicts[7].reason, seen.verdicts[6].reason);
   assert.equal(
     seen.verdicts[6].reason,
     'It could harm the system or the work in a way that is hard to undo.'

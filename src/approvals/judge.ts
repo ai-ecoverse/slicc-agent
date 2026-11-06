@@ -21,6 +21,7 @@ export const JUDGE_MODEL: ModelRef = { provider: 'adobe', modelId: 'clef' };
 export const JUDGE_ALWAYS = 0.8;
 export const JUDGE_CUT = 0.5;
 export const JUDGE_HARM = 0.4;
+export const JUDGE_EPSILON = 1e-9;
 export const JUDGE_TIMEOUT = 15_000;
 export const ASK_MIN_MS = 30_000;
 export const UNTRUSTED_LIMIT = 4000;
@@ -188,8 +189,8 @@ export function levelOf(probabilities: Record<string, number>): ApprovalLevel | 
   if (routine === undefined || permissions === undefined || harm === undefined) return undefined;
   const total = routine + permissions + harm;
   if (total <= 0) return undefined;
-  if (harm / total >= JUDGE_HARM) return 3;
-  return (permissions + harm) / total >= JUDGE_CUT ? 2 : 1;
+  if (harm >= (JUDGE_HARM - JUDGE_EPSILON) * total) return 3;
+  return permissions + harm >= (JUDGE_CUT - JUDGE_EPSILON) * total ? 2 : 1;
 }
 
 export function fallbackReason(level: ApprovalLevel): string {
@@ -223,12 +224,12 @@ export function verdictOf(result: ClassifierResult, model: string): Judgement {
 const CONTROL = /[\p{Cc}\u2028\u2029]+/gu;
 
 function clipped(text: string): string {
-  if (text.length <= VERDICT_REASON_LENGTH) return text;
-  const head = text.slice(0, VERDICT_REASON_LENGTH + 1);
-  const sentence = Math.max(...['. ', '! ', '? '].map((end) => head.lastIndexOf(end)));
-  if (sentence >= VERDICT_REASON_LENGTH / 2) return head.slice(0, sentence + 1);
-  const space = head.lastIndexOf(' ', VERDICT_REASON_LENGTH - 1);
-  return `${head.slice(0, space > 0 ? space : VERDICT_REASON_LENGTH - 1)}…`;
+  const chars = Array.from(text);
+  if (chars.length <= VERDICT_REASON_LENGTH) return text;
+  const head = chars.slice(0, VERDICT_REASON_LENGTH - 1);
+  const space = chars[head.length] === ' ' ? head.length : head.lastIndexOf(' ');
+  const kept = head.slice(0, space > 0 ? space : head.length);
+  return `${kept.join('').trimEnd()}…`;
 }
 
 export async function cleanVerdictReason(text: string): Promise<string | undefined> {
