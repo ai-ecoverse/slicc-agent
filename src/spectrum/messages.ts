@@ -24,7 +24,7 @@ import {
   guestText,
   REVIEWED_KIND,
 } from '../guests/attribution.ts';
-import { parseLick } from '../licks/lick.ts';
+import { type Lick, parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import { mcpLabel } from '../mcp/label.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
@@ -375,6 +375,10 @@ export function origins(entries: readonly EntryRecord[]): Map<number, From> {
 
 type NotifyLick = LickMessage & { summary?: string; report?: string };
 
+export function shownChannel(channel: Lick['channel']): LickMessage['channel'] {
+  return channel === 'cone-message' ? 'bash' : channel;
+}
+
 function lickMessage(
   id: string,
   entry: EntryRecord,
@@ -386,7 +390,7 @@ function lickMessage(
   return {
     id,
     role: 'lick',
-    channel: lick.channel,
+    channel: shownChannel(lick.channel),
     title: lick.title,
     text: lick.text,
     createdAt: lick.at,

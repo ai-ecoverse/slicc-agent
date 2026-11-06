@@ -7,6 +7,7 @@ export interface Lineage {
   spawned: boolean;
   argv: readonly string[];
   uid?: number;
+  hop?: { pid: number; uid: number };
   tags: string[];
   recent: string[];
 }
@@ -33,6 +34,16 @@ function indexed(rows: readonly Row[]): Map<number, Row> {
   return byPid;
 }
 
+function hopOf(byPid: ReadonlyMap<number, Row>, start: Row): Lineage['hop'] {
+  if (start.uid === undefined) return undefined;
+  const visited = new Set<number>();
+  for (let row = parentOf(byPid, start); row && !visited.has(row.pid); row = parentOf(byPid, row)) {
+    visited.add(row.pid);
+    if (row.uid !== undefined && row.uid !== start.uid) return { pid: row.pid, uid: row.uid };
+  }
+  return undefined;
+}
+
 function parentOf(byPid: ReadonlyMap<number, Row>, row: Row): Row | undefined {
   return row.ppid === undefined || row.ppid <= 1 ? undefined : byPid.get(row.ppid);
 }
@@ -57,11 +68,13 @@ export function spawns(
     const visited = new Set<number>();
     let row = byPid.get(pid);
     if (!row) return undefined;
+    const hop = hopOf(byPid, row);
     const found: Lineage = {
       agent: null,
       spawned: false,
       argv: row.argv ?? [],
       ...(row.uid === undefined ? {} : { uid: row.uid }),
+      ...(hop ? { hop } : {}),
       tags: tagsOf(row),
       recent: tagged.recent(pid, rows, at),
     };

@@ -1023,6 +1023,52 @@ test("a guest run's bash can't borrow a clean scoop's identity with SLICC_AGENT:
   assert.equal(seen.results[2], 'never');
 });
 
+test("a guest run's agent rename of a clean scoop taints that scoop, since its prompt holds the name: the scoop's next bash is asked", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    extra: [['scoop-say', '']],
+    steps: [
+      bash("agent --async --name helper --prompt 'say ready'"),
+      answer('Started.'),
+      bash('agent rename $(agent list | cut -f1 | head -n1) Renamed by the guest'),
+      answer('Renamed.'),
+      bash("agent send $(agent list | cut -f1 | head -n1) 'bash echo after-rename'"),
+      answer('Sent.'),
+      answer('Spare.'),
+    ],
+  });
+  const seen = await staged(page, "a guest run's agent rename", async () => {
+    const { until, pause, open, mint, join, send, prompt, said, results, asked, decide } =
+      globalThis.r;
+    await open();
+    await prompt('Start a helper.');
+    await until(() => said().includes('Started.'), 'the helper');
+    await until(() => results().at(-1), 'the helper handle');
+    await pause(1000);
+    const guest = await join(await mint('user'));
+    await send(guest, 'Rename it.');
+    const out = { asked: [(await decide('once')).summary] };
+    await until(() => said().includes('Renamed.'), 'the renaming run');
+    await guest.close();
+    await prompt('Give it work.');
+    await until(() => said().includes('Sent.'), 'the owner send');
+    await until(
+      () =>
+        asked().some((item) => item.summary === 'echo after-rename') ||
+        results('scoop:helper').some((result) => result.includes('after-rename')),
+      "the scoop's bash"
+    );
+    out.ranUnasked = results('scoop:helper').some((result) => result.includes('after-rename'));
+    out.renamed = results()[1];
+    return out;
+  });
+  assert.deepEqual(seen.asked, [
+    'agent rename $(agent list | cut -f1 | head -n1) Renamed by the guest',
+  ]);
+  assert.equal(seen.renamed, 'helper is now called Renamed by the guest');
+  assert.equal(seen.ranUnasked, false);
+});
+
 test('a guest-started scoop’s completion report taints the cone run it starts: that run’s bash is asked', async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
