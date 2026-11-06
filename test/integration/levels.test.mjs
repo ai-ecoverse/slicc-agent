@@ -599,7 +599,10 @@ test("the check's reason is the chat model's own words, capped, cleaned and scru
   assert.match(reason, /^It reads the file \[redacted\] and then keeps going/);
   assert.ok(!reason.includes(seen.secret));
   assert.equal(seen.fallback.verdict.level, 2);
-  assert.equal(seen.fallback.verdict.reason, 'it changes who may do what.');
+  assert.match(
+    seen.fallback.verdict.reason,
+    /^The check leaned toward a change in who may do what/
+  );
   assert.equal(seen.fallback.state, 'pending');
   assert.equal(seen.fallback.tier, 'user');
   assert.equal(seen.advised.state, 'pending');
@@ -682,4 +685,140 @@ test('paths and the directory a requester chose reach the judge only inside the 
   assert.deepEqual(outside(seen.state.request.untrusted), { hits: 4, outside: 0 });
   assert.equal(outside(seen.prompt).outside, 0);
   assert.equal(outside(seen.prompt).hits, 4);
+});
+
+test('sudo verdicts from a real session: an unsure read stays routine, the same listing gets the same level, a level 2 names what changes permissions or says nothing does, harm stays harm, and Always means the same from either judge', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
+  const rows = [
+    {
+      argv: ['ls', '-la', '/root/v6', '/root/v6/memory'],
+      level: { routine: 0.5982, permissions: 0.0912, harm: 0.3106 },
+      aligned: 0.3528,
+    },
+    {
+      argv: ['ls', '-A', '/slicc-fs'],
+      level: { routine: 0.6002, permissions: 0.2499, harm: 0.1499 },
+      aligned: 0.3751,
+    },
+    {
+      argv: ['ls', '-A', '/slicc-fs'],
+      level: { routine: 0.532, permissions: 0.3, harm: 0.168 },
+      aligned: 0.2431,
+    },
+    {
+      argv: ['find', '/home/cone-2', '-type', 'f'],
+      level: { routine: 0.5931, permissions: 0.3, harm: 0.1069 },
+      aligned: 0.3234,
+    },
+    {
+      argv: ['chown', '-R', 'cone:cone', '/home/cone/v6'],
+      level: { routine: 0.447, permissions: 0.4, harm: 0.153 },
+      aligned: 0.3744,
+    },
+    {
+      argv: ['ls', '-A', '/home/cone-2'],
+      level: { routine: 0.3966, permissions: 0.45, harm: 0.1534 },
+      aligned: 0.2735,
+    },
+    {
+      argv: ['rm', '-r', '/slicc-fs/workspace'],
+      level: { routine: 0.2206, permissions: 0.0794, harm: 0.7 },
+      aligned: 0.3669,
+    },
+  ];
+  const seen = await staged(
+    page,
+    'session verdicts',
+    async (rows) => {
+      const { owner, write, until, items, sudo, command, decide, table, said } = globalThis.t;
+      const local = await owner.connect();
+      const verdicts = [];
+      const judgeOnce = async (argv, step, extra = {}) => {
+        table({ [command(argv)]: step });
+        const before = (await items()).length;
+        const asked = sudo(argv, extra);
+        const item = await until(
+          async () => {
+            const all = await items();
+            const found = all.length > before && all.at(-1);
+            return found && !found.judging && found.verdict && found;
+          },
+          `the verdict on ${command(argv)}`
+        );
+        await decide(local, item.id, 'deny');
+        await asked;
+        return item;
+      };
+      for (const row of rows) {
+        const item = await judgeOnce(row.argv, {
+          level: row.level,
+          aligned: row.aligned,
+          sayError: 'the model is down',
+        });
+        verdicts.push({ level: item.verdict.level, reason: item.verdict.reason });
+      }
+      const safe = ['du', '-s', '/usr'];
+      const replayed = ['xargs', 'sort'];
+      const always = {};
+      for (const judge of ['judge/j-1', 'faux/faux-1']) {
+        await write(
+          '/home/.pi/agent/settings.json',
+          JSON.stringify({ approvals: { judgeModel: judge } })
+        );
+        const rerun = await judgeOnce(safe, {
+          level: 1,
+          aligned: 0.95,
+          more: 0.05,
+          say: 'level: 1\naligned: yes\nalways: yes\nreason: It prints the size of /usr.',
+        });
+        const more = await judgeOnce(replayed, {
+          level: 1,
+          aligned: 0.95,
+          more: 0.95,
+          say: 'level: 1\naligned: yes\nalways: no\nreason: It sorts input the dialog cannot show.',
+        });
+        always[judge] = [
+          [rerun.verdict.always, rerun.always],
+          [more.verdict.always, more.always],
+        ];
+      }
+      const prompts = (await said()).map((entry) => entry.text);
+      await local.close();
+      await owner.release();
+      return { verdicts, always, prompts };
+    },
+    rows
+  );
+  assert.deepEqual(
+    seen.verdicts.map((verdict) => verdict.level),
+    [1, 1, 1, 1, 2, 2, 3]
+  );
+  assert.equal(seen.verdicts[0].reason, 'It looks like routine work.');
+  assert.equal(seen.verdicts[1].reason, seen.verdicts[2].reason);
+  assert.equal(seen.verdicts[4].reason, 'It runs `chown`, which changes who owns files.');
+  assert.match(
+    seen.verdicts[5].reason,
+    /^The check leaned toward a change in who may do what, but nothing in the request changes/
+  );
+  assert.equal(
+    seen.verdicts[6].reason,
+    'It could harm the system or the work in a way that is hard to undo.'
+  );
+  for (const verdict of seen.verdicts)
+    assert.doesNotMatch(verdict.reason, /owner asked|serves|fits/);
+  assert.deepEqual(seen.always, {
+    'judge/j-1': [
+      [true, true],
+      [false, false],
+    ],
+    'faux/faux-1': [
+      [true, true],
+      [false, false],
+    ],
+  });
+  for (const prompt of seen.prompts) {
+    assert.match(prompt, /Leave out whether the owner asked for it or wants it/);
+    assert.doesNotMatch(prompt, /and whether it serves what the owner asked for/);
+  }
 });
