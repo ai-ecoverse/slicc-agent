@@ -20,6 +20,7 @@ export const JUDGE_KIND = 'slicc.approval-verdict';
 export const JUDGE_MODEL: ModelRef = { provider: 'adobe', modelId: 'clef' };
 export const JUDGE_ALWAYS = 0.8;
 export const JUDGE_CUT = 0.5;
+export const JUDGE_HARM = 0.4;
 export const JUDGE_TIMEOUT = 15_000;
 export const ASK_MIN_MS = 30_000;
 export const UNTRUSTED_LIMIT = 4000;
@@ -222,7 +223,7 @@ export function levelOf(probabilities: Record<string, number>): ApprovalLevel | 
   if (routine === undefined || permissions === undefined || harm === undefined) return undefined;
   const total = routine + permissions + harm;
   if (total <= 0) return undefined;
-  if (harm / total >= JUDGE_CUT) return 3;
+  if (harm / total >= JUDGE_HARM) return 3;
   return (permissions + harm) / total >= JUDGE_CUT ? 2 : 1;
 }
 
