@@ -93,7 +93,7 @@ export class Kept {
       if (!keep) this.#ids.delete(Number(entry.id));
       return keep;
     });
-    this.#gaps = [];
+    this.#gaps = this.#gaps.filter((other) => other.after >= gap.upTo);
     this.#start = false;
   }
 
@@ -108,7 +108,7 @@ export class Kept {
       this.#add(page.entries);
       const oldest = page.entries.at(-1);
       gap.left -= page.entries.length;
-      if (!page.more || !oldest) this.#gaps.pop();
+      if (!page.more || !oldest) this.#gaps = this.#gaps.filter((other) => other !== gap);
       else if (gap.left <= 0) this.#abandon(gap);
       else gap.upTo = Number(oldest.id);
     })().finally(() => {
