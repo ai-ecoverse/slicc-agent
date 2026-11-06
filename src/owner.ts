@@ -105,6 +105,7 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     },
     port: open,
     async approve(request, approveOptions) {
+      if (request?.kind !== 'sudo') throw unavailable();
       const stop = new AbortController();
       asking.add(stop);
       try {

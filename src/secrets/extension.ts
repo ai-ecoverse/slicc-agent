@@ -22,6 +22,9 @@ export const SHELL_GRANTS = ['fnox', 'exec', '--shell-grants', '--'] as const;
 export const MODEL_LINE =
   "Credentials are env vars (`$NAME`) holding placeholders, listed below with where each works (`fnox list` shows the fnox config). The vault fills in the real value only in the listed header, for the listed domain, method and path, over HTTPS (curl, git, fetch). Adding a rule means editing `/etc/fnox/config.toml` with sudo, which the user approves. `fnox exec` gives real values only for secrets the user enabled for exec, and the secrets listed as 'in every bash' already hold real values in your commands. Everything is logged, and stored values are replaced by their placeholder in everything you see; edit around placeholders, since files show them too. Never ask the user to paste a credential into the chat.";
 
+export const ASK_LINE =
+  'When a secret you need is missing, ask the user for it: `fnox set NAME --ask` adds it to the fnox config, and `sealed ask NAME` keeps it in the vault only (`--prompt TEXT` says why you need it). The user types the value in a dialog, and the command prints its placeholder. Add `--reveal` only when a tool needs the plaintext itself, not where the vault fills it in a header, and pipe it straight into that tool (`sealed ask NAME --reveal | tool --password-stdin`): the user must allow every reveal, and you still see only the placeholder.';
+
 type Leaf = { get(): string; set(text: string): void };
 
 function leaves(value: JsonValue, out: Leaf[], set: (next: JsonValue) => void): void {
@@ -116,13 +119,13 @@ export const NO_SECRETS =
 
 export function renderSecrets(listing: SecretListing): string {
   if (listing.error !== null) return unavailableLine(listing.error);
-  if (!listing.names.length) return NO_SECRETS;
+  if (!listing.names.length) return [NO_SECRETS, '', ASK_LINE].join('\n');
   const granted = !listing.exposed.length;
   const lines = listing.names.map(
     (name) => `- ${name.name} = ${name.placeholder ?? `$${name.name}`}${where(name, granted)}`
   );
   const off = granted ? [] : ['', exposedLine(listing.exposed)];
-  return [MODEL_LINE, '', ...lines, ...off].join('\n');
+  return [MODEL_LINE, ASK_LINE, '', ...lines, ...off].join('\n');
 }
 
 export function secretsEntry(listing: SecretListing) {

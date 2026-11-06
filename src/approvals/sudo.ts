@@ -56,7 +56,7 @@ const text = (value: unknown): value is string => typeof value === 'string';
 
 export function sudoRequest(value: unknown): SudoRequest | null {
   const request = value as Partial<SudoRequest> | null;
-  if (typeof request !== 'object' || request === null) return null;
+  if (typeof request !== 'object' || request === null || request.kind !== 'sudo') return null;
   const { argv, user, expiresAt } = request;
   if (!Array.isArray(argv) || !argv.length || !argv.every(text)) return null;
   if (!text(user) || typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) return null;
