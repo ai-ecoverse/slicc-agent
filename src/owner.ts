@@ -1,6 +1,13 @@
 import type { SudoReply, SudoRequest } from './approvals/sudo.ts';
-import { type ApproveOptions, askSudo, unavailable } from './approvals/sudo-client.ts';
+import {
+  type ApproveOptions,
+  askCapture,
+  askSudo,
+  type CaptureAsk,
+  unavailable,
+} from './approvals/sudo-client.ts';
 import { type AgentConnection, connectAgent } from './client.ts';
+import type { CaptureReply } from './guests/capture.ts';
 import { type KernelSource, serveAdmin } from './kernel/users.ts';
 import { holdLock } from './opfs-pool.ts';
 import type { PortEndpoint } from './wire.ts';
@@ -23,6 +30,7 @@ export interface AgentOwner {
   connect(options?: PortOptions): Promise<AgentConnection>;
   port(options?: PortOptions): Promise<PortEndpoint & Transferable>;
   approve(request: SudoRequest, options?: ApproveOptions): Promise<SudoReply>;
+  approveCapture(request: CaptureAsk, options?: ApproveOptions): Promise<CaptureReply>;
   restart(): Promise<void>;
   release(): Promise<void>;
 }
@@ -86,6 +94,20 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     release();
     throw error;
   }
+  const asked = async <R>(
+    ask: (port: PortEndpoint, stop: AbortSignal) => Promise<R>
+  ): Promise<R> => {
+    const stop = new AbortController();
+    asking.add(stop);
+    try {
+      const port = await open().catch((error: unknown) => {
+        throw unavailable(error);
+      });
+      return await ask(port, stop.signal);
+    } finally {
+      asking.delete(stop);
+    }
+  };
   const open = async (portOptions: PortOptions = {}): Promise<PortEndpoint & Transferable> => {
     const ready = await worker;
     if (!ready) throw new Error('the agent was released');
@@ -104,18 +126,12 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
       return connectAgent(await open(portOptions));
     },
     port: open,
-    async approve(request, approveOptions) {
-      if (request?.kind !== 'sudo') throw unavailable();
-      const stop = new AbortController();
-      asking.add(stop);
-      try {
-        const port = await open().catch((error: unknown) => {
-          throw unavailable(error);
-        });
-        return await askSudo(port, request, approveOptions, stop.signal);
-      } finally {
-        asking.delete(stop);
-      }
+    approve(request, approveOptions) {
+      if (request?.kind !== 'sudo') return Promise.reject(unavailable());
+      return asked((port, stop) => askSudo(port, request, approveOptions, stop));
+    },
+    approveCapture(request, approveOptions) {
+      return asked((port, stop) => askCapture(port, request, approveOptions, stop));
     },
     restart() {
       const deny = stopAsking();

@@ -14,7 +14,7 @@ import type { Models } from '@earendil-works/pi-ai/models';
 import type { Conversation, ModelRef } from '@earendil-works/pi-durable';
 import { completeText, scrubbed } from '../titles/generate.ts';
 import { spend } from '../titles/labels.ts';
-import type { Approval, ApprovalLevel, ApprovalVerdict } from './record.ts';
+import type { Approval, ApprovalLevel, ApprovalVerdict, CaptureDetail } from './record.ts';
 
 export const JUDGE_KIND = 'slicc.approval-verdict';
 export const JUDGE_MODEL: ModelRef = { provider: 'adobe', modelId: 'clef' };
@@ -91,6 +91,21 @@ const MORE =
 const SUDO_FACTS =
   'request.sudo has what the kernel knows that the requester cannot choose: stdin (tty, none, pipe or file), writable (whether the line can be recorded as a rule) and rootOnly (whether only root can change the directory and every path on the line). The command, the target user, the directory and, for each path, whether only root can change it, are inside request.untrusted, because the requester chose them.';
 
+const CAPTURE_FACTS =
+  "request.capture says what granting the request records: asks says it plainly, what is screen, camera or microphone, mode is still, video or audio, seconds is how long it runs (null: until the program stops), and system and microphone say which audio comes with it. The program's name and the device are inside request.untrusted, because the requester chose them.";
+
+const CAPTURE_MORE =
+  'Allowing it always lets this guest make every later capture of the same what and mode without asking, whatever its length, audio or device. Could such a later capture record something the owner would not let this guest have without being asked?';
+
+export const CAPTURE_ALWAYS: ClassifierQuestion = {
+  type: 'bool',
+  instructions: `${INSTRUCTIONS} ${CAPTURE_FACTS} ${CAPTURE_MORE}`,
+  criteria: {
+    true: 'yes: a longer capture, another device or more audio of the same kind could record more than the owner would give this guest unasked',
+    false: 'no: every later capture of the same kind is as fine as this one',
+  },
+};
+
 export const JUDGE_QUESTIONS: Record<string, ClassifierQuestion> = {
   level: {
     type: 'choice',
@@ -115,11 +130,21 @@ export const JUDGE_QUESTIONS: Record<string, ClassifierQuestion> = {
   },
 };
 
+const withFacts = (question: ClassifierQuestion): ClassifierQuestion => ({
+  ...question,
+  instructions: `${question.instructions} ${CAPTURE_FACTS}`,
+});
+
 export function questionsOf(item: Approval): Record<string, ClassifierQuestion> {
   const { level, aligned, always } = JUDGE_QUESTIONS as Record<string, ClassifierQuestion>;
-  return item.kind === 'sudo'
-    ? { level, aligned, always: always as ClassifierQuestion }
-    : { level: level as ClassifierQuestion, aligned: aligned as ClassifierQuestion };
+  if (item.kind === 'sudo') return { level, aligned, always: always as ClassifierQuestion };
+  if (item.kind === 'capture')
+    return {
+      level: withFacts(level as ClassifierQuestion),
+      aligned: withFacts(aligned as ClassifierQuestion),
+      always: CAPTURE_ALWAYS,
+    };
+  return { level: level as ClassifierQuestion, aligned: aligned as ClassifierQuestion };
 }
 
 export function fenced(text: string, nonce: string): string {
@@ -140,10 +165,64 @@ function sudoText(detail: Extract<Approval, { kind: 'sudo' }>['detail']): string
   ].join('\n');
 }
 
+const SUBJECT: Record<CaptureDetail['what'], string> = {
+  screen: 'the screen, window or tab the person picks',
+  camera: 'the camera',
+  microphone: 'the microphone',
+};
+
+function audioOf(detail: CaptureDetail): string {
+  if (detail.mode !== 'video') return '';
+  if (detail.system && detail.microphone) return ", with the system's audio and the microphone";
+  if (detail.system) return ", with the system's audio";
+  return detail.microphone ? ', with the microphone' : ', without audio';
+}
+
+export function captureAsks(detail: CaptureDetail): string {
+  const subject = SUBJECT[detail.what];
+  if (detail.mode === 'still') return `a still image of ${subject}`;
+  const made = detail.mode === 'video' ? `a video of ${subject}` : `a recording of ${subject}`;
+  const length =
+    detail.seconds === undefined ? ', until the program stops' : `, for ${detail.seconds} seconds`;
+  return `${made}${length}${audioOf(detail)}`;
+}
+
+function captureText(detail: CaptureDetail): string {
+  return [
+    `program: ${JSON.stringify(detail.program)}`,
+    ...(detail.device === undefined ? [] : [`device: ${JSON.stringify(detail.device)}`]),
+  ].join('\n');
+}
+
 export function untrustedOf(item: Approval): string {
   if (item.kind === 'guest-message') return item.detail.text;
   if (item.kind === 'guest-tool') return `${item.detail.tool}: ${item.detail.summary}`;
+  if (item.kind === 'capture') return captureText(item.detail);
   return sudoText(item.detail);
+}
+
+export type CaptureFacts = {
+  asks: string;
+  what: CaptureDetail['what'];
+  mode: CaptureDetail['mode'];
+  seconds: number | null;
+  system: boolean;
+  microphone: boolean;
+};
+
+export function captureContext(item: Approval): { capture?: CaptureFacts } {
+  if (item.kind !== 'capture') return {};
+  const { detail } = item;
+  return {
+    capture: {
+      asks: captureAsks(detail),
+      what: detail.what,
+      mode: detail.mode,
+      seconds: detail.seconds ?? null,
+      system: detail.system === true,
+      microphone: detail.microphone === true,
+    },
+  };
 }
 
 export type SudoFacts = {
@@ -172,6 +251,7 @@ export function judgeState(item: Approval, intent: OwnerIntent, nonce: string) {
       requester: { kind: item.requester.kind, name: item.requester.name },
       untrusted: fenced(untrustedOf(item), nonce),
       ...sudoContext(item),
+      ...captureContext(item),
     },
     owner: { policy: intent.policy, messages: intent.messages, memory: intent.memory },
   };
@@ -250,11 +330,16 @@ const REASON_ASK = `In one or two plain sentences, under 250 characters, say wha
 const VERDICT_ASK = `Answer in exactly four lines and nothing else:
 level: 1, 2 or 3
 aligned: yes or no (does granting the request serve the intent the owner stated? Only the owner's own words count)
-always: yes or no (yes only when a later run of exactly this command line can do no more than this one; no when input, files or code the person can't see in the dialog could make it do more, and always no for a request that is not sudo)
+always: yes or no (for sudo, yes only when a later run of exactly this command line can do no more than this one, and no when input, files or code the person can't see in the dialog could make it do more; for a capture, yes only when every later capture of the same what and mode by this guest, whatever its length, audio or device, is as fine as this one; always no for any other request)
 reason: one or two plain sentences, under 250 characters, on what granting the request would do to this system. ${NOT_ALIGNED}`;
 
+const FACTS: Partial<Record<Approval['kind'], string>> = {
+  sudo: ` ${SUDO_FACTS}`,
+  capture: ` ${CAPTURE_FACTS}`,
+};
+
 export function judgePrompt(item: Approval, chat: boolean): string {
-  const facts = item.kind === 'sudo' ? ` ${SUDO_FACTS}` : '';
+  const facts = FACTS[item.kind] ?? '';
   return `${INSTRUCTIONS}${facts} The levels: ${LEVEL_TEXT}\n\n${chat ? VERDICT_ASK : REASON_ASK}`;
 }
 
@@ -292,7 +377,7 @@ export async function chatVerdict(
   return {
     level,
     aligned,
-    ...(item.kind === 'sudo' ? { always } : {}),
+    ...(item.kind === 'sudo' || item.kind === 'capture' ? { always } : {}),
     reason: (await cleanVerdictReason(answer.reason)) ?? fallbackReason(level),
     via: 'chat',
     model,

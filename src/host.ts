@@ -28,6 +28,7 @@ import { createAgentControl, type HostLicks, type HostScoops } from './control.t
 import { trackDeliveries } from './deliveries.ts';
 import type { FreezerRuntime, FrozenCone } from './freezer/index.ts';
 import { IDLE, type ImportProgress } from './freezer/v6.ts';
+import { captureGate } from './guests/capture.ts';
 import { createGuests, type Guests } from './guests/index.ts';
 import type { ScoopReviewHost } from './guests/scoop.ts';
 import { admitGuest, guestOpener } from './guests/serve.ts';
@@ -418,6 +419,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
   };
   const sudo = createSudo({
     approvals,
+    capture: captureGate({ harness: agent.harness, approvals, policy: () => guests.policy() }),
     agents: () => agent.agents.state(),
     ...(options.licks ? { licks: options.licks.licks } : {}),
   });

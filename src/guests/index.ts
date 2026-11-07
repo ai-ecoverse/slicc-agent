@@ -230,9 +230,15 @@ function forgotten(
 ): Promise<{ removed: boolean }> {
   return harness.commit(async (tx) => {
     const record = (await tx.doc(GuestsDoc)).seats[id];
-    const kept = record?.alwaysTools?.filter((rule) => rule.approval !== approval);
-    if (!record || !kept || kept.length === record.alwaysTools?.length) return { removed: false };
-    record.alwaysTools = kept;
+    if (!record) return { removed: false };
+    const tools = record.alwaysTools ?? [];
+    const captures = record.alwaysCaptures ?? [];
+    const keptTools = tools.filter((rule) => rule.approval !== approval);
+    const keptCaptures = captures.filter((rule) => rule.approval !== approval);
+    if (keptTools.length + keptCaptures.length === tools.length + captures.length)
+      return { removed: false };
+    record.alwaysTools = keptTools;
+    record.alwaysCaptures = keptCaptures;
     return { removed: true };
   }, using);
 }
@@ -283,6 +289,7 @@ function shownSeats(
       connected: (links.get(record.id) ?? 0) > 0,
       pending: pendingOf(record.id),
       alwaysTools: (record.alwaysTools ?? []).map(({ argumentsHash: _hash, ...rule }) => rule),
+      alwaysCaptures: (record.alwaysCaptures ?? []).map((rule) => ({ ...rule })),
     }));
 }
 
@@ -300,6 +307,14 @@ function openedSeats(
     return copy(seats);
   }, using);
 }
+
+const revokedAt = (record: SeatRecord, at: number) =>
+  Object.assign(record, {
+    revoked: at,
+    epoch: record.epoch + 1,
+    alwaysTools: [],
+    alwaysCaptures: [],
+  });
 
 export async function createGuests(options: GuestsOptions): Promise<Guests> {
   const { harness, agents } = options;
@@ -421,7 +436,7 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
       const changed = await write((all) => {
         const record = all[id];
         if (!record || record.revoked !== null) return undefined;
-        return Object.assign(record, { revoked: at, epoch: record.epoch + 1, alwaysTools: [] });
+        return revokedAt(record, at);
       });
       if (!changed) return { revoked: false };
       records[id] = changed;

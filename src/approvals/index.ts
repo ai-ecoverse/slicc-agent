@@ -27,6 +27,7 @@ import {
   type DecidedBy,
   gateOf,
   guestKind,
+  heldKind,
   knownTier,
   MAX_DELAY,
   prune,
@@ -99,7 +100,9 @@ function mark(item: Approval, how: Settle, at: number) {
 }
 
 const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
-  guestKind(draft.kind) ? options.guestAlways?.(draft.kind) === true : false;
+  guestKind(draft.kind) && draft.kind !== 'capture'
+    ? options.guestAlways?.(draft.kind) === true
+    : false;
 
 const judgedKind = (kind: ApprovalKind, tier: string) =>
   kind === 'sudo' || tier === 'agent' || tier === 'user';
@@ -144,7 +147,7 @@ const withdrawIn =
     return hit.map((item) => copy([item])[0] as Approval);
   };
 
-type Judged = { judgement: Judgement; present: boolean };
+type Judged = { judgement: Judgement; present: boolean; offer?: boolean };
 
 const routeOf = (item: Approval, { judgement, present }: Judged): Routed =>
   route(judgement.verdict, item.requester, gateOf(item.tier), present);
@@ -163,6 +166,7 @@ const judgedIn = (id: string, judged: Judged, now: () => number) => (doc: Approv
   if (routed === 'ask') {
     item.tier = 'user';
     if (item.kind === 'sudo') item.always = alwaysOffered(item);
+    if (item.kind === 'capture') item.always = alwaysOffered(item) && judged.offer === true;
     return copy([item])[0] as Approval;
   }
   const at = now();
@@ -209,6 +213,7 @@ type Serial = <R>(change: (doc: ApprovalsState) => R, using: Context) => Promise
 function judgeRunner(run: {
   serial: Serial;
   present: ApprovalsAttach['present'];
+  guestAlways: ApprovalsAttach['guestAlways'];
   now: () => number;
   closed: () => boolean;
 }) {
@@ -233,6 +238,7 @@ function judgeRunner(run: {
     if (early) judged = { ...judged, judgement: withReason(judged.judgement, early) };
     signal?.removeEventListener('abort', abort);
     if (gone || run.closed()) return;
+    judged = { ...judged, offer: run.guestAlways?.(item.kind) === true };
     const after = await serial(judgedIn(item.id, judged, now), BACKGROUND_CONTEXT).catch(
       () => undefined
     );
@@ -319,7 +325,7 @@ export async function attachApprovals(
   const startup = await write((doc) => {
     for (const item of doc.items) {
       if (item.state !== 'pending') continue;
-      if (item.kind === 'sudo')
+      if (heldKind(item.kind))
         settle(item, { state: 'withdrawn', by: 'host', reason: REASONS.restart });
       else if (item.expiresAt <= now())
         settle(item, { state: 'unanswered', by: 'host', reason: REASONS.timeout });
@@ -388,6 +394,7 @@ export async function attachApprovals(
   const judging = judgeRunner({
     serial,
     present: options.present,
+    guestAlways: options.guestAlways,
     now,
     closed: () => closed,
   });
