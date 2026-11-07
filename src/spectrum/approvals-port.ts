@@ -9,7 +9,7 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { fits } from '../approvals/aligned.ts';
-import type { CaptureApproval, Approval as Recorded } from '../approvals/record.ts';
+import type { Approval as Item } from '../approvals/record.ts';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
 
@@ -40,7 +40,7 @@ function argsOf(text: string | undefined): Pick<GuestToolApproval, 'args' | 'arg
   return { args: args.slice(0, end), argsTruncated: true };
 }
 
-function requesterOf(item: Recorded): ApprovalRequester {
+function requesterOf(item: Item): ApprovalRequester {
   const { kind, name, agentId, where } = item.requester;
   return {
     kind,
@@ -50,7 +50,7 @@ function requesterOf(item: Recorded): ApprovalRequester {
   };
 }
 
-function verdictOf(item: Recorded) {
+function verdictOf(item: Item) {
   const { verdict, judging, verdictError } = item;
   return {
     ...(verdict
@@ -66,8 +66,6 @@ function verdictOf(item: Recorded) {
     ...(verdictError ? { verdictError } : {}),
   };
 }
-
-type Item = Exclude<Recorded, CaptureApproval>;
 
 export function shown(item: Item, agentName: string | undefined): Approval {
   const base = {
@@ -96,6 +94,7 @@ export function shown(item: Item, agentName: string | undefined): Approval {
     always: item.always,
     ...verdictOf(item),
   };
+  if (item.kind === 'capture') return { ...guest, kind: 'capture', detail: { ...item.detail } };
   if (item.kind === 'guest-tool')
     return {
       ...guest,
@@ -118,8 +117,7 @@ export type HostApprovals = ApprovalsPort;
 
 export const NOT_HERE = "This request can't be answered in this tab.";
 
-const asked = (item: Recorded): item is Item =>
-  item.kind !== 'capture' && item.state === 'pending' && item.tier === 'user';
+const asked = (item: Item) => item.state === 'pending' && item.tier === 'user';
 
 export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements ApprovalsPort {
   readonly #connection: AgentConnection;
@@ -142,7 +140,7 @@ export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements Approv
     host?.on('ended', (detail) => this.emit('ended', detail));
   }
 
-  #items(): readonly Recorded[] {
+  #items(): readonly Item[] {
     return this.#connection.approvals?.value ?? [];
   }
 
@@ -157,8 +155,7 @@ export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements Approv
       (this.#connection.agents?.value?.agents ?? []).map((agent) => [agent.id, agent.name])
     );
     return this.#items()
-      .filter(asked)
-      .filter((item) => !this.#mine.has(item.id))
+      .filter((item) => asked(item) && !this.#mine.has(item.id))
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((item) => shown(item, names.get(item.agentId)));
   }
