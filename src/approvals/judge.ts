@@ -15,7 +15,7 @@ import type { Models } from '@earendil-works/pi-ai/models';
 import type { Conversation, ModelRef } from '@earendil-works/pi-durable';
 import { completeText, scrubbed } from '../titles/generate.ts';
 import { spend } from '../titles/labels.ts';
-import { fits } from './aligned.ts';
+import { clears, fits, JUDGE_ALLOW, JUDGE_EPSILON } from './aligned.ts';
 import type { Approval, ApprovalLevel, ApprovalVerdict } from './record.ts';
 
 export const JUDGE_KIND = 'slicc.approval-verdict';
@@ -24,7 +24,8 @@ export const JUDGE_ALWAYS = 0.8;
 export const JUDGE_CUT = 0.5;
 export const JUDGE_HARM = 0.4;
 export const JUDGE_LOW = 0.2;
-export const JUDGE_EPSILON = 1e-9;
+export const JUDGE_PLACE = 0.05;
+export { JUDGE_EPSILON };
 export const JUDGE_TIMEOUT = 15_000;
 export const ASK_MIN_MS = 30_000;
 export const UNTRUSTED_LIMIT = 4000;
@@ -98,13 +99,14 @@ export const ACTIONS = {
   delete: 'Does it delete or empty any file or directory?',
   permissions:
     'Does it change permissions, ownership, users, groups, sudoers, secret rules or credentials?',
-  code: "Does it run code that the line itself doesn't show, such as a script file, a package install, find -exec, xargs or a pipe into a shell; pass a program to an interpreter, such as sh -c, python -c, awk, sed or jq; or open an interactive program that can run other commands, such as an editor, a pager or a shell?",
+  code: "Does it run code or write output in a way the line itself doesn't spell out, such as a script file, a package install, xargs, find -exec or -delete, a pipe into a shell, a redirection (> or >>), a command substitution ($(...) or backticks), an output option such as sort -o or tee, a download with curl or wget, or git, which can run hooks, a pager or aliases; pass a program to an interpreter, such as sh -c, python -c, awk, sed or jq; or open an interactive program that can run other commands, such as an editor, a pager or a shell?",
   services:
     'Does it stop, kill or restart processes or services, change system settings, mount or unmount, or reboot or shut down the machine?',
   send: 'Does it send data off this machine, over the network, or publish, push or message anything?',
-  secrets: 'Would its output show the value of a secret, token, password or private key?',
+  secrets:
+    'Would its output show the value of a secret, token, password or private key, including through a dump of environment variables (env, printenv, /proc/*/environ, ps e), shell history, or a configuration or credentials file that can hold them (git config, .netrc, .npmrc, cloud or kube configs)?',
   plain:
-    'Is it a standard Unix tool, such as ls, cat, head, grep, find, du, stat, cp, mv, rm, mkdir or chown, used in a way whose whole effect the line shows?',
+    'Is it a standard Unix tool, such as ls, cat, head, grep, find, du, stat, cp, mv, rm, mkdir or chown, whose whole effect you can tell from its options and paths?',
   always: `${SUDO_FACTS} Could a later run of exactly this line do something different from this one, because it reads piped or file input, runs a script or a file someone other than root can change, takes code on the line, or is interactive?`,
 } as const;
 
@@ -143,6 +145,12 @@ const NEEDS: Partial<Record<Action, Intent>> = {
 };
 
 const CHANGING: Action[] = ['changes', 'delete', 'permissions', 'services'];
+
+const PLACES: Action[] = ['others', 'system'];
+
+const DANGERS: Action[] = ['delete', 'services', 'permissions', 'send', 'secrets', 'code'];
+
+const SAID: Action[] = ['changes', ...PLACES, ...DANGERS];
 
 const SUDO_GROUP: Group = {
   about: COMMAND,
@@ -321,6 +329,18 @@ export type Match = {
   missing: Intent[];
 };
 
+const strict = (p: Record<Action, number>, action: Action) =>
+  PLACES.includes(action) && reaches(p.changes, JUDGE_LOW);
+
+export const barOf = (p: Record<Action, number>, action: Action): number =>
+  strict(p, action) ? JUDGE_PLACE : JUDGE_LOW;
+
+const weightOf = (p: Record<Action, number>, action: Action) =>
+  strict(p, action) ? Math.min(1, (p[action] * JUDGE_LOW) / JUDGE_PLACE) : p[action];
+
+export const flagged = (p: Record<Action, number>, action: Action): boolean =>
+  reaches(p[action], barOf(p, action));
+
 export function matchOf(actions: Record<Action, number>, intent: Record<Intent, number>): Match {
   const p = actions;
   const harm = Math.max(Math.min(p.changes, Math.max(p.others, p.system)), p.delete, p.services);
@@ -329,19 +349,19 @@ export function matchOf(actions: Record<Action, number>, intent: Record<Intent, 
     : reaches(p.permissions, JUDGE_CUT)
       ? 2
       : 1;
-  const sure = 1 - Math.max(harm, p.permissions);
-  const routine = Math.min(sure, p.plain);
+  const danger = Math.max(...[...PLACES, ...DANGERS].map((action) => weightOf(p, action)));
+  const routine = Math.min(1 - danger, p.plain);
   const needs = new Set<Intent>();
   for (const [action, wanted] of Object.entries(NEEDS) as [Action, Intent][])
-    if (p[action] > JUDGE_LOW) needs.add(wanted);
-  if (!CHANGING.some((action) => p[action] > JUDGE_LOW)) needs.add('read');
+    if (flagged(p, action)) needs.add(wanted);
+  if (!CHANGING.some((action) => flagged(p, action))) needs.add('read');
   const listed = (Object.keys(INTENTS) as Intent[]).filter((name) => needs.has(name));
   const aligned = Math.min(...listed.map((name) => intent[name]));
   return {
     level,
     routine,
     aligned,
-    always: 1 - p.always >= JUDGE_ALWAYS - JUDGE_EPSILON,
+    always: clears(1 - p.always, JUDGE_ALWAYS),
     needs: listed,
     missing: listed.filter((name) => !fits(intent[name])),
   };
@@ -377,39 +397,47 @@ const WANTED: Record<Intent, string> = {
 const listing = (parts: string[], last: string) =>
   parts.length < 2 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} ${last} ${parts.at(-1)}`;
 
-function deeds(p: Record<Action, number>, at: (value: number) => boolean, base: boolean) {
+const FILES: Action[] = ['changes', 'delete', ...PLACES];
+
+function deeds(at: (action: Action) => boolean, base: boolean, removes = false) {
   const where = listing(
     [
-      ...(at(p.others) ? ["in another user's home"] : []),
-      ...(at(p.system) ? ['among system files'] : []),
+      ...(at('others') ? ["in another user's home"] : []),
+      ...(at('system') ? ['among system files'] : []),
     ],
     'and'
   );
   const verb = (does: string, may: string) => (base ? may : does);
-  const file = at(p.delete)
-    ? verb('deletes files or directories', 'delete files or directories')
-    : at(p.changes)
-      ? verb('creates, changes or moves files', 'create, change or move files')
-      : '';
+  const file =
+    at('delete') || (removes && where)
+      ? verb('deletes files or directories', 'delete files or directories')
+      : at('changes') || where
+        ? verb('creates, changes or moves files', 'create, change or move files')
+        : '';
   return [
     ...(file ? [where ? `${file} ${where}` : file] : []),
-    ...DOES.filter(([action]) => at(p[action])).map(([, does, may]) => verb(does, may)),
+    ...DOES.filter(([action]) => at(action)).map(([, does, may]) => verb(does, may)),
   ];
 }
 
 export function sudoReason(actions: Record<Action, number>, match: Match): string {
-  const sure = deeds(actions, (value) => reaches(value, JUDGE_CUT), false);
-  const maybe = deeds(actions, (value) => value > JUDGE_LOW && !reaches(value, JUDGE_CUT), true);
-  const reads = !CHANGING.some((action) => actions[action] > JUDGE_LOW);
+  const certain = (action: Action) => reaches(actions[action], JUDGE_CUT);
+  const filed = FILES.some(certain);
+  const sure = deeds(certain, false);
+  const maybe = deeds(
+    (action) => flagged(actions, action) && !certain(action) && !(filed && action === 'changes'),
+    true,
+    certain('delete')
+  );
+  const plain = clears(actions.plain, JUDGE_ALLOW);
+  const reads = plain && !SAID.some((action) => flagged(actions, action));
   const does = sure.length
     ? `It ${listing(sure, 'and')}.`
     : reads
       ? 'It only reads or lists files or system state.'
       : '';
   const might = maybe.length ? `It may ${listing(maybe, 'or')}.` : '';
-  const unclear = reaches(actions.plain, JUDGE_CUT)
-    ? ''
-    : "Its whole effect isn't clear from the line.";
+  const unclear = plain ? '' : "Its whole effect isn't clear from the line.";
   const owner = match.missing.length
     ? `The owner didn't ask to ${listing(
         match.missing.map((name) => WANTED[name]),
@@ -468,21 +496,29 @@ function questionText(id: string, question: ClassifierQuestion): string {
   return `- ${id}: ${question.instructions}${how}`;
 }
 
-export function chatGroups(item: Approval): Group[] {
-  return item.kind === 'sudo' ? [SUDO_GROUP, INTENT_GROUP] : [GUEST_GROUP];
-}
+const REVIEW = 'You review a request on behalf of the owner of this agent.';
+
+const ANSWER =
+  'Answer every question above with one JSON object and nothing else: each question id as a key, true or false for a yes/no question, or the name of one option for a question with options.';
+
+const promptOf = (lead: string, { about, questions }: Group) =>
+  `${lead}\n\n${[about, ...Object.entries(questions).map(([id, q]) => questionText(id, q))].join('\n')}\n\n${ANSWER}`;
 
 export function judgePrompt(item: Approval): string {
-  const facts = item.kind === 'sudo' ? ` ${SUDO_FACTS}` : '';
-  const groups = chatGroups(item)
-    .map(({ about, questions }) =>
-      [about, ...Object.entries(questions).map(([id, q]) => questionText(id, q))].join('\n')
-    )
-    .join('\n\n');
-  return `${INSTRUCTIONS}${facts}\n\n${groups}\n\nAnswer every question above with one JSON object and nothing else: each question id as a key, true or false for a yes/no question, or the name of one option for a question with options.`;
+  return item.kind === 'sudo'
+    ? promptOf(`${REVIEW} ${SUDO_FACTS}`, SUDO_GROUP)
+    : promptOf(INSTRUCTIONS, GUEST_GROUP);
 }
 
-export function chatAnswers(text: string, item: Approval): Answers | undefined {
+export const INTENT_PROMPT = promptOf(
+  `${REVIEW} You see only what the owner said, never the request.`,
+  INTENT_GROUP
+);
+
+export function chatAnswers(
+  text: string,
+  questions: Record<string, ClassifierQuestion>
+): Answers | undefined {
   const body = text
     .trim()
     .replace(/^```(?:json)?\s*/, '')
@@ -496,35 +532,26 @@ export function chatAnswers(text: string, item: Approval): Answers | undefined {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
   const given = parsed as Record<string, unknown>;
   const answers: Answers = {};
-  for (const { questions } of chatGroups(item))
-    for (const [id, question] of Object.entries(questions)) {
-      const value = given[id];
-      if (question.type === 'choice') {
-        const names = Object.keys(question.criteria ?? {});
-        if (typeof value !== 'string' || !names.includes(value)) return undefined;
-        const probabilities = Object.fromEntries(
-          names.map((name) => [name, name === value ? 1 : 0])
-        );
-        answers[id] = { type: 'choice', choice: value, probabilities, confidence: 1 };
-      } else {
-        if (typeof value !== 'boolean') return undefined;
-        answers[id] = { type: 'bool', probability: value ? 1 : 0 };
-      }
+  for (const [id, question] of Object.entries(questions)) {
+    const value = given[id];
+    if (question.type === 'choice') {
+      const names = Object.keys(question.criteria ?? {});
+      if (typeof value !== 'string' || !names.includes(value)) return undefined;
+      const probabilities = Object.fromEntries(names.map((name) => [name, name === value ? 1 : 0]));
+      answers[id] = { type: 'choice', choice: value, probabilities, confidence: 1 };
+    } else {
+      if (typeof value !== 'boolean') return undefined;
+      answers[id] = { type: 'bool', probability: value ? 1 : 0 };
     }
+  }
   return answers;
 }
 
-export function chatVerdict(
-  item: Approval,
-  text: string,
-  model: string
-): ApprovalVerdict | undefined {
-  const answers = chatAnswers(text, item);
-  if (!answers) return undefined;
-  return item.kind === 'sudo'
-    ? sudoVerdict(answers, model, 'chat')
-    : guestVerdict(answers, model, 'chat');
-}
+export const CHAT_QUESTIONS = {
+  guest: GUEST_GROUP.questions,
+  sudo: SUDO_GROUP.questions,
+  intent: INTENT_GROUP.questions,
+};
 
 export function judgeModelOf(text: string | undefined): ModelRef | null {
   let named: unknown;
@@ -623,21 +650,40 @@ export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
       return { error: result.errorMessage || `the judge stopped: ${result.stopReason}`, cost };
     return { answers: result.answers, cost };
   };
+  const chatAsk = async (
+    item: Approval,
+    chat: Model<Api>,
+    prompt: string,
+    state: JsonObject,
+    questions: Record<string, ClassifierQuestion>,
+    clock: Clock
+  ): Promise<Classified> => {
+    const input = await scrubbed(JSON.stringify(state, null, 2), Number.POSITIVE_INFINITY);
+    const asked = await completeText(options.models, chat, `${prompt}\n\n${input}`, JUDGE_TOKENS, {
+      signal: clock.signal,
+    }).catch(() => undefined);
+    if (asked) await charge(item, asked.answer);
+    if (!asked || clock.signal.aborted) return { error: "the judge didn't answer" };
+    const cost = asked.answer.usage?.cost.total ?? null;
+    const { stopReason } = asked.answer;
+    if (stopReason !== 'stop') return { error: `the judge stopped: ${stopReason}`, cost };
+    const answers = chatAnswers(asked.text, questions);
+    return answers ? { answers, cost } : { error: 'the judge gave no usable answer', cost };
+  };
   const ownerAnswers = (
     item: Approval,
-    { ref, classifier, intent }: Prepared
+    { ref, classifier, chat, intent }: Prepared
   ): { asked: Promise<Classified>; cached: boolean } => {
     const state = intentState(intent);
-    const key = `${nameOf(ref)}\n${JSON.stringify(state)}`;
+    const by = classifier ? nameOf(ref) : `chat:${nameOf(chat as Model<Api>)}`;
+    const key = `${by}\n${JSON.stringify(state)}`;
     const known = intents.get(key);
     if (known !== undefined) return { asked: known, cached: true };
     const clock = deadline(BACKGROUND_CONTEXT, options.timeoutMs ?? JUDGE_TIMEOUT);
-    const asked = classify(
-      item,
-      classifier as ClassifierModel<ClassifierApi>,
-      state,
-      INTENT_QUESTIONS,
-      clock
+    const asked = (
+      classifier
+        ? classify(item, classifier, state, INTENT_QUESTIONS, clock)
+        : chatAsk(item, chat as Model<Api>, INTENT_PROMPT, state, CHAT_QUESTIONS.intent, clock)
     ).then((got) => {
       clock.done();
       if ('error' in got) intents.delete(key);
@@ -647,64 +693,47 @@ export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
     if (intents.size > INTENTS_KEPT) intents.delete(intents.keys().next().value as string);
     return { asked, cached: false };
   };
-  const byClassifier = async (item: Approval, prepared: Prepared, clock: Clock) => {
-    const classifier = prepared.classifier as ClassifierModel<ClassifierApi>;
-    const model = nameOf(prepared.ref);
+  const judged = async (item: Approval, prepared: Prepared, clock: Clock): Promise<Judgement> => {
+    const { classifier, chat, intent } = prepared;
+    const via = classifier ? 'classifier' : 'chat';
+    const model = classifier ? nameOf(prepared.ref) : nameOf(chat as Model<Api>);
+    const ask = (state: JsonObject, sudo: boolean) =>
+      classifier
+        ? classify(item, classifier, state, sudo ? SUDO_QUESTIONS : JUDGE_QUESTIONS, clock)
+        : chatAsk(
+            item,
+            chat as Model<Api>,
+            judgePrompt(item),
+            state,
+            sudo ? CHAT_QUESTIONS.sudo : CHAT_QUESTIONS.guest,
+            clock
+          );
     if (item.kind !== 'sudo') {
-      const got = await classify(
-        item,
-        classifier,
-        judgeState(item, prepared.intent, nonce()),
-        JUDGE_QUESTIONS,
-        clock
-      );
+      const got = await ask(judgeState(item, intent, nonce()), false);
       if ('error' in got) return got;
-      const verdict = guestVerdict(got.answers, model, 'classifier');
+      const verdict = guestVerdict(got.answers, model, via);
       return verdict
         ? { verdict, cost: got.cost }
         : { error: 'the judge gave no usable answer', cost: got.cost };
     }
     const owner = ownerAnswers(item, prepared);
     const [actions, wanted] = await Promise.all([
-      classify(item, classifier, actionState(item, nonce()), SUDO_QUESTIONS, clock),
+      ask(actionState(item, nonce()), true),
       owner.asked,
     ]);
     const cost = sum(actions.cost, owner.cached ? null : wanted.cost);
     if ('error' in actions) return { error: actions.error, cost };
     if ('error' in wanted) return { error: wanted.error, cost };
-    const verdict = sudoVerdict({ ...actions.answers, ...wanted.answers }, model, 'classifier');
-    return verdict ? { verdict, cost } : { error: 'the judge gave no usable answer', cost };
-  };
-  const byChat = async (item: Approval, { chat, intent }: Prepared, clock: Clock) => {
-    const found = chat as Model<Api>;
-    const input = await scrubbed(
-      JSON.stringify(judgeState(item, intent, nonce()), null, 2),
-      Number.POSITIVE_INFINITY
-    );
-    const asked = await completeText(
-      options.models,
-      found,
-      `${judgePrompt(item)}\n\n${input}`,
-      JUDGE_TOKENS,
-      { signal: clock.signal }
-    ).catch(() => undefined);
-    if (asked) await charge(item, asked.answer);
-    if (!asked || clock.signal.aborted) return { error: "the judge didn't answer" };
-    const cost = asked.answer.usage?.cost.total ?? null;
-    const { stopReason } = asked.answer;
-    if (stopReason !== 'stop') return { error: `the judge stopped: ${stopReason}`, cost };
-    const verdict = chatVerdict(item, asked.text, nameOf(found));
+    const verdict = sudoVerdict({ ...actions.answers, ...wanted.answers }, model, via);
     return verdict ? { verdict, cost } : { error: 'the judge gave no usable answer', cost };
   };
   return async (item, context) => {
     const prepared = await prepare(item, context);
     if (typeof prepared === 'string') return { error: prepared };
     const clock = deadline(context, options.timeoutMs ?? JUDGE_TIMEOUT);
-    const judged: Judgement = await (prepared.classifier
-      ? byClassifier(item, prepared, clock)
-      : byChat(item, prepared, clock));
+    const judgement = await judged(item, prepared, clock);
     clock.done();
-    return clock.late() && !judged.verdict ? { ...judged, error: JUDGE_LATE } : judged;
+    return clock.late() && !judgement.verdict ? { ...judgement, error: JUDGE_LATE } : judgement;
   };
 }
 

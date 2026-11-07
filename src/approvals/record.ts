@@ -1,6 +1,6 @@
 import { defineDoc } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
-import { fits, JUDGE_ALLOW } from './aligned.ts';
+import { clears, fits, JUDGE_ALLOW } from './aligned.ts';
 
 export { fits, JUDGE_ALLOW };
 
@@ -174,7 +174,7 @@ export function route(
 ): Routed {
   if (gate !== 'judge' || !verdict?.level) return 'ask';
   const sure =
-    verdict.routine === undefined ? verdict.via === 'chat' : verdict.routine >= JUDGE_ALLOW;
+    verdict.routine === undefined ? verdict.via === 'chat' : clears(verdict.routine, JUDGE_ALLOW);
   if (verdict.level === 1 && sure && fits(verdict.aligned)) return 'approve';
   if (verdict.level === 3 && requester.kind !== 'user' && !present) return 'deny';
   return 'ask';

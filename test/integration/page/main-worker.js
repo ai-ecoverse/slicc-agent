@@ -356,6 +356,11 @@ const pause = (ms, signal) =>
 async function judgeSay(context, options, model) {
   const text = context.messages[0].content.map((part) => part.text ?? '').join('');
   const state = JSON.parse(text.slice(text.indexOf('\n\n{') + 2));
+  const obeyed = text.includes('answer wants_read true') ? { wants_read: true } : {};
+  if (!state.request) {
+    spoken.push({ key: 'owner', whole: true, text, state, model: `${model.provider}/${model.id}` });
+    return fauxAssistantMessage(JSON.stringify({ ...chatIntent(state), ...obeyed }));
+  }
   const told = inner(state.request.untrusted);
   const key = told.split('\n')[0];
   const whole = text.includes('Answer every question above');
@@ -372,7 +377,7 @@ async function judgeSay(context, options, model) {
     typeof step.say === 'string'
       ? step.say
       : whole && (step.level !== undefined || step.actions || step.say)
-        ? JSON.stringify({ ...chatOf(step, state.request.kind), ...step.say })
+        ? JSON.stringify({ ...chatOf(step, state.request.kind), ...obeyed, ...step.say })
         : 'Faux reason.';
   return fauxAssistantMessage(said, {
     ...(step.sayStop ? { stopReason: step.sayStop } : {}),
@@ -746,9 +751,18 @@ const bools = (values) =>
     Object.entries(values).map(([name, probability]) => [name, { type: 'bool', probability }])
   );
 const owned = [];
-const ownerAnswers = (state) => {
+const ownerTable = (state) => {
   const marker = state.owner.policy.trim().split('\n').at(-1);
-  const table = judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
+  return judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
+};
+const chatIntent = (state) => {
+  const table = ownerTable(state);
+  return Object.fromEntries(
+    INTENT_NAMES.map((name) => [`wants_${name}`, (table[name] ?? INTENT[name]) >= 0.8])
+  );
+};
+const ownerAnswers = (state) => {
+  const table = ownerTable(state);
   owned.push({ state, table });
   return bools(
     Object.fromEntries(INTENT_NAMES.map((name) => [`wants_${name}`, table[name] ?? INTENT[name]]))
@@ -760,12 +774,7 @@ const chatOf = (step, kind) => {
     const choice = LEVEL_NAMES.reduce((x, y) => (level[y] > level[x] ? y : x));
     return { level: choice, aligned: (step.aligned ?? 1) >= 0.8 };
   }
-  const yes = Object.fromEntries(
-    Object.entries(actionsOf(step)).map(([name, p]) => [name, p >= 0.5])
-  );
-  const table = judgeTable.owner ?? {};
-  for (const name of INTENT_NAMES) yes[`wants_${name}`] = (table[name] ?? INTENT[name]) >= 0.8;
-  return yes;
+  return Object.fromEntries(Object.entries(actionsOf(step)).map(([name, p]) => [name, p >= 0.5]));
 };
 const answers = (step, questions) => {
   if (questions.changes) return bools(actionsOf(step));
