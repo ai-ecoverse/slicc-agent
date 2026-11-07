@@ -12,22 +12,23 @@ const embed = (name, wait = '') => `sh /tmp/embed ${name}${wait ? ` ${wait}` : '
 const REQUESTS = {
   screen: { kind: 'capture.screen', type: 'video/webm', duration: 3, microphone: true },
   still: { kind: 'capture.screen', type: 'image/png' },
-  camera: { kind: 'capture.camera', type: 'image/jpeg' },
+  camera: { kind: 'capture.camera', type: 'image/jpeg', device: 'cam-id-1' },
   audio: { kind: 'audio.record', gate: false, seconds: 2 },
   url: { kind: 'open.url', url: 'https://example.test/' },
 };
 
 const SCRIPT = `exec 3<>/dev/embedder
-cat "/tmp/req-$1.json" >&3
+read -r line < "/tmp/req-$1.json"
+printf '%s\n' "$line" >&3
 if [ -n "$2" ]; then timeout "$2" cat <&3; else cat <&3; fi
 echo`;
 
-async function boot(page, { steps, judge = null, files = {} }) {
+async function boot(page, { steps, judge = null, files = {}, users = 'enforce' }) {
   await page.goto('/');
   await staged(
     page,
     'the capture agent',
-    async ({ steps, judge, files, requests, script }) => {
+    async ({ steps, judge, files, users, requests, script }) => {
       for (const [path, text] of Object.entries(files)) {
         const parts = path.split('/').filter(Boolean);
         const name = parts.pop();
@@ -54,12 +55,18 @@ async function boot(page, { steps, judge = null, files = {} }) {
           signal.addEventListener('abort', () => {
             entry.aborted = true;
           });
-          const given = await held.owner.approveCapture({ kind, options, stamp }, { signal });
+          const label = options.device ? { label: `Label of ${options.device}` } : {};
+          const given = await held.owner
+            .approveCapture({ kind, options, stamp, ...label }, { signal })
+            .catch((error) => {
+              entry.answer = `error:${error.code}`;
+              throw error;
+            });
           entry.answer = given;
           return `answer: ${typeof given === 'string' ? given : JSON.stringify(given)}`;
         },
       };
-      const kernel = await bootKernel();
+      const kernel = await bootKernel({}, { users });
       let worker;
       const owner = await startTracked({
         worker: () => {
@@ -156,7 +163,7 @@ async function boot(page, { steps, judge = null, files = {} }) {
         });
       globalThis.r = r;
     },
-    { steps, judge, files, requests: REQUESTS, script: SCRIPT }
+    { steps, judge, files, users, requests: REQUESTS, script: SCRIPT }
   );
 }
 
@@ -344,7 +351,7 @@ test("the judge decides a guest's capture on an agent gate from the capture's fa
 test("Always on a guest's capture is recorded for that seat, what and mode only", async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
-    judge: Array.from({ length: 8 }, () => ({ low: 0.97, aligned: 0.95, always: true })),
+    judge: Array.from({ length: 16 }, () => ({ low: 0.97, aligned: 0.95, always: true })),
     steps: [
       bash(embed('screen')),
       answer('First.'),
@@ -354,6 +361,10 @@ test("Always on a guest's capture is recorded for that seat, what and mode only"
       answer('Still.'),
       bash(embed('screen')),
       answer('Bob.'),
+      bash(embed('screen')),
+      answer('Asked again.'),
+      bash(`(sleep 3; ${embed('screen')}) > /dev/null 2>&1 &`),
+      answer('Left.'),
     ],
     files: {
       '/home/.pi/agent/settings.json': JSON.stringify({ approvals: { judgeModel: 'judge/j-1' } }),
@@ -399,9 +410,33 @@ test("Always on a guest's capture is recorded for that seat, what and mode only"
     out.bob = bobs.seat;
     await decide(bobs.id, 'deny');
     await until(() => said().includes('Bob.'), 'the run of Bob');
-    await pause(100);
-    out.answers = seen.map(({ answer }) => answer);
     await bob.close();
+    const control = globalThis.r.local.control;
+    out.forgot = await control.guestAlwaysForget(first.seat, first.id, BACKGROUND_CONTEXT);
+    out.afterForget = (globalThis.r.local.guests.value ?? []).find(
+      (seat) => seat.id === first.seat
+    ).alwaysCaptures;
+    const again = await join(first.seat);
+    await send(again, 'Record it again.');
+    await allowTool();
+    const asked = await pending();
+    await until(
+      () => globalThis.r.captures().find((item) => item.id === asked.id && item.always),
+      'the Always offer again'
+    );
+    await decide(asked.id, 'always');
+    await until(() => said().includes('Asked again.'), 'the run after forgetting');
+    await send(again, 'Leave a job.');
+    await allowTool();
+    await until(() => said().includes('Left.'), 'the run that leaves a job');
+    const before = globalThis.r.captures().length;
+    out.revoked = await control.guestRevoke(first.seat, BACKGROUND_CONTEXT);
+    await until(() => seen.length === 6 && seen[5].answer !== null, 'the left job to ask');
+    await pause(100);
+    out.newItems = globalThis.r.captures().length - before;
+    out.listed = (globalThis.r.local.guests.value ?? []).map((seat) => seat.id);
+    out.answers = seen.map(({ answer }) => answer);
+    await again.close().catch(() => undefined);
     return out;
   });
   assert.equal(seen.set, null);
@@ -411,5 +446,121 @@ test("Always on a guest's capture is recorded for that seat, what and mode only"
   assert.equal(seen.afterAgain, 1);
   assert.equal(seen.still, 'still');
   assert.equal(seen.bob, 'seat-2');
-  assert.deepEqual(seen.answers, ['always', 'always', 'once', 'deny']);
+  assert.deepEqual(seen.forgot, { removed: true });
+  assert.deepEqual(seen.afterForget, []);
+  assert.equal(seen.revoked.revoked, true);
+  assert.equal(seen.newItems, 0);
+  assert.equal(seen.listed.includes('seat-1'), false);
+  assert.deepEqual(seen.answers, ['always', 'always', 'once', 'deny', 'always', 'deny']);
+});
+
+test('with kernel users off the agent answers EAGAIN, so the page prompts as before', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { users: 'off', steps: [bash(embed('screen')), answer('Asked the page.')] });
+  const seen = await staged(page, 'with kernel users off', async () => {
+    const { until, open, prompt, said, seen, captures } = globalThis.r;
+    await open();
+    await prompt('Capture the screen.');
+    await until(() => said().includes('Asked the page.'), 'the run');
+    return { answers: seen.map(({ answer }) => answer), items: captures().length };
+  });
+  assert.deepEqual(seen.answers, ['error:EAGAIN']);
+  assert.equal(seen.items, 0);
+});
+
+test("a clean process that a guest run sets off is routed to that guest's seat by the taints alive around it", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    steps: [
+      bash(
+        '(while [ ! -e /tmp/go ]; do sleep 0.2; done; sh /tmp/embed still > /tmp/relay.out) > /dev/null 2>&1 &'
+      ),
+      answer('Armed.'),
+      bash('touch /tmp/go; sleep 6'),
+      answer('Set off.'),
+    ],
+  });
+  const seen = await staged(page, 'a clean process that a guest run sets off', async () => {
+    const { until, open, prompt, mint, join, send, said, seen, sh, pending, allowTool, decide } =
+      globalThis.r;
+    await open();
+    await prompt('Arm the relay.');
+    await until(() => said().includes('Armed.'), 'the owner run');
+    const seat = await mint('user');
+    const guest = await join(seat);
+    await send(guest, 'Set it off.');
+    await allowTool();
+    const item = await pending();
+    const out = { seat: item.seat, mode: item.detail.mode, tags: seen[0].tags };
+    await decide(item.id, 'deny');
+    out.relay = await until(
+      async () => (await sh('cat /tmp/relay.out 2>/dev/null')).stdout.trim(),
+      'the relay to finish'
+    );
+    await until(() => said().includes('Set off.'), 'the guest run');
+    out.answers = seen.map(({ answer }) => answer);
+    await guest.close();
+    return out;
+  });
+  assert.equal(seen.seat, 'seat-1');
+  assert.equal(seen.mode, 'still');
+  assert.deepEqual(
+    seen.tags.filter((tag) => tag.startsWith('slicc-taint:')),
+    []
+  );
+  assert.equal(seen.relay, 'answer: deny');
+  assert.deepEqual(seen.answers, ['deny']);
+});
+
+test("a capture two guests' runs taint asks each seat in turn, and the first deny wins", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    steps: [
+      bash('(sleep 60) > /dev/null 2>&1 &'),
+      answer('Waiting.'),
+      bash(embed('camera')),
+      answer('Bob denied.'),
+      bash(embed('camera')),
+      answer('Anna denied.'),
+    ],
+  });
+  const seen = await staged(page, "a capture two guests' runs taint", async () => {
+    const { until, open, mint, join, send, said, seen, pending, allowTool, decide, captures } =
+      globalThis.r;
+    await open();
+    const anna = await join(await mint('user'));
+    const bob = await join(await mint('user', 'Bob'), 'Bob');
+    await send(anna, 'Wait in the background.');
+    await allowTool();
+    await until(() => said().includes('Waiting.'), 'the run of Anna');
+    await send(bob, 'Take a photo.');
+    await allowTool();
+    const first = await pending();
+    const out = { first: first.seat, device: first.detail.device };
+    await decide(first.id, 'deny');
+    await until(() => said().includes('Bob denied.'), 'the first photo');
+    out.afterFirst = captures().map((item) => item.seat);
+    await send(bob, 'Take another photo.');
+    await allowTool();
+    const second = await pending();
+    out.second = second.seat;
+    await decide(second.id, 'once');
+    const third = await until(
+      () => captures().find((item) => item.state === 'pending' && item.id !== second.id),
+      "Anna's item"
+    );
+    out.third = third.seat;
+    await decide(third.id, 'deny');
+    await until(() => said().includes('Anna denied.'), 'the second photo');
+    out.answers = seen.map(({ answer }) => answer);
+    await anna.close();
+    await bob.close();
+    return out;
+  });
+  assert.equal(seen.first, 'seat-2');
+  assert.equal(seen.device, 'Label of cam-id-1');
+  assert.deepEqual(seen.afterFirst, ['seat-2']);
+  assert.equal(seen.second, 'seat-2');
+  assert.equal(seen.third, 'seat-1');
+  assert.deepEqual(seen.answers, ['deny', 'deny']);
 });

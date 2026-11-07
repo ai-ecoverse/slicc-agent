@@ -333,6 +333,14 @@ export type HostOptions = {
   labels?: LabelsRuntime;
 } & ApprovalOptions;
 
+const captureOf = (agent: Agent, approvals: Approvals, guests: Guests, options: HostOptions) =>
+  captureGate({
+    harness: agent.harness,
+    approvals,
+    policy: () => guests.policy(),
+    ...(options.scoops ? { lineage: options.scoops.scoops.lineage } : {}),
+  });
+
 export async function hostAgent(agent: Agent, options: HostOptions = {}): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
   const serverId = options.serverId ?? crypto.randomUUID();
@@ -419,7 +427,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
   };
   const sudo = createSudo({
     approvals,
-    capture: captureGate({ harness: agent.harness, approvals, policy: () => guests.policy() }),
+    capture: captureOf(agent, approvals, guests, options),
     agents: () => agent.agents.state(),
     ...(options.licks ? { licks: options.licks.licks } : {}),
   });

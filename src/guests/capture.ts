@@ -20,11 +20,7 @@ export type CaptureDenial = { answer: 'deny'; message: string };
 
 export type CaptureReply = CaptureAnswer | CaptureDenial;
 
-export interface CaptureRequest {
-  kind: string;
-  options?: Record<string, unknown>;
-  stamp?: { tags?: unknown; argv0?: unknown };
-}
+export type CaptureLineage = (pid: number | null) => Promise<{ recent: string[] } | undefined>;
 
 export interface AgentCapture {
   capture(request: unknown, where: string | null, context: Context): Promise<CaptureReply>;
@@ -34,6 +30,7 @@ export interface CaptureHost {
   harness: Pick<Harness, 'snapshot' | 'commit'>;
   approvals: Pick<Approvals, 'request' | 'settled' | 'withdraw'>;
   policy(): GuestPolicy;
+  lineage?: CaptureLineage;
   now?: () => number;
 }
 
@@ -56,6 +53,13 @@ const textOf = (value: unknown): string | undefined => {
   return text ? text.slice(0, LABEL_LENGTH) : undefined;
 };
 
+const stampOf = (request: unknown) => objectOf(objectOf(request).stamp);
+
+export function attributed(request: unknown): boolean {
+  const { users } = stampOf(request);
+  return users === 'report' || users === 'enforce';
+}
+
 const secondsOf = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? { seconds: value } : {};
 
@@ -68,7 +72,7 @@ export function captureDetail(request: unknown): CaptureDetail | null {
   const asked = objectOf(request);
   const options = objectOf(asked.options);
   const program = textOf(objectOf(asked.stamp).argv0) ?? PROGRAM;
-  const device = textOf(options.device);
+  const device = textOf(asked.label);
   const named = device ? { device } : {};
   if (asked.kind === 'audio.record')
     return { what: 'microphone', mode: 'audio', ...secondsOf(options.seconds), ...named, program };
@@ -90,7 +94,7 @@ export function captureDetail(request: unknown): CaptureDetail | null {
 }
 
 const tagsOf = (request: unknown): string[] => {
-  const tags = objectOf(objectOf(request).stamp).tags;
+  const { tags } = stampOf(request);
   return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [];
 };
 
@@ -128,6 +132,12 @@ async function settledOr(host: CaptureHost, id: string, context: Context): Promi
 
 export function captureGate(host: CaptureHost): AgentCapture {
   const now = host.now ?? Date.now;
+  const recentOf = async (request: unknown): Promise<string[] | undefined> => {
+    if (!host.lineage) return [];
+    const { pid } = stampOf(request);
+    const lineage = await host.lineage(typeof pid === 'number' ? pid : null).catch(() => undefined);
+    return lineage?.recent;
+  };
   const seatOf = async (id: string | null, context: Context) =>
     id === null ? undefined : (await host.harness.snapshot(GuestsDoc, context))?.seats[id];
   const remember = (seat: string, rule: AlwaysCapture) =>
@@ -162,6 +172,10 @@ export function captureGate(host: CaptureHost): AgentCapture {
       },
       BACKGROUND_CONTEXT
     );
+    if (!liveSeat(await seatOf(seat.id, context), now())) {
+      await host.approvals.withdraw(asked.id, REASONS.revoked, BACKGROUND_CONTEXT);
+      return 'deny';
+    }
     const item = asked.state === 'pending' ? await settledOr(host, asked.id, context) : asked;
     if (item.state !== 'approved') return denialOf(item);
     if (!liveSeat(await seatOf(seat.id, context), now())) return 'deny';
@@ -180,7 +194,10 @@ export function captureGate(host: CaptureHost): AgentCapture {
     async capture(request, where, context) {
       const detail = captureDetail(request);
       if (!detail) return { answer: 'deny', message: NOT_CAPTURE };
-      const taints = await taggedTaints(host.harness, tagsOf(request), context);
+      if (!attributed(request)) return 'deny';
+      const recent = await recentOf(request);
+      if (!recent) return 'deny';
+      const taints = await taggedTaints(host.harness, [...tagsOf(request), ...recent], context);
       let answer: CaptureAnswer = 'always';
       for (const taint of taints) {
         const given = await review(taint, detail, cleanReason(where), context);
