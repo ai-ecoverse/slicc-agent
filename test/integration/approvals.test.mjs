@@ -630,7 +630,7 @@ test("the owner's page asks about a guest's message and tool call in a dialog wi
   const tool = await page.evaluate(async () => {
     const { ask, until, deep, record, local, asked } = globalThis.t;
     await new Promise((resolve) => setTimeout(resolve, 600));
-    deep('dialog[data-approval][data-kind="guest-message"] [data-action="once"]').click();
+    await press(deep('dialog[data-approval][data-kind="guest-message"] [data-action="once"]'));
     await until(() => record(local, asked.item.id)?.state === 'approved', 'the approval');
     const item = await ask({
       kind: 'guest-tool',
@@ -658,7 +658,7 @@ test("the owner's page asks about a guest's message and tool call in a dialog wi
   const denied = await page.evaluate(async () => {
     const { until, deep, record, local, tool, owner } = globalThis.t;
     await new Promise((resolve) => setTimeout(resolve, 600));
-    deep('dialog[data-approval][data-kind="guest-tool"] [data-action="deny"]').click();
+    await press(deep('dialog[data-approval][data-kind="guest-tool"] [data-action="deny"]'));
     await until(() => record(local, tool.id)?.state === 'rejected', 'the denial');
     await until(() => !deep('dialog[data-approval]'), 'the dialog to close');
     await owner.release();
@@ -684,7 +684,7 @@ test('a follower without Control asks about a guest message in the same dialog a
       (button) => button.dataset.action
     );
     await new Promise((resolve) => setTimeout(resolve, 600));
-    deep('dialog[data-approval][data-kind="guest-message"] [data-action="once"]').click();
+    await press(deep('dialog[data-approval][data-kind="guest-message"] [data-action="once"]'));
     await until(() => record(local, item.id)?.state === 'approved', 'the approval');
     const { decidedBy } = record(local, item.id);
     await owner.release();

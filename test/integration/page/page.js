@@ -130,3 +130,28 @@ globalThis.activity = (connection) => () => {
   const value = connection.transcript.value;
   return [value?.entries.length ?? 0, JSON.stringify(value?.docs ?? {}).length];
 };
+globalThis.press = async (node) => {
+  const root = node.closest?.('dialog') ?? node;
+  await new Promise((resolve) => {
+    let last = performance.now();
+    const bump = () => {
+      last = performance.now();
+    };
+    const moves = new ResizeObserver(bump);
+    moves.observe(root);
+    for (const child of root.querySelectorAll('*')) moves.observe(child);
+    bump();
+    const tick = () => {
+      if (performance.now() - last >= 550) {
+        moves.disconnect();
+        resolve();
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  for (const type of ['pointerdown', 'pointerup'])
+    node.dispatchEvent(new PointerEvent(type, { bubbles: true, composed: true }));
+  node.click();
+};
