@@ -229,7 +229,7 @@ test('captures from runs no guest started, in a cone, a second cone and a scoop,
   assert.equal(seen.released, 'EAGAIN');
 });
 
-test("a guest's capture waits for a person on a user gate, stays out of spectrum's list, and is withdrawn when the program gives up", async (t) => {
+test("a guest's capture waits for a person on a user gate, who answers it in spectrum's approvals list, and is withdrawn there when the program gives up", async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
     steps: [
@@ -240,9 +240,10 @@ test("a guest's capture waits for a person on a user gate, stays out of spectrum
     ],
   });
   const seen = await staged(page, "a guest's capture waits for a person", async () => {
-    const { until, pause, open, mint, join, send, said, seen, pending, allowTool, decide } =
-      globalThis.r;
+    const { until, pause, open, mint, join, send, said, seen, pending, allowTool } = globalThis.r;
     await open();
+    const ended = [];
+    globalThis.r.model.approvals.on('ended', (detail) => ended.push(detail));
     const seat = await mint('user');
     const guest = await join(seat);
     await send(guest, 'Record the screen.');
@@ -250,10 +251,20 @@ test("a guest's capture waits for a person on a user gate, stays out of spectrum
     const item = await pending();
     await pause(1000);
     out.waiting = seen.map(({ answer }) => answer);
-    out.listed = globalThis.r.model.approvals.list().map((approval) => approval.kind);
+    const listed = await until(
+      () => globalThis.r.model.approvals.list().find((approval) => approval.id === item.id),
+      'the capture in the approvals list'
+    );
+    out.listed = {
+      kind: listed.kind,
+      agentId: listed.agentId,
+      always: listed.always,
+      requester: listed.requester,
+      detail: listed.detail,
+    };
     out.item = { seat: item.seat, tier: item.tier, detail: item.detail, always: item.always };
     out.requester = item.requester;
-    out.decided = await decide(item.id, 'once');
+    await globalThis.r.model.approvals.decide(item.id, 'once');
     await until(() => said().includes('Recorded.'), 'the recorded run');
     out.first = seen[0].answer;
     await send(guest, 'Take a still.');
@@ -267,12 +278,22 @@ test("a guest's capture waits for a person on a user gate, stays out of spectrum
     );
     out.gone = { state: gone.state, reason: gone.reason, mode: gone.detail.mode };
     out.aborted = seen[1].aborted;
+    out.ended = await until(
+      () => ended.find((detail) => detail.id === still.id),
+      'the ended event of the still'
+    );
     await guest.close();
     return out;
   });
   assert.deepEqual(seen.tools, [embed('screen'), embed('still', 2)]);
   assert.deepEqual(seen.waiting, [null]);
-  assert.equal(seen.listed.includes('capture'), false);
+  assert.deepEqual(seen.listed, {
+    kind: 'capture',
+    agentId: 'cone',
+    always: false,
+    requester: { kind: 'guest', name: 'Anna' },
+    detail: { what: 'screen', mode: 'video', seconds: 3, microphone: true, program: 'a program' },
+  });
   assert.deepEqual(seen.item, {
     seat: 'seat-1',
     tier: 'user',
@@ -280,10 +301,10 @@ test("a guest's capture waits for a person on a user gate, stays out of spectrum
     always: false,
   });
   assert.deepEqual(seen.requester, { kind: 'guest', name: 'Anna', seat: 'seat-1' });
-  assert.equal(seen.decided.done, true);
   assert.equal(seen.first, 'once');
   assert.deepEqual(seen.gone, { state: 'withdrawn', reason: 'aborted', mode: 'still' });
   assert.equal(seen.aborted, true);
+  assert.equal(seen.ended.reason, 'withdrawn');
 });
 
 test("the judge decides a guest's capture on an agent gate from the capture's facts, and its denial reaches the program", async (t) => {
