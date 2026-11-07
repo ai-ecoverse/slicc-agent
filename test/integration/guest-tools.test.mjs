@@ -772,7 +772,7 @@ test('the guest tool call dialog offers Always allow only while the policy does,
     const dialog = () => find(document, 'dialog[data-approval][data-kind="guest-tool"]');
     const click = async (action) => {
       await pause(600);
-      dialog().querySelector(`[data-action="${action}"]`).click();
+      await press(dialog().querySelector(`[data-action="${action}"]`));
       await until(() => !dialog(), 'the dialog to close');
     };
     const trail = [];

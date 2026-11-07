@@ -437,7 +437,9 @@ test("an unsure judge, a failed call, an attachment the judge cannot read or a c
   const decided = await staged(page, 'an unsure judge a failed', async () => {
     const { until, find, local, unsure, record, owner } = globalThis.t;
     await new Promise((resolve) => setTimeout(resolve, 600));
-    find(document, 'dialog[data-approval][data-kind="guest-message"] [data-action="deny"]').click();
+    await press(
+      find(document, 'dialog[data-approval][data-kind="guest-message"] [data-action="deny"]')
+    );
     const item = await until(
       () => record(local, unsure.id)?.state === 'rejected' && record(local, unsure.id),
       'the owner to deny it'
