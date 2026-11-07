@@ -568,3 +568,44 @@ test("a capture two guests' runs taint asks each seat in turn, and the first den
   assert.equal(seen.third, 'seat-1');
   assert.deepEqual(seen.answers, ['deny', LEFTOVER]);
 });
+
+test("a guest's capture on a seat whose tools gate is off goes back to the page with EAGAIN, while the owner's own still answers once", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    steps: [
+      bash(embed('screen')),
+      answer('Guest asked.'),
+      bash(embed('screen')),
+      answer('Owner asked.'),
+    ],
+  });
+  const seen = await staged(
+    page,
+    "a guest's capture on a seat whose tools gate is off",
+    async () => {
+      const { until, open, mint, join, send, prompt, said, seen, captures } = globalThis.r;
+      await open();
+      const set = await globalThis.r.local.control.approvalPolicySet(
+        { guests: { allowedToolGates: ['user', 'agent', 'scoop', 'off'] } },
+        BACKGROUND_CONTEXT
+      );
+      const guest = await join(await mint('off'));
+      await send(guest, 'Record the screen.');
+      await until(() => said().includes('Guest asked.'), 'the guest run');
+      await prompt('Record the screen yourself.');
+      await until(() => said().includes('Owner asked.'), 'the owner run');
+      const out = {
+        set: set.error,
+        answers: seen.map(({ answer }) => answer),
+        items: captures().length,
+        judged: (await globalThis.r.judged()).length,
+      };
+      await guest.close();
+      return out;
+    }
+  );
+  assert.equal(seen.set, null);
+  assert.deepEqual(seen.answers, ['error:EAGAIN', 'once']);
+  assert.equal(seen.items, 0);
+  assert.equal(seen.judged, 0);
+});

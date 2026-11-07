@@ -22,8 +22,12 @@ export type CaptureReply = CaptureAnswer | CaptureDenial;
 
 export type CaptureLineage = (pid: number | null) => Promise<{ recent: string[] } | undefined>;
 
+export const UNATTRIBUTED = 'unavailable';
+
+export type CaptureWire = CaptureReply | typeof UNATTRIBUTED;
+
 export interface AgentCapture {
-  capture(request: unknown, where: string | null, context: Context): Promise<CaptureReply>;
+  capture(request: unknown, where: string | null, context: Context): Promise<CaptureWire>;
 }
 
 export interface CaptureHost {
@@ -157,6 +161,10 @@ export function captureGate(host: CaptureHost): AgentCapture {
           rule,
         ];
     }, BACKGROUND_CONTEXT);
+  const off = async (taint: InheritedTaint, detail: CaptureDetail, context: Context) => {
+    const seat = await seatOf(taint.seat, context);
+    return seat !== undefined && early(seat, taint.tier, detail, host.policy(), now()) === 'once';
+  };
   const review = async (
     taint: InheritedTaint,
     detail: CaptureDetail,
@@ -196,6 +204,23 @@ export function captureGate(host: CaptureHost): AgentCapture {
     });
     return 'always';
   };
+  const decide = async (
+    taints: readonly InheritedTaint[],
+    own: ReadonlySet<string>,
+    detail: CaptureDetail,
+    where: string | undefined,
+    context: Context
+  ): Promise<CaptureReply> => {
+    let answer: CaptureAnswer = 'always';
+    for (const taint of taints) {
+      const given = await review(taint, detail, where, context);
+      if (given === 'once') answer = 'once';
+      else if (given === 'ended' || (given === 'deny' && !own.has(keyOf(taint))))
+        return { answer: 'deny', message: CAPTURE_LEFTOVER };
+      else if (given !== 'always') return given;
+    }
+    return answer;
+  };
   return {
     async capture(request, where, context) {
       const detail = captureDetail(request);
@@ -205,15 +230,8 @@ export function captureGate(host: CaptureHost): AgentCapture {
       if (!recent) return 'deny';
       const own = new Set((await taggedTaints(host.harness, tagsOf(request), context)).map(keyOf));
       const taints = await taggedTaints(host.harness, [...tagsOf(request), ...recent], context);
-      let answer: CaptureAnswer = 'always';
-      for (const taint of taints) {
-        const given = await review(taint, detail, cleanReason(where), context);
-        if (given === 'once') answer = 'once';
-        else if (given === 'ended' || (given === 'deny' && !own.has(keyOf(taint))))
-          return { answer: 'deny', message: CAPTURE_LEFTOVER };
-        else if (given !== 'always') return given;
-      }
-      return taints.length ? answer : 'once';
+      for (const taint of taints) if (await off(taint, detail, context)) return UNATTRIBUTED;
+      return taints.length ? decide(taints, own, detail, cleanReason(where), context) : 'once';
     },
   };
 }

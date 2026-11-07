@@ -1,7 +1,7 @@
 import type { Readable } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { clientHost, holding } from '../client.ts';
-import { attributed, type CaptureReply } from '../guests/capture.ts';
+import { attributed, type CaptureReply, UNATTRIBUTED } from '../guests/capture.ts';
 import { AgentSudoService, SUDO_METHODS } from '../services.ts';
 import { bound, type Remote, type Root } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
@@ -157,7 +157,9 @@ export async function askCapture(
     const halted = new Promise<'deny'>((resolve) =>
       ending.signal.addEventListener('abort', () => resolve('deny'), { once: true })
     );
-    return await Promise.race([asked, gone, halted]);
+    const answer = await Promise.race([asked, gone, halted]);
+    if (answer === UNATTRIBUTED) throw unavailable();
+    return answer;
   } catch (error) {
     if (isEagain(error)) throw error;
     return 'deny';
