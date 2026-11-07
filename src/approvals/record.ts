@@ -1,6 +1,6 @@
 import { defineDoc } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
-import { clears, fits, JUDGE_ALLOW } from './aligned.ts';
+import { clears, fits, JUDGE_ALLOW, JUDGE_LOW, reaches } from './aligned.ts';
 
 export { fits, JUDGE_ALLOW };
 
@@ -36,6 +36,7 @@ export type ApprovalVerdict = {
   model?: string;
   actions?: Record<string, number>;
   intent?: Record<string, number>;
+  forbidden?: number | boolean;
 };
 
 export type ApprovalAttachment = { name: string; mimeType: string; size: number };
@@ -166,6 +167,15 @@ export type Routed = 'approve' | 'deny' | 'ask';
 
 export const gateOf = (tier: string): Gate => (tier === 'agent' ? 'judge' : 'person');
 
+export const vetoed = ({ forbidden }: ApprovalVerdict): boolean =>
+  forbidden === true || (typeof forbidden === 'number' && reaches(forbidden, JUDGE_LOW));
+
+export function approvable(verdict: ApprovalVerdict): boolean {
+  const sure =
+    verdict.routine === undefined ? verdict.via === 'chat' : clears(verdict.routine, JUDGE_ALLOW);
+  return verdict.level === 1 && sure && fits(verdict.aligned);
+}
+
 export function route(
   verdict: ApprovalVerdict | undefined,
   requester: Pick<ApprovalRequester, 'kind'>,
@@ -173,9 +183,7 @@ export function route(
   present: boolean
 ): Routed {
   if (gate !== 'judge' || !verdict?.level) return 'ask';
-  const sure =
-    verdict.routine === undefined ? verdict.via === 'chat' : clears(verdict.routine, JUDGE_ALLOW);
-  if (verdict.level === 1 && sure && fits(verdict.aligned)) return 'approve';
+  if (approvable(verdict) && !vetoed(verdict)) return 'approve';
   if (verdict.level === 3 && requester.kind !== 'user' && !present) return 'deny';
   return 'ask';
 }

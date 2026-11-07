@@ -571,7 +571,9 @@ test('the eval set: the recorded classifier answers reach the expected routing a
         },
       });
       const recorded = (entry) =>
-        entry.kind === 'sudo' ? { actions: entry.recorded.actions } : entry.recorded;
+        entry.kind === 'sudo'
+          ? { actions: entry.recorded.actions, forbidden: entry.recorded.forbidden }
+          : entry.recorded;
       table(
         Object.fromEntries(
           cases.flatMap((entry) => [

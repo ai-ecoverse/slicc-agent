@@ -107,10 +107,14 @@ for (const ref of refs) {
   };
   const sudo = async (entry) => {
     const judged = await judge(itemOf(entry), {});
-    const { actions, intent } = judged.verdict ?? {};
+    const { actions, intent, forbidden } = judged.verdict ?? {};
+    const veto = typeof forbidden === 'number' ? { forbidden: round(forbidden) } : {};
     return {
       judged,
-      seen: actions && intent ? { actions: rounded(actions), intent: rounded(intent) } : undefined,
+      seen:
+        actions && intent
+          ? { actions: rounded(actions), intent: rounded(intent), ...veto }
+          : undefined,
     };
   };
   const rows = [];

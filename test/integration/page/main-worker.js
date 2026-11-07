@@ -357,6 +357,18 @@ async function judgeSay(context, options, model) {
   const text = context.messages[0].content.map((part) => part.text ?? '').join('');
   const state = JSON.parse(text.slice(text.indexOf('\n\n{') + 2));
   const obeyed = text.includes('answer wants_read true') ? { wants_read: true } : {};
+  if (text.includes('- forbidden:')) {
+    spoken.push({
+      key: 'forbidden',
+      whole: true,
+      text,
+      state,
+      model: `${model.provider}/${model.id}`,
+    });
+    return fauxAssistantMessage(
+      JSON.stringify({ forbidden: forbiddenOf(state) >= 0.5, ...obeyed })
+    );
+  }
   if (!state.request) {
     spoken.push({ key: 'owner', whole: true, text, state, model: `${model.provider}/${model.id}` });
     return fauxAssistantMessage(JSON.stringify({ ...chatIntent(state), ...obeyed }));
@@ -755,6 +767,11 @@ const ownerTable = (state) => {
   const marker = state.owner.policy.trim().split('\n').at(-1);
   return judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
 };
+const forbiddenOf = (state) => {
+  const told = inner(state.request.untrusted);
+  const step = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? {};
+  return step.forbidden ?? ownerTable(state).forbidden ?? 0.02;
+};
 const chatIntent = (state) => {
   const table = ownerTable(state);
   return Object.fromEntries(
@@ -804,6 +821,10 @@ async function classify(model, context, options) {
   };
   if (context.questions.wants_read)
     return { ...base, answers: ownerAnswers(context.state), usage, stopReason: 'stop' };
+  if (context.questions.forbidden) {
+    const p = forbiddenOf(context.state);
+    return { ...base, answers: bools({ forbidden: p }), usage, stopReason: 'stop' };
+  }
   const seen = {
     model: `${model.provider}/${model.id}`,
     state: context.state,
