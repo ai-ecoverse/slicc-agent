@@ -499,7 +499,7 @@ test("with the judge on, sudo waits for a person by default with the verdict as 
   assert.deepEqual(seen.byJudge, { tier: 'agent', decidedBy: 'judge', answer: 'once' });
   assert.deepEqual(seen.context, { stdin: 'none', writable: true, rootOnly: true });
   assert.equal(seen.allowed, 0);
-  assert.equal(seen.escalated, 0.5);
+  assert.equal(seen.escalated, 0.1);
   assert.match(seen.lick, /helper asked to run \/usr\/bin\/ls \/tmp/);
   assert.equal(seen.quiet, false);
   assert.equal(seen.after, 4);
@@ -584,7 +584,7 @@ test('a sudo asked right after a restart reaches the new worker, while the one w
   assert.deepEqual(seen, { old: 'deny', answer: 'once', first: ['withdrawn', 'restart'] });
 });
 
-test("a level 3 verdict on the owner's sudo asks an attached owner device, for a cone or a scoop, once without Always; NOPASSWD skips the judge; else it is the judge's deny in its own words", async (t) => {
+test("a level 3 verdict on the owner's sudo asks an attached owner device, for a cone or a scoop, once without Always; NOPASSWD skips the judge; else it is the judge's deny with the reason built from its answers", async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
     worker: 'main-worker.js',
@@ -596,8 +596,9 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
   const seen = await staged(page, 'a judge deny asks the owner', async () => {
     const { owner, ask, judged, setTable, until, newest, sudo, tags, replies, kernel } =
       globalThis.t;
-    const said = 'It reads a file that holds secrets.';
-    const risky = { low: 0.05, aligned: 0.9, say: said };
+    const said =
+      'It creates, changes or moves files among system files. The owner asked to create, change or move files.';
+    const risky = { actions: { changes: 0.9, system: 0.9 } };
     setTable({
       '/usr/bin/cat /etc/hostname': risky,
       '/usr/bin/cat /etc/passwd': risky,
@@ -708,7 +709,8 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     verdict: {
       level: 3,
       aligned: true,
-      reason: 'It reads a file that holds secrets.',
+      reason:
+        'It creates, changes or moves files among system files. The owner asked to create, change or move files.',
     },
     always: false,
   });
@@ -744,7 +746,8 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
   assert.deepEqual({ ...seen.alone.item, always: undefined }, { ...denied, always: undefined });
   const judged = {
     answer: 'deny',
-    message: 'sudo: denied by the approval judge: It reads a file that holds secrets.',
+    message:
+      'sudo: denied by the approval judge: It creates, changes or moves files among system files. The owner asked to create, change or move files.',
   };
   assert.deepEqual(seen.replies, ['once', 'deny', judged]);
   for (const run of [seen.scooped, seen.alone]) {

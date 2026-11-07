@@ -323,7 +323,11 @@ test("the judge decides a guest's capture on an agent gate from the capture's fa
   });
   assert.deepEqual(seen.answers, [
     'once',
-    { answer: 'deny', message: 'capture: denied by the approval judge: Faux reason.' },
+    {
+      answer: 'deny',
+      message:
+        'capture: denied by the approval judge: It could harm the system or the work in a way that is hard to undo.',
+    },
   ]);
   assert.deepEqual(seen.states, ['approved:judge:microphone', 'rejected:judge:screen']);
   assert.deepEqual(seen.judged, [
