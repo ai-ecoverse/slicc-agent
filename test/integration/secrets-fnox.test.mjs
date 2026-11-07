@@ -43,11 +43,11 @@ const SEALED = [
   },
 ];
 
-async function agentWith(t, { config, fnox, sealed, steps, query = [] }) {
+async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {} }) {
   const page = await chrome.page(t);
   await page.goto('/');
   return page.evaluate(
-    async ({ config, extra, sealed, steps, query }) => {
+    async ({ config, extra, sealed, steps, query, typed }) => {
       if (config !== null) {
         let dir = await navigator.storage.getDirectory();
         for (const part of ['etc', 'fnox'])
@@ -60,7 +60,7 @@ async function agentWith(t, { config, fnox, sealed, steps, query = [] }) {
       }
       const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
-      const hook = fakeSealed(sealed);
+      const hook = fakeSealed(sealed, [], typed);
       const kernel = await bootKernel(extra, {
         env: { FNOX_CONFIG_DIR: '/etc/fnox' },
         sealed: hook,
@@ -107,7 +107,7 @@ async function agentWith(t, { config, fnox, sealed, steps, query = [] }) {
       await owner.release();
       return result;
     },
-    { config, extra: fnox ? FNOX : {}, sealed, steps, query }
+    { config, extra: fnox ? FNOX : {}, sealed, steps, query, typed }
   );
 }
 
@@ -255,4 +255,25 @@ test('sealed ask: a revealed value reaches the command, and the model sees only 
   assert.ok(seen.entries.includes(`${placeholder.length}\\n plain=0`), seen.entries);
   assert.ok(seen.entries.includes(' missing=1'), seen.entries);
   for (const text of [seen.entries, ...seen.requests]) assert.ok(!text.includes(value));
+});
+
+test('fnox set --ask: a missing secret the user types is sealed, and the agent gets its placeholder', async (t) => {
+  const value = 'typed-in-the-dialog-0099';
+  const command = 'P=$(fnox set NEW_TOKEN --ask 2>/dev/null); echo "set=$? placeholder=$P"';
+  const seen = await agentWith(t, {
+    config: CONFIG,
+    fnox: true,
+    sealed: structuredClone(SEALED),
+    typed: { NEW_TOKEN: value },
+    steps: [{ tool: { name: 'bash', args: { command } } }, { answer: 'Done.' }],
+  });
+  assert.equal(seen.answer, 'Done.');
+  const ask = seen.sealed.find((request) => request.op === 'ask');
+  assert.deepEqual(ask && { name: ask.name, reveal: ask.reveal }, {
+    name: 'NEW_TOKEN',
+    reveal: false,
+  });
+  assert.match(seen.entries, /set=0 placeholder=fnox_proxy_[0-9a-f]{24}/);
+  assert.ok(!seen.entries.includes(value));
+  for (const text of seen.requests) assert.ok(!text.includes(value));
 });
