@@ -22,11 +22,18 @@ export interface RemoteControl {
     thinking?: boolean;
     attachments?: SendAttachment[];
   }): Promise<{ delivered: Delivered; events: AsyncIterable<RemoteEvent> }>;
-  watch(request?: {
-    since?: string | null;
-    thinking?: boolean;
+  watch(request?: { since?: string | null; thinking?: boolean; busy?: boolean }): Promise<{
+    head: string;
+    gap?: true;
     busy?: boolean;
-  }): Promise<{ head: string; gap?: true; busy?: boolean; events: AsyncIterable<RemoteEvent> }>;
+    history: string | null;
+    events: AsyncIterable<RemoteEvent>;
+  }>;
+  history(request: {
+    before: string | null;
+    limit?: number;
+    thinking?: boolean;
+  }): Promise<{ events: RemoteEvent[]; before: string | null; more: boolean }>;
   abort(): Promise<{ aborted: boolean }>;
   inventory(request?: {
     watch?: boolean;
@@ -165,8 +172,21 @@ export function remoteControl(
         head: result.head ?? '',
         ...(result.gap ? { gap: true as const } : {}),
         ...(typeof result.busy === 'boolean' ? { busy: result.busy } : {}),
+        history: result.history ?? null,
         events: events(service, result.stream),
       };
+    },
+    async history({ before, limit, thinking = false }) {
+      const service = need();
+      const request = {
+        agentId: agent(),
+        before,
+        thinking,
+        ...(limit === undefined ? {} : { limit }),
+      };
+      const result = await service.history(request, BACKGROUND_CONTEXT);
+      if (!result.ok) throw failure(result.code, result.message);
+      return { events: result.events, before: result.before, more: result.more };
     },
     async abort() {
       return need().abort(agent(), BACKGROUND_CONTEXT);

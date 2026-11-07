@@ -232,12 +232,13 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
     status: 2,
     stdout: '',
     stderr:
-      "agent: --lick=fswatch is the agent's own channel; a process may send --lick=cron or --lick=webhook\n",
+      "agent: --lick=fswatch is the agent's own channel; a process may send --lick=cron or --lick=webhook; to message a cone, leave out --lick: agent send <cone> …\n",
   });
   assert.deepEqual(refused.cron, {
     status: 1,
     stdout: '',
-    stderr: 'agent: --lick=cron only works inside a cron job, which sets SLICC_CRON_JOB\n',
+    stderr:
+      'agent: --lick=cron only works inside a cron job, which sets SLICC_CRON_JOB; to message a cone, leave out --lick: agent send <cone> …\n',
   });
   const triage = await staged(page, 'the triage', () =>
     window.agentWait(() => {

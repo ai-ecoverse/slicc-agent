@@ -42,7 +42,15 @@ import {
   type SettingsState,
   TRANSCRIPT_STATES,
 } from './services.ts';
-import { type AgentPrincipal, bound, type Remote, type Root, replicated, SELF } from './serving.ts';
+import {
+  type AgentPrincipal,
+  bound,
+  offers,
+  type Remote,
+  type Root,
+  replicated,
+  SELF,
+} from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 import { otherVersion, type PortEndpoint, PortLink } from './wire.ts';
 
@@ -73,6 +81,7 @@ export interface AgentConnection {
   readonly approvalPolicy?: ReplicatedState<ApprovalPolicy>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
+  readonly history?: boolean;
   readonly pages?: AgentPages;
   readonly inventory?: ReplicatedState<InventoryState>;
   readonly closed: Promise<Error | undefined>;
@@ -288,6 +297,7 @@ export async function connectAgent(
     approvalPolicy: hold<ApprovalPolicy>(state('approvalPolicy')),
     settings: lastingSettings(settings, hold),
     remote,
+    history: offers(controlHandle, 'entries'),
     pages,
     ...(inventoryHandle?.variant === 'owner'
       ? { inventory: hold(replicated(inventoryHandle.inventory as Readable<InventoryState>)) }

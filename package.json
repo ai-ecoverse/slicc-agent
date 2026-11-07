@@ -73,7 +73,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/slicc-jsh": "0.64.0",
-    "@ai-ecoverse/slicc-kernel": "1.174.0",
+    "@ai-ecoverse/slicc-kernel": "1.174.2",
     "@ai-ecoverse/slicc-scrub": "1.1.0",
     "@ai-ecoverse/slicc-shared-web": "2.13.10",
     "@ai-ecoverse/slicc-spectrum": "1.112.1",
@@ -93,7 +93,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@ai-ecoverse/slicc-vault": "1.22.1",
+    "@ai-ecoverse/slicc-vault": "1.23.0",
     "@aws-sdk/middleware-websocket": "^3.972.54",
     "@earendil-works/chord": "1.5.0",
     "@earendil-works/pi-ai": "1.5.0",

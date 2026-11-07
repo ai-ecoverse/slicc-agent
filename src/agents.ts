@@ -180,6 +180,8 @@ export async function openAgents(
     async createCone(name, using) {
       const wanted = name.trim();
       if (!wanted) throw new Error('A cone needs a name.');
+      if (/[\p{Cc}\u2028\u2029]/u.test(wanted))
+        throw new Error('A cone name can’t contain line breaks, tabs or other control characters.');
       if (Object.values(state.cones).some((record) => record.name === wanted))
         throw new Error(`A cone named ${wanted} already exists.`);
       const conversation = await harness.createConversation(

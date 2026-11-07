@@ -26,6 +26,7 @@ import {
   type RemoteEvent,
   replayOf,
 } from './events.ts';
+import { historyFrom, historyOf, type RemoteHistory } from './history.ts';
 
 export const VAULT_BACK = 'the vault is answering again';
 
@@ -56,6 +57,7 @@ export type RemoteOpened =
       delivered: Delivered | null;
       head: string | null;
       gap: boolean;
+      history?: string | null;
       busy?: boolean;
     }
   | { ok: false; code: string; message: string };
@@ -80,6 +82,10 @@ export interface AgentRemote {
     request: { agentId: string | null; since: string | null; thinking: boolean; busy?: boolean },
     context: Context
   ): Promise<RemoteOpened>;
+  history(
+    request: { agentId: string | null; before: string | null; limit?: number; thinking: boolean },
+    context: Context
+  ): Promise<RemoteHistory>;
   next(stream: string, waitMs: number, context: Context): Promise<RemoteBatch>;
   close(stream: string, context: Context): Promise<void>;
   abort(agentId: string | null, context: Context): Promise<{ aborted: boolean }>;
@@ -237,12 +243,17 @@ async function recall(
   since: string | null,
   thinking: boolean,
   context: Context
-): Promise<{ entries: EntryRecord[]; events: RemoteEvent[]; gap: boolean }> {
+): Promise<{
+  entries: EntryRecord[];
+  events: RemoteEvent[];
+  partial: RemoteEvent[];
+  gap: boolean;
+}> {
   let merged = transcript.merge(view);
   const partial = liveOf(view)?.generation?.message as never;
   const pack = () => {
     const entries = merged.items.flatMap((item) => (item.kind === 'entry' ? [item.entry] : []));
-    return { entries, events: replayOf(entries, partial, thinking) };
+    return { entries, ...replayOf(entries, partial, thinking) };
   };
   let packed = pack();
   const has = () => since !== null && packed.events.some((event) => idOf(event) === since);
@@ -547,15 +558,20 @@ export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promi
           last++;
         const replay = own.t === 'text' || own.t === 'thinking' ? [own] : [];
         stream.push([...replay, ...recalled.events.slice(last + 1)]);
-      }
+      } else if (request.since === null) stream.push(recalled.partial);
       return {
         ok: true,
         stream: id,
         delivered: null,
         head,
         gap: recalled.gap,
+        history: historyFrom(recalled.entries, watched.view.before),
         ...(busy ? { busy: busy.opened } : {}),
       };
+    },
+    async history(request, context) {
+      const conversation = await host.conversation(request.agentId, context);
+      return historyOf(conversation, request, context);
     },
     async next(id, waitMs, context) {
       const stream = streams.get(id);
