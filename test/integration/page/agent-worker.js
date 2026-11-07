@@ -43,6 +43,15 @@ faux.setResponses(
     ...params.getAll('answer').map((answer) => fauxAssistantMessage([fauxText(answer)])),
   ].map(recorded)
 );
+const echoes = Number(params.get('echo') ?? 0);
+if (echoes)
+  faux.appendResponses(
+    Array.from({ length: echoes }, () => (context) => {
+      const asked = context.messages.findLast((message) => message.role === 'user')?.content;
+      const text = typeof asked === 'string' ? asked : (asked?.[0]?.text ?? '');
+      return fauxAssistantMessage([fauxText(text.replace(/^Q/, 'A'))]);
+    })
+  );
 const kernel = params.has('kernel');
 const fakeClock = (start) => {
   let offset = 0;

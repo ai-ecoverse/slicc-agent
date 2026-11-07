@@ -415,3 +415,112 @@ test('a view-only seat gets the full image of an entry only from a view or its o
   assert.deepEqual(seen.forkFirst, [seen.first]);
   assert.equal(seen.again, seen.png);
 });
+
+async function jumpsTwice(t, first, second, holdAt = 0) {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(() => import('/dist-test/page.js'));
+  const total = first + second;
+  const seen = await staged(
+    page,
+    'a second jump during a gap fill',
+    async (first, total, holdAt) => {
+      const owner = await startTracked({
+        worker: () => new Worker(`/dist-test/agent-worker.js?echo=${total}`, { type: 'module' }),
+      });
+      const connection = await owner.connect();
+      const real = connection.views;
+      const heard = new Set();
+      let frozen = null;
+      const tell = () => {
+        for (const listener of heard) listener(real.value);
+      };
+      real.subscribe(() => {
+        if (!frozen) tell();
+      });
+      const views = {
+        get value() {
+          return frozen ?? real.value;
+        },
+        subscribe(listener) {
+          heard.add(listener);
+          return () => heard.delete(listener);
+        },
+      };
+      let hold = null;
+      let release = () => {};
+      let held = 0;
+      let fetched = 0;
+      const control = new Proxy(connection.control, {
+        get(target, key) {
+          const value = Reflect.get(target, key);
+          if (key !== 'entries') return typeof value === 'function' ? value.bind(target) : value;
+          return async (...args) => {
+            const result = await value.apply(target, args);
+            fetched += result.entries.length;
+            if (hold && fetched >= holdAt) {
+              held += 1;
+              await hold;
+            }
+            return result;
+          };
+        },
+      });
+      const { agent } = createAgentModel({ ...connection, control, views });
+      await agent.ready();
+      const cone = agent.active();
+      const texts = () =>
+        agent
+          .messages(cone)
+          .map((message) => message.text ?? message.parts?.find((p) => p.type === 'text')?.text);
+      for (let n = 1; n <= 3; n++) await connection.prompt(`Q${n}`);
+      await when([changed, every(50)], () => texts().at(-1) === 'A3', 'three turns');
+      frozen = real.value;
+      for (let n = 4; n <= first; n++) {
+        if (n % 100 === 0) stage(`turn ${n}`);
+        await connection.prompt(`Q${n}`);
+      }
+      hold = new Promise((resolve) => {
+        release = resolve;
+      });
+      frozen = null;
+      tell();
+      await when([changed, every(50)], () => held > 0, 'a gap fill held open');
+      frozen = real.value;
+      for (let n = first + 1; n <= total; n++) await connection.prompt(`Q${n}`);
+      frozen = null;
+      tell();
+      hold = null;
+      release();
+      await when([changed, every(50)], () => texts().at(-1) === `A${total}`, 'the last answer');
+      for (let last = -1; last !== fetched; ) {
+        last = fetched;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      const shown = texts();
+      await owner.release();
+      return { shown, older: agent.hasOlder(cone), fetched };
+    },
+    first,
+    total,
+    holdAt
+  );
+  return { ...seen, total, errors: page.errors };
+}
+
+test('a second jump while the chat fills a gap is filled too, and the conversation stays whole', async (t) => {
+  const seen = await jumpsTwice(t, 60, 60);
+  assert.deepEqual(seen.shown, pairs(seen.total));
+  assert.equal(seen.older, false);
+  assert.deepEqual(seen.errors, []);
+});
+
+test('a second jump while the chat fills a jump past its cap is filled too, under a contiguous tail older() continues', async (t) => {
+  const seen = await jumpsTwice(t, 2060, 60, 4000);
+  const kept = seen.shown.length / 2;
+  assert.ok(kept >= 2000 && kept < seen.total, `${kept} turns kept`);
+  assert.deepEqual(seen.shown, pairs(seen.total).slice(-seen.shown.length));
+  assert.equal(seen.older, true);
+  assert.ok(seen.fetched <= 4000 + 200, `${seen.fetched} entries fetched`);
+  assert.deepEqual(seen.errors, []);
+});
