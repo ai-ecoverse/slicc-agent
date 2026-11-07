@@ -438,6 +438,16 @@ export function fakeSealed(secrets, log = []) {
       );
       return { ticket, expiresAt: Date.now() + 30000, real };
     },
+    ask: (req) => {
+      const found = find(req.name);
+      if (!found) return { state: 'cancelled' };
+      return {
+        state: 'done',
+        placeholder: found.placeholder,
+        record: found.name,
+        ...(req.reveal ? { value: found.value } : {}),
+      };
+    },
     materializeConsume: (req) => {
       const names = tickets.get(req.ticket) ?? [];
       tickets.delete(req.ticket);

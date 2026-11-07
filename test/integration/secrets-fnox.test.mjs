@@ -43,11 +43,11 @@ const SEALED = [
   },
 ];
 
-async function agentWith(t, { config, fnox, sealed, steps }) {
+async function agentWith(t, { config, fnox, sealed, steps, query = [] }) {
   const page = await chrome.page(t);
   await page.goto('/');
   return page.evaluate(
-    async ({ config, extra, sealed, steps }) => {
+    async ({ config, extra, sealed, steps, query }) => {
       if (config !== null) {
         let dir = await navigator.storage.getDirectory();
         for (const part of ['etc', 'fnox'])
@@ -65,7 +65,10 @@ async function agentWith(t, { config, fnox, sealed, steps }) {
         env: { FNOX_CONFIG_DIR: '/etc/fnox' },
         sealed: hook,
       });
-      const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
+      const params = new URLSearchParams([
+        ...steps.map((step) => ['step', JSON.stringify(step)]),
+        ...query.map((key) => [key, '']),
+      ]);
       let worker;
       const owner = await startAgent({
         worker: () =>
@@ -92,12 +95,19 @@ async function agentWith(t, { config, fnox, sealed, steps }) {
         listed: listedEntry()?.model[0].content,
         requests: await requests,
         entries: JSON.stringify(connection.transcript.value.entries),
-        sealed: hook.log.map(({ op, shellGrants, argv }) => ({ op, shellGrants, argv })),
+        sealed: hook.log.map(({ op, shellGrants, argv, name, reveal, requester }) => ({
+          op,
+          shellGrants,
+          argv,
+          name,
+          reveal,
+          exe: requester?.exe,
+        })),
       };
       await owner.release();
       return result;
     },
-    { config, extra: fnox ? FNOX : {}, sealed, steps }
+    { config, extra: fnox ? FNOX : {}, sealed, steps, query }
   );
 }
 
@@ -214,4 +224,35 @@ test('fnox secrets: an empty config with no sealed secrets shows no secrets', as
   assert.ok(system.includes('`sealed ask NAME`'), system);
   assert.ok(system.includes('use it only for a missing secret'), system);
   assert.equal(seen.listed, 'The user listed secrets: none.');
+});
+
+test('sealed ask: a revealed value reaches the command, and the model sees only its placeholder', async (t) => {
+  const value = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+  const placeholder = 'fnox_proxy_000000000000000000000001';
+  const command = [
+    'sealed ask GH_TOKEN --reveal --prompt "to log in"; echo " reveal=$?"',
+    'sealed ask GH_TOKEN | wc -c; echo " plain=$?"',
+    'sealed ask MISSING; echo " missing=$?"',
+  ].join('; ');
+  const seen = await agentWith(t, {
+    config: null,
+    fnox: false,
+    sealed: [{ name: 'GH_TOKEN', placeholder, value, exec: false, rules: [] }],
+    query: ['vault', 'scrub'],
+    steps: [{ tool: { name: 'bash', args: { command } } }, { answer: 'Done.' }],
+  });
+  assert.equal(seen.answer, 'Done.');
+  const asks = seen.sealed.filter((request) => request.op === 'ask');
+  assert.deepEqual(
+    asks.map(({ name, reveal, exe }) => ({ name, reveal, exe })),
+    [
+      { name: 'GH_TOKEN', reveal: true, exe: '/usr/bin/sealed' },
+      { name: 'GH_TOKEN', reveal: false, exe: '/usr/bin/sealed' },
+      { name: 'MISSING', reveal: false, exe: '/usr/bin/sealed' },
+    ]
+  );
+  assert.ok(seen.entries.includes(`${placeholder} reveal=0`), seen.entries);
+  assert.ok(seen.entries.includes(`${placeholder.length}\\n plain=0`), seen.entries);
+  assert.ok(seen.entries.includes(' missing=1'), seen.entries);
+  for (const text of [seen.entries, ...seen.requests]) assert.ok(!text.includes(value));
 });
