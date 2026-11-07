@@ -526,7 +526,7 @@ test('aborting the conversation withdraws its waiting guest tool call, which nev
   assert.deepEqual(seen, { item: 'withdrawn:aborted', asked: 0, last: 'never' });
 });
 
-test('with the judge as the tools gate and nobody there, the judge allows a call that fits the owner’s intent and declines a harmful one in its own words', async (t) => {
+test('with the judge as the tools gate and nobody there, the judge allows a call that fits the owner’s intent and declines a harmful one with its level’s reason', async (t) => {
   const page = await chrome.page(t);
   await boot(page, {
     judge: [
@@ -568,7 +568,9 @@ test('with the judge as the tools gate and nobody there, the judge allows a call
   assert.equal(seen.results[0], 'judged-ok');
   assert.equal(
     seen.results[1],
-    refused('The automatic check declined this tool call in a run a guest started: Faux reason.')
+    refused(
+      'The automatic check declined this tool call in a run a guest started: It could harm the system or the work in a way that is hard to undo.'
+    )
   );
   assert.deepEqual(seen.states, ['approved:judge', 'rejected:judge']);
 });

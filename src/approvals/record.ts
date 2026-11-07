@@ -34,6 +34,8 @@ export type ApprovalVerdict = {
   via?: 'classifier' | 'chat';
   risk?: number;
   model?: string;
+  actions?: Record<string, number>;
+  intent?: Record<string, number>;
 };
 
 export type ApprovalAttachment = { name: string; mimeType: string; size: number };
@@ -171,7 +173,8 @@ export function route(
   present: boolean
 ): Routed {
   if (gate !== 'judge' || !verdict?.level) return 'ask';
-  const sure = verdict.via === 'chat' || (verdict.routine ?? 0) >= JUDGE_ALLOW;
+  const sure =
+    verdict.routine === undefined ? verdict.via === 'chat' : verdict.routine >= JUDGE_ALLOW;
   if (verdict.level === 1 && sure && fits(verdict.aligned)) return 'approve';
   if (verdict.level === 3 && requester.kind !== 'user' && !present) return 'deny';
   return 'ask';

@@ -358,17 +358,23 @@ async function judgeSay(context, options, model) {
   const state = JSON.parse(text.slice(text.indexOf('\n\n{') + 2));
   const told = inner(state.request.untrusted);
   const key = told.split('\n')[0];
-  const whole = text.includes('Answer in exactly four lines');
+  const whole = text.includes('Answer every question above');
   spoken.push({ key, whole, text, state, model: `${model.provider}/${model.id}` });
   for (const wake of judgedWakes.splice(0)) wake();
   const entry = judgeTable[told] ?? judgeTable[key];
-  const step = entry?.say !== undefined || entry?.sayError ? entry : (sayings.shift() ?? {});
+  const step = entry ?? sayings.shift() ?? {};
   if (step.sayDelay) await pause(step.sayDelay, options?.signal);
   if (options?.signal?.aborted)
     return fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' });
   if (step.sayError)
     return fauxAssistantMessage([], { stopReason: 'error', errorMessage: step.sayError });
-  return fauxAssistantMessage(step.say ?? 'Faux reason.', {
+  const said =
+    typeof step.say === 'string'
+      ? step.say
+      : whole && (step.level !== undefined || step.actions || step.say)
+        ? JSON.stringify({ ...chatOf(step, state.request.kind), ...step.say })
+        : 'Faux reason.';
+  return fauxAssistantMessage(said, {
     ...(step.sayStop ? { stopReason: step.sayStop } : {}),
   });
 }
@@ -695,7 +701,74 @@ const levelsOf = (step) => {
   if (step.level) return step.level;
   return { routine: step.low, permissions: 0, harm: 1 - step.low };
 };
+const ACTION_NAMES = [
+  'changes',
+  'others',
+  'system',
+  'delete',
+  'permissions',
+  'code',
+  'services',
+  'send',
+  'secrets',
+];
+const INTENT_NAMES = [
+  'read',
+  'write',
+  'delete',
+  'permissions',
+  'code',
+  'send',
+  'secrets',
+  'services',
+];
+const INTENT = Object.fromEntries(INTENT_NAMES.map((name) => [name, name === 'send' ? 0.1 : 0.95]));
+const actionsOf = (step) => {
+  const base = Object.fromEntries(ACTION_NAMES.map((name) => [name, 0.02]));
+  const legacy = {};
+  if (!step.actions) {
+    const { permissions, harm } = levelsOf(step);
+    legacy.permissions = permissions;
+    legacy.delete = harm;
+    legacy.changes = Math.max(permissions, harm);
+    if (step.aligned !== undefined && step.aligned < 0.8) legacy.send = 0.9;
+  }
+  return {
+    ...base,
+    plain: 0.95,
+    ...legacy,
+    ...step.actions,
+    always: step.actions?.always ?? step.more ?? (step.always === true ? 0.05 : 0.9),
+  };
+};
+const bools = (values) =>
+  Object.fromEntries(
+    Object.entries(values).map(([name, probability]) => [name, { type: 'bool', probability }])
+  );
+const owned = [];
+const ownerAnswers = (state) => {
+  const marker = state.owner.policy.trim().split('\n').at(-1);
+  const table = judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
+  owned.push({ state, table });
+  return bools(
+    Object.fromEntries(INTENT_NAMES.map((name) => [`wants_${name}`, table[name] ?? INTENT[name]]))
+  );
+};
+const chatOf = (step, kind) => {
+  if (kind !== 'sudo') {
+    const level = levelsOf(step);
+    const choice = LEVEL_NAMES.reduce((x, y) => (level[y] > level[x] ? y : x));
+    return { level: choice, aligned: (step.aligned ?? 1) >= 0.8 };
+  }
+  const yes = Object.fromEntries(
+    Object.entries(actionsOf(step)).map(([name, p]) => [name, p >= 0.5])
+  );
+  const table = judgeTable.owner ?? {};
+  for (const name of INTENT_NAMES) yes[`wants_${name}`] = (table[name] ?? INTENT[name]) >= 0.8;
+  return yes;
+};
 const answers = (step, questions) => {
+  if (questions.changes) return bools(actionsOf(step));
   const probabilities = levelsOf(step);
   const choice = LEVEL_NAMES.reduce((a, b) => (probabilities[b] > probabilities[a] ? b : a));
   const more = step.more ?? (step.always === true ? 0.05 : 0.9);
@@ -711,6 +784,17 @@ const answers = (step, questions) => {
   };
 };
 async function classify(model, context, options) {
+  const base = { api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
+  const usage = {
+    input: 100,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 102,
+    cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+  };
+  if (context.questions.wants_read)
+    return { ...base, answers: ownerAnswers(context.state), usage, stopReason: 'stop' };
   const seen = {
     model: `${model.provider}/${model.id}`,
     state: context.state,
@@ -721,7 +805,6 @@ async function classify(model, context, options) {
   for (const wake of judgedWakes.splice(0)) wake();
   const told = inner(context.state.request.untrusted);
   const step = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? judgeSteps.shift() ?? {};
-  const base = { api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
   if (step.hold) {
     await new Promise((resolve) => {
       if (options?.signal?.aborted) resolve();
@@ -732,15 +815,8 @@ async function classify(model, context, options) {
   }
   if (step.delay) await new Promise((resolve) => setTimeout(resolve, step.delay));
   if (step.stop) return { ...base, answers: {}, stopReason: step.stop, errorMessage: step.error };
-  if (step.low === undefined && step.level === undefined) throw new Error('no judge answer queued');
-  const usage = {
-    input: 100,
-    output: 2,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 102,
-    cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
-  };
+  if (step.low === undefined && step.level === undefined && !step.actions)
+    throw new Error('no judge answer queued');
   return { ...base, answers: answers(step, context.questions), usage, stopReason: 'stop' };
 }
 const classifier = (id) => ({
@@ -803,6 +879,7 @@ const clef = triaged
 const aborts = new Map();
 self.addEventListener('message', ({ data }) => {
   data?.judged?.postMessage(judged);
+  data?.owned?.postMessage(owned);
   if (data?.items) void running.then((host) => data.items.postMessage(host.approvals.state.value));
   if (data?.judgeTable) judgeTable = data.judgeTable;
   if (data?.abort) aborts.get(data.abort)?.abort();
