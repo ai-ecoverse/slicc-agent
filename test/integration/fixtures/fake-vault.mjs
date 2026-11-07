@@ -410,7 +410,7 @@ export function fakeVault(values, version = 1, options = {}) {
   });
 }
 
-export function fakeSealed(secrets, log = []) {
+export function fakeSealed(secrets, log = [], typed = {}) {
   const tickets = new Map();
   const hex = () =>
     Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
@@ -437,6 +437,29 @@ export function fakeSealed(secrets, log = []) {
         names.filter((name) => real[name])
       );
       return { ticket, expiresAt: Date.now() + 30000, real };
+    },
+    ask: (req) => {
+      let found = find(req.name);
+      if ((req.replace || !found) && Object.hasOwn(typed, req.name)) {
+        const value = typed[req.name];
+        if (found) found.value = value;
+        else {
+          found = {
+            name: req.name,
+            placeholder: `fnox_proxy_${hex().slice(0, 24)}`,
+            value,
+            rules: [],
+          };
+          secrets.push(found);
+        }
+      }
+      if (!found) return { state: 'cancelled' };
+      return {
+        state: 'done',
+        placeholder: found.placeholder,
+        record: found.name,
+        ...(req.reveal ? { value: found.value } : {}),
+      };
     },
     materializeConsume: (req) => {
       const names = tickets.get(req.ticket) ?? [];

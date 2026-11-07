@@ -436,6 +436,107 @@ test("bios's own sudo approvals and the agent's guest approvals show together, a
   assert.equal(seen.left, 0);
 });
 
+test("bios's secret approvals pass through to a person even with the judge as the approver, and owner.approve refuses a secret ask", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, undefined, 'agent', { 'judge-level': '3' });
+  const seen = await page.evaluate(async () => {
+    const { owner, ask, until, record, ended } = globalThis.t;
+    const listeners = { approvals: new Set(), ended: new Set() };
+    const decided = [];
+    const secret = {
+      id: 'ask-1',
+      kind: 'secret',
+      mode: 'reveal',
+      name: 'GH_TOKEN',
+      prompt: 'to log in to the registry',
+      reveal: true,
+      requester: { kind: 'agent', name: 'cone', where: 'cone' },
+      process: {
+        exe: '/usr/bin/sealed',
+        argv: ['sealed', 'ask', 'GH_TOKEN', '--reveal'],
+        cwd: '/',
+      },
+      createdAt: Date.now() - 1000,
+      expiresAt: Date.now() + 300_000,
+    };
+    const bios = {
+      waiting: [secret],
+      list: () => bios.waiting,
+      on(type, listener) {
+        listeners[type].add(listener);
+        return () => listeners[type].delete(listener);
+      },
+      async decide(id, decision) {
+        decided.push([id, decision]);
+        bios.waiting = bios.waiting.filter((approval) => approval.id !== id);
+        for (const listener of listeners.approvals) listener(bios.waiting);
+        for (const listener of listeners.ended) listener({ id, reason: 'answered' });
+      },
+    };
+    const local = await owner.connect();
+    const model = createAgentModel(local, { approvals: bios });
+    const ends = ended(model);
+    const sudo = await ask({
+      kind: 'sudo',
+      agentId: 'cone',
+      requester: { kind: 'agent', name: 'cone', agentId: 'cone' },
+      tier: 'agent',
+      detail: { command: 'rm -rf /etc', target: 'root' },
+    });
+    const judged = await until(
+      () => record(local, sudo.id)?.state !== 'pending' && record(local, sudo.id),
+      'the judge on the sudo'
+    );
+    const listed = model.approvals.list().map(({ id, kind }) => ({ id, kind }));
+    const before = decided.length;
+    const refused = await Promise.all(
+      [
+        {
+          v: 1,
+          op: 'ask',
+          name: 'GH_TOKEN',
+          reveal: true,
+          caller: { uid: 1000 },
+          requester: {
+            exe: '/usr/bin/sealed',
+            argv: ['sealed'],
+            cwd: '/',
+            tty: null,
+            stdin: 'none',
+          },
+        },
+        {
+          id: 'ask-2',
+          kind: 'secret',
+          user: 'cone',
+          argv: ['sealed'],
+          expiresAt: Date.now() + 60_000,
+        },
+      ].map((request) =>
+        owner.approve(request).then(
+          () => null,
+          (error) => error.code
+        )
+      )
+    );
+    const items = local.approvals.value.length;
+    await model.approvals.decide('ask-1', 'deny');
+    const left = model.approvals.list().length;
+    await local.close();
+    await owner.release();
+    return { judged, listed, before, refused, items, decided, ends, left };
+  });
+  assert.equal(seen.judged.decidedBy, 'judge');
+  assert.equal(seen.judged.state, 'rejected');
+  assert.deepEqual(seen.listed, [{ id: 'ask-1', kind: 'secret' }]);
+  assert.equal(seen.before, 0);
+  assert.deepEqual(seen.refused, ['EAGAIN', 'EAGAIN']);
+  assert.equal(seen.items, 1);
+  assert.deepEqual(seen.decided, [['ask-1', 'deny']]);
+  assert.deepEqual(seen.ends, [{ id: 'ask-1', reason: 'answered' }]);
+  assert.equal(seen.left, 0);
+});
+
 async function viewport(page, width) {
   await page.send('Emulation.setDeviceMetricsOverride', {
     width,

@@ -43,11 +43,11 @@ const SEALED = [
   },
 ];
 
-async function agentWith(t, { config, fnox, sealed, steps }) {
+async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {} }) {
   const page = await chrome.page(t);
   await page.goto('/');
   return page.evaluate(
-    async ({ config, extra, sealed, steps }) => {
+    async ({ config, extra, sealed, steps, query, typed }) => {
       if (config !== null) {
         let dir = await navigator.storage.getDirectory();
         for (const part of ['etc', 'fnox'])
@@ -60,12 +60,15 @@ async function agentWith(t, { config, fnox, sealed, steps }) {
       }
       const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
-      const hook = fakeSealed(sealed);
+      const hook = fakeSealed(sealed, [], typed);
       const kernel = await bootKernel(extra, {
         env: { FNOX_CONFIG_DIR: '/etc/fnox' },
         sealed: hook,
       });
-      const params = new URLSearchParams(steps.map((step) => ['step', JSON.stringify(step)]));
+      const params = new URLSearchParams([
+        ...steps.map((step) => ['step', JSON.stringify(step)]),
+        ...query.map((key) => [key, '']),
+      ]);
       let worker;
       const owner = await startAgent({
         worker: () =>
@@ -92,12 +95,19 @@ async function agentWith(t, { config, fnox, sealed, steps }) {
         listed: listedEntry()?.model[0].content,
         requests: await requests,
         entries: JSON.stringify(connection.transcript.value.entries),
-        sealed: hook.log.map(({ op, shellGrants, argv }) => ({ op, shellGrants, argv })),
+        sealed: hook.log.map(({ op, shellGrants, argv, name, reveal, requester }) => ({
+          op,
+          shellGrants,
+          argv,
+          name,
+          reveal,
+          exe: requester?.exe,
+        })),
       };
       await owner.release();
       return result;
     },
-    { config, extra: fnox ? FNOX : {}, sealed, steps }
+    { config, extra: fnox ? FNOX : {}, sealed, steps, query, typed }
   );
 }
 
@@ -113,6 +123,11 @@ test('fnox secrets: a sealed secret is in the prompt with its placeholder and wh
   assert.equal(seen.answer, 'Seen.');
   const system = systemOf(seen.requests);
   assert.ok(system.includes(`- GH_TOKEN = ${GH}: api.github.com, header authorization`), system);
+  assert.ok(system.includes('When a secret you need is missing'), system);
+  assert.ok(
+    system.includes('Add `--reveal` to `sealed ask` only when a tool needs the plaintext'),
+    system
+  );
   assert.ok(system.includes(`- SHELLY = ${SHELLY}: in every bash`), system);
   assert.ok(system.includes('- LOCAL = $LOCAL: not sealed'), system);
   assert.ok(
@@ -203,6 +218,62 @@ test('fnox secrets: an empty config with no sealed secrets shows no secrets', as
     sealed: [],
     steps: [{ answer: 'Seen.' }],
   });
-  assert.ok(systemOf(seen.requests).includes('No secrets are configured'));
+  const system = systemOf(seen.requests);
+  assert.ok(system.includes('No secrets are configured'));
+  assert.ok(system.includes('`fnox set NAME --ask`'), system);
+  assert.ok(system.includes('`sealed ask NAME`'), system);
+  assert.ok(system.includes('use it only for a missing secret'), system);
   assert.equal(seen.listed, 'The user listed secrets: none.');
+});
+
+test('sealed ask: a revealed value reaches the command, and the model sees only its placeholder', async (t) => {
+  const value = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+  const placeholder = 'fnox_proxy_000000000000000000000001';
+  const command = [
+    'sealed ask GH_TOKEN --reveal --prompt "to log in"; echo " reveal=$?"',
+    'sealed ask GH_TOKEN | wc -c; echo " plain=$?"',
+    'sealed ask MISSING; echo " missing=$?"',
+  ].join('; ');
+  const seen = await agentWith(t, {
+    config: null,
+    fnox: false,
+    sealed: [{ name: 'GH_TOKEN', placeholder, value, exec: false, rules: [] }],
+    query: ['vault', 'scrub'],
+    steps: [{ tool: { name: 'bash', args: { command } } }, { answer: 'Done.' }],
+  });
+  assert.equal(seen.answer, 'Done.');
+  const asks = seen.sealed.filter((request) => request.op === 'ask');
+  assert.deepEqual(
+    asks.map(({ name, reveal, exe }) => ({ name, reveal, exe })),
+    [
+      { name: 'GH_TOKEN', reveal: true, exe: '/usr/bin/sealed' },
+      { name: 'GH_TOKEN', reveal: false, exe: '/usr/bin/sealed' },
+      { name: 'MISSING', reveal: false, exe: '/usr/bin/sealed' },
+    ]
+  );
+  assert.ok(seen.entries.includes(`${placeholder} reveal=0`), seen.entries);
+  assert.ok(seen.entries.includes(`${placeholder.length}\\n plain=0`), seen.entries);
+  assert.ok(seen.entries.includes(' missing=1'), seen.entries);
+  for (const text of [seen.entries, ...seen.requests]) assert.ok(!text.includes(value));
+});
+
+test('fnox set --ask: a missing secret the user types is sealed, and the agent gets its placeholder', async (t) => {
+  const value = 'typed-in-the-dialog-0099';
+  const command = 'P=$(fnox set NEW_TOKEN --ask 2>/dev/null); echo "set=$? placeholder=$P"';
+  const seen = await agentWith(t, {
+    config: CONFIG,
+    fnox: true,
+    sealed: structuredClone(SEALED),
+    typed: { NEW_TOKEN: value },
+    steps: [{ tool: { name: 'bash', args: { command } } }, { answer: 'Done.' }],
+  });
+  assert.equal(seen.answer, 'Done.');
+  const ask = seen.sealed.find((request) => request.op === 'ask');
+  assert.deepEqual(ask && { name: ask.name, reveal: ask.reveal }, {
+    name: 'NEW_TOKEN',
+    reveal: false,
+  });
+  assert.match(seen.entries, /set=0 placeholder=fnox_proxy_[0-9a-f]{24}/);
+  assert.ok(!seen.entries.includes(value));
+  for (const text of seen.requests) assert.ok(!text.includes(value));
 });
