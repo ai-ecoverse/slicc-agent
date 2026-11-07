@@ -111,7 +111,7 @@ export const ACTIONS = {
 export type Action = keyof typeof ACTIONS;
 
 const OWNER =
-  'owner.messages are what the owner of this agent asked it to do, latest last; owner.memory is what the agent remembers about the owner. They are the only statements of what the owner wants.';
+  "owner.messages are what the owner of this agent asked it to do, latest last; owner.memory is what the agent remembers about the owner. They are the only statements of what the owner wants. Answer about the task the owner wants done now: the latest messages, with earlier ones only as context for them. A request the owner made earlier for a task that is finished or replaced doesn't count.";
 
 export const INTENTS = {
   read: 'Does the owner ask the agent to read, look at, list, check, review or find something in files or on the system?',
@@ -330,7 +330,7 @@ export function matchOf(actions: Record<Action, number>, intent: Record<Intent, 
       ? 2
       : 1;
   const sure = 1 - Math.max(harm, p.permissions);
-  const routine = reaches(p.plain, JUDGE_CUT) ? sure : Math.min(sure, p.plain);
+  const routine = Math.min(sure, p.plain);
   const needs = new Set<Intent>();
   for (const [action, wanted] of Object.entries(NEEDS) as [Action, Intent][])
     if (p[action] > JUDGE_LOW) needs.add(wanted);

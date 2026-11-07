@@ -681,54 +681,64 @@ test('paths and the directory a requester chose reach the judge only inside the 
 
 const SESSION_INTENT = {
   1: {
-    read: 0.942,
-    write: 0.595,
-    delete: 0.008,
-    permissions: 0.184,
-    code: 0.083,
-    send: 0.009,
-    secrets: 0.017,
-    services: 0.017,
+    read: 0.946,
+    write: 0.622,
+    delete: 0.012,
+    permissions: 0.191,
+    code: 0.122,
+    send: 0.007,
+    secrets: 0.012,
+    services: 0.016,
   },
   3: {
-    read: 0.979,
-    write: 0.965,
-    delete: 0.971,
-    permissions: 0.587,
-    code: 0.035,
-    send: 0.007,
-    secrets: 0.016,
-    services: 0.08,
+    read: 0.97,
+    write: 0.952,
+    delete: 0.947,
+    permissions: 0.588,
+    code: 0.044,
+    send: 0.008,
+    secrets: 0.013,
+    services: 0.034,
   },
   4: {
-    read: 0.981,
-    write: 0.962,
-    delete: 0.969,
-    permissions: 0.615,
-    code: 0.044,
-    send: 0.007,
-    secrets: 0.018,
-    services: 0.069,
+    read: 0.946,
+    write: 0.793,
+    delete: 0.263,
+    permissions: 0.373,
+    code: 0.02,
+    send: 0.006,
+    secrets: 0.008,
+    services: 0.014,
   },
   5: {
-    read: 0.98,
-    write: 0.967,
-    delete: 0.966,
-    permissions: 0.633,
-    code: 0.047,
-    send: 0.007,
-    secrets: 0.016,
-    services: 0.043,
+    read: 0.957,
+    write: 0.884,
+    delete: 0.501,
+    permissions: 0.398,
+    code: 0.028,
+    send: 0.006,
+    secrets: 0.012,
+    services: 0.023,
   },
   6: {
-    read: 0.979,
-    write: 0.976,
-    delete: 0.965,
-    permissions: 0.548,
-    code: 0.031,
-    send: 0.007,
-    secrets: 0.016,
-    services: 0.063,
+    read: 0.953,
+    write: 0.949,
+    delete: 0.912,
+    permissions: 0.197,
+    code: 0.014,
+    send: 0.006,
+    secrets: 0.011,
+    services: 0.017,
+  },
+  7: {
+    read: 0.458,
+    write: 0.958,
+    delete: 0.006,
+    permissions: 0.009,
+    code: 0.023,
+    send: 0.013,
+    secrets: 0.014,
+    services: 0.02,
   },
 };
 const READ_ONLY = (plain, always, extra = {}) => ({
@@ -749,13 +759,19 @@ const SESSION_ROWS = [
   {
     phase: 1,
     argv: ['ls', '-la', '/root/v6', '/root/v6/memory'],
-    actions: READ_ONLY(0.901, 0.19),
+    actions: READ_ONLY(0.849, 0.19),
     expect: ['approve', 1, READS],
+  },
+  {
+    phase: 1,
+    argv: ['cat', '/etc/shadow'],
+    actions: READ_ONLY(0.909, 0.138, { secrets: 0.942 }),
+    expect: ['ask', 1, "It shows secrets in its output. The owner didn't ask to see secrets."],
   },
   {
     phase: 3,
     argv: ['find', '/home/cone-2', '-type', 'f'],
-    actions: READ_ONLY(0.846, 0.105),
+    actions: READ_ONLY(0.837, 0.105),
     expect: ['approve', 1, READS],
   },
   {
@@ -817,7 +833,7 @@ const SESSION_ROWS = [
   {
     phase: 4,
     argv: ['du', '-s', '/usr'],
-    actions: READ_ONLY(0.893, 0.121),
+    actions: READ_ONLY(0.869, 0.121),
     expect: ['approve', 1, READS],
   },
   {
@@ -829,27 +845,39 @@ const SESSION_ROWS = [
       system: 0.184,
       delete: 0.963,
     }),
+    expect: ['ask', 3, "It deletes files or directories. The owner didn't ask to delete files."],
+  },
+  {
+    phase: 6,
+    argv: ['ls', '-A', '/slicc-fs'],
+    actions: READ_ONLY(0.852, 0.144),
+    expect: ['approve', 1, READS],
+  },
+  {
+    phase: 6,
+    argv: ['ls', '-A', '/slicc-fs'],
+    actions: READ_ONLY(0.852, 0.144),
+    expect: ['approve', 1, READS],
+  },
+  {
+    phase: 6,
+    argv: ['ls', '-la', '/slicc-fs'],
+    actions: READ_ONLY(0.788, 0.122),
+    expect: ['ask', 1, READS],
+  },
+  {
+    phase: 7,
+    argv: ['ls', '-la', '/root'],
+    actions: READ_ONLY(0.877, 0.088),
     expect: [
       'ask',
-      3,
-      'It deletes files or directories. The owner asked to create, change or move files and delete files.',
+      1,
+      "It only reads or lists files or system state. The owner didn't ask to read or inspect files.",
     ],
-  },
-  {
-    phase: 6,
-    argv: ['ls', '-A', '/slicc-fs'],
-    actions: READ_ONLY(0.813, 0.144),
-    expect: ['approve', 1, READS],
-  },
-  {
-    phase: 6,
-    argv: ['ls', '-A', '/slicc-fs'],
-    actions: READ_ONLY(0.813, 0.144),
-    expect: ['approve', 1, READS],
   },
 ];
 
-test('real session sudo on live clef answers: asked-for reads are approved, writes ask, reasons match, intent once per turn', async (t) => {
+test('real session sudo on live clef answers: asked-for reads approved, writes, secrets, stale reads ask', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { files: { [SETTINGS]: judgeSettings('judge/j-1') } });
   const seen = await staged(
@@ -904,13 +932,12 @@ test('real session sudo on live clef answers: asked-for reads are approved, writ
           decidedBy: item.decidedBy,
         });
       }
-      const asks = (await owned()).map((entry) =>
-        entry.state.owner.policy.trim().split('\n').at(-1)
-      );
+      const intentStates = (await owned()).map((entry) => entry.state);
+      const asks = intentStates.map((state) => state.owner.policy.trim().split('\n').at(-1));
       const texts = (await said()).length;
       await local.close();
       await owner.release();
-      return { out, asks, texts };
+      return { out, asks, texts, intentStates };
     },
     { rows: SESSION_ROWS, intents: SESSION_INTENT }
   );
@@ -926,6 +953,60 @@ test('real session sudo on live clef answers: asked-for reads are approved, writ
     assert.equal(seen.out[at].decidedBy, got === 'approve' ? 'judge' : null, label);
     for (const word of ['fits', 'serves']) assert.ok(!seen.out[at].reason.includes(word), label);
   }
-  assert.deepEqual(seen.asks, ['phase: 1', 'phase: 3', 'phase: 4', 'phase: 5', 'phase: 6']);
+  assert.deepEqual(
+    seen.asks,
+    [1, 3, 4, 5, 6, 7].map((phase) => `phase: ${phase}`)
+  );
+  for (const state of seen.intentStates) assert.deepEqual(Object.keys(state), ['owner']);
+  for (const state of seen.intentStates) {
+    const text = JSON.stringify(state);
+    assert.ok(!text.includes('untrusted'));
+    for (const row of SESSION_ROWS)
+      assert.ok(!text.includes(`/usr/bin/${row.argv.join(' ')}`), row.argv.join(' '));
+  }
   assert.equal(seen.texts, 0);
+});
+
+test('the chat fallback answers yes or no, so a chat model that calls a secret read or a shell one-liner harmless gets it approved, and one that names the risk gets it asked', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { files: { [SETTINGS]: judgeSettings('faux/faux-1') } });
+  const seen = await staged(page, 'chat fallback answers', async () => {
+    const { owner, until, items, sudo, command, decide, table, agentGate } = globalThis.t;
+    const local = await agentGate();
+    const shadow = ['cat', '/etc/shadow'];
+    const oneLiner = ['sh', '-c', 'id'];
+    const out = [];
+    for (const [argv, say] of [
+      [shadow, { secrets: false, plain: true }],
+      [oneLiner, { code: false, plain: true }],
+      [shadow, { secrets: true, plain: true }],
+      [oneLiner, { code: true, plain: false }],
+    ]) {
+      table({ [command(argv)]: { actions: {}, say }, owner: { secrets: 0.05, code: 0.05 } });
+      const before = (await items()).length;
+      const asked = sudo(argv);
+      const item = await until(
+        async () => {
+          const all = await items();
+          const found = all.length > before && all.at(-1);
+          return (
+            found && !found.judging && (found.state !== 'pending' || found.tier === 'user') && found
+          );
+        },
+        `the chat verdict on ${command(argv)}`
+      );
+      if (item.state === 'pending') await decide(local, item.id, 'deny');
+      await asked;
+      out.push([item.state, item.verdict.via, item.verdict.routine, item.verdict.aligned]);
+    }
+    await local.close();
+    await owner.release();
+    return out;
+  });
+  assert.deepEqual(seen, [
+    ['approved', 'chat', 1, true],
+    ['approved', 'chat', 1, true],
+    ['pending', 'chat', 1, false],
+    ['pending', 'chat', 0, false],
+  ]);
 });
