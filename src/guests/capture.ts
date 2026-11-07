@@ -1,6 +1,7 @@
 import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Harness } from '@earendil-works/pi-durable';
+import { attributed, stampOf, UNATTRIBUTED } from '../approvals/attributed.ts';
 import type { Approval, Approvals } from '../approvals/index.ts';
 import {
   type ApprovalAnswer,
@@ -21,8 +22,6 @@ export type CaptureDenial = { answer: 'deny'; message: string };
 export type CaptureReply = CaptureAnswer | CaptureDenial;
 
 export type CaptureLineage = (pid: number | null) => Promise<{ recent: string[] } | undefined>;
-
-export const UNATTRIBUTED = 'unavailable';
 
 export type CaptureWire = CaptureReply | typeof UNATTRIBUTED;
 
@@ -59,13 +58,6 @@ const textOf = (value: unknown): string | undefined => {
     .trim();
   return text ? text.slice(0, LABEL_LENGTH) : undefined;
 };
-
-const stampOf = (request: unknown) => objectOf(objectOf(request).stamp);
-
-export function attributed(request: unknown): boolean {
-  const { users } = stampOf(request);
-  return users === 'report' || users === 'enforce';
-}
 
 const secondsOf = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? { seconds: value } : {};
