@@ -32,6 +32,8 @@ export {
   ASK_MIN_MS,
   approvalJudge,
   attachApprovals,
+  type CaptureApproval,
+  type CaptureDetail,
   DEFAULT_POLICY,
   type DecidedBy,
   type Decider,
@@ -67,6 +69,7 @@ export type {
   SudoReply,
   SudoRequest,
 } from './approvals/sudo.ts';
+export type { CaptureAsk } from './approvals/sudo-client.ts';
 export {
   FILE_LIMIT,
   IMAGE_LIMIT,
@@ -79,6 +82,7 @@ export {
 export { type AgentConnection, connectAgent } from './client.ts';
 export type { Clock } from './clock.ts';
 export { createAgentControl } from './control.ts';
+export type { CaptureAnswer, CaptureDenial, CaptureReply } from './guests/capture.ts';
 export {
   connectGuest,
   GUEST_ONLY,
@@ -87,7 +91,13 @@ export {
 } from './guests/client.ts';
 export type { GuestOpened, Proposed, ProposeRequest } from './guests/index.ts';
 export type { GateKind, GuestPolicy } from './guests/policy.ts';
-export type { GuestDraft, GuestGate, GuestGates, GuestSeat } from './guests/seats.ts';
+export type {
+  AlwaysCapture,
+  GuestDraft,
+  GuestGate,
+  GuestGates,
+  GuestSeat,
+} from './guests/seats.ts';
 export { type AgentHost, type ConnectOptions, hostAgent } from './host.ts';
 export type {
   KernelClient,

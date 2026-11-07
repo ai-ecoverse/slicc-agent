@@ -113,7 +113,7 @@ export const alwaysFor =
   (policy: Pick<ApprovalPolicies, 'current'>) =>
   (kind: ApprovalKind): boolean => {
     const { always } = policy.current().guests;
-    return kind === 'guest-tool' ? always.tools : always.messages;
+    return kind === 'guest-message' ? always.messages : always.tools;
   };
 
 export async function attachApprovalPolicy(

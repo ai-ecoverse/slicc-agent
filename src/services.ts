@@ -483,6 +483,7 @@ export const AgentPagesService: RemoteContract = contract('slicc.agent.pages', {
 export const SUDO_METHODS = keys<Omit<AgentSudo, 'approvals'>>({
   request: true,
   withdraw: true,
+  capture: true,
 });
 
 export const AgentSudoService: RemoteContract = contract('slicc.agent.sudo', {

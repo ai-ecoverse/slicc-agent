@@ -4,7 +4,7 @@ import { clears, fits, JUDGE_ALLOW, JUDGE_LOW, reaches } from './aligned.ts';
 
 export { fits, JUDGE_ALLOW };
 
-export type ApprovalKind = 'guest-message' | 'guest-tool' | 'sudo';
+export type ApprovalKind = 'guest-message' | 'guest-tool' | 'sudo' | 'capture';
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'unanswered' | 'withdrawn';
 
@@ -57,6 +57,20 @@ export type SudoDetail = {
   writable?: boolean;
 };
 
+export type CaptureWhat = 'screen' | 'camera' | 'microphone';
+
+export type CaptureMode = 'still' | 'video' | 'audio';
+
+export type CaptureDetail = {
+  what: CaptureWhat;
+  mode: CaptureMode;
+  seconds?: number;
+  system?: boolean;
+  microphone?: boolean;
+  device?: string;
+  program: string;
+};
+
 type Base = {
   id: string;
   seat?: string;
@@ -81,8 +95,9 @@ type Base = {
 export type GuestMessageApproval = Base & { kind: 'guest-message'; detail: GuestMessageDetail };
 export type GuestToolApproval = Base & { kind: 'guest-tool'; detail: GuestToolDetail };
 export type SudoApproval = Base & { kind: 'sudo'; detail: SudoDetail };
+export type CaptureApproval = Base & { kind: 'capture'; detail: CaptureDetail };
 
-export type Approval = GuestMessageApproval | GuestToolApproval | SudoApproval;
+export type Approval = GuestMessageApproval | GuestToolApproval | SudoApproval | CaptureApproval;
 
 type DraftOf<T extends Approval> = Pick<T, 'kind' | 'detail' | 'agentId' | 'requester'> & {
   seat?: string;
@@ -94,7 +109,8 @@ type DraftOf<T extends Approval> = Pick<T, 'kind' | 'detail' | 'agentId' | 'requ
 export type ApprovalDraft =
   | DraftOf<GuestMessageApproval>
   | DraftOf<GuestToolApproval>
-  | DraftOf<SudoApproval>;
+  | DraftOf<SudoApproval>
+  | DraftOf<CaptureApproval>;
 
 export type ApprovalsState = { items: Approval[] };
 
@@ -136,8 +152,10 @@ export function knownTier(tier: unknown): tier is ApprovalTier {
   return scoopTier(tier);
 }
 
+export const heldKind = (kind: ApprovalKind): boolean => kind === 'sudo' || kind === 'capture';
+
 export function routable(kind: ApprovalKind, tier: ApprovalTier): boolean {
-  return !(kind === 'guest-tool' && tier === 'cone');
+  return !((kind === 'guest-tool' || kind === 'capture') && tier === 'cone');
 }
 
 export function answerOf(value: unknown): ApprovalAnswer | null {
@@ -189,9 +207,10 @@ export function route(
 }
 
 export function alwaysOffered(item: Approval): boolean {
-  if (item.kind !== 'sudo' || item.tier !== 'user') return false;
-  const { verdict, detail } = item;
-  return verdict?.level === 1 && verdict.always === true && detail.writable !== false;
+  if ((item.kind !== 'sudo' && item.kind !== 'capture') || item.tier !== 'user') return false;
+  const { verdict } = item;
+  const writable = item.kind !== 'sudo' || item.detail.writable !== false;
+  return verdict?.level === 1 && verdict.always === true && writable;
 }
 
 export function gone(state: ApprovalState): string {

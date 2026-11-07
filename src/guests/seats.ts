@@ -1,5 +1,5 @@
 import { defineDoc } from '@earendil-works/pi-durable';
-import type { ApprovalTier, DecidedBy } from '../approvals/record.ts';
+import type { ApprovalTier, CaptureDetail, DecidedBy } from '../approvals/record.ts';
 import { boundedDeltas } from '../checkpoints.ts';
 import {
   DAY_MS,
@@ -38,6 +38,12 @@ export type AlwaysTool = {
 
 export type ShownAlwaysTool = Omit<AlwaysTool, 'argumentsHash'>;
 
+export type AlwaysCapture = Pick<CaptureDetail, 'what' | 'mode'> & {
+  approval: string;
+  by: DecidedBy | null;
+  at: number;
+};
+
 export type SeatRecord = GuestDraft & {
   createdAt: number;
   epoch: number;
@@ -46,6 +52,7 @@ export type SeatRecord = GuestDraft & {
   submissions?: SeatSubmission[];
   always?: { by: DecidedBy | null; approval: string; at: number };
   alwaysTools?: AlwaysTool[];
+  alwaysCaptures?: AlwaysCapture[];
 };
 
 export interface GuestSeat {
@@ -58,6 +65,7 @@ export interface GuestSeat {
   connected: boolean;
   pending: number;
   alwaysTools: ShownAlwaysTool[];
+  alwaysCaptures: AlwaysCapture[];
 }
 
 export type GuestsState = { seats: Record<string, SeatRecord> };

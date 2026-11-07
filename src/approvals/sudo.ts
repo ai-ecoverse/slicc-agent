@@ -1,6 +1,7 @@
 import type { Context, ReplicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentsState } from '../agents.ts';
+import type { AgentCapture } from '../guests/capture.ts';
 import type { Licks } from '../licks/licks.ts';
 import { sprinklesOf } from '../sprinkles/cgi.ts';
 import type { Approvals } from './index.ts';
@@ -41,7 +42,7 @@ export interface SudoRequest {
 
 export type SudoAsked = { id: string; error: null } | { id: null; error: string };
 
-export interface AgentSudo {
+export interface AgentSudo extends AgentCapture {
   readonly approvals: ReplicatedState<Approval[]>;
   request(request: SudoRequest, where: string | null, context: Context): Promise<SudoAsked>;
   withdraw(id: string, reason: string | null, context: Context): Promise<void>;
@@ -169,6 +170,7 @@ function scoopLick(
 
 export interface SudoAttach {
   approvals: Approvals;
+  capture: AgentCapture;
   agents?: () => Readonly<AgentsState> | undefined;
   licks?: Pick<Licks, 'deliver'>;
 }
@@ -192,6 +194,7 @@ export function createSudo(options: SudoAttach): AgentSudo & { close(): void } {
   const off = approvals.state.subscribe((items) => watch(items));
   return {
     approvals: approvals.state,
+    capture: (request, where, context) => options.capture.capture(request, where, context),
     async request(value, where, context) {
       const request = sudoRequest(value);
       if (!request) return { id: null, error: 'This is not a sudo request.' };
@@ -238,6 +241,7 @@ export function ownedSudo(sudo: AgentSudo): AgentSudo & { release(): void } {
   };
   return {
     approvals: sudo.approvals,
+    capture: (request, where, context) => sudo.capture(request, where, context),
     async request(request, where, context) {
       forget();
       const asked = await sudo.request(request, where, context);

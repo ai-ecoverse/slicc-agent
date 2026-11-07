@@ -1,9 +1,11 @@
 import type { Readable } from '@earendil-works/chord';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { clientHost, holding } from '../client.ts';
+import type { CaptureReply } from '../guests/capture.ts';
 import { AgentSudoService, SUDO_METHODS } from '../services.ts';
 import { bound, type Remote, type Root } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
+import { attributed, UNATTRIBUTED } from './attributed.ts';
 import type { Approval } from './record.ts';
 import type { AgentSudo, SudoAnswer, SudoDenial, SudoReply, SudoRequest } from './sudo.ts';
 
@@ -124,6 +126,49 @@ function timedOut(
   });
   const wait = Math.max(0, expiresAt - Date.now()) + WITHDRAW_MS;
   return Promise.race([left, link.ended.catch(() => undefined), delay(wait)]).finally(() => off());
+}
+
+export interface CaptureAsk {
+  kind: string;
+  options?: Record<string, unknown>;
+  stamp?: Record<string, unknown>;
+  label?: string;
+}
+
+const isEagain = (error: unknown) => (error as { code?: unknown })?.code === 'EAGAIN';
+
+export async function askCapture(
+  endpoint: PortEndpoint,
+  request: CaptureAsk,
+  options: ApproveOptions = {},
+  stop?: AbortSignal
+): Promise<CaptureReply> {
+  if (!attributed(request)) throw unavailable();
+  const { signal } = options;
+  const link = await open(endpoint, stop);
+  const ending = new AbortController();
+  const end = () => ending.abort();
+  signal?.addEventListener('abort', end, { once: true });
+  stop?.addEventListener('abort', end, { once: true });
+  const using = withAbortSignal(ending.signal, BACKGROUND_CONTEXT);
+  try {
+    if (signal?.aborted || stop?.aborted) return 'deny';
+    const asked = link.sudo.capture(request, options.where ?? null, using);
+    const gone = link.ended.catch(() => 'deny' as const);
+    const halted = new Promise<'deny'>((resolve) =>
+      ending.signal.addEventListener('abort', () => resolve('deny'), { once: true })
+    );
+    const answer = await Promise.race([asked, gone, halted]);
+    if (answer === UNATTRIBUTED) throw unavailable();
+    return answer;
+  } catch (error) {
+    if (isEagain(error)) throw error;
+    return 'deny';
+  } finally {
+    signal?.removeEventListener('abort', end);
+    stop?.removeEventListener('abort', end);
+    await link.close();
+  }
 }
 
 export async function askSudo(

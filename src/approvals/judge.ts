@@ -21,6 +21,7 @@ import {
   type ApprovalLevel,
   type ApprovalVerdict,
   approvable,
+  type CaptureDetail,
   vetoed,
 } from './record.ts';
 
@@ -201,6 +202,25 @@ const GUEST_GROUP: Group = {
   },
 };
 
+const CAPTURE_FACTS =
+  "request.capture says what granting the request records: asks says it plainly, what is screen, camera or microphone, mode is still, video or audio, seconds is how long it runs (null: until the program stops), and system and microphone say which audio comes with it. The program's name and the device are inside request.untrusted, because the requester chose them.";
+
+const CAPTURE_GROUP: Group = {
+  about: `${INSTRUCTIONS} ${CAPTURE_FACTS}`,
+  questions: {
+    ...GUEST_GROUP.questions,
+    always: {
+      type: 'bool',
+      instructions:
+        'Allowing it always lets this guest make every later capture of the same what and mode without asking, whatever its length, audio or device. Could such a later capture record something the owner would not let this guest have without being asked?',
+      criteria: {
+        true: 'yes: a longer capture, another device or more audio of the same kind could record more than the owner would give this guest unasked',
+        false: 'no: every later capture of the same kind is as fine as this one',
+      },
+    },
+  },
+};
+
 const asked = ({ about, questions }: Group): Record<string, ClassifierQuestion> =>
   Object.fromEntries(
     Object.entries(questions).map(([id, question]) => [
@@ -210,12 +230,14 @@ const asked = ({ about, questions }: Group): Record<string, ClassifierQuestion> 
   );
 
 export const JUDGE_QUESTIONS = asked(GUEST_GROUP);
+export const CAPTURE_QUESTIONS = asked(CAPTURE_GROUP);
 export const SUDO_QUESTIONS = asked(SUDO_GROUP);
 export const INTENT_QUESTIONS = asked(INTENT_GROUP);
 export const FORBID_QUESTIONS = asked(FORBID_GROUP);
 
 export function questionsOf(item: Approval): Record<string, ClassifierQuestion> {
-  return item.kind === 'sudo' ? SUDO_QUESTIONS : JUDGE_QUESTIONS;
+  if (item.kind === 'sudo') return SUDO_QUESTIONS;
+  return item.kind === 'capture' ? CAPTURE_QUESTIONS : JUDGE_QUESTIONS;
 }
 
 export function fenced(text: string, nonce: string): string {
@@ -236,10 +258,64 @@ function sudoText(detail: Extract<Approval, { kind: 'sudo' }>['detail']): string
   ].join('\n');
 }
 
+const SUBJECT: Record<CaptureDetail['what'], string> = {
+  screen: 'the screen, window or tab the person picks',
+  camera: 'the camera',
+  microphone: 'the microphone',
+};
+
+function audioOf(detail: CaptureDetail): string {
+  if (detail.mode !== 'video') return '';
+  if (detail.system && detail.microphone) return ", with the system's audio and the microphone";
+  if (detail.system) return ", with the system's audio";
+  return detail.microphone ? ', with the microphone' : ', without audio';
+}
+
+export function captureAsks(detail: CaptureDetail): string {
+  const subject = SUBJECT[detail.what];
+  if (detail.mode === 'still') return `a still image of ${subject}`;
+  const made = detail.mode === 'video' ? `a video of ${subject}` : `a recording of ${subject}`;
+  const length =
+    detail.seconds === undefined ? ', until the program stops' : `, for ${detail.seconds} seconds`;
+  return `${made}${length}${audioOf(detail)}`;
+}
+
+function captureText(detail: CaptureDetail): string {
+  return [
+    `program: ${JSON.stringify(detail.program)}`,
+    ...(detail.device === undefined ? [] : [`device: ${JSON.stringify(detail.device)}`]),
+  ].join('\n');
+}
+
 export function untrustedOf(item: Approval): string {
   if (item.kind === 'guest-message') return item.detail.text;
   if (item.kind === 'guest-tool') return `${item.detail.tool}: ${item.detail.summary}`;
+  if (item.kind === 'capture') return captureText(item.detail);
   return sudoText(item.detail);
+}
+
+export type CaptureFacts = {
+  asks: string;
+  what: CaptureDetail['what'];
+  mode: CaptureDetail['mode'];
+  seconds: number | null;
+  system: boolean;
+  microphone: boolean;
+};
+
+export function captureContext(item: Approval): { capture?: CaptureFacts } {
+  if (item.kind !== 'capture') return {};
+  const { detail } = item;
+  return {
+    capture: {
+      asks: captureAsks(detail),
+      what: detail.what,
+      mode: detail.mode,
+      seconds: detail.seconds ?? null,
+      system: detail.system === true,
+      microphone: detail.microphone === true,
+    },
+  };
 }
 
 export type SudoFacts = {
@@ -274,6 +350,7 @@ export function judgeState(item: Approval, intent: OwnerIntent, nonce: string) {
       requester: { kind: item.requester.kind, name: item.requester.name },
       untrusted: fenced(untrustedOf(item), nonce),
       ...sudoContext(item),
+      ...captureContext(item),
     },
     owner: ownerState(intent),
   };
@@ -322,7 +399,8 @@ function guestVerdict(
   model: string,
   via: 'classifier' | 'chat'
 ): ApprovalVerdict | undefined {
-  const { level: chosen, aligned: fit } = answers;
+  const { level: chosen, aligned: fit, always: more } = answers;
+  const replay = more?.type === 'bool' ? unit(more.probability) : undefined;
   const level = chosen?.type === 'choice' ? levelOf(chosen.probabilities) : undefined;
   const routine = chosen?.type === 'choice' ? unit(chosen.probabilities.routine) : undefined;
   const aligned = fit?.type === 'bool' ? unit(fit.probability) : undefined;
@@ -330,6 +408,7 @@ function guestVerdict(
   return {
     level,
     ...(via === 'classifier' ? { routine, aligned } : { aligned: aligned >= JUDGE_CUT }),
+    ...(replay === undefined ? {} : { always: clears(1 - replay, JUDGE_ALWAYS) }),
     reason: fallbackReason(level),
     via,
     model,
@@ -521,8 +600,9 @@ const promptOf = (lead: string, { about, questions }: Group) =>
   `${lead}\n\n${[about, ...Object.entries(questions).map(([id, q]) => questionText(id, q))].join('\n')}\n\n${ANSWER}`;
 
 export function judgePrompt(item: Approval): string {
-  return item.kind === 'sudo'
-    ? promptOf(`${REVIEW} ${SUDO_FACTS}`, SUDO_GROUP)
+  if (item.kind === 'sudo') return promptOf(`${REVIEW} ${SUDO_FACTS}`, SUDO_GROUP);
+  return item.kind === 'capture'
+    ? promptOf(REVIEW, CAPTURE_GROUP)
     : promptOf(INSTRUCTIONS, GUEST_GROUP);
 }
 
@@ -567,6 +647,7 @@ export function chatAnswers(
 
 export const CHAT_QUESTIONS = {
   guest: GUEST_GROUP.questions,
+  capture: CAPTURE_GROUP.questions,
   sudo: SUDO_GROUP.questions,
   intent: INTENT_GROUP.questions,
   forbidden: FORBID_GROUP.questions,
@@ -648,6 +729,8 @@ type Classified =
 
 const sum = (...costs: (number | null | undefined)[]) =>
   costs.every((cost) => cost == null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0);
+
+const guestAsk = (item: Approval) => (item.kind === 'capture' ? 'capture' : 'guest');
 
 export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
   const nonce = options.nonce ?? (() => crypto.randomUUID().replaceAll('-', ''));
@@ -739,6 +822,7 @@ export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
     const model = classifier ? nameOf(prepared.ref) : nameOf(chat as Model<Api>);
     const asking = {
       guest: [JUDGE_QUESTIONS, judgePrompt(item)],
+      capture: [CAPTURE_QUESTIONS, judgePrompt(item)],
       sudo: [SUDO_QUESTIONS, judgePrompt(item)],
       forbidden: [FORBID_QUESTIONS, FORBID_PROMPT],
     } as const;
@@ -747,7 +831,7 @@ export function approvalJudge(options: JudgeOptions): ApprovalJudge['judge'] {
         ? classify(item, classifier, state, asking[kind][0], clock)
         : chatAsk(item, chat as Model<Api>, asking[kind][1], state, CHAT_QUESTIONS[kind], clock);
     if (item.kind !== 'sudo') {
-      const got = await ask(judgeState(item, intent, nonce()), 'guest');
+      const got = await ask(judgeState(item, intent, nonce()), guestAsk(item));
       if ('error' in got) return got;
       const verdict = guestVerdict(got.answers, model, via);
       return verdict
