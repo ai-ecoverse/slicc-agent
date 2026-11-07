@@ -36,6 +36,9 @@ export interface CaptureHost {
 
 export const NOT_CAPTURE = 'capture: not a capture kind';
 export const CAPTURE_JUDGED = 'capture: denied by the approval judge';
+export const CAPTURE_LEFTOVER = "capture: a guest's job or crontab line is still running";
+
+type Reviewed = CaptureReply | 'ended';
 export const PROGRAM = 'a program';
 export const LABEL_LENGTH = 200;
 
@@ -98,6 +101,8 @@ const tagsOf = (request: unknown): string[] => {
   return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [];
 };
 
+const keyOf = (taint: InheritedTaint) => `${taint.seat}\n${taint.tier}`;
+
 const kept = (seat: SeatRecord, detail: CaptureDetail) =>
   seat.alwaysCaptures?.some((rule) => rule.what === detail.what && rule.mode === detail.mode);
 
@@ -107,15 +112,16 @@ function early(
   detail: CaptureDetail,
   policy: GuestPolicy,
   at: number
-): CaptureAnswer | null {
+): CaptureAnswer | 'ended' | null {
   if (!isGate(tier)) return 'deny';
   if (!policy.allowedToolGates.includes(gateKind(tier))) return 'deny';
-  if (!liveSeat(seat, at)) return 'deny';
+  if (!liveSeat(seat, at)) return 'ended';
   if (tier === 'off') return 'once';
   return policy.always.tools && kept(seat, detail) ? 'always' : null;
 }
 
-function denialOf(item: Approval): CaptureReply {
+function denialOf(item: Approval): Reviewed {
+  if (item.state === 'withdrawn' && item.reason === REASONS.revoked) return 'ended';
   if (item.state !== 'rejected' || item.decidedBy !== 'judge') return 'deny';
   const reason = item.verdict?.reason;
   return { answer: 'deny', message: reason ? `${CAPTURE_JUDGED}: ${reason}` : CAPTURE_JUDGED };
@@ -133,7 +139,7 @@ async function settledOr(host: CaptureHost, id: string, context: Context): Promi
 export function captureGate(host: CaptureHost): AgentCapture {
   const now = host.now ?? Date.now;
   const recentOf = async (request: unknown): Promise<string[] | undefined> => {
-    if (!host.lineage) return [];
+    if (!host.lineage) return undefined;
     const { pid } = stampOf(request);
     const lineage = await host.lineage(typeof pid === 'number' ? pid : null).catch(() => undefined);
     return lineage?.recent;
@@ -156,7 +162,7 @@ export function captureGate(host: CaptureHost): AgentCapture {
     detail: CaptureDetail,
     where: string | undefined,
     context: Context
-  ): Promise<CaptureReply> => {
+  ): Promise<Reviewed> => {
     const seat = await seatOf(taint.seat, context);
     if (!seat) return 'deny';
     const settled = early(seat, taint.tier, detail, host.policy(), now());
@@ -174,11 +180,11 @@ export function captureGate(host: CaptureHost): AgentCapture {
     );
     if (!liveSeat(await seatOf(seat.id, context), now())) {
       await host.approvals.withdraw(asked.id, REASONS.revoked, BACKGROUND_CONTEXT);
-      return 'deny';
+      return 'ended';
     }
     const item = asked.state === 'pending' ? await settledOr(host, asked.id, context) : asked;
     if (item.state !== 'approved') return denialOf(item);
-    if (!liveSeat(await seatOf(seat.id, context), now())) return 'deny';
+    if (!liveSeat(await seatOf(seat.id, context), now())) return 'ended';
     if (item.answer !== 'always' || !host.policy().always.tools) return 'once';
     const { what, mode } = detail;
     await remember(seat.id, {
@@ -197,11 +203,14 @@ export function captureGate(host: CaptureHost): AgentCapture {
       if (!attributed(request)) return 'deny';
       const recent = await recentOf(request);
       if (!recent) return 'deny';
+      const own = new Set((await taggedTaints(host.harness, tagsOf(request), context)).map(keyOf));
       const taints = await taggedTaints(host.harness, [...tagsOf(request), ...recent], context);
       let answer: CaptureAnswer = 'always';
       for (const taint of taints) {
         const given = await review(taint, detail, cleanReason(where), context);
         if (given === 'once') answer = 'once';
+        else if (given === 'ended' || (given === 'deny' && !own.has(keyOf(taint))))
+          return { answer: 'deny', message: CAPTURE_LEFTOVER };
         else if (given !== 'always') return given;
       }
       return taints.length ? answer : 'once';

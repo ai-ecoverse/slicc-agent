@@ -7,6 +7,10 @@ after(() => chrome.close());
 
 const bash = (command) => ({ tool: { name: 'bash', args: { command } } });
 const answer = (text) => ({ answer: text });
+const LEFTOVER = {
+  answer: 'deny',
+  message: "capture: a guest's job or crontab line is still running",
+};
 const embed = (name, wait = '') => `sh /tmp/embed ${name}${wait ? ` ${wait}` : ''}`;
 
 const REQUESTS = {
@@ -451,7 +455,7 @@ test("Always on a guest's capture is recorded for that seat, what and mode only"
   assert.equal(seen.revoked.revoked, true);
   assert.equal(seen.newItems, 0);
   assert.equal(seen.listed.includes('seat-1'), false);
-  assert.deepEqual(seen.answers, ['always', 'always', 'once', 'deny', 'always', 'deny']);
+  assert.deepEqual(seen.answers, ['always', 'always', 'once', 'deny', 'always', LEFTOVER]);
 });
 
 test('with kernel users off the agent answers EAGAIN, so the page prompts as before', async (t) => {
@@ -508,8 +512,8 @@ test("a clean process that a guest run sets off is routed to that guest's seat b
     seen.tags.filter((tag) => tag.startsWith('slicc-taint:')),
     []
   );
-  assert.equal(seen.relay, 'answer: deny');
-  assert.deepEqual(seen.answers, ['deny']);
+  assert.equal(seen.relay, `answer: ${JSON.stringify(LEFTOVER)}`);
+  assert.deepEqual(seen.answers, [LEFTOVER]);
 });
 
 test("a capture two guests' runs taint asks each seat in turn, and the first deny wins", async (t) => {
@@ -562,5 +566,5 @@ test("a capture two guests' runs taint asks each seat in turn, and the first den
   assert.deepEqual(seen.afterFirst, ['seat-2']);
   assert.equal(seen.second, 'seat-2');
   assert.equal(seen.third, 'seat-1');
-  assert.deepEqual(seen.answers, ['deny', 'deny']);
+  assert.deepEqual(seen.answers, ['deny', LEFTOVER]);
 });
