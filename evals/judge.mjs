@@ -4,6 +4,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { cloudflareWorkersAIProvider } from '@earendil-works/pi-ai/providers/cloudflare-workers-ai';
 import { ADOBE, adobeProvider } from '../src/adobe.ts';
 import {
+  approvalJudge,
   DEFAULT_POLICY,
   JUDGE_MODEL,
   JUDGE_TIMEOUT,
@@ -58,7 +59,7 @@ const itemOf = (entry) => ({
   expiresAt: 0,
   detail: detailOf(entry),
 });
-const intent = async (entry) => ({
+const intentOf = (entry) => ({
   policy: DEFAULT_POLICY,
   messages: entry.owner ?? set.owner,
   memory: [],
@@ -72,44 +73,76 @@ for (const ref of refs) {
     console.error(`no classifier ${name}`);
     exit(2);
   }
-  const rows = [];
-  for (const entry of set.cases) {
+  let spent = 0;
+  const judge = approvalJudge({
+    models,
+    model: async () => ref,
+    intent: async (item) => intentOf(set.cases.find((entry) => `eval-${entry.name}` === item.id)),
+    timeoutMs: JUDGE_TIMEOUT,
+    spend: async (_item, result) => {
+      spent += result.usage?.cost.total ?? 0;
+    },
+  });
+  const round = (value) => Number(value.toFixed(3));
+  const rounded = (values) =>
+    Object.fromEntries(Object.entries(values).map(([key, p]) => [key, round(p)]));
+  const guest = async (entry) => {
     const raw = await models.classify(
       model,
       {
-        state: judgeState(itemOf(entry), await intent(entry), 'eval'),
+        state: judgeState(itemOf(entry), intentOf(entry), 'eval'),
         questions: questionsOf(itemOf(entry)),
       },
       { timeoutMs: JUDGE_TIMEOUT, maxRetries: 1 }
     );
+    spent += raw.usage?.cost.total ?? 0;
     const judged = verdictOf(raw, name);
-    const requester = { kind: entry.kind === 'sudo' ? 'agent' : 'guest' };
-    const got = route(judged.verdict, requester, 'judge', entry.present === true);
-    cost += raw.usage?.cost.total ?? 0;
     const level = raw.answers.level?.probabilities;
     const aligned = raw.answers.aligned?.probability;
-    const more = raw.answers.always?.probability;
-    const always = entry.always === undefined || judged.verdict?.always === entry.always;
+    const seen =
+      level && typeof aligned === 'number'
+        ? { level: rounded(level), aligned: round(aligned) }
+        : undefined;
+    return { judged, seen };
+  };
+  const sudo = async (entry) => {
+    const judged = await judge(itemOf(entry), {});
+    const { actions, intent, forbidden } = judged.verdict ?? {};
+    const veto = typeof forbidden === 'number' ? { forbidden: round(forbidden) } : {};
+    return {
+      judged,
+      seen:
+        actions && intent
+          ? { actions: rounded(actions), intent: rounded(intent), ...veto }
+          : undefined,
+    };
+  };
+  const rows = [];
+  for (const entry of set.cases) {
+    const started = Date.now();
+    const { judged, seen } = await (entry.kind === 'sudo' ? sudo(entry) : guest(entry));
+    const ms = Date.now() - started;
+    const verdict = judged.verdict;
+    const requester = { kind: entry.kind === 'sudo' ? 'agent' : 'guest' };
+    const got = route(verdict, requester, 'judge', entry.present === true);
+    const always = entry.always === undefined || verdict?.always === entry.always;
     const ok = got === entry.expect && always;
     if (!ok) misses += 1;
     rows.push({
       case: entry.name,
       expect: entry.expect,
       got,
-      level: judged.verdict?.level ?? '',
-      aligned: aligned?.toFixed(3),
-      always: judged.verdict?.always ?? '',
+      level: verdict?.level ?? '',
+      routine: verdict?.routine?.toFixed(3),
+      aligned: typeof verdict?.aligned === 'number' ? verdict.aligned.toFixed(3) : '',
+      always: verdict?.always ?? '',
+      ms,
       ok: ok ? 'yes' : 'NO',
       error: judged.error ?? '',
     });
-    const round = (value) => Number(value.toFixed(3));
-    if (record && ref === refs[0] && level && typeof aligned === 'number')
-      entry.recorded = {
-        level: Object.fromEntries(Object.entries(level).map(([key, p]) => [key, round(p)])),
-        aligned: round(aligned),
-        ...(typeof more === 'number' ? { more: round(more) } : {}),
-      };
+    if (record && ref === refs[0] && seen) entry.recorded = seen;
   }
+  cost += spent;
   console.log(`\n${name}`);
   console.table(rows);
 }

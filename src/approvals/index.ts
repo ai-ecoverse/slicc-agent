@@ -7,13 +7,7 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { Clock } from '../clock.ts';
-import {
-  type ApprovalJudge,
-  ASK_MIN_MS,
-  JUDGE_RESTARTED,
-  type Judgement,
-  type Reasoned,
-} from './judge.ts';
+import { type ApprovalJudge, ASK_MIN_MS, JUDGE_RESTARTED, type Judgement } from './judge.ts';
 import {
   APPROVAL_MS,
   type Approval,
@@ -172,22 +166,6 @@ const judgedIn = (id: string, judged: Judged, now: () => number) => (doc: Approv
   return copy([item])[0] as Approval;
 };
 
-const reasonIn = (id: string, reasoned: Reasoned) => (doc: ApprovalsState) => {
-  const item = doc.items.find((entry) => entry.id === id);
-  if (item?.verdict && reasoned.reason) item.verdict.reason = reasoned.reason;
-};
-
-const withReason = (judgement: Judgement, reasoned: Reasoned): Judgement => ({
-  ...judgement,
-  ...(judgement.verdict && reasoned.reason
-    ? { verdict: { ...judgement.verdict, reason: reasoned.reason } }
-    : {}),
-  cost:
-    judgement.cost == null && reasoned.cost == null
-      ? null
-      : (judgement.cost ?? 0) + (reasoned.cost ?? 0),
-});
-
 async function judgedBy(
   judge: ApprovalJudge,
   present: ApprovalsAttach['present'],
@@ -225,24 +203,14 @@ function judgeRunner(run: {
     };
     if (signal?.aborted) return abort();
     signal?.addEventListener('abort', abort, { once: true });
-    let judged = await judgedBy(judge, run.present, item, using, now);
-    const pending = judged.judgement.reason;
-    const ready = pending ? await Promise.race([pending, Promise.resolve(undefined)]) : undefined;
-    const early =
-      ready ?? (pending && routeOf(item, judged) === 'deny' ? await pending : undefined);
-    if (early) judged = { ...judged, judgement: withReason(judged.judgement, early) };
+    const judged = await judgedBy(judge, run.present, item, using, now);
     signal?.removeEventListener('abort', abort);
     if (gone || run.closed()) return;
     const after = await serial(judgedIn(item.id, judged, now), BACKGROUND_CONTEXT).catch(
       () => undefined
     );
     if (!after) return;
-    const reasoned = early ? {} : ((await pending) ?? {});
-    const final = withReason(judged.judgement, reasoned);
-    if (reasoned.reason && !run.closed())
-      await serial(reasonIn(item.id, reasoned), BACKGROUND_CONTEXT).catch(() => undefined);
-    const recorded = final.verdict ? { ...after, verdict: final.verdict } : after;
-    await judge.record?.(recorded, final, BACKGROUND_CONTEXT).catch(() => undefined);
+    await judge.record?.(after, judged.judgement, BACKGROUND_CONTEXT).catch(() => undefined);
   };
 }
 
