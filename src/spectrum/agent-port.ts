@@ -14,6 +14,7 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
+import type { SendAttachment } from '../attachments.ts';
 import type { AgentConnection } from '../client.ts';
 import { contextRatio, contextTokens } from '../context.ts';
 import { shrink } from '../images/fit.ts';
@@ -26,7 +27,15 @@ import { Emitter } from './emitter.ts';
 import { IDLE_IMPORT, importProfile, type ShownImport } from './import-port.ts';
 import { Kept } from './kept.ts';
 import { CONNECT_IT, isBusy, providerName, queued, toMessages } from './messages.ts';
-import { readUrl, sendAttachments } from './outgoing.ts';
+import {
+  type AttachmentLimits,
+  limitsOf,
+  readUrl,
+  type Stager,
+  sendAttachments,
+  stager,
+  stagingDir,
+} from './outgoing.ts';
 import { merged, proposalNotices, proposalQueue } from './proposals.ts';
 
 export const CONE = 'cone';
@@ -93,6 +102,8 @@ interface Pending {
 export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPort {
   readonly #connection: AgentConnection;
   readonly #ready: Promise<void>;
+  readonly #staging: Promise<FileSystemDirectoryHandle | undefined>;
+  #stageable = false;
   readonly #messages = new Map<string, Message[]>();
   #active: string | null = null;
   #creating = new Map<string, Promise<string | null>>();
@@ -129,7 +140,11 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       this.emit('agents', this.list());
     });
     connection.importing?.subscribe(() => this.emit('importing', this.importing()));
-    this.#ready = new Promise((resolve) => {
+    this.#staging = stagingDir(connection.serverId).then((dir) => {
+      this.#stageable = dir !== undefined;
+      return dir;
+    });
+    const shown = new Promise<void>((resolve) => {
       connection.transcript.subscribe(() => {
         this.#refresh();
         resolve();
@@ -138,6 +153,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       connection.views?.subscribe(() => this.#refresh());
       connection.agents?.subscribe(() => this.#refresh());
     });
+    this.#ready = Promise.all([shown, this.#staging]).then(() => undefined);
     connection.settings?.state.subscribe(() => {
       this.emit('agents', this.list());
       this.#refresh();
@@ -421,17 +437,41 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     ];
   }
 
+  attachmentLimits(): AttachmentLimits {
+    return limitsOf(this.#stageable);
+  }
+
   async send(agentId: string, input: string | Outgoing): Promise<void> {
     const outgoing = typeof input === 'string' ? { text: input } : input;
-    const attachments = outgoing.attachments?.length
-      ? await sendAttachments(outgoing.attachments, readUrl, shrink, (ref) =>
-          this.#connection.control.image(ref, BACKGROUND_CONTEXT)
-        ).catch((error: Error) => {
-          this.notify(error.message, agentId);
-          return null;
-        })
-      : [];
-    if (!attachments) return;
+    if (!outgoing.attachments?.length) return this.#sendWith(agentId, outgoing, []);
+    const dir = await this.#staging;
+    const staged = dir ? stager(dir) : undefined;
+    try {
+      await this.#sendStaged(agentId, outgoing, staged);
+    } finally {
+      await staged?.clear();
+    }
+  }
+
+  async #sendStaged(agentId: string, outgoing: Outgoing, staged?: Stager): Promise<void> {
+    const attachments = await sendAttachments(
+      outgoing.attachments,
+      readUrl,
+      shrink,
+      (ref) => this.#connection.control.image(ref, BACKGROUND_CONTEXT),
+      staged?.stage
+    ).catch((error: Error) => {
+      this.notify(error.message, agentId);
+      throw error;
+    });
+    await this.#sendWith(agentId, outgoing, attachments);
+  }
+
+  async #sendWith(
+    agentId: string,
+    outgoing: Outgoing,
+    attachments: SendAttachment[]
+  ): Promise<void> {
     const target = this.#creating.has(agentId) ? await this.#creating.get(agentId) : agentId;
     if (target === null) throw new Error('The scoop could not be created.');
     const pending = target && this.#held(target) ? this.#pending(target, outgoing) : undefined;
