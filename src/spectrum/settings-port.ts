@@ -149,7 +149,8 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   }
 
   get(): Settings {
-    const cone = this.#agent.list()[0];
+    const id = this.#agent.active();
+    const cone = this.#agent.list().find((row) => row.id === id) ?? this.#agent.list()[0];
     return { ...this.#local, model: cone?.model ?? '', thinking: cone?.thinking ?? 'off' };
   }
 

@@ -133,3 +133,47 @@ test('agents show their context fill, and a background cone counts its unread an
   assert.equal(seen.coneUnread, 0);
   assert.deepEqual(page.errors, []);
 });
+
+test('settings thinking follows the active cone, not the first cone in the list', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'settings thinking follows the active', async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const owner = await startTracked({
+      worker: () =>
+        new Worker(
+          `/dist-test/main-worker.js?vault&record=${encodeURIComponent(JSON.stringify({ kind: 'model', name: 'FAUX_API_KEY', provider: 'faux', placeholder: 'fnox_proxy_faux', value: 'faux-model-key-0001' }))}`,
+          { type: 'module' }
+        ),
+      kernel: { connect: () => kernel.connect() },
+    });
+    const model = createAgentModel(await owner.connect(), { storage: localStorage });
+    const { agent, settings } = model;
+    await agent.ready();
+    const until = (check, what = 'the state') => when([changed, every(100)], check, what);
+    await until(() => settings.accounts().length > 0);
+    await settings.connect('faux');
+    await until(() => settings.accounts()[0]?.status === 'connected');
+    const row = (id) => agent.list().find((entry) => entry.id === id);
+    const first = agent.active();
+    settings.update({ thinking: 'medium' });
+    await until(() => row(first)?.thinking === 'medium');
+    const other = await agent.createCone('other');
+    await until(() => row(other.id));
+    agent.select(other.id);
+    await until(() => agent.active() === other.id);
+    const onOther = {
+      settings: settings.get().thinking,
+      active: row(other.id)?.thinking,
+      first: row(first)?.thinking,
+    };
+    await owner.release();
+    return { first, other: other.id, onOther };
+  });
+  assert.equal(seen.onOther.first, 'medium');
+  assert.equal(seen.onOther.active, 'off');
+  assert.equal(seen.onOther.settings, 'off');
+  assert.deepEqual(page.errors, []);
+});
