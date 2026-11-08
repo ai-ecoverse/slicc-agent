@@ -26,6 +26,7 @@ export const TITLES = 'slicc-titles';
 const TITLE_LENGTH = 60;
 const TITLE_WORDS = 6;
 export const TITLE_TURNS = [1, 3];
+export const TITLE_REFRESH_EVERY = 5;
 const TRIVIAL_WORDS = 4;
 
 function textOf(entry: EntryRecord): string {
@@ -42,6 +43,18 @@ export function trivial(text: string): boolean {
   );
 }
 
+export function titleNextThreshold(titled: number, greeting = false): number | undefined {
+  const next = TITLE_TURNS.find((turn) => turn > titled && !(greeting && turn === 1));
+  if (next !== undefined) return next;
+  return TITLE_REFRESH_EVERY > 0 ? titled + TITLE_REFRESH_EVERY : undefined;
+}
+
+export function titleRefreshGate(titled: number, reason: string): boolean {
+  const earlyLast = TITLE_TURNS.at(-1) ?? 0;
+  if (titled < earlyLast) return true;
+  return TITLE_REFRESH_EVERY > 0 && reason === 'answer';
+}
+
 export function titleDue(
   record: Pick<ConeRecord, 'titled'>,
   entries: readonly EntryRecord[],
@@ -51,8 +64,9 @@ export function titleDue(
   const stop = (last?.model?.[0] as { stopReason?: unknown } | undefined)?.stopReason;
   if (last?.kind !== 'pi.assistant' || stop !== 'stop') return undefined;
   const said = entries.filter((entry) => entry.kind === 'pi.user' && textOf(entry));
+  const titled = record.titled ?? 0;
   const greeting = !final && trivial(textOf(said[0] ?? ({} as EntryRecord)));
-  const next = TITLE_TURNS.find((turn) => turn > (record.titled ?? 0) && !(greeting && turn === 1));
+  const next = titleNextThreshold(titled, greeting);
   return next !== undefined && said.length >= next ? said.length : undefined;
 }
 
@@ -235,8 +249,8 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
           const agents = deps.agents();
           if (!agents || !deps.harness() || !deps.title()) return undefined;
           const found = findAgent(agents, api.conversationId);
-          const lastTurn = TITLE_TURNS[TITLE_TURNS.length - 1] ?? 0;
-          if (!found || (found.record.titled ?? 0) >= lastTurn) return undefined;
+          if (!found) return undefined;
+          if (!titleRefreshGate(found.record.titled ?? 0, run.reason)) return undefined;
           return { tasks: [runEndTask(due, { last: Number(run.last) })] };
         },
       }),

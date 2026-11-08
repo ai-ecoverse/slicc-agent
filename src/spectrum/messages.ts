@@ -26,13 +26,13 @@ import {
 } from '../guests/attribution.ts';
 import { type Lick, parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
-import { mcpLabel } from '../mcp/label.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
 import type { SecretName } from '../secrets/names.ts';
 import { listedLine, SECRETS_KIND } from '../secrets/view.ts';
 import type { Delivered } from '../services.ts';
 import { SPRINKLE_KIND } from '../sprinkles/kind.ts';
 import { warn } from './attempt.ts';
+import { toolTitle } from './tool-title.ts';
 
 type Json = Record<string, unknown>;
 
@@ -85,11 +85,6 @@ export function textOf(content: ModelMessage['content']): string {
 
 const paths = (args: Json | undefined): string[] =>
   typeof args?.path === 'string' ? [args.path] : [];
-
-function title(args: Json | undefined): string {
-  const subject = args?.command ?? args?.path;
-  return typeof subject === 'string' ? subject : '';
-}
 
 interface Replacement {
   oldText?: string;
@@ -158,11 +153,12 @@ function shape(name: string, args: Json): Pick<ToolCall, 'input' | 'meta' | 'dif
 
 function toolCall(block: Block): ToolCall {
   const args = block.arguments ?? {};
+  const name = block.name ?? 'tool';
   return {
     id: block.id ?? '',
-    name: block.name ?? 'tool',
-    title: mcpLabel(block.name ?? '') ?? title(block.arguments),
-    ...shape(block.name ?? 'tool', args),
+    name,
+    title: toolTitle(name, args),
+    ...shape(name, args),
     output: '',
     status: 'running',
     paths: paths(block.arguments),
