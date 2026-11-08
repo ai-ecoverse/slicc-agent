@@ -53,19 +53,27 @@ test('reading an image through slicc-images does not report a missing structured
             .join('\n'),
           images: (entry.model[0].content ?? []).filter((block) => block.type === 'image').length,
         }));
-      const problems = (connection.monitor.value?.problems ?? []).filter(
-        (problem) =>
-          problem.report?.source === 'slicc-images' ||
-          /structuredOutput/i.test(problem.message ?? '')
+      const off = model.monitor.on('snapshot', () => {});
+      const problems = await when(
+        [connection.monitor, heard(model.monitor, 'snapshot')],
+        () => {
+          if (!connection.monitor.value?.open) return false;
+          return (connection.monitor.value.problems ?? [])
+            .filter(
+              (problem) =>
+                problem.report?.source === 'slicc-images' ||
+                /structuredOutput/i.test(problem.message ?? '')
+            )
+            .map((problem) => ({
+              message: problem.message,
+              report: problem.report,
+            }));
+        },
+        'the monitor problems'
       );
+      off();
       await owner.release();
-      return {
-        results,
-        problems: problems.map((problem) => ({
-          message: problem.message,
-          report: problem.report,
-        })),
-      };
+      return { results, problems };
     },
     steps
   );
