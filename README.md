@@ -490,7 +490,7 @@ pi durable keeps every conversation and entry in the session database, and has n
     - A title still on its way when a scoop is reset or rewound is dropped. Rewinding a scoop clears its title, as a cone's new conversation does.
     - The call uses `memory.extractModel`, else the conversation's model. Clef classifiers only answer choices, so they can't write a title.
     - The transcript sent is the model-visible text, cut at 4000 characters. Vault values are scrubbed and secret-shaped text is redacted first.
-    - A failed or empty answer keeps the first line and isn't retried. A live cone costs the early two calls, then one more every five user turns; a scoop that stops before those early titles costs at most one call, and a cone one more at freeze.
+    - A failed or empty answer keeps the first line and isn't retried. A live cone or scoop costs the early two calls, then one more every five user turns; a scoop that stops before those early titles costs at most one call, and a cone one more at freeze.
     - `"titles": false` in `~/.pi/agent/settings.json` turns every model title off.
     - The title moves with the cone. Freeze and New conversation copy it into the frozen row, then the final call replaces it there. Thaw brings that title back (and sets `titled` to the last early turn), also from a stopped scoop; if the thawed cone keeps chatting, the every-five-turns refresh can replace it later. A new conversation, or a scoop's reset, starts untitled.
     - The Agents panel shows it as each cone's and scoop's summary (spectrum's `title`).
