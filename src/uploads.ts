@@ -9,6 +9,7 @@ export interface Uploads {
     context: Context
   ): ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>;
   sees(model: ModelRef | undefined): boolean;
+  staged?(id: string): Promise<Blob | undefined>;
 }
 
 export const UPLOADS = 'uploads';
@@ -50,6 +51,7 @@ export async function saverFor(
   const agent = await conversation.agent(context);
   return {
     sees: uploads.sees(agent.model),
+    ...(uploads.staged ? { staged: uploads.staged } : {}),
     async save(name, bytes) {
       const target = {
         conversationId: conversation.id,

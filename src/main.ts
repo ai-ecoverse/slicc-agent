@@ -23,6 +23,7 @@ import {
   seedPolicy,
   verdictRecorder,
 } from './approvals/index.ts';
+import { STAGED_DIR, stagedDir } from './attachments.ts';
 import { attachChanges, CHANGES_MS } from './changes/index.ts';
 import {
   codemodeExtension,
@@ -52,6 +53,7 @@ import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
 import { pageOnly, type Reach, type Transport, transportFetch, transportReach } from './net.ts';
+import { opfsFile } from './opfs-pool.ts';
 import { sliccPrompt } from './prompt.ts';
 import { AZURE, azureBase } from './providers.ts';
 import { createPages } from './remote/pages.ts';
@@ -136,7 +138,11 @@ export const STORE_DIR = '/.slicc';
 export const ACCOUNTS_FILE = `${STORE_DIR}/accounts.json`;
 export const MODELS_FILE = `${STORE_DIR}/models.json`;
 
-async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions) {
+async function attached(
+  ports: Promise<KernelPorts>,
+  options: AgentWorkerOptions,
+  serverId: string
+) {
   const wiped = await wipeLegacy();
   const attach: KernelAttach = options.attach ?? attachKernel;
   const { kernel, admin } = await ports;
@@ -144,7 +150,7 @@ async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions
   const users = usersOf(admin, options.users, attach);
   await warnSupport(users, client, options.users);
   const home = new SliccKernelEnv(client, { cwd: HOME });
-  await privateStore(home);
+  await privateStore(home, serverId);
   return {
     client,
     users,
@@ -154,8 +160,12 @@ async function attached(ports: Promise<KernelPorts>, options: AgentWorkerOptions
   };
 }
 
-function privateStore(env: SliccKernelEnv): Promise<unknown> {
-  return env.exec(`mkdir -p ${STORE_DIR} && chmod 700 ${STORE_DIR}`, undefined, BACKGROUND_CONTEXT);
+function privateStore(env: SliccKernelEnv, serverId: string): Promise<unknown> {
+  return env.exec(
+    `mkdir -p ${STORE_DIR} && chmod 700 ${STORE_DIR} && rm -rf ${STAGED_DIR} && mkdir -p ${stagedDir(serverId)}`,
+    undefined,
+    BACKGROUND_CONTEXT
+  );
 }
 
 export async function codemodeTools(
@@ -491,7 +501,8 @@ export async function start(
   options: AgentWorkerOptions,
   vault: Vault
 ): Promise<AgentHost> {
-  const { client, users, home, at, wiped } = await attached(ports, options);
+  const serverId = crypto.randomUUID();
+  const { client, users, home, at, wiped } = await attached(ports, options, serverId);
   const ready = await prepare(scope, { client, home, vault }, options);
   const { names, native, transport, facts, models, registry, records, endpoints } = ready;
   const memory = setupMemory(registry);
@@ -621,6 +632,7 @@ export async function start(
   });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
   return hostAgent(agent, {
+    serverId,
     ...(await setupApprovals(models, home, at, agent, memoryRuntime.memories, options)),
     settings,
     licks: { licks: licks.licks, sources },
@@ -638,6 +650,7 @@ export async function start(
     uploads: {
       env: environment,
       sees: (ref) => seesImages(models, ref),
+      staged: (id) => opfsFile(`${stagedDir(serverId)}/${id}`),
     },
     monitor: {
       kernel: client,

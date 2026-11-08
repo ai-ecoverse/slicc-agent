@@ -453,3 +453,158 @@ test('a conversation whose images pass one 16 MiB frame still attaches, with thu
   assert.deepEqual(retried.retry, [['image/png', Math.ceil(sent[3] / 3) * 4]]);
   assert.deepEqual(retried.retry, retried.first);
 });
+
+const MiB = 1024 * 1024;
+
+const stagedLeft = (page) =>
+  page.evaluate(async () => {
+    let dir = await navigator.storage.getDirectory();
+    for (const part of ['.slicc', 'attachments']) dir = await dir.getDirectoryHandle(part);
+    const left = [];
+    for await (const [name, handle] of dir.entries())
+      if (handle.kind === 'directory')
+        for await (const [file] of handle.entries()) left.push(`${name}/${file}`);
+    return left;
+  });
+
+test('a 100 MiB PDF, far over one link frame, is saved under uploads, and the adapter says what it takes', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, [['answer', 'Got the contract.']]);
+  const sent = await staged(
+    page,
+    'a 100 MiB PDF',
+    async (size) => {
+      const { model, answered, client } = globalThis.attach;
+      const limits = model.agent.attachmentLimits();
+      const bytes = new Uint8Array(size);
+      for (let at = 0; at < size; at++) bytes[at] = (at * 31) % 251;
+      const digest = async (data) =>
+        btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', data))));
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      await model.agent.send('cone', {
+        text: 'Read the contract.',
+        attachments: [
+          {
+            id: 'pdf',
+            name: 'Kaufvertrag Opawohnung.pdf',
+            kind: 'file',
+            mimeType: 'application/pdf',
+            size,
+            url: URL.createObjectURL(blob),
+          },
+        ],
+      });
+      await when([changed, every(100)], () => answered(1), 'the answer');
+      const saved = await client.fs.readFile('/home/uploads/Kaufvertrag Opawohnung.pdf');
+      const notices = model.agent
+        .messages('cone')
+        .filter((message) => message.role === 'system')
+        .map((message) => message.text ?? message.title);
+      return {
+        limits,
+        notices,
+        size: saved.length,
+        same: (await digest(saved)) === (await digest(bytes)),
+      };
+    },
+    100 * MiB
+  );
+  assert.deepEqual(sent, {
+    limits: { image: 100 * MiB, text: 100 * MiB, file: 100 * MiB, total: 256 * MiB },
+    notices: [],
+    size: 100 * MiB,
+    same: true,
+  });
+  const content = users(await page.evaluate(() => globalThis.attach.requests()));
+  assert.deepEqual(content, [
+    { type: 'text', text: 'Read the contract.' },
+    {
+      type: 'text',
+      text: `<attachment kind="file" name="Kaufvertrag Opawohnung.pdf" type="application/pdf" path="/home/uploads/Kaufvertrag Opawohnung.pdf" size="${100 * MiB}">\nSaved at /home/uploads/Kaufvertrag Opawohnung.pdf.\n</attachment>`,
+    },
+  ]);
+  assert.deepEqual(await stagedLeft(page), []);
+});
+
+test('images past 10 MiB together and a text over 8 MiB still arrive, saved as files', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, [['answer', 'All here.']]);
+  const sizes = await staged(
+    page,
+    'images past 10 MiB',
+    async (text) => {
+      const { model, answered } = globalThis.attach;
+      const canvas = new OffscreenCanvas(1100, 1000);
+      const draw = canvas.getContext('2d');
+      const pixels = draw.createImageData(1100, 1000);
+      const attachments = [];
+      for (let n = 0; n < 3; n++) {
+        for (let at = 0; at < pixels.data.length; at += 65536)
+          crypto.getRandomValues(
+            pixels.data.subarray(at, Math.min(at + 65536, pixels.data.length))
+          );
+        for (let at = 3; at < pixels.data.length; at += 4) pixels.data[at] = 255;
+        draw.putImageData(pixels, 0, 0);
+        const blob = await canvas.convertToBlob({ type: 'image/png' });
+        attachments.push({
+          id: `n${n}`,
+          name: `noise-${n}.png`,
+          kind: 'image',
+          mimeType: 'image/png',
+          size: blob.size,
+          url: URL.createObjectURL(blob),
+        });
+      }
+      attachments.push({
+        id: 'log',
+        name: 'big.log',
+        kind: 'text',
+        mimeType: 'text/plain',
+        size: text,
+        text: 'x'.repeat(text),
+      });
+      await model.agent.send('cone', { text: 'Look.', attachments });
+      await when([changed, every(100)], () => answered(1), 'the answer');
+      return attachments.map((item) => item.size);
+    },
+    9 * MiB
+  );
+  assert.ok(sizes.slice(0, 3).every((size) => size < 5 * MiB));
+  assert.ok(sizes[0] + sizes[1] + sizes[2] > 10 * MiB);
+  const content = users(await page.evaluate(() => globalThis.attach.requests()));
+  assert.deepEqual(
+    content.map((part) => part.type),
+    ['text', 'text', 'image', 'text', 'image', 'text', 'text']
+  );
+  assert.equal(
+    content[5].text,
+    `<attachment kind="image" name="noise-2.png" type="image/png" path="/home/uploads/noise-2.png" size="${sizes[2]}">\nSaved at /home/uploads/noise-2.png. The image was too large to show the model, so it was saved as a file instead.\n</attachment>`
+  );
+  assert.equal(
+    content[6].text,
+    `<attachment kind="file" name="big.log" type="text/plain" path="/home/uploads/big.log" size="${9 * MiB}">\nSaved at /home/uploads/big.log.\n</attachment>`
+  );
+  const saved = await page.evaluate(async () => {
+    const { client } = globalThis.attach;
+    return [
+      (await client.fs.readFile('/home/uploads/noise-2.png')).length,
+      (await client.fs.readFile('/home/uploads/big.log')).length,
+    ];
+  });
+  assert.deepEqual(saved, [sizes[2], 9 * MiB]);
+  assert.deepEqual(await stagedLeft(page), []);
+});
+
+test('a page that cannot reach the agent folder says it takes what fits one link frame', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, [['answer', 'Small.']]);
+  const limits = await staged(page, 'a page that cannot reach', async () => {
+    const { owner } = globalThis.attach;
+    const root = await navigator.storage.getDirectory();
+    await (await root.getDirectoryHandle('.slicc')).removeEntry('attachments', { recursive: true });
+    const { agent } = createAgentModel(await owner.connect());
+    await agent.ready();
+    return agent.attachmentLimits();
+  });
+  assert.deepEqual(limits, { image: 8 * MiB, text: 8 * MiB, file: 8 * MiB, total: 10 * MiB });
+});

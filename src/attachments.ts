@@ -7,6 +7,7 @@ export interface SendAttachment {
   data?: string;
   text?: string;
   path?: string;
+  upload?: string;
 }
 
 export interface ShownAttachment {
@@ -27,30 +28,42 @@ export type Part =
 export interface Saver {
   sees: boolean;
   save?(name: string, bytes: Uint8Array): Promise<string>;
+  staged?(id: string): Promise<Blob | undefined>;
 }
 
 const MIB = 1024 * 1024;
 
 export const IMAGE_LIMIT = 5 * MIB;
-export const FILE_LIMIT = 8 * MIB;
-export const TOTAL_LIMIT = 10 * MIB;
+export const INLINE_LIMIT = 8 * MIB;
+export const INLINE_TOTAL = 10 * MIB;
+export const FILE_LIMIT = 100 * MIB;
+export const TOTAL_LIMIT = 256 * MIB;
+
+export const STAGED_DIR = '/.slicc/attachments';
+
+export const STAGED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function stagedDir(serverId: string): string {
+  return `${STAGED_DIR}/${serverId}`;
+}
 
 export const SEEN = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 export const BLIND = "This model can't see images, so the image was saved as a file instead.";
 
-export const TOGETHER = `These attachments add up to more than ${TOTAL_LIMIT / MIB} MiB; send them in separate messages.`;
+export const UNSHOWN =
+  'The image was too large to show the model, so it was saved as a file instead.';
 
 export function mib(bytes: number): string {
   return `${Math.round(bytes / MIB)} MiB`;
 }
 
-export function limitOf(kind: AttachmentKind): number {
-  return kind === 'image' ? IMAGE_LIMIT : FILE_LIMIT;
+export function together(limit: number): string {
+  return `These attachments add up to more than ${mib(limit)}; send them in separate messages.`;
 }
 
-export function tooLarge(name: string, kind: AttachmentKind): string {
-  return `${name} is larger than ${mib(limitOf(kind))}, so it can't be sent.`;
+export function tooLarge(name: string, limit: number): string {
+  return `${name} is larger than ${mib(limit)}, so it can't be sent.`;
 }
 
 export function textBytes(text: string): number {
@@ -180,19 +193,44 @@ export function splitUser(
   return { text, attachments };
 }
 
+async function saved(attachment: SendAttachment, bytes: Uint8Array, saver: Saver): Promise<Part[]> {
+  if (!saver.save) throw new Error(`This agent can't save ${attachment.name} as a file.`);
+  const path = await saver.save(attachment.name, bytes);
+  const header = { kind: attachment.kind, name: attachment.name, type: attachment.mimeType };
+  const image = attachment.kind === 'image';
+  const note = !image
+    ? ''
+    : !saver.sees
+      ? ` ${BLIND}`
+      : SEEN.has(attachment.mimeType)
+        ? ` ${UNSHOWN}`
+        : '';
+  return [
+    {
+      type: 'text',
+      text: wrap({ ...header, path, size: bytes.length }, `Saved at ${path}.${note}`),
+    },
+  ];
+}
+
 async function encoded(attachment: SendAttachment, data: string, saver: Saver): Promise<Part[]> {
   const size = decodedSize(data);
-  if (size > limitOf(attachment.kind)) throw new Error(tooLarge(attachment.name, attachment.kind));
+  if (size > INLINE_LIMIT) throw new Error(tooLarge(attachment.name, INLINE_LIMIT));
   const header = { kind: attachment.kind, name: attachment.name, type: attachment.mimeType };
-  if (attachment.kind === 'image' && saver.sees && SEEN.has(attachment.mimeType))
+  const shown = saver.sees && SEEN.has(attachment.mimeType) && size <= IMAGE_LIMIT;
+  if (attachment.kind === 'image' && shown)
     return [
       { type: 'text', text: wrap(header, '') },
       { type: 'image', data, mimeType: attachment.mimeType },
     ];
-  if (!saver.save) throw new Error(`This agent can't save ${attachment.name} as a file.`);
-  const path = await saver.save(attachment.name, fromBase64(data));
-  const blind = attachment.kind === 'image' && !saver.sees ? ` ${BLIND}` : '';
-  return [{ type: 'text', text: wrap({ ...header, path, size }, `Saved at ${path}.${blind}`) }];
+  return saved(attachment, fromBase64(data), saver);
+}
+
+async function uploaded(attachment: SendAttachment, id: string, saver: Saver): Promise<Part[]> {
+  const file = STAGED_ID.test(id) ? await saver.staged?.(id) : undefined;
+  if (!file) throw new Error(`Couldn't find ${attachment.name} again; attach it again.`);
+  if (file.size > FILE_LIMIT) throw new Error(tooLarge(attachment.name, FILE_LIMIT));
+  return saved(attachment, new Uint8Array(await file.arrayBuffer()), saver);
 }
 
 async function partsOf(attachment: SendAttachment, saver: Saver): Promise<Part[]> {
@@ -203,11 +241,12 @@ async function partsOf(attachment: SendAttachment, saver: Saver): Promise<Part[]
     ...(attachment.path === undefined ? {} : { path: attachment.path }),
   };
   if (attachment.kind === 'text' && attachment.text !== undefined) {
-    if (textBytes(attachment.text) > FILE_LIMIT)
-      throw new Error(tooLarge(attachment.name, attachment.kind));
+    if (textBytes(attachment.text) > INLINE_LIMIT)
+      throw new Error(tooLarge(attachment.name, INLINE_LIMIT));
     return [{ type: 'text', text: wrap(header, attachment.text) }];
   }
   if (attachment.data !== undefined) return encoded(attachment, attachment.data, saver);
+  if (attachment.upload !== undefined) return uploaded(attachment, attachment.upload, saver);
   if (attachment.path !== undefined)
     return [{ type: 'text', text: wrap(header, `It is at ${attachment.path}.`) }];
   throw new Error(`${attachment.name} has nothing to send.`);
@@ -222,7 +261,7 @@ export async function userParts(
     (sum, item) => sum + textBytes(item.text ?? '') + decodedSize(item.data ?? ''),
     0
   );
-  if (total > TOTAL_LIMIT) throw new Error(TOGETHER);
+  if (total > INLINE_TOTAL) throw new Error(together(INLINE_TOTAL));
   const parts: Part[] = text ? [{ type: 'text', text }] : [];
   for (const attachment of attachments) parts.push(...(await partsOf(attachment, saver)));
   return parts;
