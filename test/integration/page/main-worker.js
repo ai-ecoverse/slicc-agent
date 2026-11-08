@@ -954,6 +954,7 @@ const running = runAgentWorker(self, {
     : {}),
   model: { provider: 'faux', modelId: 'faux-1' },
   ...(params.has('ttl') ? { approvalMs: Number(params.get('ttl')) } : {}),
+  ...(params.has('staged-ms') ? { stagedMs: Number(params.get('staged-ms')) } : {}),
   providers: [
     faux.provider,
     ...judges,

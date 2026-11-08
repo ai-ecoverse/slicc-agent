@@ -462,9 +462,9 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
       staged?.stage
     ).catch((error: Error) => {
       this.notify(error.message, agentId);
-      return null;
+      throw error;
     });
-    if (attachments) await this.#sendWith(agentId, outgoing, attachments);
+    await this.#sendWith(agentId, outgoing, attachments);
   }
 
   async #sendWith(

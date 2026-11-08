@@ -107,6 +107,7 @@ async function fitted(
   });
   const { mimeType } = attachment;
   if (attachment.kind !== 'image' || blob.size <= IMAGE_LIMIT) return { blob, mimeType };
+  if (blob.size > FILE_LIMIT) throw new Error(tooLarge(attachment.name, FILE_LIMIT));
   const image = { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType };
   const smaller = await fit(image).catch(() => image);
   return {

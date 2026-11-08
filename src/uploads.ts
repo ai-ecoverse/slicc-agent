@@ -2,6 +2,7 @@ import type { Context } from '@earendil-works/chord';
 import type { Conversation, ModelRef } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { Saver } from './attachments.ts';
+import type { Staging } from './staging.ts';
 
 export interface Uploads {
   env(
@@ -9,13 +10,13 @@ export interface Uploads {
     context: Context
   ): ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>;
   sees(model: ModelRef | undefined): boolean;
-  staged?(id: string): Promise<Blob | undefined>;
+  staging?: Staging;
 }
 
 export const UPLOADS = 'uploads';
 
 function cleaned(name: string): { stem: string; ext: string } {
-  const clean = name.replace(/[/\\\0]/g, '_').replace(/^\.+/, '') || 'attachment';
+  const clean = name.replace(/[/\\<>"\p{Cc}]/gu, '_').replace(/^\.+/, '') || 'attachment';
   const dot = clean.lastIndexOf('.');
   return dot > 0 ? { stem: clean.slice(0, dot), ext: clean.slice(dot) } : { stem: clean, ext: '' };
 }
@@ -48,10 +49,11 @@ export async function saverFor(
   context: Context
 ): Promise<Saver> {
   if (!uploads) return { sees: true };
+  await uploads.staging?.sweep();
   const agent = await conversation.agent(context);
   return {
     sees: uploads.sees(agent.model),
-    ...(uploads.staged ? { staged: uploads.staged } : {}),
+    ...(uploads.staging ? { staging: uploads.staging } : {}),
     async save(name, bytes) {
       const target = {
         conversationId: conversation.id,

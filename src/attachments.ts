@@ -28,7 +28,7 @@ export type Part =
 export interface Saver {
   sees: boolean;
   save?(name: string, bytes: Uint8Array): Promise<string>;
-  staged?(id: string): Promise<Blob | undefined>;
+  staging?: { take(id: string): Promise<Blob | undefined>; drop(id: string): Promise<void> };
 }
 
 const MIB = 1024 * 1024;
@@ -81,7 +81,7 @@ export function fromBase64(data: string): Uint8Array {
 const ESCAPES: Record<string, string> = { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' };
 
 function escape(value: string): string {
-  return value.replace(/[&"<>]/g, (char) => ESCAPES[char] as string);
+  return value.replace(/\p{Cc}/gu, ' ').replace(/[&"<>]/g, (char) => ESCAPES[char] as string);
 }
 
 function unescape(value: string): string {
@@ -193,9 +193,7 @@ export function splitUser(
   return { text, attachments };
 }
 
-async function saved(attachment: SendAttachment, bytes: Uint8Array, saver: Saver): Promise<Part[]> {
-  if (!saver.save) throw new Error(`This agent can't save ${attachment.name} as a file.`);
-  const path = await saver.save(attachment.name, bytes);
+function savedText(attachment: SendAttachment, path: string, size: number, saver: Saver): Part {
   const header = { kind: attachment.kind, name: attachment.name, type: attachment.mimeType };
   const image = attachment.kind === 'image';
   const note = !image
@@ -205,51 +203,75 @@ async function saved(attachment: SendAttachment, bytes: Uint8Array, saver: Saver
       : SEEN.has(attachment.mimeType)
         ? ` ${UNSHOWN}`
         : '';
-  return [
-    {
-      type: 'text',
-      text: wrap({ ...header, path, size: bytes.length }, `Saved at ${path}.${note}`),
-    },
-  ];
-}
-
-async function encoded(attachment: SendAttachment, data: string, saver: Saver): Promise<Part[]> {
-  const size = decodedSize(data);
-  if (size > INLINE_LIMIT) throw new Error(tooLarge(attachment.name, INLINE_LIMIT));
-  const header = { kind: attachment.kind, name: attachment.name, type: attachment.mimeType };
-  const shown = saver.sees && SEEN.has(attachment.mimeType) && size <= IMAGE_LIMIT;
-  if (attachment.kind === 'image' && shown)
-    return [
-      { type: 'text', text: wrap(header, '') },
-      { type: 'image', data, mimeType: attachment.mimeType },
-    ];
-  return saved(attachment, fromBase64(data), saver);
-}
-
-async function uploaded(attachment: SendAttachment, id: string, saver: Saver): Promise<Part[]> {
-  const file = STAGED_ID.test(id) ? await saver.staged?.(id) : undefined;
-  if (!file) throw new Error(`Couldn't find ${attachment.name} again; attach it again.`);
-  if (file.size > FILE_LIMIT) throw new Error(tooLarge(attachment.name, FILE_LIMIT));
-  return saved(attachment, new Uint8Array(await file.arrayBuffer()), saver);
-}
-
-async function partsOf(attachment: SendAttachment, saver: Saver): Promise<Part[]> {
-  const header = {
-    kind: attachment.kind,
-    name: attachment.name,
-    type: attachment.mimeType,
-    ...(attachment.path === undefined ? {} : { path: attachment.path }),
+  return {
+    type: 'text',
+    text: wrap({ ...header, path, size }, `Saved at ${escape(path)}.${note}`),
   };
+}
+
+function shownImage(attachment: SendAttachment, size: number, saver: Saver): boolean {
+  return (
+    attachment.kind === 'image' &&
+    saver.sees &&
+    SEEN.has(attachment.mimeType) &&
+    size <= IMAGE_LIMIT
+  );
+}
+
+interface Plan {
+  attachment: SendAttachment;
+  size: number;
+  blob?: Blob;
+}
+
+function saving(attachment: SendAttachment, saver: Saver): void {
+  if (!saver.save) throw new Error(`This agent can't save ${attachment.name} as a file.`);
+}
+
+async function planned(attachment: SendAttachment, saver: Saver): Promise<Plan> {
   if (attachment.kind === 'text' && attachment.text !== undefined) {
-    if (textBytes(attachment.text) > INLINE_LIMIT)
-      throw new Error(tooLarge(attachment.name, INLINE_LIMIT));
-    return [{ type: 'text', text: wrap(header, attachment.text) }];
+    const size = textBytes(attachment.text);
+    if (size > INLINE_LIMIT) throw new Error(tooLarge(attachment.name, INLINE_LIMIT));
+    return { attachment, size };
   }
-  if (attachment.data !== undefined) return encoded(attachment, attachment.data, saver);
-  if (attachment.upload !== undefined) return uploaded(attachment, attachment.upload, saver);
-  if (attachment.path !== undefined)
-    return [{ type: 'text', text: wrap(header, `It is at ${attachment.path}.`) }];
+  if (attachment.data !== undefined) {
+    const size = decodedSize(attachment.data);
+    if (size > INLINE_LIMIT) throw new Error(tooLarge(attachment.name, INLINE_LIMIT));
+    if (!shownImage(attachment, size, saver)) saving(attachment, saver);
+    return { attachment, size };
+  }
+  if (attachment.upload !== undefined) {
+    const id = attachment.upload;
+    const blob = STAGED_ID.test(id) ? await saver.staging?.take(id) : undefined;
+    if (!blob) throw new Error(`Couldn't find ${attachment.name} again; attach it again.`);
+    if (blob.size > FILE_LIMIT) throw new Error(tooLarge(attachment.name, FILE_LIMIT));
+    saving(attachment, saver);
+    return { attachment, size: blob.size, blob };
+  }
+  if (attachment.path !== undefined) return { attachment, size: 0 };
   throw new Error(`${attachment.name} has nothing to send.`);
+}
+
+async function partsOf({ attachment, size, blob }: Plan, saver: Saver): Promise<Part[]> {
+  const base = { kind: attachment.kind, name: attachment.name, type: attachment.mimeType };
+  const header = { ...base, ...(attachment.path === undefined ? {} : { path: attachment.path }) };
+  if (attachment.kind === 'text' && attachment.text !== undefined)
+    return [{ type: 'text', text: wrap(header, attachment.text) }];
+  const save = saver.save as NonNullable<Saver['save']>;
+  if (attachment.data !== undefined) {
+    if (shownImage(attachment, size, saver))
+      return [
+        { type: 'text', text: wrap(base, '') },
+        { type: 'image', data: attachment.data, mimeType: attachment.mimeType },
+      ];
+    const path = await save(attachment.name, fromBase64(attachment.data));
+    return [savedText(attachment, path, size, saver)];
+  }
+  if (blob) {
+    const path = await save(attachment.name, new Uint8Array(await blob.arrayBuffer()));
+    return [savedText(attachment, path, size, saver)];
+  }
+  return [{ type: 'text', text: wrap(header, `It is at ${escape(attachment.path as string)}.`) }];
 }
 
 export async function userParts(
@@ -257,12 +279,21 @@ export async function userParts(
   attachments: readonly SendAttachment[],
   saver: Saver
 ): Promise<Part[]> {
-  const total = attachments.reduce(
-    (sum, item) => sum + textBytes(item.text ?? '') + decodedSize(item.data ?? ''),
-    0
-  );
-  if (total > INLINE_TOTAL) throw new Error(together(INLINE_TOTAL));
-  const parts: Part[] = text ? [{ type: 'text', text }] : [];
-  for (const attachment of attachments) parts.push(...(await partsOf(attachment, saver)));
-  return parts;
+  try {
+    const inline = attachments.reduce(
+      (sum, item) => sum + textBytes(item.text ?? '') + decodedSize(item.data ?? ''),
+      0
+    );
+    if (inline > INLINE_TOTAL) throw new Error(together(INLINE_TOTAL));
+    const plans: Plan[] = [];
+    for (const attachment of attachments) plans.push(await planned(attachment, saver));
+    if (plans.reduce((sum, plan) => sum + plan.size, 0) > TOTAL_LIMIT)
+      throw new Error(together(TOTAL_LIMIT));
+    const parts: Part[] = text ? [{ type: 'text', text }] : [];
+    for (const plan of plans) parts.push(...(await partsOf(plan, saver)));
+    return parts;
+  } finally {
+    const ids = attachments.flatMap((item) => (item.upload === undefined ? [] : [item.upload]));
+    await Promise.all(ids.map((id) => saver.staging?.drop(id)));
+  }
 }

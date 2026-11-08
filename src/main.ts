@@ -53,7 +53,6 @@ import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
 import { pageOnly, type Reach, type Transport, transportFetch, transportReach } from './net.ts';
-import { opfsFile } from './opfs-pool.ts';
 import { sliccPrompt } from './prompt.ts';
 import { AZURE, azureBase } from './providers.ts';
 import { createPages } from './remote/pages.ts';
@@ -87,6 +86,7 @@ import {
 import { RELOAD_MS, setupSkills } from './skills/index.ts';
 import { type SprinklesAttach, setupSprinkles } from './sprinkles/index.ts';
 import { openOpfsSqliteStorage } from './sqlite.ts';
+import { type Staging, workerStaging } from './staging.ts';
 import {
   agentVersion,
   browserConnected,
@@ -119,6 +119,7 @@ export interface AgentWorkerOptions {
   users?: boolean;
   mcpRedirect?: string;
   approvalMs?: number;
+  stagedMs?: number;
 }
 
 export function usersOf(
@@ -631,7 +632,8 @@ export async function start(
     ...(options.catalog ? { catalog: options.catalog } : {}),
   });
   await memoryRuntime.reload(BACKGROUND_CONTEXT).catch(() => undefined);
-  return hostAgent(agent, {
+  const staging = workerStaging(serverId, { maxAgeMs: options.stagedMs });
+  const host = await hostAgent(agent, {
     serverId,
     ...(await setupApprovals(models, home, at, agent, memoryRuntime.memories, options)),
     settings,
@@ -650,12 +652,23 @@ export async function start(
     uploads: {
       env: environment,
       sees: (ref) => seesImages(models, ref),
-      staged: (id) => opfsFile(`${stagedDir(serverId)}/${id}`),
+      staging,
     },
     monitor: {
       kernel: client,
       groups,
       ...(users ? { users: () => users.users.list() } : {}),
+    },
+  });
+  return closing(host, staging);
+}
+
+function closing(host: AgentHost, staging: Staging): AgentHost {
+  const close = host.close;
+  return Object.assign(host, {
+    close: () => {
+      staging.close();
+      return close();
     },
   });
 }
