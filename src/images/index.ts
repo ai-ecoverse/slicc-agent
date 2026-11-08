@@ -44,11 +44,13 @@ export function imageReads(read: ToolRegistration, fit: Shrink = shrink): Extens
             return refuse(
               `${path} is too large to read as an image (${image.bytes.length} bytes after fitting it to ${MAX_WIDTH} px). Take a smaller screenshot, for example with --max-width ${MAX_WIDTH}.`
             );
+          const block = { type: 'image' as const, data, mimeType: image.mimeType };
           return {
             output: [
               { type: 'text', text: `${path} (${image.mimeType}, ${image.bytes.length} bytes)` },
-              { type: 'image', data, mimeType: image.mimeType },
+              block,
             ],
+            structuredOutput: block,
           } as Result;
         },
       })),
