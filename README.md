@@ -492,7 +492,7 @@ pi durable keeps every conversation and entry in the session database, and has n
     - The transcript sent is the model-visible text, cut at 4000 characters. Vault values are scrubbed and secret-shaped text is redacted first.
     - A failed or empty answer keeps the first line and isn't retried. A live cone costs the early two calls, then one more every five user turns; a scoop that stops before those early titles costs at most one call, and a cone one more at freeze.
     - `"titles": false` in `~/.pi/agent/settings.json` turns every model title off.
-    - The title moves with the cone. Freeze and New conversation copy it into the frozen row, then the final call replaces it there. Thaw brings it back as final, also from a stopped scoop. A new conversation, or a scoop's reset, starts untitled.
+    - The title moves with the cone. Freeze and New conversation copy it into the frozen row, then the final call replaces it there. Thaw brings that title back (and sets `titled` to the last early turn), also from a stopped scoop; if the thawed cone keeps chatting, the every-five-turns refresh can replace it later. A new conversation, or a scoop's reset, starts untitled.
     - The Agents panel shows it as each cone's and scoop's summary (spectrum's `title`).
     - The call goes through the same `Models` (and so `scope.fetch` and the vault) as every chat request.
   - **Tool labels.** Spectrum groups tool runs into clusters and asks `AgentPort.toolLabel(agentId, callIds)` once a cluster forms (three runs), and again with the longer id list each time it grows, even while it still runs. The agent answers with an imperative label of three to eight words, or `null`, and spectrum keeps its own summary either way.

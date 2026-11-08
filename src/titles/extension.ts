@@ -43,6 +43,18 @@ export function trivial(text: string): boolean {
   );
 }
 
+export function titleNextThreshold(titled: number, greeting = false): number | undefined {
+  const next = TITLE_TURNS.find((turn) => turn > titled && !(greeting && turn === 1));
+  if (next !== undefined) return next;
+  return TITLE_REFRESH_EVERY > 0 ? titled + TITLE_REFRESH_EVERY : undefined;
+}
+
+export function titleRefreshGate(titled: number, reason: string): boolean {
+  const earlyLast = TITLE_TURNS.at(-1) ?? 0;
+  if (titled < earlyLast) return true;
+  return TITLE_REFRESH_EVERY > 0 && reason === 'answer';
+}
+
 export function titleDue(
   record: Pick<ConeRecord, 'titled'>,
   entries: readonly EntryRecord[],
@@ -54,10 +66,8 @@ export function titleDue(
   const said = entries.filter((entry) => entry.kind === 'pi.user' && textOf(entry));
   const titled = record.titled ?? 0;
   const greeting = !final && trivial(textOf(said[0] ?? ({} as EntryRecord)));
-  const next = TITLE_TURNS.find((turn) => turn > titled && !(greeting && turn === 1));
-  if (next !== undefined) return said.length >= next ? said.length : undefined;
-  if (TITLE_REFRESH_EVERY > 0 && said.length >= titled + TITLE_REFRESH_EVERY) return said.length;
-  return undefined;
+  const next = titleNextThreshold(titled, greeting);
+  return next !== undefined && said.length >= next ? said.length : undefined;
 }
 
 export function cleanTitle(title: string | undefined): string | undefined {
@@ -238,7 +248,9 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
         afterRun(run, api) {
           const agents = deps.agents();
           if (!agents || !deps.harness() || !deps.title()) return undefined;
-          if (!findAgent(agents, api.conversationId)) return undefined;
+          const found = findAgent(agents, api.conversationId);
+          if (!found) return undefined;
+          if (!titleRefreshGate(found.record.titled ?? 0, run.reason)) return undefined;
           return { tasks: [runEndTask(due, { last: Number(run.last) })] };
         },
       }),
