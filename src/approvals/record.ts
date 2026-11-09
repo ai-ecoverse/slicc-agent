@@ -249,7 +249,8 @@ function stopped(item: Approval, by: DecidedBy): Ruling {
   };
 }
 
-const why = (reason: string | undefined) => (reason ? { reason } : {});
+const why = (reason: string | undefined) =>
+  reason && reason !== REASONS.stopped ? { reason } : {};
 
 export function ruled(
   item: Approval,

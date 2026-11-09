@@ -128,7 +128,7 @@ test("deny and stop ends the cone's turn and the shell loop that keeps asking fo
       (error) => error.message
     );
     const stillPending = r.local.approvals.value.find((item) => item.id === fromTerminal.id).state;
-    await r.model.approvals.decide(fromTerminal.id, 'deny');
+    await r.model.approvals.decide(fromTerminal.id, 'deny', 'stopped');
     const terminalRun = await terminal;
     await r.model.agent.send(r.model.agent.active(), 'Loop sudo.');
     const asked = await r.shown('cone');
@@ -150,6 +150,9 @@ test("deny and stop ends the cone's turn and the shell loop that keeps asking fo
       refused,
       stillPending,
       terminalStatus: terminalRun.status,
+      terminalStderr: terminalRun.stderr,
+      terminalReason:
+        r.local.approvals.value.find((item) => item.id === fromTerminal.id).reason ?? null,
       asked,
       afterDecide,
       counted,
@@ -165,6 +168,8 @@ test("deny and stop ends the cone's turn and the shell loop that keeps asking fo
   assert.equal(seen.refused, 'This request has no turn to stop.');
   assert.equal(seen.stillPending, 'pending');
   assert.notEqual(seen.terminalStatus, 0);
+  assert.match(seen.terminalStderr, /approval denied/);
+  assert.equal(seen.terminalReason, null, "a person's own words can't read as a stop");
   assert.equal(seen.asked.stoppable, true);
   assert.deepEqual(seen.asked.requester, { kind: 'agent', name: 'sliccy', agentId: 'cone' });
   const stopped = seen.items.find((item) => item.id === seen.asked.id);
