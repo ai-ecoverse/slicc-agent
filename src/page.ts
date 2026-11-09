@@ -1,4 +1,10 @@
-export type { SudoAnswer, SudoDenial, SudoReply, SudoRequest } from './approvals/sudo.ts';
+export type {
+  SudoAnswer,
+  SudoDenial,
+  SudoReply,
+  SudoRequest,
+  SudoTimestamp,
+} from './approvals/sudo.ts';
 export { type ApproveOptions, JUDGE_DENIED, UNAVAILABLE } from './approvals/sudo-client.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
 export {

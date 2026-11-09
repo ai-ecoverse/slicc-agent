@@ -1,8 +1,9 @@
 import { defineDoc } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
 import { clears, fits, JUDGE_ALLOW, JUDGE_LOW, reaches } from './aligned.ts';
+import { personal } from './people.ts';
 
-export { fits, JUDGE_ALLOW };
+export { fits, JUDGE_ALLOW, personal };
 
 export type ApprovalKind = 'guest-message' | 'guest-tool' | 'sudo' | 'capture';
 
@@ -55,6 +56,7 @@ export type SudoDetail = {
   stdin?: SudoStdin;
   rootOnly?: Record<string, boolean>;
   writable?: boolean;
+  validate?: true;
 };
 
 export type CaptureWhat = 'screen' | 'camera' | 'microphone';
@@ -162,8 +164,6 @@ export function answerOf(value: unknown): ApprovalAnswer | null {
   return value === 'once' || value === 'always' || value === 'deny' ? value : null;
 }
 
-export const personal = (by: DecidedBy): boolean => by === 'owner' || by === 'follower';
-
 export function answerer(by: DecidedBy, item: Pick<Approval, 'tier' | 'reviewer'>): boolean {
   if (personal(by)) return item.tier === 'user';
   if (by === 'judge') return item.tier === 'agent';
@@ -176,8 +176,13 @@ export type SudoApprover = 'user' | 'agent';
 export const sudoApprover = (value: unknown): SudoApprover =>
   value === 'agent' ? 'agent' : 'user';
 
-export const tierOf = (kind: ApprovalKind, tier: string, sudo: SudoApprover): string =>
-  kind === 'sudo' ? sudo : tier;
+export const personOnly = (item: Pick<ApprovalDraft, 'kind' | 'detail'>): boolean =>
+  item.kind === 'sudo' && (item.detail as SudoDetail).validate === true;
+
+export const tierOf = (
+  draft: Pick<ApprovalDraft, 'kind' | 'detail' | 'tier'>,
+  sudo: SudoApprover
+) => (draft.kind !== 'sudo' ? draft.tier : personOnly(draft) ? 'user' : sudo);
 
 export type Gate = 'person' | 'judge';
 
@@ -208,6 +213,7 @@ export function route(
 
 export function alwaysOffered(item: Approval): boolean {
   if ((item.kind !== 'sudo' && item.kind !== 'capture') || item.tier !== 'user') return false;
+  if (personOnly(item)) return false;
   const { verdict } = item;
   const writable = item.kind !== 'sudo' || item.detail.writable !== false;
   return verdict?.level === 1 && verdict.always === true && writable;

@@ -6,6 +6,7 @@ import { AgentSudoService, SUDO_METHODS } from '../services.ts';
 import { bound, type Remote, type Root } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import { attributed, UNATTRIBUTED } from './attributed.ts';
+import { personal } from './people.ts';
 import type { Approval } from './record.ts';
 import type { AgentSudo, SudoAnswer, SudoDenial, SudoReply, SudoRequest } from './sudo.ts';
 
@@ -28,8 +29,11 @@ export function answerOf(item: Approval | undefined): SudoAnswer | null {
 
 export const JUDGE_DENIED = 'sudo: denied by the approval judge';
 
-export function replyOf(item: Approval | undefined): SudoReply | null {
+export function replyOf(item: Approval | undefined, stamps = false): SudoReply | null {
   const answer = answerOf(item);
+  const by = item?.decidedBy;
+  if (stamps && answer !== null && answer !== 'deny' && by && personal(by))
+    return { answer, timestamp: true };
   if (answer !== 'deny' || item?.state !== 'rejected' || item.decidedBy !== 'judge') return answer;
   const reason = item.verdict?.reason;
   const denial: SudoDenial = {
@@ -79,10 +83,10 @@ async function open(endpoint: PortEndpoint, stop: AbortSignal | undefined) {
 function settled(
   approvals: Readable<Approval[]>,
   id: string,
-  signals: { signal: AbortSignal | undefined; stop: AbortSignal | undefined },
+  signals: { signal: AbortSignal | undefined; stop: AbortSignal | undefined; stamps: boolean },
   ended: Promise<never>
 ): Promise<{ answer: SudoReply; aborted: unknown }> {
-  const { signal, stop } = signals;
+  const { signal, stop, stamps } = signals;
   return new Promise((resolve) => {
     let off: () => void = () => undefined;
     let done = false;
@@ -102,7 +106,10 @@ function settled(
     stop?.addEventListener('abort', halt, { once: true });
     ended.catch(() => finish('deny'));
     off = approvals.subscribe((items) => {
-      const answer = replyOf(items?.find((item) => item.id === id));
+      const answer = replyOf(
+        items?.find((item) => item.id === id),
+        stamps
+      );
       if (answer) finish(answer);
     });
     if (done) off();
@@ -183,7 +190,7 @@ export async function askSudo(
     if (signal?.aborted || stop?.aborted) return 'deny';
     const asked = await link.sudo.request(request, options.where ?? null, BACKGROUND_CONTEXT);
     if (asked.id === null) throw new Error(asked.error);
-    const signals = { signal, stop };
+    const signals = { signal, stop, stamps: request.timestamp === true };
     const { answer, aborted } = await settled(link.approvals, asked.id, signals, link.ended);
     if (aborted === 'expired') await timedOut(link, asked.id, request.expiresAt);
     else if (aborted)

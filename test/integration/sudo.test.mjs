@@ -128,11 +128,13 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
           running.postMessage({ ...message(port2) }, [port2]);
         });
       const ask = async (draft) => (await call((reply) => ({ approve: draft, reply }))).item;
+      const decideAs = (id, answer, by) => call((reply) => ({ decide: { id, answer, by }, reply }));
       const judged = () => call((port) => ({ judged: port }));
       const setTable = (judgeTable) => running.postMessage({ judgeTable });
       globalThis.t = {
         kernel,
         ask,
+        decideAs,
         judged,
         setTable,
         owner,
@@ -503,6 +505,182 @@ test("with the judge on, sudo waits for a person by default with the verdict as 
   assert.match(seen.lick, /helper asked to run \/usr\/bin\/ls \/tmp/);
   assert.equal(seen.quiet, false);
   assert.equal(seen.after, 4);
+});
+
+test('only a person approving a kernel that asks for timestamps answers with one, the judge and host never do, and an older kernel still gets the plain answer it runs', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { query: '?judge-level=1' });
+  const seen = await staged(page, 'timestamp answers', async () => {
+    const { owner, follow, until, newest, pending, decideAs, sudo, tags, replies } = globalThis.t;
+    const local = await owner.connect();
+    const phone = await follow('phone-1');
+    const mine = createAgentModel(local);
+    const theirs = createAgentModel(phone);
+    const request = (id, extra = {}) => ({
+      id,
+      kind: 'sudo',
+      user: 'cone',
+      target: 'root',
+      argv: ['ls', '/root'],
+      path: '/usr/bin/ls',
+      cwd: '/',
+      expiresAt: Date.now() + 60_000,
+      always: true,
+      timestamp: true,
+      ...extra,
+    });
+    const offered = (model, id) =>
+      until(() => model.approvals.list().find((a) => a.id === id)?.always, 'Always offered');
+    const answered = async (req, answer) => {
+      const asked = owner.approve(req);
+      await until(() => newest(local)?.state === 'pending', 'the request');
+      const id = newest(local).id;
+      await answer(id);
+      return asked;
+    };
+    const once = await answered(request('sudo-a'), (id) => mine.approvals.decide(id, 'once'));
+    const always = await answered(request('sudo-b'), async (id) => {
+      await offered(theirs, id);
+      await theirs.approvals.decide(id, 'always');
+    });
+    const denied = await answered(request('sudo-c'), (id) => mine.approvals.decide(id, 'deny'));
+    const older = await answered(request('sudo-d', { timestamp: undefined }), (id) =>
+      mine.approvals.decide(id, 'once')
+    );
+    const byHost = await answered(request('sudo-e'), (id) => decideAs(id, 'once', 'host'));
+    const running = sudo(['ls', '/root'], tags.terminal);
+    await pending(local, 1);
+    const kernelReq = newest(local);
+    await mine.approvals.decide(kernelReq.id, 'once');
+    const ran = await running;
+    await phone.close();
+    await local.close();
+    await owner.release();
+    return {
+      once,
+      always,
+      denied,
+      older,
+      byHost,
+      kernel: { status: ran.status, reply: replies.at(-1).answer },
+    };
+  });
+  assert.deepEqual(seen.once, { answer: 'once', timestamp: true });
+  assert.deepEqual(seen.always, { answer: 'always', timestamp: true });
+  assert.equal(seen.denied, 'deny');
+  assert.equal(seen.older, 'once');
+  assert.equal(seen.byHost, 'once');
+  assert.equal(seen.kernel.status, 0);
+  assert.ok(
+    seen.kernel.reply === 'once' || seen.kernel.reply?.timestamp === true,
+    JSON.stringify(seen.kernel.reply)
+  );
+});
+
+test('the judge approving a sudo never answers with a timestamp', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { query: '?sudo-approver=agent' });
+  const seen = await staged(page, 'a judge approval', async () => {
+    const { owner, until, newest, decideAs } = globalThis.t;
+    const local = await owner.connect();
+    const asked = owner.approve({
+      id: 'sudo-j',
+      kind: 'sudo',
+      user: 'cone',
+      argv: ['ls'],
+      expiresAt: Date.now() + 60_000,
+      timestamp: true,
+    });
+    await until(() => newest(local)?.state === 'pending', 'the request');
+    const { id, tier } = newest(local);
+    const person = await decideAs(id, 'once', 'owner');
+    const decided = await decideAs(id, 'once', 'judge');
+    const answer = await asked;
+    await local.close();
+    await owner.release();
+    return { tier, person: person.error, decided: decided.done, answer };
+  });
+  assert.deepEqual(seen, {
+    tier: 'agent',
+    person: "This request isn't yours to answer.",
+    decided: true,
+    answer: 'once',
+  });
+});
+
+test('sudo -v asks a person even when the judge approves sudo, is not judged, shows no command and never offers Always', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, { query: '?judge-level=1&sudo-approver=agent' });
+  const seen = await staged(page, 'sudo -v', async () => {
+    const { owner, until, newest, decideAs } = globalThis.t;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    const asked = owner.approve({
+      id: 'sudo-v',
+      kind: 'sudo',
+      user: 'cone',
+      target: 'root',
+      argv: [],
+      cwd: '/',
+      expiresAt: Date.now() + 60_000,
+      always: true,
+      timestamp: true,
+      validate: true,
+    });
+    await until(() => newest(local)?.state === 'pending', 'the request');
+    const item = newest(local);
+    const shown = await until(
+      () => model.approvals.list().find((a) => a.id === item.id),
+      'the dialog'
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const later = newest(local);
+    const byJudge = await decideAs(item.id, 'once', 'judge');
+    const always = await model.approvals.decide(item.id, 'always').then(
+      () => 'decided',
+      (error) => error.message
+    );
+    await model.approvals.decide(item.id, 'once');
+    const answer = await asked;
+    const bare = await owner
+      .approve({ id: 'sudo-x', kind: 'sudo', user: 'cone', argv: [], expiresAt: Date.now() + 1 })
+      .then(
+        () => 'answered',
+        (error) => error.message
+      );
+    await local.close();
+    await owner.release();
+    return {
+      tier: item.tier,
+      judging: item.judging ?? false,
+      verdict: later.verdict ?? null,
+      detail: item.detail,
+      shown: { command: shown.command, always: shown.always, target: shown.target ?? null },
+      byJudge: byJudge.error,
+      always,
+      answer,
+      bare,
+    };
+  });
+  assert.deepEqual(seen, {
+    tier: 'user',
+    judging: false,
+    verdict: null,
+    detail: {
+      command: 'start a sudo timestamp for cone (no command)',
+      validate: true,
+      writable: false,
+    },
+    shown: {
+      command: 'start a sudo timestamp for cone (no command)',
+      always: false,
+      target: null,
+    },
+    byJudge: "This request isn't yours to answer.",
+    always: "Always isn't offered for this request.",
+    answer: { answer: 'once', timestamp: true },
+    bare: 'This is not a sudo request.',
+  });
 });
 
 test('a sudo the kernel lets expire is recorded as timed out, not withdrawn', async (t) => {
