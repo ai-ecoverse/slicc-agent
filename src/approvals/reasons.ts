@@ -1,0 +1,15 @@
+export const REASONS = {
+  timeout: 'timeout',
+  unknownTier: 'unknown-tier',
+  unroutable: 'unroutable',
+  unknownAnswer: 'unknown-answer',
+  restart: 'restart',
+  revoked: 'revoked',
+  aborted: 'aborted',
+  disconnected: 'disconnected',
+  noScoop: 'no-scoop',
+  scoopStopped: 'scoop-stopped',
+  scoopAsked: 'scoop-asked',
+  scoopUndecided: 'scoop-undecided',
+  stopped: 'stopped',
+} as const;

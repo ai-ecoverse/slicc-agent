@@ -10,6 +10,7 @@ import type {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { fits } from '../approvals/aligned.ts';
 import type { Approval as Item } from '../approvals/record.ts';
+import { stoppable } from '../approvals/stoppable.ts';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
 
@@ -84,6 +85,7 @@ export function shown(item: Item, agentName: string | undefined): Approval {
       ...(cwd ? { cwd } : {}),
       always: item.always,
       ...(alwaysScope ? { alwaysScope } : {}),
+      ...(stoppable(item) ? { stoppable: true } : {}),
       ...verdictOf(item),
     };
   }

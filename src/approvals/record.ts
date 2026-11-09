@@ -2,8 +2,10 @@ import { defineDoc } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
 import { clears, fits, JUDGE_ALLOW, JUDGE_LOW, reaches } from './aligned.ts';
 import { personal } from './people.ts';
+import { REASONS } from './reasons.ts';
+import { stoppable } from './stoppable.ts';
 
-export { fits, JUDGE_ALLOW, personal };
+export { fits, JUDGE_ALLOW, personal, REASONS, stoppable };
 
 export type ApprovalKind = 'guest-message' | 'guest-tool' | 'sudo' | 'capture';
 
@@ -12,6 +14,8 @@ export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'unanswered' |
 export type ApprovalTier = 'user' | 'agent' | 'cone' | `scoop:${string}`;
 
 export type ApprovalAnswer = 'once' | 'always' | 'deny';
+
+export type ApprovalDecision = ApprovalAnswer | 'stop';
 
 export type DecidedBy = 'owner' | 'follower' | 'judge' | 'host' | `scoop:${string}`;
 
@@ -129,21 +133,6 @@ export const APPROVALS_KEPT = 100;
 export const MAX_DELAY = 2_147_483_647;
 export const REASON_LENGTH = 500;
 
-export const REASONS = {
-  timeout: 'timeout',
-  unknownTier: 'unknown-tier',
-  unroutable: 'unroutable',
-  unknownAnswer: 'unknown-answer',
-  restart: 'restart',
-  revoked: 'revoked',
-  aborted: 'aborted',
-  disconnected: 'disconnected',
-  noScoop: 'no-scoop',
-  scoopStopped: 'scoop-stopped',
-  scoopAsked: 'scoop-asked',
-  scoopUndecided: 'scoop-undecided',
-} as const;
-
 export const guestKind = (kind: ApprovalKind): boolean => kind !== 'sudo';
 
 export const scoopTier = (tier: unknown): tier is `scoop:${string}` =>
@@ -160,8 +149,10 @@ export function routable(kind: ApprovalKind, tier: ApprovalTier): boolean {
   return !((kind === 'guest-tool' || kind === 'capture') && tier === 'cone');
 }
 
-export function answerOf(value: unknown): ApprovalAnswer | null {
-  return value === 'once' || value === 'always' || value === 'deny' ? value : null;
+export function answerOf(value: unknown): ApprovalDecision | null {
+  return value === 'once' || value === 'always' || value === 'deny' || value === 'stop'
+    ? value
+    : null;
 }
 
 export function answerer(by: DecidedBy, item: Pick<Approval, 'tier' | 'reviewer'>): boolean {
@@ -242,7 +233,21 @@ export function prune(items: Approval[], kept = APPROVALS_KEPT): Approval[] {
 
 export type Settle = { state: Exclude<ApprovalState, 'pending'>; by: DecidedBy; reason?: string };
 
-export type Ruling = { error?: string; settle?: Settle; answer?: 'once' | 'always' };
+export type Ruling = {
+  error?: string;
+  settle?: Settle;
+  answer?: 'once' | 'always';
+  stop?: string;
+};
+
+function stopped(item: Approval, by: DecidedBy): Ruling {
+  if (!personal(by)) return { error: 'Only a person can stop a turn.' };
+  if (!stoppable(item)) return { error: 'This request has no turn to stop.' };
+  return {
+    settle: { state: 'rejected', by, reason: REASONS.stopped },
+    stop: item.requester.agentId as string,
+  };
+}
 
 const why = (reason: string | undefined) => (reason ? { reason } : {});
 
@@ -267,6 +272,7 @@ export function ruled(
   if (known === 'always' && !item.always)
     return { error: "Always isn't offered for this request." };
   if (!known) return { settle: { state: 'rejected', by, reason: REASONS.unknownAnswer } };
+  if (known === 'stop') return stopped(item, by);
   const given = why(cleanReason(reason));
   if (known === 'deny') return { settle: { state: 'rejected', by, ...given } };
   return { settle: { state: 'approved', by, ...given }, answer: known };

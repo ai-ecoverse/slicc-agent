@@ -20,6 +20,7 @@ export {
   type Approval,
   type ApprovalAnswer,
   type ApprovalDecided,
+  type ApprovalDecision,
   type ApprovalDraft,
   type ApprovalJudge,
   type ApprovalKind,

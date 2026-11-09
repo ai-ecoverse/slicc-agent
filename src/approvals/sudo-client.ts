@@ -7,6 +7,7 @@ import { bound, type Remote, type Root } from '../serving.ts';
 import { type PortEndpoint, PortLink } from '../wire.ts';
 import { attributed, UNATTRIBUTED } from './attributed.ts';
 import { personal } from './people.ts';
+import { REASONS } from './reasons.ts';
 import type { Approval } from './record.ts';
 import type { AgentSudo, SudoAnswer, SudoDenial, SudoReply, SudoRequest } from './sudo.ts';
 
@@ -29,8 +30,12 @@ export function answerOf(item: Approval | undefined): SudoAnswer | null {
 
 export const JUDGE_DENIED = 'sudo: denied by the approval judge';
 
+export const STOPPED = 'sudo: denied, and the owner stopped this turn';
+
 export function replyOf(item: Approval | undefined, stamps = false): SudoReply | null {
   const answer = answerOf(item);
+  if (answer === 'deny' && item?.reason === REASONS.stopped)
+    return { answer: 'deny', message: STOPPED };
   const by = item?.decidedBy;
   if (stamps && answer !== null && answer !== 'deny' && by && personal(by))
     return { answer, timestamp: true };
