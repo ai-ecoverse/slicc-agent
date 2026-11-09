@@ -24,6 +24,7 @@ import {
   heldKind,
   knownTier,
   MAX_DELAY,
+  personOnly,
   prune,
   REASONS,
   type Routed,
@@ -98,8 +99,8 @@ const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
     ? options.guestAlways?.(draft.kind) === true
     : false;
 
-const judgedKind = (kind: ApprovalKind, tier: string) =>
-  kind === 'sudo' || tier === 'agent' || tier === 'user';
+const judgedKind = (item: Pick<ApprovalDraft, 'kind' | 'detail'>, tier: string) =>
+  !personOnly(item) && (item.kind === 'sudo' || tier === 'agent' || tier === 'user');
 
 function detailOf(draft: ApprovalDraft): ApprovalDraft['detail'] {
   if (draft.kind !== 'sudo' || draft.always !== false) return draft.detail;
@@ -112,7 +113,7 @@ function fresh(
   ttl: number,
   options: ApprovalsAttach
 ): Approval {
-  const tier = tierOf(draft.kind, draft.tier, sudoApprover(options.sudoApprover?.()));
+  const tier = tierOf(draft, sudoApprover(options.sudoApprover?.()));
   const item = {
     ...draft,
     detail: detailOf(draft),
@@ -121,7 +122,7 @@ function fresh(
     state: 'pending',
     decidedBy: null,
     always: offered(options, draft),
-    ...(options.judge && judgedKind(draft.kind, tier) ? { judging: true } : {}),
+    ...(options.judge && judgedKind(draft, tier) ? { judging: true } : {}),
     createdAt: at,
     expiresAt: draft.expiresAt ?? at + ttl,
   } as Approval;
@@ -380,7 +381,7 @@ export async function attachApprovals(
         doc.items.push(item);
         return copy([item])[0] as Approval;
       }, using);
-      if (created && options.judge && made.state === 'pending' && judgedKind(made.kind, made.tier))
+      if (created && options.judge && made.state === 'pending' && judgedKind(made, made.tier))
         void judging(options.judge, made, made.tier === 'agent' ? using : BACKGROUND_CONTEXT);
       if (created) toScoop(made);
       return made;

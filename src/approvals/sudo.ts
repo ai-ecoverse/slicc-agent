@@ -18,7 +18,9 @@ export type SudoAnswer = 'once' | 'always' | 'deny';
 
 export type SudoDenial = { answer: 'deny'; message: string };
 
-export type SudoReply = SudoAnswer | SudoDenial;
+export type SudoTimestamp = { answer: 'once' | 'always'; timestamp: true };
+
+export type SudoReply = SudoAnswer | SudoDenial | SudoTimestamp;
 
 export interface SudoRequest {
   id: string;
@@ -38,6 +40,8 @@ export interface SudoRequest {
   always?: boolean;
   stdin?: SudoStdin;
   rootOnly?: Record<string, boolean>;
+  timestamp?: boolean;
+  validate?: boolean;
 }
 
 export type SudoAsked = { id: string; error: null } | { id: null; error: string };
@@ -59,7 +63,8 @@ export function sudoRequest(value: unknown): SudoRequest | null {
   const request = value as Partial<SudoRequest> | null;
   if (typeof request !== 'object' || request === null || request.kind !== 'sudo') return null;
   const { argv, user, expiresAt } = request;
-  if (!Array.isArray(argv) || !argv.length || !argv.every(text)) return null;
+  if (!Array.isArray(argv) || !argv.every(text)) return null;
+  if (!argv.length && request.validate !== true) return null;
   if (!text(user) || typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) return null;
   return request as SudoRequest;
 }
@@ -134,7 +139,15 @@ function kernelFacts(request: SudoRequest): Partial<SudoDetail> {
   };
 }
 
+export const validating = (request: Pick<SudoRequest, 'validate'>): boolean =>
+  request.validate === true;
+
+export const timestampFor = (user: string): string =>
+  `start a sudo timestamp for ${user} (no command)`;
+
 export function sudoDetail(request: SudoRequest): SudoDetail {
+  if (validating(request))
+    return { command: timestampFor(request.user), validate: true, writable: false };
   const command = [request.path || request.argv[0], ...request.argv.slice(1)]
     .map((word) => shellWord(String(word)))
     .join(' ');
@@ -155,15 +168,16 @@ function scoopLick(
 ) {
   const scoop = agents?.scoops[agentId];
   if (!scoop) return undefined;
-  const { command, target, cwd } = detail;
+  const { command, target, cwd, validate } = detail;
   const as = target ? ` as ${target}` : '';
   const at = cwd ? ` in ${cwd}` : '';
+  const asked = validate ? 'to start a sudo timestamp' : `to run ${command}${as}${at}`;
   return {
     channel: 'sudo-request' as const,
     source: id,
     title: `${scoop.name} waits for sudo`,
     text: `[scoop ${scoop.name} waits for a person to approve sudo]`,
-    body: `${scoop.name} asked to run ${command}${as}${at}. A person answers it in the approvals dialog; you can't approve it. It ends when someone answers or it times out.`,
+    body: `${scoop.name} asked ${asked}. A person answers it in the approvals dialog; you can't approve it. It ends when someone answers or it times out.`,
     target: `cone:${scoop.cone}` as const,
   };
 }
@@ -206,7 +220,7 @@ export function createSudo(options: SudoAttach): AgentSudo & { close(): void } {
           agentId,
           requester,
           tier: 'user',
-          always: request.always !== false,
+          always: request.always !== false && !validating(request),
           expiresAt: request.expiresAt,
           detail,
         },

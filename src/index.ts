@@ -68,6 +68,7 @@ export type {
   SudoDenial,
   SudoReply,
   SudoRequest,
+  SudoTimestamp,
 } from './approvals/sudo.ts';
 export type { CaptureAsk } from './approvals/sudo-client.ts';
 export {
