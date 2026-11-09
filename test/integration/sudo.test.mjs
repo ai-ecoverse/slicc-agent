@@ -577,6 +577,54 @@ test('only a person approving a kernel that asks for timestamps answers with one
   );
 });
 
+test("a person's sudo -v opens the shell's sudo timestamp, so its next sudo runs without asking, while another shell still asks", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page);
+  const seen = await staged(page, 'sudo -v in one shell', async () => {
+    const { kernel, owner, until, newest, pending, sudo, tags, replies, asked } = globalThis.t;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    const shell = kernel.run(['bash', '-c', 'sudo -v && sudo ls /root && sudo -n ls /'], {
+      user: 'cone',
+      tag: tags.terminal,
+    });
+    await pending(local, 1);
+    const item = newest(local);
+    const shown = await until(
+      () => model.approvals.list().find((a) => a.id === item.id),
+      'the dialog'
+    );
+    await model.approvals.decide(item.id, 'once');
+    const ran = await shell;
+    const count = asked.length;
+    const other = sudo(['ls', '/root'], tags.terminal);
+    await pending(local, 1);
+    const again = newest(local);
+    await model.approvals.decide(again.id, 'deny');
+    const refused = await other;
+    await local.close();
+    await owner.release();
+    return {
+      command: shown.command,
+      always: shown.always,
+      status: ran.status,
+      count,
+      reply: replies[0].answer,
+      again: again.detail.command,
+      refused: refused.status,
+    };
+  });
+  assert.deepEqual(seen, {
+    command: 'start a sudo timestamp for cone (no command)',
+    always: false,
+    status: 0,
+    count: 1,
+    reply: { answer: 'once', timestamp: true },
+    again: '/usr/bin/ls /root',
+    refused: 1,
+  });
+});
+
 test('the judge approving a sudo never answers with a timestamp', async (t) => {
   const page = await chrome.page(t);
   await boot(page, { query: '?sudo-approver=agent' });
@@ -927,7 +975,7 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     message:
       'sudo: denied by the approval judge: It creates, changes or moves files among system files. The owner asked to create, change or move files.',
   };
-  assert.deepEqual(seen.replies, ['once', 'deny', judged]);
+  assert.deepEqual(seen.replies, [{ answer: 'once', timestamp: true }, 'deny', judged]);
   for (const run of [seen.scooped, seen.alone]) {
     assert.notEqual(run.status, 0);
     assert.doesNotMatch(run.stderr, /withdrawn/);
