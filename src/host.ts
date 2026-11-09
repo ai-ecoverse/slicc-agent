@@ -252,6 +252,8 @@ async function approving(
       sudoApprover: () => policy.current().sudo.approver,
       present: ownerPresent({ attended: owners.attended, agents: agent.agents }),
       scoops: agent.scoopReviews,
+      stop: async (agentId, using) =>
+        (await agent.agents.conversation(agentId, using))?.abort(using),
       ...(options.judge ? { judge: options.judge } : {}),
       ...(options.approvalMs ? { ttlMs: options.approvalMs } : {}),
     },

@@ -28,6 +28,7 @@ import {
   prune,
   REASONS,
   type Routed,
+  type Ruling,
   routable,
   route,
   ruled,
@@ -82,6 +83,7 @@ export interface ApprovalsAttach {
   guestAlways?: (kind: ApprovalKind) => boolean;
   sudoApprover?: () => unknown;
   present?: (item: Approval, context: Context) => Promise<boolean>;
+  stop?: (agentId: string, context: Context) => Promise<void>;
 }
 
 const copy = (items: readonly Approval[]): Approval[] => JSON.parse(JSON.stringify(items));
@@ -141,6 +143,81 @@ const withdrawIn =
       mark(item, { state: 'withdrawn', by: 'host', ...(reason ? { reason } : {}) }, now());
     return hit.map((item) => copy([item])[0] as Approval);
   };
+
+export const NO_STOP = "This agent can't stop a turn.";
+
+type Halts = ReturnType<typeof haltsOf>;
+
+type Halt = { agentId: string; done: Promise<void>; release: () => void };
+
+function haltsOf(stop: ApprovalsAttach['stop']) {
+  const stopping = new Map<object, Halt>();
+  const of = (agentId: string) =>
+    [...stopping.values()].filter((entry) => entry.agentId === agentId);
+  const drop = (token: object) => {
+    stopping.get(token)?.release();
+    stopping.delete(token);
+  };
+  return {
+    halted: (agentId: string) => of(agentId).length > 0,
+    async idle(agentId: string) {
+      while (of(agentId).length) await Promise.all(of(agentId).map((entry) => entry.done));
+    },
+    able: (ruling: Ruling): Ruling => (ruling.stop && !stop ? { error: NO_STOP } : ruling),
+    begin(token: object, agentId: string) {
+      let release = () => {};
+      const done = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      drop(token);
+      stopping.set(token, { agentId, done, release });
+    },
+    drop,
+    async end(token: object) {
+      const entry = stopping.get(token);
+      if (!entry) return;
+      await Promise.resolve()
+        .then(() => stop?.(entry.agentId, BACKGROUND_CONTEXT))
+        .catch(() => undefined);
+      drop(token);
+    },
+  };
+}
+
+type Deciding = {
+  token: object;
+  by: DecidedBy;
+  device: string | undefined;
+  ruling: (item: Approval) => Ruling;
+  halts: Halts;
+  now: () => number;
+};
+
+const decidedIn =
+  (id: string, { token, by, device, ruling: rule, halts, now }: Deciding) =>
+  (doc: ApprovalsState): ApprovalDecided => {
+    halts.drop(token);
+    const item = doc.items.find((entry) => entry.id === id);
+    const ruling: Ruling = item ? rule(item) : { error: `There is no approval ${id}.` };
+    if (item && ruling.settle) {
+      if (ruling.answer) item.answer = ruling.answer;
+      if (device && ruling.settle.by === by) item.device = device;
+      mark(item, ruling.settle, now());
+    }
+    if (ruling.error) return { done: false, state: null, error: ruling.error };
+    if (ruling.stop) {
+      halts.begin(token, ruling.stop);
+      stoppedIn(ruling.stop, id, now)(doc);
+    }
+    return { done: true, state: (item as Approval).state, error: null };
+  };
+
+const stoppedIn = (agentId: string, id: string, now: () => number) =>
+  withdrawIn(
+    (item) => item.id !== id && item.agentId === agentId && heldKind(item.kind),
+    REASONS.stopped,
+    now
+  );
 
 type Judged = { judgement: Judgement; present: boolean; offer?: boolean };
 
@@ -278,6 +355,7 @@ export async function attachApprovals(
   const ttl = options.ttlMs ?? APPROVAL_MS;
   const setTimer = options.setTimer ?? systemTimer;
   const timers = new Map<string, () => void>();
+  const halts = haltsOf(options.stop);
   let line: Promise<unknown> = Promise.resolve();
   let closed = false;
   const settle = (item: Approval, how: Settle) => mark(item, how, now());
@@ -371,6 +449,8 @@ export async function attachApprovals(
     state,
     async request(draft, using) {
       let created = true;
+      const held = heldKind(draft.kind) && halts.halted(draft.agentId);
+      if (held) await halts.idle(draft.agentId);
       const made = await serial((doc) => {
         const kept = draft.id && doc.items.find((entry) => entry.id === draft.id);
         if (kept) {
@@ -378,6 +458,8 @@ export async function attachApprovals(
           return copy([kept])[0] as Approval;
         }
         const item = fresh(draft, now(), ttl, options);
+        if (item.state === 'pending' && heldKind(item.kind) && (held || halts.halted(item.agentId)))
+          settle(item, { state: 'withdrawn', by: 'host', reason: REASONS.stopped });
         doc.items.push(item);
         return copy([item])[0] as Approval;
       }, using);
@@ -386,22 +468,17 @@ export async function attachApprovals(
       if (created) toScoop(made);
       return made;
     },
-    decide(id, answer, reason, decider, using) {
+    async decide(id, answer, reason, decider, using) {
       const { by, device } = deciderOf(decider);
-      return serial((doc): ApprovalDecided => {
-        const item = doc.items.find((entry) => entry.id === id);
-        const ruling = item
-          ? ruled(item, answer, reason, by, now())
-          : { error: `There is no approval ${id}.` };
-        if (item && ruling.settle) {
-          if (ruling.answer) item.answer = ruling.answer;
-          if (device && ruling.settle.by === by) item.device = device;
-          settle(item, ruling.settle);
-        }
-        if ('error' in ruling && ruling.error)
-          return { done: false, state: null, error: ruling.error };
-        return { done: true, state: (item as Approval).state, error: null };
-      }, using);
+      const token = {};
+      const ruling = (item: Approval) => halts.able(ruled(item, answer, reason, by, now()));
+      const deciding = { token, by, device, ruling, halts, now };
+      const decided = await serial(decidedIn(id, deciding), using).catch((error: unknown) => {
+        halts.drop(token);
+        throw error;
+      });
+      await halts.end(token);
+      return decided;
     },
     settled: (id, using) => settledIn(state, id, using),
     assign(id, reviewer, using) {

@@ -5,7 +5,12 @@ export type {
   SudoRequest,
   SudoTimestamp,
 } from './approvals/sudo.ts';
-export { type ApproveOptions, JUDGE_DENIED, UNAVAILABLE } from './approvals/sudo-client.ts';
+export {
+  type ApproveOptions,
+  JUDGE_DENIED,
+  STOPPED,
+  UNAVAILABLE,
+} from './approvals/sudo-client.ts';
 export { type AgentConnection, connectAgent } from './client.ts';
 export {
   connectGuest,

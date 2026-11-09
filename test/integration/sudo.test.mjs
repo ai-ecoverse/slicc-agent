@@ -221,6 +221,7 @@ test("a cone's sudo waits in the agent's approvals, and every owner device answe
     expiresAt: seen.once.expiresAt,
     always: true,
     alwaysScope: 'cwd',
+    stoppable: true,
     verdict: {
       level: 1,
       aligned: true,

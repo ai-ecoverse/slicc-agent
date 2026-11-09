@@ -1,6 +1,6 @@
 import type { Context, JsonValue, RemoteContract, ReplicatedState } from '@earendil-works/chord';
 import type { BlockedReason, ConversationView } from '@earendil-works/pi-durable';
-import type { Approval, ApprovalAnswer, ApprovalDecided } from './approvals/index.ts';
+import type { Approval, ApprovalDecided, ApprovalDecision } from './approvals/index.ts';
 import type {
   ApprovalPolicy,
   ApprovalPolicyChange,
@@ -128,7 +128,7 @@ export interface AgentControl {
   approvalPolicySet(change: ApprovalPolicyChange, context: Context): Promise<ApprovalPolicySet>;
   decide(
     id: string,
-    decision: ApprovalAnswer,
+    decision: ApprovalDecision,
     reason: string | null,
     context: Context
   ): Promise<ApprovalDecided>;
