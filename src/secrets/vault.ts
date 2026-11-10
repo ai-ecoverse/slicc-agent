@@ -11,7 +11,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Scrub, Scrubbable, ScrubStream } from './scrub.ts';
 import { vaultHold } from './view.ts';
 
-export type ScrubPair = { needed: boolean; version: number };
+export type ScrubPair = { needed: boolean; version: number; ready?: boolean };
 export type Locked = 'no' | 'scrubbing' | 'passkey';
 
 export interface VaultState {
@@ -68,11 +68,37 @@ const LOCKS: readonly unknown[] = ['no', 'scrubbing', 'passkey'];
 
 const EMPTY = new Uint8Array();
 
+function isVersion(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 function pairOf(value: unknown): ScrubPair | undefined {
-  const pair = value as Partial<ScrubPair> | null;
-  if (pair === null) return { needed: false, version: 0 };
-  if (typeof pair?.needed !== 'boolean' || typeof pair.version !== 'number') return undefined;
+  if (value === null) return { needed: false, version: 0 };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const pair = value as Partial<ScrubPair>;
+  if (
+    typeof pair.needed !== 'boolean' ||
+    !isVersion(pair.version) ||
+    ('ready' in pair && typeof pair.ready !== 'boolean')
+  )
+    return undefined;
   return { needed: pair.needed, version: pair.version };
+}
+
+type ScrubReceipt = { v: 1; nonce: string; version: number };
+
+function receiptOf(value: unknown): ScrubReceipt | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const receipt = value as Partial<ScrubReceipt>;
+  if (
+    Object.keys(receipt).length !== 3 ||
+    receipt.v !== 1 ||
+    typeof receipt.nonce !== 'string' ||
+    !/^[0-9a-f]{32}$/.test(receipt.nonce) ||
+    !isVersion(receipt.version)
+  )
+    return undefined;
+  return { v: 1, nonce: receipt.nonce, version: receipt.version };
 }
 
 export class Vault implements Scrub {
@@ -103,8 +129,7 @@ export class Vault implements Scrub {
   }
 
   connect(port: MessagePort | undefined, scrub: unknown, locked?: unknown): void {
-    const pair = scrub === undefined ? undefined : pairOf(scrub);
-    if (pair) this.#pair = pair;
+    this.#apply(scrub);
     if (typeof locked === 'boolean') this.#locked = locked ? 'passkey' : 'no';
     if (port && port !== this.#port) {
       if (this.#port) this.#port.onmessage = null;
@@ -229,14 +254,13 @@ export class Vault implements Scrub {
 
   #answer(data: Answer): void {
     if (!data || typeof data !== 'object') return;
-    const pair = 'scrub' in data ? pairOf(data.scrub) : undefined;
-    if (pair) this.#pair = pair;
+    this.#apply(data.scrub);
     if (LOCKS.includes(data.locked)) this.#locked = data.locked as Locked;
     if (data.op === 'welcome') this.#welcome(data.status);
     const item = typeof data.id === 'number' ? this.#pending.get(data.id) : undefined;
     if (item) {
       this.#pending.delete(data.id as number);
-      if (typeof data.version === 'number') this.#seen = Math.max(this.#seen, data.version);
+      if (isVersion(data.version)) this.#seen = Math.max(this.#seen, data.version);
       if (data.error)
         item.reject(new VaultRefusal(data.error.code, data.error.message ?? 'the vault refused'));
       else item.resolve(data);
@@ -246,9 +270,17 @@ export class Vault implements Scrub {
 
   #welcome(status: unknown): void {
     const given = status as { scrub?: unknown; locked?: unknown } | null;
-    const pair = given && 'scrub' in given ? pairOf(given.scrub) : undefined;
-    if (pair) this.#pair = pair;
+    this.#apply(given?.scrub);
     if (typeof given?.locked === 'boolean') this.#locked = given.locked ? 'passkey' : 'no';
+  }
+
+  #apply(value: unknown): void {
+    const pair = pairOf(value);
+    if (!pair || pair.version < this.#pair.version) return;
+    this.#pair = {
+      needed: pair.needed || (pair.version === this.#pair.version && this.#pair.needed),
+      version: pair.version,
+    };
   }
 
   #waiting(): boolean {
@@ -291,9 +323,33 @@ export function listenVault(
   scope: { addEventListener(type: 'message', listener: (event: MessageEvent) => void): void },
   vault: Vault
 ): void {
-  scope.addEventListener('message', ({ data }) => {
-    const message = data as { vault?: MessagePort; scrub?: unknown; locked?: unknown } | null;
+  scope.addEventListener('message', ({ data, ports }) => {
+    const message = data as {
+      vault?: MessagePort;
+      scrub?: unknown;
+      locked?: unknown;
+      scrubReceipt?: unknown;
+    } | null;
     if (!message || typeof message !== 'object') return;
+    if ('scrubReceipt' in message) {
+      try {
+        const receipt = receiptOf(message.scrubReceipt);
+        const pair = message.scrub === null ? undefined : pairOf(message.scrub);
+        if (
+          !receipt ||
+          !pair ||
+          pair.version !== receipt.version ||
+          ports.length !== 1 ||
+          Object.keys(message).some((key) => key !== 'scrub' && key !== 'scrubReceipt')
+        )
+          return;
+        vault.connect(undefined, pair);
+        ports[0].postMessage(receipt);
+      } finally {
+        for (const port of ports) port.close();
+      }
+      return;
+    }
     if (!('vault' in message || 'scrub' in message || 'locked' in message)) return;
     vault.connect(message.vault, message.scrub, message.locked);
   });
