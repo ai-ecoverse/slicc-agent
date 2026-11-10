@@ -1,4 +1,5 @@
 import type { OAuthConfig, OutgoingRequest } from '@ai-ecoverse/slicc-vault';
+import { type HeaderList, headerList } from '../net.ts';
 import { type RefreshTarget, type Vault, VaultRefusal } from './vault.ts';
 
 type Fetch = typeof fetch;
@@ -27,14 +28,14 @@ export function absent(vault: Pick<Vault, 'connected' | 'needed'>): boolean {
   return !vault.connected && !vault.needed;
 }
 
-async function outgoing(request: Request): Promise<OutgoingRequest> {
+async function outgoing(request: Request, headers: HeaderList): Promise<OutgoingRequest> {
   const body = BODYLESS.has(request.method)
     ? undefined
     : new Uint8Array(await request.arrayBuffer());
   return {
     method: request.method,
     url: request.url,
-    headers: [...request.headers],
+    headers,
     ...(body ? { body } : {}),
   };
 }
@@ -138,8 +139,13 @@ function unfollowed(url: string): Response {
   );
 }
 
-async function through(op: Op, inner: Fetch, request: Request): Promise<Response> {
-  let current = await outgoing(request);
+async function through(
+  op: Op,
+  inner: Fetch,
+  request: Request,
+  headers: HeaderList
+): Promise<Response> {
+  let current = await outgoing(request, headers);
   let refreshed = false;
   let hops = 0;
   for (;;) {
@@ -181,8 +187,9 @@ export function vaultFetch(
 ): Fetch {
   return async (input, init) => {
     const request = new Request(input, init);
+    const headers = headerList(request, input, init);
     const provider = absent(vault) ? undefined : route(request);
-    if (provider === undefined) return inner(request);
+    if (provider === undefined) return inner(request, { headers });
     const target: RefreshTarget | undefined = provider === null ? undefined : { provider };
     const rejected = provider === null ? undefined : rejecting(provider);
     const response = await through(
@@ -191,7 +198,8 @@ export function vaultFetch(
         ...(target ? { refresh: () => vault.refresh(target) } : {}),
       },
       inner,
-      request
+      request,
+      headers
     );
     if (response.status === 401) rejected?.();
     return response;
@@ -200,15 +208,16 @@ export function vaultFetch(
 
 export function mcpFetch(vault: Port, inner: Fetch, server: string): Fetch {
   return async (input, init) => {
+    if (absent(vault)) return inner(input, init);
     const request = new Request(input, init);
-    if (absent(vault)) return inner(request);
     return through(
       {
         prepare: (outgoing) => vault.mcp(server, outgoing),
         refresh: () => vault.refresh({ server }),
       },
       inner,
-      request
+      request,
+      headerList(request, input, init)
     );
   };
 }

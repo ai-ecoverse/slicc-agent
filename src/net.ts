@@ -131,15 +131,28 @@ async function dropped(response: TransportResponse): Promise<void> {
 
 const TELEMETRY = 'x-stainless-';
 
-function untracked(request: Request): Request {
-  const telemetry = [...request.headers.keys()].filter((name) => name.startsWith(TELEMETRY));
-  if (!telemetry.length) return request;
+export type HeaderList = [string, string][];
+
+export function headerList(
+  request: Request,
+  input: RequestInfo | URL,
+  init?: RequestInit
+): HeaderList {
   const headers = new Headers(request.headers);
-  for (const name of telemetry) headers.delete(name);
-  return new Request(request, { headers });
+  const given = init?.headers ?? (input instanceof Request ? input.headers : undefined);
+  for (const [name, value] of new Headers(given)) headers.set(name, value);
+  return [...headers];
 }
 
-async function carried(transport: Transport, request: Request): Promise<Response> {
+function untracked(headers: HeaderList): HeaderList {
+  return headers.filter(([name]) => !name.startsWith(TELEMETRY));
+}
+
+async function carried(
+  transport: Transport,
+  request: Request,
+  headers: HeaderList
+): Promise<Response> {
   const manual = request.redirect === 'manual';
   if (manual && !honorsManual(transport.traits)) return refused();
   const told =
@@ -150,7 +163,7 @@ async function carried(transport: Transport, request: Request): Promise<Response
   const response = await transport.fetch({
     url: request.url,
     method: request.method,
-    headers: [...request.headers],
+    headers,
     ...(body ? { body } : {}),
     signal: request.signal,
     ...(told ? { redirect: request.redirect } : {}),
@@ -180,7 +193,9 @@ export function transportFetch(
   loopback?: Loopback
 ): typeof fetch {
   return async (input, init) => {
-    const request = untracked(new Request(input, init));
+    const given = new Request(input, init);
+    const headers = untracked(headerList(given, input, init));
+    const request = new Request(given, { headers });
     const port = kernelPort(request.url);
     if (loopback && port) return loopback(request, { port, signal: request.signal });
     if (
@@ -191,6 +206,6 @@ export function transportFetch(
     ) {
       return native(request);
     }
-    return carried(transport, request);
+    return carried(transport, request, headers);
   };
 }

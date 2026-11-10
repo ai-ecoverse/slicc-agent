@@ -378,6 +378,10 @@ const REFUSED = [
   ['pass', { url: 'https://user:hunter2@mcp.test/mcp' }, 'url-secret'],
   ['key', { url: 'https://mcp.test/mcp?api_key=abc123' }, 'url-secret'],
   ['head', { url: URL_OK, headers: { 'X-Api-Key': 'abc123' } }, 'header-secret'],
+  ['cookie', { url: URL_OK, headers: { Cookie: 'abc123' } }, 'header-secret'],
+  ['cookie', { url: URL_OK, headers: { Cookie: 'session=abc123' } }, 'header-secret'],
+  ['cookie', { url: URL_OK, headers: { Cookie: 'a=${A}; b=abc123' } }, 'header-secret'],
+  ['cookie', { url: URL_OK, headers: { Cookie: 'session=abc123${A}' } }, 'header-secret'],
   ['local', { command: 'npx', args: ['abc123'] }, 'stdio'],
   ['old', { type: 'sse', url: URL_OK }, 'sse'],
   ['nourl', {}, 'bad-url'],
@@ -440,6 +444,29 @@ test('every refused edit carries a stable code beside its reason, and no reply h
   refusedWith(seen.shape, 'file-invalid', 'the wrong shape');
   refusedWith(seen.unreadable, 'file-unreadable', 'a directory');
   refusedWith(seen.unreadableRemove, 'file-unreadable', 'a directory, remove');
+});
+
+test('a Cookie header of name=${NAME} pairs is accepted, as is one whole placeholder', async (t) => {
+  const page = await booted(t);
+  const cookies = [
+    '${A}',
+    'fjv3_session=${MCP_FLUFFYJAWS_TOKEN}',
+    'a=${A}; b=${B}',
+    'a=${A};b=${B};',
+  ];
+  const seen = await page.evaluate(
+    async ({ cookies, url }) => {
+      const edits = [];
+      for (const [at, Cookie] of cookies.entries())
+        edits.push(await window.model.settings.addServer(`jar${at}`, { url, headers: { Cookie } }));
+      return edits;
+    },
+    { cookies, url: URL_OK }
+  );
+  assert.deepEqual(
+    seen,
+    cookies.map(() => ({ ok: true }))
+  );
 });
 
 test('a write that fails answers file-unwritable and leaves the file as it was', async (t) => {

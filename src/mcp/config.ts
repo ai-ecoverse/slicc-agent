@@ -70,6 +70,7 @@ const SECRET_HEADER = /authorization|cookie|token|key|secret|password|session/i;
 const SECRET_PARAM = /token|key|secret|password|signature|sig|auth|code/i;
 const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const SCHEME = /^\s*(?:bearer|basic|token|apikey|api-key)\s+/i;
+const COOKIE_PAIR = /^(?:[!#$%&'*+.^_`|~0-9A-Za-z-]+=)?(?:\$\{[A-Za-z_][A-Za-z0-9_]*\})+$/;
 const MAX_TOOL_NAME = 64;
 export const DEFAULT_TIMEOUT_SECONDS = 60;
 
@@ -91,6 +92,8 @@ export function placeholders(value: string): string[] {
 
 export function literalSecret(header: string, value: string): boolean {
   if (!SECRET_HEADER.test(header)) return false;
+  if (header.toLowerCase() === 'cookie')
+    return value.split(';').some((pair) => pair.trim() !== '' && !COOKIE_PAIR.test(pair.trim()));
   return value.replace(PLACEHOLDER, '').replace(SCHEME, '').trim() !== '';
 }
 

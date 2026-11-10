@@ -182,6 +182,11 @@ self.addEventListener('message', ({ data }) => {
   data?.vaultRecords?.postMessage(
     (self.fakeVault?.records ?? []).map(({ value: _value, ...record }) => record)
   );
+  data?.vaultMcp?.postMessage(
+    (self.fakeVault?.log ?? [])
+      .filter((entry) => entry.op === 'mcp')
+      .map((entry) => entry.request?.headers ?? null)
+  );
 });
 const fauxModels = [
   ...params.getAll('model').map((id) => ({ id })),
