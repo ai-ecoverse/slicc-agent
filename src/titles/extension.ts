@@ -27,6 +27,7 @@ const TITLE_LENGTH = 60;
 const TITLE_WORDS = 6;
 export const TITLE_TURNS = [1, 3];
 export const TITLE_REFRESH_EVERY = 5;
+export const TITLE_IDLE_MS = 30 * 60_000;
 const TRIVIAL_WORDS = 4;
 
 function textOf(entry: EntryRecord): string {
@@ -68,6 +69,26 @@ export function titleDue(
   const greeting = !final && trivial(textOf(said[0] ?? ({} as EntryRecord)));
   const next = titleNextThreshold(titled, greeting);
   return next !== undefined && said.length >= next ? said.length : undefined;
+}
+
+export function idleDue(
+  record: Pick<ConeRecord, 'titled'>,
+  entries: readonly EntryRecord[]
+): number | undefined {
+  const last = entries.at(-1);
+  const stop = (last?.model?.[0] as { stopReason?: unknown } | undefined)?.stopReason;
+  if (last?.kind !== 'pi.assistant' || stop !== 'stop') return undefined;
+  const said = entries.filter((entry) => entry.kind === 'pi.user' && textOf(entry));
+  if (said.length <= (record.titled ?? 0)) return undefined;
+  if (said.length === 1 && trivial(textOf(said[0] as EntryRecord))) return undefined;
+  return said.length;
+}
+
+export function spokenSince(entries: readonly EntryRecord[], last: number): boolean {
+  return entries.some(
+    (entry) =>
+      Number(entry.id) > last && (entry.kind === 'pi.user' || entry.kind === 'pi.assistant')
+  );
 }
 
 export function cleanTitle(title: string | undefined): string | undefined {
@@ -117,6 +138,7 @@ function modelName(model: { provider: string; modelId: string } | undefined): st
 
 const DUE_TASK = 'slicc.title-due';
 const TITLE_TASK = 'slicc.title';
+export const IDLE_TASK = 'slicc.title-idle';
 const PAGE = 100;
 
 type History = Pick<TaskRuntime<unknown, { phase: string }, unknown, object>, 'entries'>;
@@ -145,8 +167,66 @@ export interface TitlesRuntime {
   cancel(agentId: string): void;
 }
 
+const completed = () =>
+  ({ status: 'terminal', outcome: { status: 'completed', result: null } }) as const;
+
+type Starter = Pick<TaskRuntime<unknown, { phase: string }, unknown, object>, 'commit'>;
+
+interface IdleHooks {
+  deps: TitlesAttach;
+  idling: Map<string, number>;
+  busy(agentId: string, conversation: number): boolean;
+  start(
+    runtime: Starter,
+    id: string,
+    conversation: number,
+    turns: number,
+    context: Context
+  ): Promise<void>;
+}
+
+function idleTask(hooks: IdleHooks) {
+  return defineTask<
+    { agentId: string; conversation: number; last: number },
+    { phase: 'wait' } | { phase: 'check' },
+    null
+  >({
+    name: IDLE_TASK,
+    version: 1,
+    initial: () => ({ phase: 'wait' }),
+    phases: {
+      wait: (_task, runtime, context) =>
+        runtime.sleepUntil(runtime.now() + TITLE_IDLE_MS, { phase: 'check' }, context),
+      async check(task, runtime, context) {
+        const { agentId, conversation, last } = task.input;
+        const finish = () => runtime.commit(async () => completed(), context);
+        if (hooks.idling.get(agentId) === Number(task.id)) hooks.idling.delete(agentId);
+        const agents = hooks.deps.agents();
+        if (!agents || !hooks.deps.title()) return finish();
+        const found = findAgent(agents, runtime.conversationId);
+        if (found?.id !== agentId || found.record.conversation !== conversation) return finish();
+        if (hooks.busy(agentId, conversation)) return finish();
+        const entries = await history(runtime, undefined, context);
+        if (spokenSince(entries, last)) return finish();
+        const before = entries.filter((entry) => Number(entry.id) <= last);
+        const turns = idleDue(found.record, before);
+        if (turns === undefined) return finish();
+        return hooks.start(runtime, agentId, conversation, turns, context);
+      },
+    },
+    abort: (_task, runtime, context) =>
+      runtime.commit(async () => ({ status: 'terminal', outcome: { status: 'aborted' } }), context),
+  });
+}
+
 export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
   const pending = new Map<string, { token: symbol; conversation: number; taskId: number }>();
+  const idling = new Map<string, number>();
+  const abort = (taskId: number | undefined) => {
+    const harness = deps.harness();
+    if (taskId !== undefined && harness)
+      void harness.abortTask(taskId as TaskId, BACKGROUND_CONTEXT).catch(() => undefined);
+  };
 
   const named = (
     entries: readonly EntryRecord[],
@@ -203,6 +283,33 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
     abort: (_task, runtime, context) =>
       runtime.commit(async () => ({ status: 'terminal', outcome: { status: 'aborted' } }), context),
   });
+  const start = async (
+    runtime: Starter,
+    id: string,
+    conversation: number,
+    turns: number,
+    context: Context
+  ) => {
+    const token = Symbol(id);
+    let created = 0;
+    await runtime.commit(async (tx) => {
+      created = Number(
+        await tx.createTask(
+          naming,
+          { agentId: id, conversation, turns },
+          { ownership: { kind: 'conversation' }, background: true }
+        )
+      );
+      return done();
+    }, context);
+    pending.set(id, { token, conversation, taskId: created });
+  };
+  const idle = idleTask({
+    deps,
+    idling,
+    busy: (agentId, conversation) => pending.get(agentId)?.conversation === conversation,
+    start,
+  });
   const due = defineTask<{ last: number }, { phase: 'schedule' }, null>({
     name: DUE_TASK,
     version: 1,
@@ -217,22 +324,25 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
         const { id, record } = found;
         if (pending.get(id)?.conversation === record.conversation) return finish();
         const entries = await history(runtime, task.input.last, context);
-        const turns = titleDue(record, entries);
-        if (turns === undefined) return finish();
-        const token = Symbol(id);
         const conversation = record.conversation;
+        const turns = titleDue(record, entries);
+        const quiet = turns === undefined && idleDue(record, entries) !== undefined;
+        abort(idling.get(id));
+        idling.delete(id);
+        if (turns !== undefined) return start(runtime, id, conversation, turns, context);
+        if (!quiet) return finish();
         let created = 0;
         await runtime.commit(async (tx) => {
           created = Number(
             await tx.createTask(
-              naming,
-              { agentId: id, conversation, turns },
+              idle,
+              { agentId: id, conversation, last: task.input.last },
               { ownership: { kind: 'conversation' }, background: true }
             )
           );
           return done();
         }, context);
-        pending.set(id, { token, conversation, taskId: created });
+        idling.set(id, created);
         return undefined;
       },
     },
@@ -242,7 +352,7 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
 
   const extension = defineExtension({
     name: TITLES,
-    tasks: [due, naming],
+    tasks: [due, naming, idle],
     hooks: [
       hook(GenerationTask, {
         afterRun(run, api) {
@@ -262,9 +372,9 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
     cancel(agentId: string) {
       const held = pending.get(agentId);
       pending.delete(agentId);
-      const harness = deps.harness();
-      if (held && harness)
-        void harness.abortTask(held.taskId as TaskId, BACKGROUND_CONTEXT).catch(() => undefined);
+      abort(held?.taskId);
+      abort(idling.get(agentId));
+      idling.delete(agentId);
     },
   };
 }
