@@ -89,6 +89,7 @@ const KINDS: Record<string, string> = {
   'slicc.scoop-reporter': 'report',
   'slicc.memory-extract': 'memory extraction',
   'slicc.memory-idle': 'memory idle watch',
+  'slicc.title-idle': 'title idle watch',
 };
 
 export function age(ms: number): string {
