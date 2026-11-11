@@ -73,6 +73,10 @@ export function clusterOf(
   return { runs, at, settled };
 }
 
+export function describeStep(run: Run): string {
+  return `${run.name}: ${run.input}`;
+}
+
 export function describe(runs: readonly Run[]): string {
   return runs
     .map(

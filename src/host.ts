@@ -82,7 +82,7 @@ import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 import { type Slimmer, slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
-import { type LabelsRuntime, visibleLabels, watchLabel } from './titles/labels.ts';
+import { type LabelsRuntime, visibleLabels, watchLabel, watchStep } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
 import { type PortEndpoint, PortLink } from './wire.ts';
@@ -217,6 +217,7 @@ export function gatedControls(
       ...control,
       image: viewedImage(control, views, paged),
       toolLabel: watchLabel(labels),
+      stepLabel: watchStep(labels),
       entries: async (request, using) => {
         const page = await slimmed(request, using);
         for (const entry of page.entries)

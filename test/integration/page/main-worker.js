@@ -192,7 +192,10 @@ const fauxModels = [
   ...params.getAll('model').map((id) => ({ id })),
   ...params.getAll('blind').map((id) => ({ id, input: ['text'] })),
 ];
-const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
+const faux = fauxProvider({
+  ...(fauxModels.length ? { models: fauxModels } : {}),
+  ...(params.has('tps') ? { tokensPerSecond: Number(params.get('tps')) } : {}),
+});
 const requests = [];
 const served = [];
 const recorded = (message) => (context, _options, _state, model) => {
@@ -295,6 +298,17 @@ let labels = 0;
 const labelling = (context) =>
   context.messages.length === 1 &&
   JSON.stringify(context.messages[0].content).includes('Label this group of tool runs');
+const stepping = (context) =>
+  context.messages.length === 1 &&
+  JSON.stringify(context.messages[0].content).includes('Label this tool run');
+const stepCommand = (context) =>
+  JSON.parse(
+    context.messages[0].content[0].text
+      .split('\n\n')
+      .slice(1)
+      .join('\n\n')
+      .replace(/^\w+: /, '')
+  ).command;
 const sayStats = { active: 0, most: 0, prompts: [] };
 self.addEventListener('message', ({ data }) => {
   data?.sayStats?.postMessage(sayStats);
@@ -409,6 +423,7 @@ const dispatch = (context, ...rest) => {
   if (judging(context)) return judgeSay(context, rest[0], rest[2]);
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
   if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
+  if (stepping(context)) return fauxAssistantMessage(`Run ${stepCommand(context)}`);
   if (params.has('scoop-say') && JSON.stringify(context).includes('You are the scoop'))
     return said(context, ...rest);
   if (scoopSteps.length && JSON.stringify(context).includes('You are the scoop'))
@@ -494,7 +509,10 @@ function model(request) {
   const chunk = (delta, finish) =>
     `data: ${JSON.stringify({ id: 'e2e', object: 'chat.completion.chunk', created: 1, model: 'e2e-1', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
   const body = upstream.at(-1).body;
-  const side = body.includes('Give this chat a title') || body.includes('Label this group');
+  const side =
+    body.includes('Give this chat a title') ||
+    body.includes('Label this group') ||
+    body.includes('Label this tool run');
   const call = !side && scripted.length ? scripted.shift() : undefined;
   const text = call
     ? `${chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_e2e', type: 'function', function: { name: call.name, arguments: call.arguments } }] }, null)}${chunk({}, 'tool_calls')}data: [DONE]\n\n`

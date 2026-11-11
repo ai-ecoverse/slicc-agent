@@ -382,6 +382,17 @@ const pager =
   async (request: EntriesRequest, context: Context): Promise<EntriesPage> =>
     entriesPage(await conversationFor(request.agentId, context), request, context);
 
+function labelControls(
+  labels: Pick<LabelsRuntime, 'label' | 'step'> | undefined
+): Pick<AgentControl, 'toolLabel' | 'stepLabel'> {
+  return {
+    toolLabel: async (agentId, callIds, context) =>
+      labels ? labels.label(agentId, callIds, context) : null,
+    stepLabel: async (agentId, callId, context) =>
+      labels ? labels.step(agentId, callId, context) : null,
+  };
+}
+
 export function createAgentControl(
   harness: Harness,
   target: Conversation | Cones,
@@ -396,7 +407,7 @@ export function createAgentControl(
   monitor?: Pick<Monitor, 'open' | 'close'>,
   secrets?: () => SecretListing,
   uploads?: Uploads,
-  labels?: Pick<LabelsRuntime, 'label'>,
+  labels?: Pick<LabelsRuntime, 'label' | 'step'>,
   guests?: Pick<Guests, 'open' | 'revoke' | 'forgetAlways'>
 ): Omit<AgentControl, 'approvalPolicySet'> {
   const cone = cones(target);
@@ -579,8 +590,7 @@ export function createAgentControl(
         context
       ),
     agentCommands: async (agentId) => skills?.commandsFor(agentId) ?? [],
-    toolLabel: async (agentId, callIds, context) =>
-      labels ? labels.label(agentId, callIds, context) : null,
+    ...labelControls(labels),
     entries: pager(conversationFor),
     decide: noApprovals,
   };

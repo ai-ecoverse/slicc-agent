@@ -21,7 +21,7 @@ import { shrink } from '../images/fit.ts';
 import { entryLick } from '../licks/state.ts';
 import { type VaultHold, vaultHold } from '../secrets/view.ts';
 import type { AgentSettingsChange, AgentSummary, Command } from '../services.ts';
-import { shownLabel } from '../titles/shown.ts';
+import { shownLabel, stepKey } from '../titles/shown.ts';
 import { attempt, warn } from './attempt.ts';
 import { Emitter } from './emitter.ts';
 import { IDLE_IMPORT, importProfile, type ShownImport } from './import-port.ts';
@@ -786,6 +786,14 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     if (shown !== undefined) return shown;
     return this.#connection.control
       .toolLabel(agentId, [...callIds], BACKGROUND_CONTEXT)
+      .catch(() => null);
+  }
+
+  async stepLabel(agentId: string, callId: string): Promise<string | null> {
+    const shown = shownLabel(this.#connection.labels?.value, [stepKey(callId)]);
+    if (shown !== undefined) return shown;
+    return this.#connection.control
+      .stepLabel(agentId, callId, BACKGROUND_CONTEXT)
       .catch(() => null);
   }
 
