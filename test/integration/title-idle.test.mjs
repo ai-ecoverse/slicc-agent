@@ -21,6 +21,12 @@ test('a cone that goes quiet for 30 minutes after an untitled turn gets a fresh 
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
+  await staged(page, 'spectrum', async () => {
+    const spectrum = '/node_modules/@ai-ecoverse/slicc-spectrum/dist';
+    await import(`${spectrum}/slicc-ui.js`);
+    const { createDummyModel } = await import(`${spectrum}/slicc-dummy.js`);
+    globalThis.spectrum = { createDummyModel };
+  });
   const seen = await staged(page, 'cone titles refresh after 30 idle minutes', async () => {
     const MINUTE = 60_000;
     await window.write(
@@ -41,6 +47,13 @@ test('a cone that goes quiet for 30 minutes after an untitled turn gets a fresh 
     const connection = await owner.connect();
     const model = createAgentModel(connection, { storage: localStorage });
     await model.agent.ready();
+    const panel = document.createElement('slicc-agents');
+    panel.style.cssText = 'display:block;width:360px;height:600px';
+    panel.model = { ...globalThis.spectrum.createDummyModel({ storage: localStorage }), ...model };
+    document.body.append(panel);
+    await customElements.whenDefined('slicc-agents');
+    const shown = () =>
+      panel.shadowRoot?.querySelector('li[data-id="cone"] .title')?.textContent.trim() ?? '';
     const off = model.monitor.on('snapshot', () => {});
     const until = (check, what = 'the state') =>
       when([changed, every(100), connection.monitor], check, what);
@@ -91,11 +104,13 @@ test('a cone that goes quiet for 30 minutes after an untitled turn gets a fresh 
     pass(11);
     await until(() => coneTitle() !== third, 'title after 30 idle minutes');
     const idle = coneTitle();
+    await until(() => shown() === idle, 'the idle title in the Agents panel');
+    const rendered = shown();
     await until(() => sleeping().length === 0, 'the idle watch ends');
 
     off();
     await owner.release();
-    return { first, quietAfterFirst, at20, third, watches, twentyAfterFifth, idle };
+    return { first, quietAfterFirst, at20, third, watches, twentyAfterFifth, idle, rendered };
   });
   assert.match(seen.first, /^Title \d+$/);
   assert.equal(seen.quietAfterFirst, 0);
@@ -105,4 +120,5 @@ test('a cone that goes quiet for 30 minutes after an untitled turn gets a fresh 
   assert.equal(seen.twentyAfterFifth, seen.third);
   assert.match(seen.idle, /^Title \d+$/);
   assert.notEqual(seen.idle, seen.third);
+  assert.equal(seen.rendered, seen.idle);
 });
