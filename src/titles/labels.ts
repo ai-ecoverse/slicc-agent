@@ -11,6 +11,8 @@ import {
   type ConversationView,
   defineDoc,
   type Harness,
+  LiveDoc,
+  type LiveState,
   type Tx,
   UsageDoc,
 } from '@earendil-works/pi-durable';
@@ -42,6 +44,10 @@ const RESERVED = 2;
 const POLL_MS = 1000;
 const SETTLE_MS = 600_000;
 const STEP_POLL_MS = 250;
+const STEP_ID = /^\S{1,256}$/;
+export const STEP_WAITERS = 8;
+export const STEP_WAITS_PER_MINUTE = 60;
+export const STEP_WATCHERS = 32;
 
 export const LABEL_WAIT_MS = 30_000;
 
@@ -106,10 +112,25 @@ export function watchLabel(
   };
 }
 
+export function stepId(callId: unknown): callId is string {
+  return typeof callId === 'string' && STEP_ID.test(callId);
+}
+
 export function watchStep(labels: ReplicatedState<Record<string, string>>, waitMs = LABEL_WAIT_MS) {
   const watch = watchLabel(labels, waitMs);
-  return (agentId: string, callId: string): Promise<string | null> =>
-    callId ? watch(agentId, [stepKey(callId)]) : Promise.resolve(null);
+  const watching = new Map<string, Promise<string | null>>();
+  return (agentId: string, callId: string): Promise<string | null> => {
+    if (!stepId(callId)) return Promise.resolve(null);
+    const key = stepKey(callId);
+    const shown = shownLabel(labels.value, [key]);
+    if (shown !== undefined) return Promise.resolve(shown);
+    const known = watching.get(key);
+    if (known !== undefined) return known;
+    if (watching.size >= STEP_WATCHERS) return Promise.resolve(null);
+    const waiting = watch(agentId, [key]).finally(() => watching.delete(key));
+    watching.set(key, waiting);
+    return waiting;
+  };
 }
 
 export function cleanLabel(text: string): string {
@@ -152,7 +173,7 @@ export async function spend(
 }
 
 export interface LabelsAttach {
-  harness: Pick<Harness, 'commit'>;
+  harness: Pick<Harness, 'commit' | 'snapshot'>;
   agents: Pick<Agents, 'conversation'>;
   label: Labeler;
   vault?: Pick<ReplicatedState<VaultState>, 'value'>;
@@ -185,7 +206,10 @@ function recentIn(books: Map<string, number[]>, agentId: string, at: number): nu
 type Kept = Record<string, string>;
 
 interface StepsAttach
-  extends Pick<LabelsAttach, 'agents' | 'label' | 'vault' | 'stepsPerMinute' | 'stepWaitMs'> {
+  extends Pick<
+    LabelsAttach,
+    'harness' | 'agents' | 'label' | 'vault' | 'stepsPerMinute' | 'stepWaitMs'
+  > {
   labels: MutableReplicatedState<Kept>;
   keep(key: string, label: string, id: ConversationId, answer: AssistantMessage): Promise<Kept>;
   now: () => number;
@@ -193,9 +217,22 @@ interface StepsAttach
   pollMs: number;
 }
 
+type Said = { content?: { type?: string; id?: string }[] };
+
+export function pendingIn(live: Readonly<LiveState> | undefined, callId: string): boolean {
+  if (!live?.run) return false;
+  const said = live.generation?.message as Said | undefined;
+  return (
+    (said?.content ?? []).some((block) => block.type === 'toolCall' && block.id === callId) ||
+    (live.tools ?? []).some((slot) => slot.callId === callId)
+  );
+}
+
 function stepLabels(options: StepsAttach): LabelsRuntime['step'] {
-  const { agents, labels, now } = options;
+  const { agents, labels, now, harness } = options;
   const spent = new Map<string, number[]>();
+  const waits = new Map<string, number[]>();
+  const waiters = new Map<string, number>();
   const flying = new Map<string, Promise<string | null>>();
   const cap = options.stepsPerMinute ?? STEP_LABELS_PER_MINUTE;
   const poll = Math.min(options.pollMs, STEP_POLL_MS);
@@ -206,15 +243,34 @@ function stepLabels(options: StepsAttach): LabelsRuntime['step'] {
     recent.push(now());
     return true;
   };
+  const room = (agentId: string) => {
+    const recent = recentIn(waits, agentId, now());
+    if ((waiters.get(agentId) ?? 0) >= STEP_WAITERS || recent.length >= STEP_WAITS_PER_MINUTE)
+      return false;
+    recent.push(now());
+    return true;
+  };
   const appeared = async (agentId: string, callId: string) => {
     const conversation = await agents.conversation(agentId, BACKGROUND_CONTEXT);
     if (!conversation) return undefined;
-    for (let round = 0; ; round++) {
-      const entries = (await conversation.context(BACKGROUND_CONTEXT)).entries;
-      const cluster = clusterOf(entries, [callId]);
-      if (cluster) return { conversation, cluster };
-      if (round >= rounds) return undefined;
-      await wait(poll);
+    const look = async () =>
+      clusterOf((await conversation.context(BACKGROUND_CONTEXT)).entries, [callId]);
+    const pending = async () =>
+      pendingIn(await harness.snapshot(LiveDoc, conversation.id, BACKGROUND_CONTEXT), callId);
+    const first = await look();
+    if (first) return { conversation, cluster: first };
+    if (!(await pending()) || !room(agentId)) return undefined;
+    waiters.set(agentId, (waiters.get(agentId) ?? 0) + 1);
+    try {
+      for (let round = 0; round < rounds; round++) {
+        await wait(poll);
+        const cluster = await look();
+        if (cluster) return { conversation, cluster };
+        if (!(await pending())) return undefined;
+      }
+      return undefined;
+    } finally {
+      waiters.set(agentId, (waiters.get(agentId) as number) - 1);
     }
   };
   const make = async (agentId: string, callId: string, key: string) => {
@@ -233,7 +289,7 @@ function stepLabels(options: StepsAttach): LabelsRuntime['step'] {
     return label || null;
   };
   return (agentId, callId) => {
-    if (!callId) return Promise.resolve(null);
+    if (!stepId(callId)) return Promise.resolve(null);
     const key = stepKey(callId);
     const shown = shownLabel(labels.value, [key]);
     if (shown !== undefined) return Promise.resolve(shown);

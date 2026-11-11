@@ -192,7 +192,10 @@ const fauxModels = [
   ...params.getAll('model').map((id) => ({ id })),
   ...params.getAll('blind').map((id) => ({ id, input: ['text'] })),
 ];
-const faux = fauxProvider(fauxModels.length ? { models: fauxModels } : {});
+const faux = fauxProvider({
+  ...(fauxModels.length ? { models: fauxModels } : {}),
+  ...(params.has('tps') ? { tokensPerSecond: Number(params.get('tps')) } : {}),
+});
 const requests = [];
 const served = [];
 const recorded = (message) => (context, _options, _state, model) => {
