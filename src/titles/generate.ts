@@ -14,6 +14,9 @@ export const TITLE_PROMPT =
 export const LABEL_PROMPT =
   'Label this group of tool runs in three to eight words, as an imperative that says what they do, such as "Check the failing build logs". Answer with the label only, without quotes.';
 
+export const STEP_PROMPT =
+  'Label this tool run in three to eight words, as an imperative that says what it does, such as "Install the skill into a staging folder". Answer with the label only, without quotes.';
+
 export const TRANSCRIPT_LENGTH = 4000;
 
 type Switch = 'titles' | 'toolLabels';
@@ -98,7 +101,8 @@ function smallModel(models: Models, settings: Settings, key: Switch, prompt: str
     transcript: string,
     model: string,
     context: Context,
-    admit: () => boolean = () => true
+    admit: () => boolean = () => true,
+    asked = prompt
   ): Promise<Asked | undefined> => {
     const text = await settings(context);
     if (!settingOn(text, key)) return undefined;
@@ -107,7 +111,7 @@ function smallModel(models: Models, settings: Settings, key: Switch, prompt: str
     const ref = chosen ?? (provider && rest.length ? { provider, modelId: rest.join('/') } : null);
     const found = ref ? models.getModel(ref.provider, ref.modelId) : undefined;
     if (!found || !transcript || !admit()) return undefined;
-    return completeText(models, found, `${prompt}\n\n${transcript}`, max);
+    return completeText(models, found, `${asked}\n\n${transcript}`, max);
   };
 }
 

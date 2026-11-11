@@ -14,6 +14,14 @@ test('single tool cards get human titles while input stays the raw command or pa
   await page.goto('/');
   const steps = [
     { tool: { name: 'bash', args: { command: 'git status -sb' } } },
+    {
+      tool: {
+        name: 'bash',
+        args: { command: 'cd /tmp; rm -rf stage && FOO=1 mkdir -p stage | sudo tee log' },
+      },
+    },
+    { tool: { name: 'bash', args: { command: 'a; b; c; d' } } },
+    { tool: { name: 'bash', args: { command: '"$X" <<EOF' } } },
     { tool: { name: 'read', args: { path: '/home/src/foo.ts' } } },
     { tool: { name: 'write', args: { path: '/home/src/bar.ts', content: 'x' } } },
     {
@@ -66,7 +74,14 @@ test('single tool cards get human titles while input stays the raw command or pa
     { query: query(steps) }
   );
   assert.deepEqual(seen, [
-    { name: 'bash', title: 'Use the computer', input: 'git status -sb' },
+    { name: 'bash', title: 'Run git', input: 'git status -sb' },
+    {
+      name: 'bash',
+      title: 'Run cd, rm, mkdir and more',
+      input: 'cd /tmp; rm -rf stage && FOO=1 mkdir -p stage | sudo tee log',
+    },
+    { name: 'bash', title: 'Run a, b, c and more', input: 'a; b; c; d' },
+    { name: 'bash', title: 'Run a command', input: '"$X" <<EOF' },
     { name: 'read', title: 'Read foo.ts', input: '/home/src/foo.ts' },
     { name: 'write', title: 'Write bar.ts', input: '/home/src/bar.ts' },
     { name: 'edit', title: 'Edit baz.ts', input: '/home/src/baz.ts' },

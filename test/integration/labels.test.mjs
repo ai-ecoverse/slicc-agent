@@ -123,3 +123,28 @@ test('labels: a growing cluster whose first label the per-minute cap refused sti
   assert.equal(seen.refused, null);
   assert.equal(seen.settled, 'Label 5');
 });
+
+test('labels: a step is labelled from its own input while it still runs, once however often it is asked', async (t) => {
+  const page = await chrome.page(t);
+  const seen = await run(
+    page,
+    [bash('echo a'), bash('sleep 3; echo b'), { answer: 'Done.' }],
+    `await api.send('go');
+    ${running(2)}
+    const asked = [api.agent.stepLabel('cone', ids[1]), api.agent.stepLabel('cone', ids[1])];
+    const running = await Promise.all(asked);
+    const status = api.tools().at(-1).status;
+    const first = await api.agent.stepLabel('cone', ids[0]);
+    await api.until(() => api.tools().at(-1).status === 'done', 'the last run');
+    const again = await api.agent.stepLabel('cone', ids[1]);
+    const cluster = await api.agent.toolLabel('cone', ids);
+    return { running, status, first, again, cluster };`
+  );
+  assert.deepEqual(seen, {
+    running: ['Run sleep 3; echo b', 'Run sleep 3; echo b'],
+    status: 'running',
+    first: 'Run echo a',
+    again: 'Run sleep 3; echo b',
+    cluster: 'Label 1',
+  });
+});
