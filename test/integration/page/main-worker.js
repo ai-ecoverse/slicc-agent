@@ -715,38 +715,19 @@ const routed = params.has('route')
       },
     }
   : {};
-const sudoRunning = (client) => {
-  const extra = {
-    protocol: [1, 16],
-    async sudoRun(request, options) {
-      if (params.has('sudo-run-refuse'))
-        throw Object.assign(new Error(params.get('sudo-run-refuse')), { code: 'EPERM' });
-      const script = 'exec "$0" "$@" >"$SUDO_OUT" 2>"$SUDO_ERR"';
-      const started = await client.spawn(
-        ['bash', '-c', script, request.path, ...request.argv.slice(1)],
-        {
-          user: request.target ?? 'root',
-          cwd: request.cwd ?? '/',
-          tag: options.tag,
-          env: { SUDO_OUT: options.stdout, SUDO_ERR: options.stderr },
-        }
-      );
-      return { pid: started.pid, pgid: started.pgid, ended: started.ended };
-    },
-  };
-  return new Proxy(client, {
+const olderKernel = (client) =>
+  new Proxy(client, {
     get(target, key) {
-      if (key in extra) return extra[key];
+      if (key === 'sudoRun') return undefined;
       const value = Reflect.get(target, key, target);
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-};
 const attach =
   relayed || params.has('gateway') || registry.length || params.has('xai')
     ? async (port) => Object.assign(await attachKernel(port), { transport: relay, ...routed })
-    : params.has('sudo-run')
-      ? async (port) => sudoRunning(await attachKernel(port))
+    : params.has('no-sudo-run')
+      ? async (port) => olderKernel(await attachKernel(port))
       : undefined;
 const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]

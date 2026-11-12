@@ -31,6 +31,7 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         {
           users: 'enforce',
           approve: (req, options) => {
+            if (held.late) return held.late(req);
             asked.push(req.id);
             const where = req.tag?.includes('follower:') ? 'on Pat’s phone' : undefined;
             const reply = held.owner.approve(req, { ...options, ...(where ? { where } : {}) });
@@ -131,33 +132,20 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
       const decideAs = (id, answer, by) => call((reply) => ({ decide: { id, answer, by }, reply }));
       const judged = () => call((port) => ({ judged: port }));
       const setTable = (judgeTable) => running.postMessage({ judgeTable });
-      const timeOut = async (local, id) => {
-        const expiresAt = Date.now() + 1500;
-        const stop = new AbortController();
-        const asked = owner.approve(
-          {
-            id,
-            kind: 'sudo',
-            user: 'cone',
-            uid: 1000,
-            target: 'root',
-            argv: ['ls', '/'],
-            path: '/usr/bin/ls',
-            cwd: '/',
-            tag: tags.cone,
-            expiresAt,
-            always: true,
-            stdin: 'none',
-            rootOnly: { '/usr/bin/ls': true, '/': true },
-            userWritable: [],
-          },
-          { signal: stop.signal }
-        );
-        await until(() => newest(local)?.replay?.id === id, 'the request');
-        setTimeout(() => stop.abort('expired'), expiresAt - Date.now() - 300);
-        await asked;
-        await until(() => newest(local).state === 'unanswered', 'the timeout');
-        return newest(local).id;
+      const timeOut = async (local, argv, extra = {}) => {
+        held.late = (req) => {
+          const stop = new AbortController();
+          const reply = owner.approve(
+            { ...req, expiresAt: Date.now() + 1500 },
+            { signal: stop.signal }
+          );
+          setTimeout(() => stop.abort('expired'), 1200);
+          return reply;
+        };
+        const ran = await sudo(argv, tags.cone, extra);
+        delete held.late;
+        await until(() => newest(local)?.state === 'unanswered', 'the timeout');
+        return { id: newest(local).id, status: ran.status };
       };
       globalThis.t = {
         kernel,
@@ -1016,13 +1004,13 @@ test("Run now replays a cone's timed-out sudo through the kernel, shows it in th
   const page = await chrome.page(t);
   await boot(page, {
     worker: 'main-worker.js',
-    query: '?sudo-run&answer=Noted.&answer=Noted.',
+    query: '?answer=Noted.&answer=Noted.',
   });
   const seen = await staged(page, 'a late sudo run', async () => {
     const { owner, until, kernel, timeOut } = globalThis.t;
     const local = await owner.connect();
     const model = createAgentModel(local);
-    const id = await timeOut(local, 'sudo-late');
+    const { id } = await timeOut(local, ['ls', '/']);
     const record = () => model.approvals.history().find((entry) => entry.approval.id === id);
     await until(() => record()?.runnable === true, 'Run now to be offered');
     const offered = record();
@@ -1072,47 +1060,69 @@ test("Run now replays a cone's timed-out sudo through the kernel, shows it in th
   assert.ok(seen.cards.every((approval) => approval === seen.offered.approval.id));
 });
 
-async function refusedRun(t, query) {
+async function refusedRun(t, query, swap) {
   const page = await chrome.page(t);
   await boot(page, { worker: 'main-worker.js', query });
-  return staged(page, 'a refused late sudo', async () => {
-    const { owner, until, timeOut } = globalThis.t;
-    const local = await owner.connect();
-    const model = createAgentModel(local);
-    const id = await timeOut(local, 'sudo-refused');
-    const record = () => model.approvals.history().find((entry) => entry.approval.id === id);
-    await until(() => record()?.runnable, 'the gate');
-    const runnable = record().runnable;
-    const ran = await model.approvals.run(id).then(
-      () => null,
-      (error) => error.message
-    );
-    if (!ran) await until(() => record()?.run?.state === 'failed', 'the refusal');
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const licks = (local.transcript.value?.entries ?? []).filter((entry) =>
-      JSON.stringify(entry.model ?? '').includes('sudo-run')
-    ).length;
-    const result = { runnable, ran, run: record().run ?? null, licks };
-    await local.close();
-    await owner.release();
-    return result;
-  });
+  return staged(
+    page,
+    'a refused late sudo',
+    async (swap) => {
+      const { owner, until, timeOut, kernel } = globalThis.t;
+      const local = await owner.connect();
+      const model = createAgentModel(local);
+      const write = (text) =>
+        kernel.run(
+          ['bash', '-c', `printf '${text}' > /home/cone/job.sh && chmod 755 /home/cone/job.sh`],
+          {
+            user: 'cone',
+          }
+        );
+      if (swap) await write('#!/bin/bash\\necho one\\n');
+      const { id, status } = await timeOut(local, swap ? ['/home/cone/job.sh'] : ['ls', '/']);
+      if (swap) await write('#!/bin/bash\\necho two\\n');
+      const record = () => model.approvals.history().find((entry) => entry.approval.id === id);
+      await until(() => record()?.runnable, 'the gate');
+      const runnable = record().runnable;
+      const ran = await model.approvals.run(id).then(
+        () => null,
+        (error) => error.message
+      );
+      if (!ran) await until(() => record()?.run?.state === 'failed', 'the refusal');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const licks = (local.transcript.value?.entries ?? []).filter((entry) =>
+        JSON.stringify(entry.model ?? '').includes('sudo-run')
+      ).length;
+      const result = {
+        status,
+        writable: globalThis.t.newest(local).replay.userWritable,
+        runnable,
+        ran,
+        run: record().run ?? null,
+        licks,
+      };
+      await local.close();
+      await owner.release();
+      return result;
+    },
+    swap
+  );
 }
 
 test('Run now is refused with the reason when the kernel has no sudo replay', async (t) => {
-  const seen = await refusedRun(t, '');
+  const seen = await refusedRun(t, '?no-sudo-run', false);
   assert.deepEqual(seen.runnable, { reason: 'Needs slicc-kernel protocol 1.16 or later.' });
   assert.equal(seen.ran, 'Needs slicc-kernel protocol 1.16 or later.');
   assert.equal(seen.run, null);
   assert.equal(seen.licks, 0);
 });
 
-test("a replay the kernel refuses fails with the kernel's sentence and sends no lick", async (t) => {
-  const sentence = 'sudo: /usr/bin/ls changed since it was requested';
-  const seen = await refusedRun(t, `?sudo-run&sudo-run-refuse=${encodeURIComponent(sentence)}`);
+test('a replay whose script changed since the request is refused by the kernel, with its sentence and no lick', async (t) => {
+  const seen = await refusedRun(t, '', true);
+  assert.notEqual(seen.status, 0);
   assert.equal(seen.runnable, true);
   assert.equal(seen.ran, null);
   assert.equal(seen.run.state, 'failed');
-  assert.equal(seen.run.error, sentence);
+  assert.ok(seen.writable.some((file) => file.path === '/home/cone/job.sh'));
+  assert.equal(seen.run.error, 'sudo: /home/cone/job.sh changed since it was requested');
   assert.equal(seen.licks, 0);
 });
