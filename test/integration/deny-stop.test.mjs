@@ -9,12 +9,12 @@ const STOPPED = 'sudo: denied, and the owner stopped this turn';
 const bash = (command) => ({ tool: { name: 'bash', args: { command } } });
 const answer = (text) => ({ answer: text });
 
-async function boot(page, steps) {
+async function boot(page, steps, flags = []) {
   await page.goto('/');
   await staged(
     page,
     'the deny-and-stop agent',
-    async (steps) => {
+    async ({ steps, flags }) => {
       await import('/dist-test/page.js');
       const { bootKernel } = await import('/kernel.js');
       const replies = [];
@@ -36,6 +36,7 @@ async function boot(page, steps) {
       await kernel.users.add({ name: 'cone', groups: ['sudo'] });
       const query = new URLSearchParams([
         ['scoop-say', ''],
+        ...flags.map((flag) => [flag, '']),
         ...steps.map((step) => ['step', JSON.stringify(step)]),
       ]);
       const owner = await startTracked({
@@ -104,7 +105,7 @@ async function boot(page, steps) {
       };
       globalThis.r = r;
     },
-    steps
+    { steps, flags }
   );
 }
 
@@ -195,6 +196,56 @@ test("deny and stop ends the cone's turn and the shell loop that keeps asking fo
   assert.equal(seen.listed, 0);
   assert.deepEqual(seen.replies.slice(1, 2), [{ answer: 'deny', message: STOPPED }]);
   assert.equal(seen.said.at(-1), 'Back again.');
+});
+
+test('deny and stop tombstones later sudo asks from a shell that survives abort, until the next turn', async (t) => {
+  const page = await chrome.page(t);
+  const loop =
+    'for i in 1 2 3 4 5 6; do sudo ls -la /root > /dev/null 2>> /tmp/stop-loop.log; echo "try-$i=$?" >> /tmp/stop-loop.log; done; echo loop-done >> /tmp/stop-loop.log';
+  await boot(page, [bash(loop), answer('Back again.')], ['abandon-abort']);
+  const seen = await staged(page, 'tombstone asks after an orphaned loop', async () => {
+    const r = globalThis.r;
+    await r.open();
+    await r.model.agent.send(r.model.agent.active(), 'Loop sudo.');
+    const asked = await r.shown('cone');
+    await r.model.approvals.decide(asked.id, 'stop');
+    await r.idle();
+    await r.pause(1500);
+    const afterIdle = r.sudoItems().map((item) => ({ id: item.id, ...r.pick(item) }));
+    const pending = afterIdle.filter((item) => item.state === 'pending');
+    const late = afterIdle.filter((item) => item.id !== asked.id);
+    const stopped = afterIdle.find((item) => item.id === asked.id);
+    await r.model.agent.send(r.model.agent.active(), 'Are you there?');
+    await r.until(() => r.said().includes('Back again.'), 'the next turn');
+    await r.local.close();
+    await r.owner.release();
+    return {
+      stopped,
+      afterIdle,
+      pending,
+      late,
+      said: r.said(),
+      log: await r.kernel.run(['bash', '-c', 'cat /tmp/stop-loop.log 2>/dev/null'], {}),
+    };
+  });
+  assert.ok(seen.stopped, 'the stopped ask is kept');
+  assert.deepEqual(
+    { state: seen.stopped.state, decidedBy: seen.stopped.decidedBy, reason: seen.stopped.reason },
+    { state: 'rejected', decidedBy: 'owner', reason: 'stopped' }
+  );
+  assert.equal(
+    seen.pending.length,
+    0,
+    `no ask left for a person: ${JSON.stringify(seen.afterIdle)}`
+  );
+  for (const item of seen.late)
+    assert.deepEqual(
+      { state: item.state, decidedBy: item.decidedBy, reason: item.reason },
+      { state: 'withdrawn', decidedBy: 'host', reason: 'stopped' }
+    );
+  assert.ok(seen.late.length >= 1, 'the orphaned loop asked again after idle');
+  assert.equal(seen.said.at(-1), 'Back again.');
+  assert.match(seen.log.stdout, /try-/);
 });
 
 test("deny and stop on a scoop's sudo stops the scoop's turn, not its cone's, and the cone waiting on it hears the scoop ended without an answer", async (t) => {

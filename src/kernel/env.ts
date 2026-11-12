@@ -50,10 +50,16 @@ export interface KernelEnvOptions {
   scrub?: Scrub;
   spawn?: (argv: readonly string[]) => readonly string[];
   tag?: (context: Context) => Promise<string | undefined>;
+  abandonOnAbort?: boolean;
 }
 
 export const STREAMED_READ = 8 * 1024 * 1024;
 export const READ_CHUNK = 1024 * 1024;
+
+export const abandonOf = (
+  options: { abandonOnAbort?: boolean } = {}
+): Pick<KernelEnvOptions, 'abandonOnAbort'> =>
+  options.abandonOnAbort ? { abandonOnAbort: true } : {};
 
 export async function scrubbedFile(scrub: Scrub, bytes: Uint8Array): Promise<Uint8Array> {
   if (mimeOf(bytes)) return bytes;
@@ -113,11 +119,16 @@ export class SliccKernelEnv implements ExecutionEnv {
     this.#exports = options.exports;
     this.#scrub = options.scrub;
     const scrub = options.scrub;
-    this.#hooks = {
+    const abandon =
+      options.abandonOnAbort === true ||
+      (globalThis as { sliccAbandonOnAbort?: boolean }).sliccAbandonOnAbort === true;
+    const hooks: ExecHooks = {
       ...(scrub ? { scrub: () => scrub.stream() } : {}),
       ...(options.spawn ? { spawn: options.spawn } : {}),
       ...(options.tag ? { tag: options.tag } : {}),
     };
+    if (abandon) hooks.abandonOnAbort = true;
+    this.#hooks = hooks;
   }
 
   #path(path: string): string {
