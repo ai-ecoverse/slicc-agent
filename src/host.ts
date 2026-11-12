@@ -21,9 +21,11 @@ import {
   stoppingAttach,
 } from './approvals/index.ts';
 import { type ApprovalPolicies, attachApprovalPolicy } from './approvals/policy.ts';
-import type { RunKernel, Runner } from './approvals/run.ts';
+import { publishedApprovals } from './approvals/published.ts';
+import type { RunKernel, Runner, SudoRunHost } from './approvals/run.ts';
 import {
   frozenOf,
+  goneOf,
   kernelGate,
   type RunGates,
   type RunnableWatch,
@@ -329,8 +331,12 @@ export type HostOptions = {
   uploads?: Uploads;
   thumbnail?: Thumbnail;
   labels?: LabelsRuntime;
-  runs?: { kernel: RunKernel & { protocol?: readonly number[] }; boot: string | null };
+  runs?: { kernel: RunKernel & { protocol?: readonly number[] }; boot: string | null } & RunTimes;
 } & ApprovalOptions;
+
+type RunTimes = Partial<
+  Pick<SudoRunHost, 'pollMs' | 'killMs' | 'adoptMs' | 'outputCap' | 'keepMs'>
+>;
 
 function runsOf(
   agent: Agent,
@@ -342,11 +348,10 @@ function runsOf(
   const runs = options.runs;
   if (runs)
     agent.sudoRuns.bind({
-      kernel: runs.kernel,
+      ...runs,
       harness: agent.harness,
       agents: agent.agents,
       ...(options.licks ? { licks: options.licks.licks } : {}),
-      boot: runs.boot,
       server: serverId,
       conversation: Number(agent.root.id),
     });
@@ -354,6 +359,7 @@ function runsOf(
     maxAgeMinutes: policy.current().sudo.runLate.maxAgeMinutes,
     kernel: kernelGate(runs?.kernel),
     frozen: frozenOf(() => agent.agents.state()),
+    gone: goneOf(() => agent.agents.state()),
   });
   const serve: Served['runs'] = (runner) => ({
     approvalRun: (id, using) => agent.sudoRuns.claim(id, runner, gates(), using),
@@ -382,6 +388,11 @@ const sudoOf = (agent: Agent, approvals: Approvals, guests: Guests, options: Hos
     agents: () => agent.agents.state(),
     ...(options.licks ? { licks: options.licks.licks } : {}),
   });
+
+const viewStates = (viewMonitor: ReplicatedState<unknown>, approvals: Approvals['state']) => ({
+  viewMonitor,
+  viewApprovals: publishedApprovals(approvals, true),
+});
 
 export async function hostAgent(agent: Agent, options: HostOptions = {}): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -465,7 +476,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     vault: options.secrets?.vault ?? idleVault,
     labels: labels.state,
     guests: guests.seats,
-    approvals: approvals.state,
+    approvals: publishedApprovals(approvals.state, false),
     approvalPolicy: policy.state,
     approvalRunnable: runs.runnable.state,
   };
@@ -476,7 +487,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     trusted,
     viewed,
     transcript: transcriptService,
-    viewMonitor: monitor.viewState,
+    ...viewStates(monitor.viewState, approvals.state),
     sudo,
     settings,
     remote,
@@ -554,6 +565,7 @@ interface Served {
   viewed: () => AgentControl;
   transcript: Record<keyof AgentTranscript, ReplicatedState<unknown>>;
   viewMonitor: ReplicatedState<unknown>;
+  viewApprovals: ReplicatedState<unknown>;
   sudo?: AgentSudo;
   settings: AgentSettings;
   remote: AgentRemote;
@@ -636,7 +648,11 @@ export function serveAgent(serving: Served): Host<AgentPrincipal> {
   const host = closedToGuests(
     createHost<AgentPrincipal>({ name: AGENT_HOST, self: SELF, principalKey })
   );
-  const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
+  const viewing = {
+    ...serving.transcript,
+    monitor: serving.viewMonitor,
+    approvals: serving.viewApprovals,
+  };
   host.serve(AgentControl, (_input, principal, self) => {
     const control = seated(serving, principal);
     if (serving.owners && principal.seat !== 'host' && principal.seat !== 'guest')

@@ -120,8 +120,9 @@ export function shown(item: Item, agentName: string | undefined): Approval {
 
 export type HostApprovals = ApprovalsPort;
 
-export function runShown(run: SudoRun): ApprovalRun {
-  const { state, by, device, at, pid, status, signal, endedAt, error, stdout, stderr } = run;
+export function runShown(run: SudoRun): ApprovalRun & { survivors?: number[] } {
+  const { state, by, device, at, pid, status, signal, endedAt, error, stdout, stderr, survivors } =
+    run;
   return {
     state,
     by,
@@ -134,6 +135,7 @@ export function runShown(run: SudoRun): ApprovalRun {
     ...(error ? { error } : {}),
     ...(stdout ? { stdout } : {}),
     ...(stderr ? { stderr } : {}),
+    ...(survivors?.length ? { survivors: [...survivors] } : {}),
   };
 }
 

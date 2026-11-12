@@ -11,6 +11,7 @@ export type RunGates = {
   maxAgeMinutes: number;
   kernel: true | string;
   frozen?: (agentId: string) => string | undefined;
+  gone?: (agentId: string) => boolean;
 };
 
 export const SUDO_RUN_PROTOCOL: readonly [number, number] = [1, 16];
@@ -26,6 +27,7 @@ export const RUN_REASONS = {
   stdin: 'Its input is gone, so it must be asked again.',
   old: 'This request is from before Run now, so it must be asked again.',
   off: 'Run now is off in the approval policy.',
+  gone: 'The agent that asked is gone, so it must be asked again.',
   kernel: `Needs slicc-kernel protocol ${SUDO_RUN_PROTOCOL.join('.')} or later.`,
 } as const;
 
@@ -62,6 +64,7 @@ export function runnable(item: Approval, now: number, gates: RunGates): Runnable
   if (now - since > gates.maxAgeMinutes * MINUTE) return { reason: tooOld(gates.maxAgeMinutes) };
   const frozen = gates.frozen?.(agentId);
   if (frozen) return { reason: thawFirst(frozen) };
+  if (gates.gone?.(agentId)) return { reason: RUN_REASONS.gone };
   if (gates.kernel !== true) return { reason: gates.kernel };
   return true;
 }
@@ -82,6 +85,14 @@ export const frozenOf =
   (state: () => Readonly<AgentsState>) =>
   (agentId: string): string | undefined =>
     frozenTarget(state(), agentTarget(state(), agentId))?.name;
+
+export const goneOf =
+  (state: () => Readonly<AgentsState>) =>
+  (agentId: string): boolean => {
+    const now = state();
+    const target = agentTarget(now, agentId);
+    return target.startsWith('cone:') ? !now.cones[target.slice(5)] : !now.scoops[agentId];
+  };
 
 type Protocol = { protocol?: readonly number[]; sudoRun?: unknown };
 

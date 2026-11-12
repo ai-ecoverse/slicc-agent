@@ -97,6 +97,9 @@ export type SudoRun = {
   stdout?: string;
   stderr?: string;
   stopBy?: DecidedBy;
+  survivors?: number[];
+  capped?: number;
+  removed?: true;
 };
 
 export type CaptureWhat = 'screen' | 'camera' | 'microphone';
@@ -268,8 +271,13 @@ const decided = (item: Approval) => item.decidedAt ?? item.createdAt;
 export const runLive = (item: Approval): boolean =>
   item.kind === 'sudo' && (item.run?.state === 'starting' || item.run?.state === 'running');
 
+const runHeld = (item: Approval): boolean =>
+  item.kind === 'sudo' &&
+  !!item.run &&
+  (runLive(item) || !!item.run.survivors?.length || (!!item.run.stdout && !item.run.removed));
+
 export function prune(items: Approval[], kept = APPROVALS_KEPT): Approval[] {
-  const settled = items.filter((item) => item.state !== 'pending' && !runLive(item));
+  const settled = items.filter((item) => item.state !== 'pending' && !runHeld(item));
   settled.sort((a, b) => decided(a) - decided(b));
   const drop = new Set(settled.slice(0, Math.max(0, settled.length - kept)));
   return items.filter((item) => !drop.has(item));

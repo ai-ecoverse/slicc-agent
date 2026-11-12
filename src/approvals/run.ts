@@ -10,37 +10,55 @@ import {
   type TaskRuntime,
 } from '@earendil-works/pi-durable';
 import type { AgentsState } from '../agents.ts';
-import { taggedTaints } from '../guests/tags.ts';
-import type { KernelClient, SudoRunning } from '../kernel/client.ts';
-import { tagsOf } from '../kernel/sightings.ts';
+import type { SudoRunning } from '../kernel/client.ts';
 import type { LickEvent, Licks } from '../licks/licks.ts';
 import {
   type Approval,
   ApprovalsDoc,
   type DecidedBy,
+  MAX_DELAY,
   runLive,
   type SudoApproval,
   type SudoRun,
 } from './record.ts';
-import { agentTarget, RUN_REASONS, type RunGates, runnable } from './runnable.ts';
-import { shellWord } from './sudo.ts';
+import { endLick, KEEP_HOURS, MIB, startLick } from './run-licks.ts';
+import {
+  aborted,
+  adoptable,
+  type Exit,
+  gone,
+  outputOf,
+  outputSize,
+  type RunKernel,
+  removeOutput,
+  runTag,
+  signalTree,
+  sleep,
+  tagged,
+  type Watcher,
+  watchExits,
+} from './run-procs.ts';
+import { RUN_REASONS, type RunGates, runnable } from './runnable.ts';
+
+export { clock, duration, endLick, startLick } from './run-licks.ts';
+export { outputOf, RUN_TAG, RUNS_DIR, type RunKernel, runTag } from './run-procs.ts';
 
 export const SUDO_RUN_TASK = 'slicc.sudo-run';
 export const SUDO_RUNS = 'slicc-sudo-runs';
-export const RUN_TAG = 'sudo-run:';
-export const RUNS_DIR = '.slicc/sudo-runs';
-export const TAIL_BYTES = 2048;
 export const POLL_MS = 5000;
-export const GRACE_MS = 1000;
 export const KILL_MS = 5000;
+export const ADOPT_MS = 250;
+export const ADOPT_TRIES = 5;
+export const OUTPUT_CAP = 32 * MIB;
+export const KEEP_MS = KEEP_HOURS * 3_600_000;
 
 export const RUN_ERRORS = {
   interrupted: 'interrupted before it started',
   reloaded: 'the page reloaded while it ran',
   idle: "This request isn't running.",
+  gone: 'Its processes are already gone.',
+  unseen: "The kernel's process list isn't available, so it can't be stopped.",
 } as const;
-
-export type RunKernel = Pick<KernelClient, 'fs' | 'spawn' | 'ps' | 'kill' | 'sudoRun' | 'trace'>;
 
 export interface SudoRunHost {
   kernel: RunKernel;
@@ -53,6 +71,9 @@ export interface SudoRunHost {
   now?: () => number;
   pollMs?: number;
   killMs?: number;
+  adoptMs?: number;
+  outputCap?: number;
+  keepMs?: number;
 }
 
 export type RunAnswer = { done: true; error: null } | { done: false; error: string };
@@ -72,16 +93,14 @@ type Phase =
   | { phase: 'call'; server: string; boot: string | null }
   | { phase: 'started'; pid: number; pgid: number; boot: string | null }
   | { phase: 'wait'; pid: number; pgid: number; boot: string | null }
-  | { phase: 'ended' };
+  | { phase: 'ended' }
+  | { phase: 'linger' };
 type Runtime = TaskRuntime<Input, Phase, null, object>;
 type Next = NextTaskState<Phase, null>;
-type Exit = { status?: number; signal?: string };
 
 const DONE: Next = { status: 'terminal', outcome: { status: 'completed', result: null } };
 
 const next = (checkpoint: Phase): Next => ({ status: 'running', checkpoint });
-
-export const runTag = (id: string): string => `${RUN_TAG}${id}`;
 
 const sudoIn = (items: readonly Approval[] | undefined, id: string) => {
   const item = items?.find((entry) => entry.id === id);
@@ -105,7 +124,7 @@ function edit(
   runtime: Runtime,
   id: string,
   change: (run: SudoRun, item: SudoApproval) => void,
-  then: Next,
+  then: Next | undefined,
   context: Context
 ): Promise<void> {
   return runtime.commit(async (tx) => {
@@ -127,290 +146,19 @@ export function messageOf(error: unknown): string {
   return text.trim() || 'the kernel refused to run it';
 }
 
-async function passwdOf(kernel: RunKernel, user: string): Promise<string[] | undefined> {
-  const passwd = await kernel.fs.readText('/etc/passwd').catch(() => '');
-  return passwd
-    .split('\n')
-    .find((entry) => entry.startsWith(`${user}:`))
-    ?.split(':');
-}
-
-async function homeOf(kernel: RunKernel, user: string): Promise<string> {
-  const home = (await passwdOf(kernel, user))?.[5];
-  if (home) return home.replace(/\/+$/, '') || '/';
-  return user === 'root' ? '/root' : `/home/${user}`;
-}
-
-async function uidOf(kernel: RunKernel, user: string): Promise<number | undefined> {
-  const uid = Number((await passwdOf(kernel, user))?.[2] ?? (user === 'root' ? 0 : NaN));
-  return Number.isInteger(uid) ? uid : undefined;
-}
-
-function aborted(signal: AbortSignal | undefined): Promise<never> {
-  return new Promise((_, reject) => {
-    if (signal?.aborted) reject(signal.reason);
-    signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
-  });
-}
-
-export async function outputOf(kernel: RunKernel, user: string, id: string, signal?: AbortSignal) {
-  const home = await homeOf(kernel, user);
-  const dir = `${home === '/' ? '' : home}/${RUNS_DIR}`;
-  const made = await kernel.spawn(['mkdir', '-p', dir], { user, cwd: '/' });
-  const code = await Promise.race([made.exited, aborted(signal)]);
-  if (code !== 0) throw new Error(`can't create ${dir} as ${user}`);
-  return { stdout: `${dir}/${id}.out`, stderr: `${dir}/${id}.err` };
-}
-
-type Watcher = { waitFor(pid: number): Promise<Exit>; close(): void };
-
-async function watchExits(kernel: RunKernel, tag: string): Promise<Watcher> {
-  const exits = new Map<number, Exit>();
-  const waiting = new Map<number, (exit: Exit) => void>();
-  const subscription = await kernel
-    .trace?.(tag, ({ events }) => {
-      for (const event of events) {
-        if (event.type !== 'exit') continue;
-        const exit = { status: event.status, ...(event.signal ? { signal: event.signal } : {}) };
-        exits.set(event.pid, exit);
-        waiting.get(event.pid)?.(exit);
-      }
-    })
-    .catch(() => undefined);
-  return {
-    waitFor: (pid) =>
-      new Promise((resolve) => {
-        const known = exits.get(pid);
-        if (known) resolve(known);
-        else waiting.set(pid, resolve);
-      }),
-    close: () => subscription?.close(),
-  };
-}
-
-const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', abort);
-      resolve();
-    }, ms);
-    if (signal.aborted) abort();
-    else signal.addEventListener('abort', abort, { once: true });
-  });
-
-async function alive(kernel: RunKernel, pid: number): Promise<boolean> {
-  const rows = await kernel.ps?.().catch(() => undefined);
-  return !rows || rows.some((row) => row.pid === pid && row.state !== 'Z');
-}
-
-async function gone(kernel: RunKernel, pid: number, ms: number, signal: AbortSignal) {
-  while (await alive(kernel, pid)) await sleep(ms, signal);
-  await sleep(GRACE_MS, signal);
-  return {} as Exit;
-}
-
-const decoder = () => new TextDecoder('utf-8', { fatal: false });
-
-export const READ_MS = 5000;
-
-const parentOf = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
-
-async function plain(kernel: RunKernel, path: string): Promise<boolean> {
-  const [file, dir] = await Promise.all([kernel.fs.lstat(path), kernel.fs.lstat(parentOf(path))]);
-  return file.isFile && !file.isSymbolicLink && dir.isDirectory && !dir.isSymbolicLink;
-}
-
-async function readAs(
-  kernel: RunKernel,
-  user: string,
-  path: string,
-  ms: number
-): Promise<Uint8Array | null> {
-  const parts: Uint8Array[] = [];
-  const tail = await kernel.spawn(['tail', '-c', String(TAIL_BYTES + 1), path], {
-    user,
-    cwd: '/',
-    onStdout: (chunk) => parts.push(chunk.slice()),
-  });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      void Promise.resolve(tail.signal('SIGKILL')).catch(() => undefined);
-      resolve(null);
-    }, ms);
-  });
-  const code = await Promise.race([tail.exited, late]).finally(() => clearTimeout(timer));
-  if (code !== 0) return null;
-  return new Uint8Array(parts.flatMap((part) => [...part]));
-}
-
-export async function tailOf(
-  kernel: RunKernel,
-  user: string | undefined,
-  path: string | undefined,
-  ms = READ_MS
-): Promise<string | null> {
-  if (!user || !path?.startsWith('/')) return null;
-  try {
-    if (!(await plain(kernel, path))) return null;
-    const bytes = await readAs(kernel, user, path, ms);
-    if (!bytes) return null;
-    const cut = bytes.length > TAIL_BYTES;
-    const text = decoder()
-      .decode(cut ? bytes.slice(-TAIL_BYTES) : bytes)
-      .replace(/^\uFFFD+/, '');
-    return cut ? `…${text}` : text;
-  } catch {
-    return null;
-  }
-}
-
-function typed(item: SudoApproval): string {
-  return (item.replay?.argv ?? [])
-    .map((word) => shellWord(String(word)))
-    .join(' ')
-    .trim();
-}
-
-function where(item: SudoApproval): string {
-  const { command, target, cwd } = item.detail;
-  return `${command} as ${target ?? 'root'}${cwd ? ` in ${cwd}` : ''}`;
-}
-
-const pad = (value: number) => String(value).padStart(2, '0');
-
-export function clock(at: number, now: number): string {
-  const when = new Date(at);
-  const time = `${pad(when.getHours())}:${pad(when.getMinutes())}`;
-  if (when.toDateString() === new Date(now).toDateString()) return time;
-  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${time}`;
-}
-
-export function duration(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds} s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ${seconds % 60} s`;
-  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
-}
-
-function outcome(run: SudoRun): { text: string; sentence: string; ok: boolean } {
-  if (run.state === 'failed')
-    return { text: run.error ?? 'failed', sentence: `didn't finish: ${run.error}`, ok: false };
-  const signal = run.signal ? ` (${run.signal})` : '';
-  if (run.state === 'stopped')
-    return {
-      text: 'stopped by the owner',
-      sentence: `was stopped by the owner${signal}`,
-      ok: false,
-    };
-  if (run.status === undefined)
-    return {
-      text: 'status unknown',
-      sentence: 'ended while the agent was away, so its exit status is unknown',
-      ok: false,
-    };
-  if (run.signal)
-    return {
-      text: `killed by ${run.signal}`,
-      sentence: `was killed by ${run.signal} (status ${run.status})`,
-      ok: false,
-    };
-  return {
-    text: `exit ${run.status}`,
-    sentence: `exited with status ${run.status}`,
-    ok: run.status === 0,
-  };
-}
-
-async function lickBase(host: SudoRunHost, item: SudoApproval) {
-  const replay = item.replay;
-  const tags = [...(replay?.tag ? [replay.tag] : []), ...(replay?.tags ?? [])];
-  const taints = await taggedTaints(host.harness, tags, BACKGROUND_CONTEXT);
-  return {
-    channel: 'sudo-run' as const,
-    source: item.id,
-    target: agentTarget(host.agents.state(), item.requester.agentId as string),
-    coalesce: false,
-    ...(taints.length ? { taints } : {}),
-  };
-}
-
-export async function startLick(host: SudoRunHost, item: SudoApproval): Promise<LickEvent> {
-  const run = item.run as SudoRun;
-  const now = host.now?.() ?? Date.now();
-  return {
-    ...(await lickBase(host, item)),
-    eventId: `${item.id}:start`,
-    title: `sudo runs now: ${typed(item)}`,
-    text: '[the owner ran your timed-out sudo request]',
-    body: [
-      `Your sudo request from ${clock(item.createdAt, now)} (${where(item)}) timed out.`,
-      `The owner ran it at ${clock(run.at, now)} with Run now. It runs in the background (pid ${run.pid}), with no terminal and no input.`,
-      `Its result follows as another sudo-run lick. Output: ${run.stdout} (.err)`,
-    ].join('\n'),
-  };
-}
-
-export async function endLick(host: SudoRunHost, item: SudoApproval): Promise<LickEvent> {
-  const run = item.run as SudoRun;
-  const ran = outcome(run);
-  const took = run.endedAt !== undefined ? ` after ${duration(run.endedAt - run.at)}` : '';
-  const user = item.replay?.user;
-  const [stdout, stderr] = await Promise.all([
-    tailOf(host.kernel, user, run.stdout),
-    tailOf(host.kernel, user, run.stderr),
-  ]);
-  const shown = (name: string, text: string | null) =>
-    text === null
-      ? [`${name}: output unavailable`]
-      : text
-        ? [`${name} (last 2 KiB):`, text]
-        : [`${name}: empty`];
-  return {
-    ...(await lickBase(host, item)),
-    eventId: `${item.id}:end`,
-    title: `sudo run ended: ${typed(item)}`,
-    text: `[your late sudo run ended: ${ran.text}]`,
-    body: [
-      `${where(item)} ${ran.sentence}${took}.`,
-      ...shown('stdout', stdout),
-      ...shown('stderr', stderr),
-      `Full output: ${run.stdout} and ${run.stderr}`,
-    ].join('\n'),
-    ...(ran.ok ? {} : { severity: 'warn' as const }),
-  };
-}
-
 async function tell(host: SudoRunHost, made: Promise<LickEvent>) {
   const event = await made.catch(() => undefined);
   if (event) await host.licks?.deliver(event, BACKGROUND_CONTEXT).catch(() => undefined);
 }
 
-export async function leads(kernel: RunKernel, tag: string, pgid: number): Promise<boolean> {
-  const rows = await kernel.ps?.().catch(() => undefined);
-  return !!rows?.some((row) => row.pid === pgid && row.state !== 'Z' && tagsOf(row).includes(tag));
-}
-
-function killer(host: SudoRunHost, tag: string) {
-  return async (pgid: number) => {
-    if (!(await leads(host.kernel, tag, pgid))) return;
-    await host.kernel.kill?.(-pgid, 'SIGTERM').catch(() => undefined);
-    setTimeout(() => {
-      void leads(host.kernel, tag, pgid).then((up) =>
-        up ? host.kernel.kill?.(-pgid, 'SIGKILL').catch(() => undefined) : undefined
-      );
-    }, host.killMs ?? KILL_MS);
-  };
-}
+const stopTree = (host: SudoRunHost, id: string) =>
+  signalTree(host.kernel, runTag(id), host.killMs ?? KILL_MS);
 
 type Lookup = () => Promise<SudoRunHost>;
 
 const nowOf = (host: SudoRunHost) => host.now?.() ?? Date.now();
+
+const knownBoots = (a: string | null, b: string | null) => a !== null && b !== null;
 
 function memory() {
   const calling = new Set<string>();
@@ -464,18 +212,12 @@ function starting(lookup: Lookup, mem: Memory) {
   async function adopt(id: string, boot: string | null, runtime: Runtime, context: Context) {
     const host = await lookup();
     const item = await itemOf(runtime, id, context);
-    const uid = await uidOf(host.kernel, item?.replay?.target ?? 'root');
-    const rows = (await host.kernel.ps?.().catch(() => undefined)) ?? [];
-    const mine = rows
-      .filter(
-        (row) =>
-          row.state !== 'Z' &&
-          uid !== undefined &&
-          row.uid === uid &&
-          tagsOf(row).includes(runTag(id))
-      )
-      .sort((a, b) => a.pid - b.pid);
-    const lead = mine.find((row) => row.pid === row.pgid) ?? mine[0];
+    const target = item?.replay?.target ?? 'root';
+    let lead = await adoptable(host.kernel, runTag(id), target);
+    for (let attempt = 0; !lead && attempt < ADOPT_TRIES - 1; attempt++) {
+      await sleep((host.adoptMs ?? ADOPT_MS) * 2 ** attempt, context.abortSignal);
+      lead = await adoptable(host.kernel, runTag(id), target);
+    }
     if (!lead)
       return edit(
         runtime,
@@ -547,7 +289,7 @@ function starting(lookup: Lookup, mem: Memory) {
     const item = await itemOf(runtime, id, context);
     if (item?.run) {
       await tell(host, startLick(host, item));
-      if (item.run.stopBy) await killer(host, runTag(id))(at.pgid);
+      if (item.run.stopBy) await stopTree(host, id);
     }
     const { pid, pgid, boot } = at;
     await runtime.commit(async () => next({ phase: 'wait', pid, pgid, boot }), context);
@@ -556,11 +298,29 @@ function starting(lookup: Lookup, mem: Memory) {
   return { prepare, call, begun };
 }
 
-function finishing(lookup: Lookup, mem: Memory) {
+function watchdog(host: SudoRunHost, id: string, paths: string[], signal: AbortSignal) {
+  const cap = host.outputCap ?? OUTPUT_CAP;
+  return (async () => {
+    for (;;) {
+      await sleep(host.pollMs ?? POLL_MS, signal);
+      if ((await outputSize(host.kernel, paths)) <= cap) continue;
+      await stopTree(host, id);
+      return cap;
+    }
+  })().catch(() => undefined);
+}
+
+function finishing(lookup: Lookup, mem: Memory, swept: (host: SudoRunHost) => void) {
   const { ends, watcher, release } = mem;
   const now = nowOf;
 
-  async function exitOf(host: SudoRunHost, id: string, pid: number, context: Context) {
+  async function exitOf(
+    host: SudoRunHost,
+    id: string,
+    pid: number,
+    paths: string[],
+    context: Context
+  ) {
     const seen = await watcher(host, id);
     const end = ends.get(id)?.then(
       (exit) => ({ status: exit.status, ...(exit.signal ? { signal: exit.signal } : {}) }),
@@ -571,12 +331,15 @@ function finishing(lookup: Lookup, mem: Memory) {
     const quit = () => polling.abort(signal?.reason);
     signal?.addEventListener('abort', quit, { once: true });
     if (signal?.aborted) quit();
+    const capped = watchdog(host, id, paths, polling.signal);
     try {
-      return await Promise.race([
+      const exit = await Promise.race([
         seen.waitFor(pid),
         ...(end ? [end] : []),
         gone(host.kernel, pid, host.pollMs ?? POLL_MS, polling.signal),
       ]);
+      polling.abort();
+      return { exit, cap: await capped };
     } finally {
       signal?.removeEventListener('abort', quit);
       polling.abort();
@@ -585,12 +348,15 @@ function finishing(lookup: Lookup, mem: Memory) {
 
   async function wait(
     id: string,
-    at: { pid: number; boot: string | null },
+    at: { pid: number; pgid: number; boot: string | null },
     runtime: Runtime,
     context: Context
   ) {
     const host = await lookup();
-    if (at.boot !== host.boot) {
+    if (knownBoots(at.boot, host.boot) && at.boot !== host.boot) {
+      const left = await tagged(host.kernel, runTag(id));
+      if (left?.length)
+        return runtime.commit(async () => next({ ...at, phase: 'wait', boot: host.boot }), context);
       await release(id);
       return edit(
         runtime,
@@ -601,14 +367,21 @@ function finishing(lookup: Lookup, mem: Memory) {
       );
     }
     try {
-      const exit = await exitOf(host, id, at.pid, context);
+      const item = await itemOf(runtime, id, context);
+      const paths = [item?.run?.stdout, item?.run?.stderr].filter((path): path is string => !!path);
+      const { exit, cap } = await exitOf(host, id, at.pid, paths, context);
+      const left = ((await tagged(host.kernel, runTag(id))) ?? [])
+        .map((row) => row.pid)
+        .filter((pid) => pid !== at.pid);
       await edit(
         runtime,
         id,
         (kept) => {
-          ended(kept, kept.stopBy ? 'stopped' : 'done', now(host));
+          ended(kept, kept.stopBy || cap ? 'stopped' : 'done', now(host));
           if (exit.status !== undefined) kept.status = exit.status;
           if (exit.signal) kept.signal = exit.signal;
+          if (cap) kept.capped = cap;
+          if (left.length) kept.survivors = left;
         },
         next({ phase: 'ended' }),
         context
@@ -622,14 +395,15 @@ function finishing(lookup: Lookup, mem: Memory) {
     const host = await lookup();
     const item = await itemOf(runtime, id, context);
     if (item?.run) await tell(host, endLick(host, item));
-    await runtime.commit(async () => DONE, context);
+    const lingering = !!item?.run?.survivors?.length;
+    await runtime.commit(async () => (lingering ? next({ phase: 'linger' }) : DONE), context);
+    if (!lingering) swept(host);
   }
 
   async function abort(id: string, runtime: Runtime, context: Context) {
     const host = await lookup();
     const item = await itemOf(runtime, id, context);
-    const pgid = item?.run?.pgid;
-    if (item && runLive(item) && pgid) await killer(host, runTag(id))(pgid);
+    if (item && (runLive(item) || item.run?.survivors?.length)) await stopTree(host, id);
     await release(id);
     await runtime.commit(async (tx) => {
       const kept = sudoIn((await tx.doc(ApprovalsDoc)).items, id);
@@ -643,9 +417,84 @@ function finishing(lookup: Lookup, mem: Memory) {
   return { wait, report, abort };
 }
 
-function phases(lookup: Lookup) {
-  const mem = memory();
-  return { ...starting(lookup, mem), ...finishing(lookup, mem) };
+async function linger(
+  lookup: Lookup,
+  swept: (host: SudoRunHost) => void,
+  id: string,
+  runtime: Runtime,
+  context: Context
+) {
+  const host = await lookup();
+  const item = await itemOf(runtime, id, context);
+  let shown = (item?.run?.survivors ?? []).join(',');
+  for (;;) {
+    await sleep(host.pollMs ?? POLL_MS, context.abortSignal);
+    const rows = await tagged(host.kernel, runTag(id));
+    if (!rows) continue;
+    const pids = rows.map((row) => row.pid);
+    if (pids.join(',') === shown) continue;
+    shown = pids.join(',');
+    const done = !pids.length;
+    await edit(
+      runtime,
+      id,
+      (kept) => {
+        if (done) delete kept.survivors;
+        else kept.survivors = pids;
+      },
+      done ? DONE : undefined,
+      context
+    );
+    if (!done) continue;
+    swept(host);
+    return;
+  }
+}
+
+function sweeper() {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const sweep = async (host: SudoRunHost) => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    const keep = host.keepMs ?? KEEP_MS;
+    const at = nowOf(host);
+    const items = (await host.harness.snapshot(ApprovalsDoc, BACKGROUND_CONTEXT))?.items ?? [];
+    const kept = items.filter(
+      (item): item is SudoApproval & { run: SudoRun } =>
+        item.kind === 'sudo' &&
+        !!item.run?.stdout &&
+        !item.run.removed &&
+        item.run.endedAt !== undefined &&
+        !runLive(item) &&
+        !item.run.survivors?.length
+    );
+    const due = kept.filter((item) => at - (item.run.endedAt as number) >= keep);
+    for (const item of due) {
+      const paths = [item.run.stdout, item.run.stderr].filter((path): path is string => !!path);
+      const user = item.replay?.user;
+      if (user) await removeOutput(host.kernel, user, paths);
+    }
+    if (due.length)
+      await host.harness.commit(async (tx) => {
+        for (const item of due) {
+          const found = sudoIn((await tx.doc(ApprovalsDoc)).items, item.id)?.run;
+          if (!found) continue;
+          delete found.stdout;
+          delete found.stderr;
+          found.removed = true;
+        }
+      }, BACKGROUND_CONTEXT);
+    const later = kept
+      .filter((item) => !due.includes(item))
+      .map((item) => (item.run.endedAt as number) + keep - at);
+    if (!later.length) return;
+    timer = setTimeout(
+      () => void sweep(host).catch(() => undefined),
+      Math.min(MAX_DELAY, Math.max(0, Math.min(...later)))
+    );
+    (timer as { unref?: () => void }).unref?.();
+  };
+  return (host: SudoRunHost) => void sweep(host).catch(() => undefined);
 }
 
 export function sudoRuns(): SudoRuns {
@@ -657,7 +506,15 @@ export function sudoRuns(): SudoRuns {
       resolve(host);
     };
   });
-  const run = phases(() => bound);
+  const swept = sweeper();
+  const mem = memory();
+  const lookup = () => bound;
+  const run = {
+    ...starting(lookup, mem),
+    ...finishing(lookup, mem, swept),
+    linger: (id: string, runtime: Runtime, context: Context) =>
+      linger(lookup, swept, id, runtime, context),
+  };
   const task = defineTask<Input, Phase, null>({
     name: SUDO_RUN_TASK,
     version: 1,
@@ -671,12 +528,16 @@ export function sudoRuns(): SudoRuns {
       wait: (task, runtime, context) =>
         run.wait(task.input.approval, task.state.checkpoint, runtime, context),
       ended: (task, runtime, context) => run.report(task.input.approval, runtime, context),
+      linger: (task, runtime, context) => run.linger(task.input.approval, runtime, context),
     },
     abort: (task, runtime, context) => run.abort(task.input.approval, runtime, context),
   });
   return {
     extension: defineExtension({ name: SUDO_RUNS, tasks: [task] }),
-    bind: (host) => bind(host),
+    bind: (host) => {
+      bind(host);
+      swept(host);
+    },
     async claim(id, runner, gates, context) {
       const host = held;
       if (!host) return { done: false, error: RUN_REASONS.kernel };
@@ -707,15 +568,19 @@ export function sudoRuns(): SudoRuns {
     async stop(id, runner, context) {
       const host = held;
       if (!host) return { done: false, error: RUN_ERRORS.idle };
-      const pgid = await host.harness.commit(async (tx) => {
+      const found = await host.harness.commit(async (tx) => {
         const item = sudoIn((await tx.doc(ApprovalsDoc)).items, id);
-        if (!item?.run || !runLive(item)) return null;
-        item.run.stopBy = runner.by;
-        return item.run.pgid ?? 0;
+        if (!item?.run) return null;
+        const live = runLive(item);
+        if (live) item.run.stopBy = runner.by;
+        return { live, pid: item.run.pid };
       }, context);
-      if (pgid === null) return { done: false, error: RUN_ERRORS.idle };
-      if (pgid) await killer(host, runTag(id))(pgid);
-      return { done: true, error: null };
+      if (!found) return { done: false, error: RUN_ERRORS.idle };
+      if (found.live && found.pid === undefined) return { done: true, error: null };
+      const sent = await stopTree(host, id);
+      if (sent === 'sent') return { done: true, error: null };
+      if (sent === 'unknown') return { done: false, error: RUN_ERRORS.unseen };
+      return { done: false, error: found.live ? RUN_ERRORS.gone : RUN_ERRORS.idle };
     },
   };
 }
