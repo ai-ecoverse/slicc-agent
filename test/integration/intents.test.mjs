@@ -6,7 +6,7 @@ const chrome = await launch();
 after(() => chrome.close());
 
 const INTENT_DESCRIPTION =
-  'What this call does, as 2–6 words starting with a present participle, in the user\'s language, such as "Backing up the dataset\'s access list". No credentials, secrets or command output.';
+  'What this call does, as 2–6 words starting with a present participle, in the user\'s language, such as "Backing up the dataset\'s access list". At most 80 characters; a longer one is cut. No credentials, secrets or command output.';
 
 const bash = (args) => ({ tool: { name: 'bash', args } });
 const code = (args) => ({ tool: { name: 'codemode', args } });
@@ -149,7 +149,6 @@ test('bash and codemode offer an optional intent as their first property', async
   for (const schema of [on.bash, on.codemode]) {
     assert.deepEqual(schema.properties.intent, {
       type: 'string',
-      maxLength: 120,
       description: INTENT_DESCRIPTION,
     });
     assert.equal(schema.required.includes('intent'), false);
@@ -375,4 +374,23 @@ test("a clean scoop's streamed call that a guest's taint gates before it runs sh
   assert.equal(seen.asked, 'echo scoop-ran');
   assert.deepEqual(seen.title, ['Running echo']);
   assert.deepEqual(seen.reloaded, ['Running echo']);
+});
+
+test('an intent over 80 characters is cut, not refused: the call runs, its SLICC_INTENT is the cut intent and its title shows its start', async (t) => {
+  const page = await chrome.page(t);
+  const long = `Printing ${'a'.repeat(300)}`;
+  await boot(page, [
+    bash({ intent: long, command: 'echo "$SLICC_INTENT"' }),
+    code({ intent: long, code: 'return 1;' }),
+    answer('Done.'),
+  ]);
+  const seen = await staged(page, 'an intent over 80 characters', async () => {
+    await window.agent.send(window.agent.active(), 'Go.');
+    await window.until(() => window.said().includes('Done.'), 'the answer');
+    return { results: window.results(), titles: window.tools().map((tool) => tool.title) };
+  });
+  const cut = long.slice(0, 80);
+  assert.equal(seen.results[0], cut);
+  assert.match(seen.results[1], /^Script completed\n/);
+  assert.deepEqual(seen.titles, [`${cut.slice(0, 59)}…`, `${cut.slice(0, 59)}…`]);
 });

@@ -16,11 +16,9 @@ import { INTENT_TOOLS, intentOf, withoutIntent } from './said.ts';
 export const INTENTS = 'slicc-intents';
 export const INTENT_ENV = 'SLICC_INTENT';
 export const INTENT_DESCRIPTION =
-  'What this call does, as 2–6 words starting with a present participle, in the user\'s language, such as "Backing up the dataset\'s access list". No credentials, secrets or command output.';
+  'What this call does, as 2–6 words starting with a present participle, in the user\'s language, such as "Backing up the dataset\'s access list". At most 80 characters; a longer one is cut. No credentials, secrets or command output.';
 
-export const INTENT_LENGTH = 120;
-
-const INTENT = { type: 'string', maxLength: INTENT_LENGTH, description: INTENT_DESCRIPTION };
+const INTENT = { type: 'string', description: INTENT_DESCRIPTION };
 
 type Schema = { properties?: Record<string, unknown> };
 
