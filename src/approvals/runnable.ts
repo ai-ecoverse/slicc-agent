@@ -56,7 +56,7 @@ export function runnable(item: Approval, now: number, gates: RunGates): Runnable
   if (item.detail.validate || item.replay?.validate) return { reason: RUN_REASONS.validate };
   const stdin = item.replay?.stdin ?? item.detail.stdin;
   if (stdin === 'pipe' || stdin === 'file') return { reason: RUN_REASONS.stdin };
-  if (!item.replay) return { reason: RUN_REASONS.old };
+  if (!item.replay?.rootOnly) return { reason: RUN_REASONS.old };
   if (gates.maxAgeMinutes <= 0) return { reason: RUN_REASONS.off };
   const since = item.decidedAt ?? item.expiresAt;
   if (now - since > gates.maxAgeMinutes * MINUTE) return { reason: tooOld(gates.maxAgeMinutes) };

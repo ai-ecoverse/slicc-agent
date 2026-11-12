@@ -148,6 +148,7 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
             expiresAt,
             always: true,
             stdin: 'none',
+            rootOnly: { '/usr/bin/ls': true, '/': true },
             userWritable: [],
           },
           { signal: stop.signal }
