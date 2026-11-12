@@ -16,6 +16,8 @@ import { splitUser } from '../attachments.ts';
 import {
   ASKED_KIND,
   askedLine,
+  GATED_KIND,
+  type GatedCall,
   GUEST_INPUT_KIND,
   type GuestAsked,
   type GuestInput,
@@ -23,7 +25,9 @@ import {
   type GuestReviewed,
   guestText,
   REVIEWED_KIND,
+  TAINTED_KIND,
 } from '../guests/attribution.ts';
+import { withoutIntent } from '../intent/said.ts';
 import { type Lick, parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
@@ -148,16 +152,21 @@ function shape(name: string, args: Json): Pick<ToolCall, 'input' | 'meta' | 'dif
     const diff = edits(args);
     return { input: path, ...(diff ? { diff } : {}) };
   }
-  return { input: JSON.stringify(args, null, 2) };
+  return { input: JSON.stringify(withoutIntent(name, args), null, 2) };
 }
 
-function toolCall(block: Block): ToolCall {
+type Trust = (callId: string) => boolean;
+
+const NEVER: Trust = () => false;
+
+function toolCall(block: Block, trust: Trust): ToolCall {
   const args = block.arguments ?? {};
   const name = block.name ?? 'tool';
+  const id = block.id ?? '';
   return {
-    id: block.id ?? '',
+    id,
     name,
-    title: toolTitle(name, args),
+    title: toolTitle(name, args, trust(id)),
     ...shape(name, args),
     output: '',
     status: 'running',
@@ -165,10 +174,10 @@ function toolCall(block: Block): ToolCall {
   };
 }
 
-function part(block: Block): MessagePart | undefined {
+function part(block: Block, trust: Trust): MessagePart | undefined {
   if (block.type === 'text') return { type: 'text', text: block.text ?? '' };
   if (block.type === 'thinking') return { type: 'thinking', text: block.thinking ?? '' };
-  if (block.type === 'toolCall') return { type: 'tool', tool: toolCall(block) };
+  if (block.type === 'toolCall') return { type: 'tool', tool: toolCall(block, trust) };
   return undefined;
 }
 
@@ -303,10 +312,13 @@ function sprinkleMessage(id: string, entry: EntryRecord): AssistantMessage {
 export function assistant(
   id: string,
   message: ModelMessage,
-  status?: AssistantStatus
+  status?: AssistantStatus,
+  trust: Trust = NEVER
 ): AssistantMessage {
   const blocks = Array.isArray(message.content) ? message.content : [];
-  const parts = blocks.map(part).filter((item): item is MessagePart => item !== undefined);
+  const parts = blocks
+    .map((block) => part(block, trust))
+    .filter((item): item is MessagePart => item !== undefined);
   if (message.errorMessage) parts.push(errorPart(message.errorMessage, message.provider));
   const used = usage(message);
   return {
@@ -618,6 +630,7 @@ function entryMessage(
     decisions: ReadonlyMap<string, LickDecision>;
     origins: ReadonlyMap<number, From>;
     outcomes: ReadonlyMap<string, GuestOutcome>;
+    trust: { tainted: boolean; intents: boolean; gated: ReadonlySet<string> };
   }
 ): void {
   const id = `e${entry.id}`;
@@ -627,6 +640,7 @@ function entryMessage(
     if (kind) entryMessage({ ...entry, kind }, out, calls, delivered, notes);
     return;
   }
+  if (entry.kind === TAINTED_KIND) notes.trust.tainted = true;
   if (entry.kind === 'slicc.rewound') out.push(rewound(id, entry));
   if (entry.kind === 'slicc.thawed') out.push(thawed(id, entry));
   else if (entry.kind === SECRETS_KIND) out.push(secrets(id, entry));
@@ -640,7 +654,8 @@ function entryMessage(
   else if (entry.kind === GUEST_INPUT_KIND && model)
     out.push(guestUser(id, model, delivered, entry.data));
   else if (entry.kind === 'pi.assistant' && model) {
-    const message = assistant(id, model);
+    const message = assistant(id, model, undefined, trusted(notes.trust));
+    notes.trust.tainted = false;
     out.push(withoutLickTools(message));
     for (const [key, value] of tools([message])) calls.set(key, value);
   } else if (entry.kind === 'pi.tool-result' && model) settle(calls, model, entry.data);
@@ -653,7 +668,24 @@ const slotStatus: Record<string, ToolStatus> = {
   done: 'done',
 };
 
-function live(view: ConversationView, out: Message[], calls: Map<string, ToolCall>): void {
+function trusted(trust: { tainted: boolean; intents: boolean; gated: ReadonlySet<string> }) {
+  if (!trust.intents || trust.tainted) return NEVER;
+  return (callId: string) => !trust.gated.has(callId);
+}
+
+function gatedCalls(entries: readonly EntryRecord[]): Set<string> {
+  const found = new Set<string>();
+  for (const entry of entries)
+    if (entry.kind === GATED_KIND) found.add(String((entry.data as Partial<GatedCall>)?.callId));
+  return found;
+}
+
+function live(
+  view: ConversationView,
+  out: Message[],
+  calls: Map<string, ToolCall>,
+  trust: Trust
+): void {
   const state = view.docs['pi.live'] as Live | undefined;
   for (const slot of state?.tools ?? []) {
     const call = calls.get(slot.callId);
@@ -663,7 +695,7 @@ function live(view: ConversationView, out: Message[], calls: Map<string, ToolCal
     }
   }
   const partial = state?.generation?.message;
-  if (partial) out.push(assistant('live', partial, 'streaming'));
+  if (partial) out.push(assistant('live', partial, 'streaming', trust));
   for (const compaction of state?.compactions ?? []) {
     out.push({
       id: `compaction-${compaction.taskId}`,
@@ -688,7 +720,8 @@ function live(view: ConversationView, out: Message[], calls: Map<string, ToolCal
 
 export function toMessages(
   view: ConversationView | undefined,
-  deliveries: Readonly<Record<string, Delivered>> = {}
+  deliveries: Readonly<Record<string, Delivered>> = {},
+  intents = false
 ): Message[] {
   const out: Message[] = [];
   if (!view) return out;
@@ -697,6 +730,7 @@ export function toMessages(
     decisions: lickDecisions(view.entries),
     origins: origins(view.entries),
     outcomes: reviewed(view.entries),
+    trust: { tainted: view.before !== undefined, intents, gated: gatedCalls(view.entries) },
   };
   let previous: EntryRecord | undefined;
   for (const entry of view.entries) {
@@ -704,7 +738,7 @@ export function toMessages(
     entryMessage(entry, out, calls, deliveries[String(entry.id)] ?? steered, notes);
     previous = entry;
   }
-  live(view, out, calls);
+  live(view, out, calls, trusted(notes.trust));
   return out;
 }
 

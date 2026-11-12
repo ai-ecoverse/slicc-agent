@@ -4,6 +4,11 @@ export const ASKED_CLIP = 200;
 
 export const REVIEWED_KIND = 'slicc.guest-reviewed';
 
+export const TAINTED_KIND = 'slicc.tainted';
+export const GATED_KIND = 'slicc.gated-call';
+
+export type GatedCall = { callId: string };
+
 export type GuestAsked = { seat: string; name: string; review: string; text: string; at: number };
 
 export type GuestOutcome = 'approved' | 'rejected' | 'unanswered' | 'withdrawn';

@@ -4,6 +4,7 @@ import { type ToolRegistration, type Wrap, wrapTool } from '@earendil-works/pi-d
 import type { ExecutionEnv, ShellExecOptions } from '@earendil-works/pi-durable/env';
 
 import { gatedRun } from '../guests/guard.ts';
+import { withExec } from '../kernel/with-exec.ts';
 import { fitted, MAX_BASE64, MAX_WIDTH, mimeOf, type Shrink } from './fit.ts';
 
 export const MAX_IMAGES = 4;
@@ -101,13 +102,7 @@ function watched(env: ExecutionEnv, markers: Markers): ExecutionEnv {
     };
     return env.exec(command, { ...options, onOutput }, context);
   };
-  return new Proxy(env, {
-    get(target, key) {
-      if (key === 'exec') return exec;
-      const value = Reflect.get(target, key, target);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
+  return withExec(env, exec);
 }
 
 export async function shown(

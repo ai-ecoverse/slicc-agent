@@ -304,6 +304,18 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return entries.map((entry) => fresh.get(entry.id) ?? entry);
   }
 
+  #shown(agentId: string, view: ConversationView): ConversationView {
+    const entries = this.#entries(agentId, view);
+    if (!this.#paged() || this.#transcript(agentId, view).kept.earlier) return { ...view, entries };
+    const { before: _, ...whole } = view;
+    return { ...whole, entries };
+  }
+
+  #intents(agentId: string, view: ConversationView): boolean {
+    if (this.#connection.settings?.state.value?.toolIntents !== true) return false;
+    return !this.#paged() || !this.#transcript(agentId, view).kept.gap;
+  }
+
   #fill(agentId: string, held: Held): void {
     if (held.filling || held.failed) return;
     held.filling = true;
@@ -324,8 +336,9 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const view = this.#view(agentId);
     if (!view) return false;
     const before = this.#messages.get(agentId) ?? [];
-    const shown = { ...view, entries: this.#entries(agentId, view) };
-    const after = this.#labelled(toMessages(shown, this.#connection.deliveries.value));
+    const shown = this.#shown(agentId, view);
+    const intents = this.#intents(agentId, view);
+    const after = this.#labelled(toMessages(shown, this.#connection.deliveries.value, intents));
     this.#messages.set(agentId, after);
     if (older) this.#saw(agentId, after, before[0]?.id);
     if (before.length !== after.length) this.emit('messages', agentId);

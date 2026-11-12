@@ -619,6 +619,7 @@ export interface SettingsState {
   budgets?: BudgetState[];
   moved?: { kind: 'model' | 'mcp'; label: string }[];
   labels?: Record<string, string>;
+  toolIntents?: boolean;
 }
 
 export interface AgentSettings {
