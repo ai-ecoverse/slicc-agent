@@ -15,11 +15,18 @@ import {
 } from '../guests/policy.ts';
 import type { ApprovalKind } from './record.ts';
 
-export type SudoPolicy = { approver: 'user' | 'agent' };
+export type RunLatePolicy = { maxAgeMinutes: number };
+
+export type SudoPolicy = { approver: 'user' | 'agent'; runLate: RunLatePolicy };
 
 export type ApprovalPolicy = { guests: GuestPolicy; sudo: SudoPolicy };
 
-export type ApprovalPolicyChange = { guests?: GuestPolicyChange; sudo?: Partial<SudoPolicy> };
+export type SudoPolicyChange = {
+  approver?: SudoPolicy['approver'];
+  runLate?: Partial<RunLatePolicy>;
+};
+
+export type ApprovalPolicyChange = { guests?: GuestPolicyChange; sudo?: SudoPolicyChange };
 
 export type ApprovalPolicySet =
   | { policy: ApprovalPolicy; error: null }
@@ -27,8 +34,10 @@ export type ApprovalPolicySet =
 
 export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = {
   guests: DEFAULT_GUEST_POLICY,
-  sudo: { approver: 'user' },
+  sudo: { approver: 'user', runLate: { maxAgeMinutes: 1440 } },
 };
+
+export const MAX_RUN_LATE_MINUTES = 10_080;
 
 type Overrides = Partial<Record<keyof ApprovalPolicy, JsonObject>>;
 
@@ -42,10 +51,32 @@ export const ApprovalPolicyDoc = defineDoc<{ overrides: Overrides }>({
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
-function changedSudo(next: ApprovalPolicy, change: unknown): string | null {
-  if (!change || typeof change !== 'object' || Array.isArray(change))
-    return 'The sudo policy is an object of policy entries.';
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+function changedRunLate(next: ApprovalPolicy, change: unknown): string | null {
+  if (!isObject(change)) return 'sudo.runLate is an object of policy entries.';
   for (const [name, value] of Object.entries(change)) {
+    if (name !== 'maxAgeMinutes') return `There is no sudo.runLate policy entry ${name}.`;
+    if (
+      !Number.isInteger(value) ||
+      (value as number) < 0 ||
+      (value as number) > MAX_RUN_LATE_MINUTES
+    )
+      return `sudo.runLate.maxAgeMinutes is a whole number of minutes from 0 to ${MAX_RUN_LATE_MINUTES}.`;
+    next.sudo.runLate.maxAgeMinutes = value as number;
+  }
+  return null;
+}
+
+function changedSudo(next: ApprovalPolicy, change: unknown): string | null {
+  if (!isObject(change)) return 'The sudo policy is an object of policy entries.';
+  for (const [name, value] of Object.entries(change)) {
+    if (name === 'runLate') {
+      const error = changedRunLate(next, value);
+      if (error) return error;
+      continue;
+    }
     if (name !== 'approver') return `There is no sudo policy entry ${name}.`;
     if (value !== 'user' && value !== 'agent')
       return 'A sudo request is approved by user or agent.';
@@ -72,13 +103,18 @@ export function changedPolicy(base: ApprovalPolicy, change: unknown): ApprovalPo
 
 export function resolvedPolicy(overrides: Overrides): ApprovalPolicy {
   const guests = (overrides.guests ?? {}) as Partial<GuestPolicy>;
+  const sudo = (overrides.sudo ?? {}) as Partial<SudoPolicy>;
   return copy({
     guests: {
       ...DEFAULT_GUEST_POLICY,
       ...guests,
       always: { ...DEFAULT_GUEST_POLICY.always, ...guests.always },
     },
-    sudo: { ...DEFAULT_APPROVAL_POLICY.sudo, ...overrides.sudo },
+    sudo: {
+      ...DEFAULT_APPROVAL_POLICY.sudo,
+      ...sudo,
+      runLate: { ...DEFAULT_APPROVAL_POLICY.sudo.runLate, ...sudo.runLate },
+    },
   });
 }
 
@@ -94,8 +130,8 @@ export function overridden(
     const resolved = policy[key] as unknown as JsonObject;
     for (const name of Object.keys(entries))
       into[name] = (
-        name === 'always'
-          ? { ...(into.always as object), ...(entries.always as object) }
+        name === 'always' || name === 'runLate'
+          ? { ...(into[name] as object), ...(entries[name] as object) }
           : resolved[name]
       ) as JsonValue;
     next[key] = into;

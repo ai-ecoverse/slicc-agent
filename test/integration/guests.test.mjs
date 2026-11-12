@@ -514,7 +514,7 @@ test('the approval policy: by default a guest seat with tools off is refused, an
   assert.match(result.asGuest.policy, /^EACCES /);
   assert.equal(result.policy.guests.manageGuests, 'deny');
   assert.deepEqual(result.policy.guests.allowedToolGates, ['user', 'agent', 'scoop']);
-  assert.deepEqual(result.policy.sudo, { approver: 'user' });
+  assert.deepEqual(result.policy.sudo, { approver: 'user', runLate: { maxAgeMinutes: 1440 } });
 });
 
 test('seats survive a worker restart: a revoked seat stays refused with its epoch bumped, a live one admits again, and an expiring one closes its guest and leaves the list', async (t) => {
