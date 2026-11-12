@@ -127,12 +127,23 @@ export function messageOf(error: unknown): string {
   return text.trim() || 'the kernel refused to run it';
 }
 
-async function homeOf(kernel: RunKernel, user: string): Promise<string> {
+async function passwdOf(kernel: RunKernel, user: string): Promise<string[] | undefined> {
   const passwd = await kernel.fs.readText('/etc/passwd').catch(() => '');
-  const line = passwd.split('\n').find((entry) => entry.startsWith(`${user}:`));
-  const home = line?.split(':')[5];
+  return passwd
+    .split('\n')
+    .find((entry) => entry.startsWith(`${user}:`))
+    ?.split(':');
+}
+
+async function homeOf(kernel: RunKernel, user: string): Promise<string> {
+  const home = (await passwdOf(kernel, user))?.[5];
   if (home) return home.replace(/\/+$/, '') || '/';
   return user === 'root' ? '/root' : `/home/${user}`;
+}
+
+async function uidOf(kernel: RunKernel, user: string): Promise<number | undefined> {
+  const uid = Number((await passwdOf(kernel, user))?.[2] ?? (user === 'root' ? 0 : NaN));
+  return Number.isInteger(uid) ? uid : undefined;
 }
 
 function aborted(signal: AbortSignal | undefined): Promise<never> {
@@ -204,25 +215,55 @@ async function gone(kernel: RunKernel, pid: number, ms: number, signal: AbortSig
 
 const decoder = () => new TextDecoder('utf-8', { fatal: false });
 
-async function tailOf(kernel: RunKernel, path: string | undefined): Promise<string | null> {
-  if (!path) return null;
+export const READ_MS = 5000;
+
+const parentOf = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
+
+async function plain(kernel: RunKernel, path: string): Promise<boolean> {
+  const [file, dir] = await Promise.all([kernel.fs.lstat(path), kernel.fs.lstat(parentOf(path))]);
+  return file.isFile && !file.isSymbolicLink && dir.isDirectory && !dir.isSymbolicLink;
+}
+
+async function readAs(
+  kernel: RunKernel,
+  user: string,
+  path: string,
+  ms: number
+): Promise<Uint8Array | null> {
+  const parts: Uint8Array[] = [];
+  const tail = await kernel.spawn(['tail', '-c', String(TAIL_BYTES + 1), path], {
+    user,
+    cwd: '/',
+    onStdout: (chunk) => parts.push(chunk.slice()),
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      void Promise.resolve(tail.signal('SIGKILL')).catch(() => undefined);
+      resolve(null);
+    }, ms);
+  });
+  const code = await Promise.race([tail.exited, late]).finally(() => clearTimeout(timer));
+  if (code !== 0) return null;
+  return new Uint8Array(parts.flatMap((part) => [...part]));
+}
+
+export async function tailOf(
+  kernel: RunKernel,
+  user: string | undefined,
+  path: string | undefined,
+  ms = READ_MS
+): Promise<string | null> {
+  if (!user || !path?.startsWith('/')) return null;
   try {
-    const stat = await kernel.fs.stat(path);
-    let bytes: Uint8Array;
-    if (stat.size <= 65_536) bytes = (await kernel.fs.readFile(path)).slice(-TAIL_BYTES);
-    else {
-      const parts: Uint8Array[] = [];
-      const tail = await kernel.spawn(['tail', '-c', String(TAIL_BYTES), path], {
-        cwd: '/',
-        onStdout: (chunk) => parts.push(chunk.slice()),
-      });
-      await tail.exited;
-      bytes = new Uint8Array(parts.flatMap((part) => [...part]));
-    }
+    if (!(await plain(kernel, path))) return null;
+    const bytes = await readAs(kernel, user, path, ms);
+    if (!bytes) return null;
+    const cut = bytes.length > TAIL_BYTES;
     const text = decoder()
-      .decode(bytes)
+      .decode(cut ? bytes.slice(-TAIL_BYTES) : bytes)
       .replace(/^\uFFFD+/, '');
-    return stat.size > TAIL_BYTES ? `…${text}` : text;
+    return cut ? `…${text}` : text;
   } catch {
     return null;
   }
@@ -319,12 +360,17 @@ export async function endLick(host: SudoRunHost, item: SudoApproval): Promise<Li
   const run = item.run as SudoRun;
   const ran = outcome(run);
   const took = run.endedAt !== undefined ? ` after ${duration(run.endedAt - run.at)}` : '';
+  const user = item.replay?.user;
   const [stdout, stderr] = await Promise.all([
-    tailOf(host.kernel, run.stdout),
-    tailOf(host.kernel, run.stderr),
+    tailOf(host.kernel, user, run.stdout),
+    tailOf(host.kernel, user, run.stderr),
   ]);
   const shown = (name: string, text: string | null) =>
-    text === null ? [] : text ? [`${name} (last 2 KiB):`, text] : [`${name}: empty`];
+    text === null
+      ? [`${name}: output unavailable`]
+      : text
+        ? [`${name} (last 2 KiB):`, text]
+        : [`${name}: empty`];
   return {
     ...(await lickBase(host, item)),
     eventId: `${item.id}:end`,
@@ -345,11 +391,17 @@ async function tell(host: SudoRunHost, made: Promise<LickEvent>) {
   if (event) await host.licks?.deliver(event, BACKGROUND_CONTEXT).catch(() => undefined);
 }
 
-function killer(host: SudoRunHost) {
+export async function leads(kernel: RunKernel, tag: string, pgid: number): Promise<boolean> {
+  const rows = await kernel.ps?.().catch(() => undefined);
+  return !!rows?.some((row) => row.pid === pgid && row.state !== 'Z' && tagsOf(row).includes(tag));
+}
+
+function killer(host: SudoRunHost, tag: string) {
   return async (pgid: number) => {
+    if (!(await leads(host.kernel, tag, pgid))) return;
     await host.kernel.kill?.(-pgid, 'SIGTERM').catch(() => undefined);
     setTimeout(() => {
-      void alive(host.kernel, pgid).then((up) =>
+      void leads(host.kernel, tag, pgid).then((up) =>
         up ? host.kernel.kill?.(-pgid, 'SIGKILL').catch(() => undefined) : undefined
       );
     }, host.killMs ?? KILL_MS);
@@ -411,9 +463,17 @@ function starting(lookup: Lookup, mem: Memory) {
 
   async function adopt(id: string, boot: string | null, runtime: Runtime, context: Context) {
     const host = await lookup();
+    const item = await itemOf(runtime, id, context);
+    const uid = await uidOf(host.kernel, item?.replay?.target ?? 'root');
     const rows = (await host.kernel.ps?.().catch(() => undefined)) ?? [];
     const mine = rows
-      .filter((row) => row.state !== 'Z' && tagsOf(row).includes(runTag(id)))
+      .filter(
+        (row) =>
+          row.state !== 'Z' &&
+          uid !== undefined &&
+          row.uid === uid &&
+          tagsOf(row).includes(runTag(id))
+      )
       .sort((a, b) => a.pid - b.pid);
     const lead = mine.find((row) => row.pid === row.pgid) ?? mine[0];
     if (!lead)
@@ -487,7 +547,7 @@ function starting(lookup: Lookup, mem: Memory) {
     const item = await itemOf(runtime, id, context);
     if (item?.run) {
       await tell(host, startLick(host, item));
-      if (item.run.stopBy) await killer(host)(at.pgid);
+      if (item.run.stopBy) await killer(host, runTag(id))(at.pgid);
     }
     const { pid, pgid, boot } = at;
     await runtime.commit(async () => next({ phase: 'wait', pid, pgid, boot }), context);
@@ -569,7 +629,7 @@ function finishing(lookup: Lookup, mem: Memory) {
     const host = await lookup();
     const item = await itemOf(runtime, id, context);
     const pgid = item?.run?.pgid;
-    if (item && runLive(item) && pgid) await killer(host)(pgid);
+    if (item && runLive(item) && pgid) await killer(host, runTag(id))(pgid);
     await release(id);
     await runtime.commit(async (tx) => {
       const kept = sudoIn((await tx.doc(ApprovalsDoc)).items, id);
@@ -654,7 +714,7 @@ export function sudoRuns(): SudoRuns {
         return item.run.pgid ?? 0;
       }, context);
       if (pgid === null) return { done: false, error: RUN_ERRORS.idle };
-      if (pgid) await killer(host)(pgid);
+      if (pgid) await killer(host, runTag(id))(pgid);
       return { done: true, error: null };
     },
   };

@@ -1126,3 +1126,136 @@ test('a replay whose script changed since the request is refused by the kernel, 
   assert.equal(seen.run.error, 'sudo: /home/cone/job.sh changed since it was requested');
   assert.equal(seen.licks, 0);
 });
+
+async function lateRun(t, { argv, swap, stop, restart, secret }) {
+  const page = await chrome.page(t);
+  const persist = restart ? `&persist=/.slicc/late-run-${Date.now()}` : '';
+  await boot(page, {
+    worker: 'main-worker.js',
+    query: `?answer=Noted.&answer=Noted.&answer=Noted.${persist}`,
+  });
+  return staged(
+    page,
+    'a late sudo run',
+    async ({ argv, swap, stop, restart, secret }) => {
+      const { owner, until, kernel, timeOut } = globalThis.t;
+      const sh = (script, user) => kernel.run(['bash', '-c', script], user ? { user } : {});
+      if (secret)
+        await sh(
+          `mkdir -p /srv/vault && chmod 755 /srv/vault && printf '%s' "${secret}" > /srv/vault/secret && chmod 600 /srv/vault/secret`
+        );
+      let local = await owner.connect();
+      let model = createAgentModel(local);
+      const { id } = await timeOut(local, argv);
+      const record = () => model.approvals.history().find((entry) => entry.approval.id === id);
+      await until(() => record()?.runnable === true, 'Run now to be offered');
+      await model.approvals.run(id);
+      await until(() => record()?.run?.state === 'running', 'the run to start');
+      const { stdout } = record().run;
+      const dir = stdout.slice(0, stdout.lastIndexOf('/'));
+      const swaps = {
+        link: `rm -f ${stdout} && ln -s /srv/vault/secret ${stdout}`,
+        hard: `rm -f ${stdout} && ln /srv/vault/secret ${stdout}`,
+        dir: `mv ${dir} ${dir}.old && ln -s /srv/vault ${dir}`,
+      };
+      let swapped = null;
+      if (swap) {
+        if (swap === 'dir')
+          await sh(`cp /srv/vault/secret /srv/vault/${id}.out && chmod 600 /srv/vault/${id}.out`);
+        const done = await sh(swaps[swap], 'cone');
+        swapped = { status: done.status, stderr: done.stderr };
+      }
+      const at = Date.now();
+      if (stop) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await model.approvals.stopRun(id);
+      }
+      if (restart) {
+        await local.close();
+        if (restart === 'gone') {
+          await owner.release();
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+        }
+        const restarted = owner.restart();
+        await restarted;
+        local = await owner.connect();
+        model = createAgentModel(local);
+      }
+      await until(() => record()?.run?.endedAt, 'the run to end');
+      const took = Date.now() - at;
+      const licks = () =>
+        (local.transcript.value?.entries ?? [])
+          .filter((entry) => entry.kind === 'pi.user')
+          .map((entry) => JSON.stringify(entry.model?.[0]?.content ?? ''))
+          .filter((text) => text.includes('channel=\\"sudo-run\\"'));
+      await until(
+        () => licks().some((text) => text.includes('late sudo run ended')),
+        'the end lick'
+      );
+      const vault = secret ? (await sh('cat /srv/vault/secret')).stdout : null;
+      const result = {
+        run: record().run,
+        took,
+        swapped,
+        end: licks().find((text) => text.includes('late sudo run ended')),
+        all: JSON.stringify(local.transcript.value?.entries ?? []),
+        vault,
+      };
+      await local.close();
+      await owner.release();
+      return result;
+    },
+    { argv, swap, stop, restart, secret }
+  );
+}
+
+const MARK = 'ROOT-ONLY-SECRET-7f3a';
+
+for (const [name, swap, size] of [
+  ['the output file replaced by a symlink to a root-only file', 'link', 'small'],
+  ['the output file replaced by a symlink to a root-only file over 64 KiB', 'link', 'large'],
+  ['the output file replaced by a hardlink to a root-only file', 'hard', 'small'],
+  ['the sudo-runs directory replaced by a symlink to a root-only directory', 'dir', 'small'],
+]) {
+  test(`Run now reads output as the requester: ${name} never reaches the end lick`, async (t) => {
+    const secret = size === 'large' ? `${'s'.repeat(70_000)}${MARK}` : MARK;
+    const seen = await lateRun(t, { argv: ['sleep', '2'], swap, secret });
+    assert.equal(seen.run.state, 'done');
+    assert.equal(seen.run.status, 0);
+    assert.match(seen.end, /stdout: output unavailable/);
+    assert.ok(!seen.all.includes(MARK), 'the root-only content stays out of the transcript');
+    assert.equal(seen.vault, secret);
+  });
+}
+
+test('Stop ends a late run with SIGTERM to its group', async (t) => {
+  const seen = await lateRun(t, { argv: ['sleep', '30'], stop: true });
+  assert.equal(seen.run.state, 'stopped');
+  assert.equal(seen.run.signal, 'SIGTERM');
+  assert.ok(seen.took < 5000, `ended in ${seen.took} ms`);
+  assert.match(seen.end, /was stopped by the owner \(SIGTERM\)/);
+});
+
+test('Stop sends SIGKILL 5 s later to a late run that ignores SIGTERM', async (t) => {
+  const seen = await lateRun(t, {
+    argv: ['bash', '-c', "trap '' TERM; while true; do sleep 1; done"],
+    stop: true,
+  });
+  assert.equal(seen.run.state, 'stopped');
+  assert.equal(seen.run.signal, 'SIGKILL');
+  assert.ok(seen.took >= 5000, `ended in ${seen.took} ms`);
+});
+
+test('a late run that exits after a worker restart is picked up with its status', async (t) => {
+  const seen = await lateRun(t, { argv: ['bash', '-c', 'sleep 4; exit 7'], restart: 'exit' });
+  assert.equal(seen.run.state, 'done');
+  assert.equal(seen.run.status, 7);
+  assert.match(seen.end, /exited with status 7/);
+});
+
+test('a late run that ends while the worker restarts is done with its status unknown', async (t) => {
+  const seen = await lateRun(t, { argv: ['sleep', '2'], restart: 'gone' });
+  assert.equal(seen.run.state, 'done');
+  assert.equal(seen.run.status, undefined);
+  assert.match(seen.end, /status unknown/);
+});
