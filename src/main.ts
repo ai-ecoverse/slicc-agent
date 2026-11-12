@@ -38,6 +38,7 @@ import { lateGelatiere } from './gelatiere/index.ts';
 import { runTag } from './guests/tags.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { imageReads } from './images/index.ts';
+import { intentExtension } from './intent/index.ts';
 import { createActivity } from './kernel/activity.ts';
 import { type AgentUsers, agentUsers, modeOf, warnSupport } from './kernel/agent-users.ts';
 import type { KernelClient } from './kernel/client.ts';
@@ -95,7 +96,7 @@ import {
   transportName,
 } from './system.ts';
 import { titlesExtension } from './titles/extension.ts';
-import { labeler, settingsText, titler } from './titles/generate.ts';
+import { intentsOn, labeler, settingsText, titler } from './titles/generate.ts';
 import { attachLabels } from './titles/labels.ts';
 import { type KernelPorts, kernelPorts, serveConnections, type WorkerScope } from './worker.ts';
 
@@ -169,15 +170,19 @@ function privateStore(env: SliccKernelEnv, serverId: string): Promise<unknown> {
   );
 }
 
+async function settingsFile(client: KernelClient, dir = `${HOME}/.pi/agent`) {
+  const settings = await client.fs.readFile(`${dir}/settings.json`).catch(() => undefined);
+  return settings === undefined ? undefined : new TextDecoder().decode(settings);
+}
+
 export async function codemodeTools(
   client: KernelClient,
   options: AgentWorkerOptions,
   native: typeof fetch,
   extra: Parameters<typeof codemodeTool>[0]['extra'],
-  dir = `${HOME}/.pi/agent`
+  dir?: string
 ): Promise<{ tools: ToolRegistration[]; toolSearch: boolean }> {
-  const settings = await client.fs.readFile(`${dir}/settings.json`).catch(() => undefined);
-  const text = settings === undefined ? undefined : new TextDecoder().decode(settings);
+  const text = await settingsFile(client, dir);
   const toolSearch = !disabledBySettings(text, TOOL_SEARCH_TOOL_NAME);
   if (disabledBySettings(text)) return { tools: [], toolSearch };
   const sandbox = sandboxFactory(
@@ -378,7 +383,7 @@ function modelsOfAgent(
 async function settingsOf(
   made: Awaited<ReturnType<typeof modelsOf>> & { reach: Reach },
   mcp: McpAccounts,
-  moved: { agent: Agent; vault: Vault; wiped: Wiped; licks: Licks }
+  moved: { agent: Agent; vault: Vault; wiped: Wiped; licks: Licks; intents: boolean }
 ) {
   const { models, records, fields, providers, reach } = made;
   const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
@@ -387,6 +392,7 @@ async function settingsOf(
     moved: keys,
     reach,
     vault: moved.vault,
+    intents: moved.intents,
   });
   settings.state.subscribe(() => void moved.licks.flush(BACKGROUND_CONTEXT).catch(() => undefined));
   return settings;
@@ -512,6 +518,8 @@ export async function start(
   const chosen = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   const codemode = chosen.tools;
   registry.install(codemodeExtension(codemode));
+  const intents = intentsOn(await settingsFile(client, at.agentDir));
+  registry.install(intentExtension([...coding, ...codemode], intents));
   if (chosen.toolSearch) registry.install(createToolSearchExtension());
   const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));
@@ -594,7 +602,8 @@ export async function start(
     },
     BACKGROUND_CONTEXT
   );
-  const settings = await settingsOf(ready, mcpRuntime, { agent, vault, wiped, licks: licks.licks });
+  const moved = { agent, vault, wiped, licks: licks.licks, intents };
+  const settings = await settingsOf(ready, mcpRuntime, moved);
   const pages = createPages({ claim: sprinkles.claim });
   const runtime = await scoops.attach(
     {
@@ -645,7 +654,7 @@ export async function start(
     freezer,
     changes: attachChanges({ agents: agent.agents, env: home, reloadMs: CHANGES_MS }),
     pages,
-    labels: await attachLabels({ ...agent, label: titles.label, vault: vault.state }),
+    labels: await attachLabels({ ...agent, label: titles.label, vault: vault.state, intents }),
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
     secrets: hostSecrets(vault, names, [names, records, endpoints]),

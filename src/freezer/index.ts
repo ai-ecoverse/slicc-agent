@@ -16,6 +16,7 @@ import {
   live,
   type ScoopRecord,
 } from '../agents.ts';
+import { withoutIntent } from '../intent/said.ts';
 import { HOME } from '../kernel/env.ts';
 import { resolve } from '../kernel/paths.ts';
 import { type Layout, LEGACY, ROOT_HOME, ROOT_USER } from '../layout.ts';
@@ -139,7 +140,10 @@ function calls(entry: EntryRecord): string[] {
   if (!Array.isArray(content)) return [];
   return (content as { type: string; name?: string; arguments?: unknown }[])
     .filter((part) => part.type === 'toolCall')
-    .map((part) => `- \`${part.name}\` ${JSON.stringify(part.arguments ?? {})}`);
+    .map(
+      (part) =>
+        `- \`${part.name}\` ${JSON.stringify(withoutIntent(String(part.name), part.arguments ?? {}))}`
+    );
 }
 
 export function markdown(

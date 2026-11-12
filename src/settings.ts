@@ -405,6 +405,7 @@ export async function createAgentSettings(
     flows?: DeviceFlows;
     grok?: UsageReader;
     now?: () => number;
+    intents?: boolean;
   } = {}
 ): Promise<AgentSettings> {
   const { mcp, moved, reach, vault } = options;
@@ -458,6 +459,7 @@ export async function createAgentSettings(
       providers: offered(providers, blocked),
       budget: held[0] ?? null,
       budgets: held,
+      ...(options.intents ? { toolIntents: true } : {}),
       ...(moved?.state.value?.length
         ? { moved: moved.state.value.map((name) => ({ ...name })) }
         : {}),

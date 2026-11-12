@@ -1,3 +1,4 @@
+import { intentOf } from '../intent/said.ts';
 import { mcpLabel } from '../mcp/label.ts';
 import { redactSecrets } from '../memory/format.ts';
 
@@ -43,22 +44,24 @@ export function commandTitle(command: string): string {
         .filter((name) => name !== undefined)
     ),
   ];
-  if (!names.length) return 'Run a command';
+  if (!names.length) return 'Running a command';
   const shown = names.slice(0, PROGRAMS_SHOWN);
   const more = names.length > PROGRAMS_SHOWN ? [...shown, 'more'] : shown;
-  return `Run ${listed(more)}`;
+  return `Running ${listed(more)}`;
 }
 
-export function toolTitle(name: string, args: Json | undefined): string {
+export function toolTitle(name: string, args: Json | undefined, trusted = false): string {
+  const said = trusted ? intentOf(name, args) : '';
+  if (said) return shown(said);
   const labeled = mcpLabel(name);
-  if (labeled) return labeled;
+  if (labeled) return `Calling ${labeled}`;
   const path = typeof args?.path === 'string' ? args.path : '';
   const command = typeof args?.command === 'string' ? args.command : '';
   if (name === 'bash') return shown(commandTitle(command));
-  if (name === 'read') return file('Read', path);
-  if (name === 'write') return file('Write', path);
-  if (name === 'edit') return file('Edit', path);
-  if (name === 'codemode') return 'Run code';
+  if (name === 'read') return file('Reading', path);
+  if (name === 'write') return file('Writing', path);
+  if (name === 'edit') return file('Editing', path);
+  if (name === 'codemode') return 'Running code';
   if (path) {
     const fileName = leaf(path);
     return shown(fileName ? `${name} ${fileName}` : name);

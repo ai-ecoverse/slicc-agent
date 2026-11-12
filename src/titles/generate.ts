@@ -12,14 +12,14 @@ export const TITLE_PROMPT =
   'Give this chat a title of three to six words that says what it is about, in the language the user writes in. Answer with the title only, without quotes.';
 
 export const LABEL_PROMPT =
-  'Label this group of tool runs in three to eight words, as an imperative that says what they do, such as "Check the failing build logs". Answer with the label only, without quotes.';
+  'Label this group of tool runs in three to eight words, starting with a present participle that says what they do, such as "Checking the failing build logs". Answer with the label only, without quotes.';
 
 export const STEP_PROMPT =
-  'Label this tool run in three to eight words, as an imperative that says what it does, such as "Install the skill into a staging folder". Answer with the label only, without quotes.';
+  'Label this tool run in three to eight words, starting with a present participle that says what it does, such as "Installing the skill into a staging folder". Answer with the label only, without quotes.';
 
 export const TRANSCRIPT_LENGTH = 4000;
 
-type Switch = 'titles' | 'toolLabels';
+type Switch = 'titles' | 'toolLabels' | 'toolIntents';
 
 function settingOn(text: string | undefined, key: Switch): boolean {
   try {
@@ -35,6 +35,10 @@ export function titlesOn(text: string | undefined): boolean {
 
 export function labelsOn(text: string | undefined): boolean {
   return settingOn(text, 'toolLabels');
+}
+
+export function intentsOn(text: string | undefined): boolean {
+  return settingOn(text, 'toolIntents');
 }
 
 export function settingsText(
