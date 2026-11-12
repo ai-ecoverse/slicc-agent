@@ -16,6 +16,8 @@ import { TrayAdapter } from './tray-port.ts';
 
 export { AgentAdapter, CONE } from './agent-port.ts';
 export {
+  type ApprovalRecord,
+  type ApprovalRunShown,
   ApprovalsAdapter,
   type HostApprovals,
   NOT_HERE,

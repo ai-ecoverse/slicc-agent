@@ -369,10 +369,10 @@ export function origins(entries: readonly EntryRecord[]): Map<number, From> {
   return out;
 }
 
-type NotifyLick = LickMessage & { summary?: string; report?: string };
+type NotifyLick = LickMessage & { summary?: string; report?: string; approval?: string };
 
 export function shownChannel(channel: Lick['channel']): LickMessage['channel'] {
-  return channel === 'cone-message' ? 'bash' : channel;
+  return (channel === 'cone-message' ? 'bash' : channel) as LickMessage['channel'];
 }
 
 function lickMessage(
@@ -396,6 +396,7 @@ function lickMessage(
     ...(lick.severity ? { severity: lick.severity } : {}),
     ...(lick.summary ? { summary: lick.summary } : {}),
     ...(lick.report ? { report: lick.report } : {}),
+    ...(lick.channel === 'sudo-run' && lick.source ? { approval: lick.source } : {}),
   };
 }
 

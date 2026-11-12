@@ -9,7 +9,8 @@ import type {
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { fits } from '../approvals/aligned.ts';
-import type { Approval as Item } from '../approvals/record.ts';
+import type { Approval as Item, SudoRun } from '../approvals/record.ts';
+import type { Runnable } from '../approvals/runnable.ts';
 import { stoppable } from '../approvals/stoppable.ts';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
@@ -115,13 +116,82 @@ export function shown(item: Item, agentName: string | undefined): Approval {
   };
 }
 
-export type HostApprovals = ApprovalsPort;
+export type ApprovalRunShown = {
+  state: SudoRun['state'];
+  by: string;
+  device?: string;
+  at: number;
+  pid?: number;
+  status?: number;
+  signal?: string;
+  endedAt?: number;
+  error?: string;
+  stdout?: string;
+  stderr?: string;
+};
+
+export type ApprovalRecord = {
+  approval: Approval;
+  state: Item['state'];
+  reason?: string;
+  decidedBy?: string;
+  device?: string;
+  decidedAt?: number;
+  answer?: 'once' | 'always';
+  run?: ApprovalRunShown;
+  runnable?: Runnable;
+};
+
+export type HistoryEvents = ApprovalsEvents & { history: readonly ApprovalRecord[] };
+
+export type HostApprovals = ApprovalsPort & {
+  history?(): readonly ApprovalRecord[];
+  run?(id: string): Promise<void>;
+  stopRun?(id: string): Promise<void>;
+};
+
+export function runShown(run: SudoRun): ApprovalRunShown {
+  const { state, by, device, at, pid, status, signal, endedAt, error, stdout, stderr } = run;
+  return {
+    state,
+    by,
+    ...(device ? { device } : {}),
+    at,
+    ...(pid === undefined ? {} : { pid }),
+    ...(status === undefined ? {} : { status }),
+    ...(signal ? { signal } : {}),
+    ...(endedAt === undefined ? {} : { endedAt }),
+    ...(error ? { error } : {}),
+    ...(stdout ? { stdout } : {}),
+    ...(stderr ? { stderr } : {}),
+  };
+}
+
+export function recordOf(
+  item: Item,
+  agentName: string | undefined,
+  runnable: Runnable | undefined
+): ApprovalRecord {
+  const approval = shown(item, agentName);
+  if (item.state !== 'pending' && 'stoppable' in approval) delete approval.stoppable;
+  return {
+    approval,
+    state: item.state,
+    ...(item.reason ? { reason: item.reason } : {}),
+    ...(item.decidedBy ? { decidedBy: item.decidedBy } : {}),
+    ...(item.device ? { device: item.device } : {}),
+    ...(item.decidedAt === undefined ? {} : { decidedAt: item.decidedAt }),
+    ...(item.answer ? { answer: item.answer } : {}),
+    ...(item.kind === 'sudo' && item.run ? { run: runShown(item.run) } : {}),
+    ...(runnable === undefined ? {} : { runnable }),
+  };
+}
 
 export const NOT_HERE = "This request can't be answered in this tab.";
 
 const asked = (item: Item) => item.state === 'pending' && item.tier === 'user';
 
-export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements ApprovalsPort {
+export class ApprovalsAdapter extends Emitter<HistoryEvents> implements ApprovalsPort {
   readonly #connection: AgentConnection;
   readonly #host: HostApprovals | undefined;
   readonly #ours: boolean;
@@ -129,6 +199,9 @@ export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements Approv
   readonly #deciding = new Set<string>();
   #listed = new Set<string>();
   readonly decide?: (id: string, decision: ApprovalDecision, reason?: string) => Promise<void>;
+  readonly history?: () => readonly ApprovalRecord[];
+  readonly run?: (id: string) => Promise<void>;
+  readonly stopRun?: (id: string) => Promise<void>;
 
   constructor(connection: AgentConnection, host?: HostApprovals) {
     super();
@@ -136,10 +209,49 @@ export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements Approv
     this.#host = host;
     this.#ours = !connection.guest;
     if (this.#ours || host?.decide) this.decide = (...args) => this.#route(...args);
+    const recorded = this.#ours && Boolean(connection.approvals);
+    if (recorded || host?.history) this.history = () => this.#history();
+    if (recorded || host?.run) this.run = (id) => this.#running(id, 'run');
+    if (recorded || host?.stopRun) this.stopRun = (id) => this.#running(id, 'stopRun');
     this.#listed = new Set(this.#agent().map((approval) => approval.id));
     connection.approvals?.subscribe(() => this.#changed());
+    connection.approvalRunnable?.subscribe(() => this.#historyChanged());
     host?.on('approvals', () => this.emit('approvals', this.list()));
     host?.on('ended', (detail) => this.emit('ended', detail));
+    if (host?.history)
+      (host as unknown as Emitter<HistoryEvents>).on('history', () => this.#historyChanged());
+  }
+
+  #historyChanged(): void {
+    if (this.history) this.emit('history', this.history());
+  }
+
+  #history(): readonly ApprovalRecord[] {
+    const names = new Map(
+      (this.#connection.agents?.value?.agents ?? []).map((agent) => [agent.id, agent.name])
+    );
+    const runnable = this.#connection.approvalRunnable?.value ?? {};
+    const ours = this.#ours
+      ? this.#items().map((item) => recordOf(item, names.get(item.agentId), runnable[item.id]))
+      : [];
+    return [...(this.#host?.history?.() ?? []), ...ours].sort(
+      (a, b) => b.approval.createdAt - a.approval.createdAt
+    );
+  }
+
+  async #running(id: string, how: 'run' | 'stopRun'): Promise<void> {
+    const host = this.#host;
+    if (host?.history?.().some((record) => record.approval.id === id)) {
+      const call = host[how];
+      if (!call) throw new Error(NOT_HERE);
+      return call.call(host, id);
+    }
+    if (!this.#ours || !this.#connection.approvals) throw new Error(NOT_HERE);
+    const control = this.#connection.control;
+    const answer = await (how === 'run'
+      ? control.approvalRun(id, BACKGROUND_CONTEXT)
+      : control.approvalRunStop(id, BACKGROUND_CONTEXT));
+    if (!answer.done) throw new Error(answer.error);
   }
 
   #items(): readonly Item[] {
@@ -177,6 +289,7 @@ export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements Approv
     }
     this.#listed = now;
     this.emit('approvals', this.list());
+    this.#historyChanged();
   }
 
   #route(id: string, decision: ApprovalDecision, reason?: string): Promise<void> {
