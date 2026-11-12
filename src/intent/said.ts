@@ -14,3 +14,14 @@ export function withoutIntent<T extends object>(name: string, args: T): T {
   const { intent: _, ...rest } = args as T & { intent?: unknown };
   return rest as T;
 }
+
+type Block = { type?: unknown; name?: unknown; arguments?: unknown };
+
+export function withoutIntents<T>(content: T): T {
+  if (!Array.isArray(content)) return content;
+  return content.map((block: Block) =>
+    block?.type === 'toolCall' && block.arguments && typeof block.arguments === 'object'
+      ? { ...block, arguments: withoutIntent(String(block.name), block.arguments) }
+      : block
+  ) as T;
+}

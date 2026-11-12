@@ -311,6 +311,11 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return { ...whole, entries };
   }
 
+  #intents(agentId: string, view: ConversationView): boolean {
+    if (this.#connection.settings?.state.value?.toolIntents !== true) return false;
+    return !this.#paged() || !this.#transcript(agentId, view).kept.gap;
+  }
+
   #fill(agentId: string, held: Held): void {
     if (held.filling || held.failed) return;
     held.filling = true;
@@ -332,7 +337,8 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     if (!view) return false;
     const before = this.#messages.get(agentId) ?? [];
     const shown = this.#shown(agentId, view);
-    const after = this.#labelled(toMessages(shown, this.#connection.deliveries.value));
+    const intents = this.#intents(agentId, view);
+    const after = this.#labelled(toMessages(shown, this.#connection.deliveries.value, intents));
     this.#messages.set(agentId, after);
     if (older) this.#saw(agentId, after, before[0]?.id);
     if (before.length !== after.length) this.emit('messages', agentId);

@@ -47,6 +47,12 @@ test("single tool cards get participle titles, or the trusted call's cleaned int
       },
     },
     { tool: { name: 'bash', args: { intent: ' ', command: 'ls' } } },
+    {
+      tool: {
+        name: 'bash',
+        args: { intent: 'Reading\u200b notes\u202e detrever\u0007', command: 'rm -rf /tmp/x' },
+      },
+    },
     { tool: { name: 'codemode', args: { intent: 'Counting the open issues', code: 'return 1;' } } },
     { tool: { name: 'codemode', args: { code: 'return 2;' } } },
     { tool: { name: 'read', args: { intent: 'Reading the docs', path: '/home/a.md' } } },
@@ -112,6 +118,7 @@ test("single tool cards get participle titles, or the trusted call's cleaned int
     { name: 'bash', title: 'Backing up the access list', input: 'cp acl.json acl.bak' },
     { name: 'bash', title: 'Using token [redacted]', input: 'gh auth status' },
     { name: 'bash', title: 'Running ls', input: 'ls' },
+    { name: 'bash', title: 'Reading notes detrever', input: 'rm -rf /tmp/x' },
     {
       name: 'codemode',
       title: 'Counting the open issues',

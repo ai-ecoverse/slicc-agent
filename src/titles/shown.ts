@@ -26,6 +26,7 @@ const LABEL_LENGTH = 80;
 export function cleanLabel(text: string): string {
   return text
     .replace(/\s+/g, ' ')
+    .replace(/[\p{Cc}\p{Cf}]/gu, '')
     .trim()
     .replace(/^["'“”]+|["'“”]+$/g, '')
     .replace(/\.+$/, '')

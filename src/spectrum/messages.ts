@@ -16,6 +16,8 @@ import { splitUser } from '../attachments.ts';
 import {
   ASKED_KIND,
   askedLine,
+  GATED_KIND,
+  type GatedCall,
   GUEST_INPUT_KIND,
   type GuestAsked,
   type GuestInput,
@@ -153,13 +155,18 @@ function shape(name: string, args: Json): Pick<ToolCall, 'input' | 'meta' | 'dif
   return { input: JSON.stringify(withoutIntent(name, args), null, 2) };
 }
 
-function toolCall(block: Block, trusted: boolean): ToolCall {
+type Trust = (callId: string) => boolean;
+
+const NEVER: Trust = () => false;
+
+function toolCall(block: Block, trust: Trust): ToolCall {
   const args = block.arguments ?? {};
   const name = block.name ?? 'tool';
+  const id = block.id ?? '';
   return {
-    id: block.id ?? '',
+    id,
     name,
-    title: toolTitle(name, args, trusted),
+    title: toolTitle(name, args, trust(id)),
     ...shape(name, args),
     output: '',
     status: 'running',
@@ -167,10 +174,10 @@ function toolCall(block: Block, trusted: boolean): ToolCall {
   };
 }
 
-function part(block: Block, trusted: boolean): MessagePart | undefined {
+function part(block: Block, trust: Trust): MessagePart | undefined {
   if (block.type === 'text') return { type: 'text', text: block.text ?? '' };
   if (block.type === 'thinking') return { type: 'thinking', text: block.thinking ?? '' };
-  if (block.type === 'toolCall') return { type: 'tool', tool: toolCall(block, trusted) };
+  if (block.type === 'toolCall') return { type: 'tool', tool: toolCall(block, trust) };
   return undefined;
 }
 
@@ -306,11 +313,11 @@ export function assistant(
   id: string,
   message: ModelMessage,
   status?: AssistantStatus,
-  trusted = false
+  trust: Trust = NEVER
 ): AssistantMessage {
   const blocks = Array.isArray(message.content) ? message.content : [];
   const parts = blocks
-    .map((block) => part(block, trusted))
+    .map((block) => part(block, trust))
     .filter((item): item is MessagePart => item !== undefined);
   if (message.errorMessage) parts.push(errorPart(message.errorMessage, message.provider));
   const used = usage(message);
@@ -624,7 +631,7 @@ function entryMessage(
     decisions: ReadonlyMap<string, LickDecision>;
     origins: ReadonlyMap<number, From>;
     outcomes: ReadonlyMap<string, GuestOutcome>;
-    trust: { tainted: boolean };
+    trust: { tainted: boolean; intents: boolean; gated: ReadonlySet<string> };
   }
 ): void {
   const id = `e${entry.id}`;
@@ -648,7 +655,7 @@ function entryMessage(
   else if (entry.kind === GUEST_INPUT_KIND && model)
     out.push(guestUser(id, model, delivered, entry.data));
   else if (entry.kind === 'pi.assistant' && model) {
-    const message = assistant(id, model, undefined, !notes.trust.tainted);
+    const message = assistant(id, model, undefined, trusted(notes.trust));
     notes.trust.tainted = false;
     out.push(withoutLickTools(message));
     for (const [key, value] of tools([message])) calls.set(key, value);
@@ -662,11 +669,23 @@ const slotStatus: Record<string, ToolStatus> = {
   done: 'done',
 };
 
+function trusted(trust: { tainted: boolean; intents: boolean; gated: ReadonlySet<string> }) {
+  if (!trust.intents || trust.tainted) return NEVER;
+  return (callId: string) => !trust.gated.has(callId);
+}
+
+function gatedCalls(entries: readonly EntryRecord[]): Set<string> {
+  const found = new Set<string>();
+  for (const entry of entries)
+    if (entry.kind === GATED_KIND) found.add(String((entry.data as Partial<GatedCall>)?.callId));
+  return found;
+}
+
 function live(
   view: ConversationView,
   out: Message[],
   calls: Map<string, ToolCall>,
-  trusted: boolean
+  trust: Trust
 ): void {
   const state = view.docs['pi.live'] as Live | undefined;
   for (const slot of state?.tools ?? []) {
@@ -677,7 +696,7 @@ function live(
     }
   }
   const partial = state?.generation?.message;
-  if (partial) out.push(assistant('live', partial, 'streaming', trusted));
+  if (partial) out.push(assistant('live', partial, 'streaming', trust));
   for (const compaction of state?.compactions ?? []) {
     out.push({
       id: `compaction-${compaction.taskId}`,
@@ -702,7 +721,8 @@ function live(
 
 export function toMessages(
   view: ConversationView | undefined,
-  deliveries: Readonly<Record<string, Delivered>> = {}
+  deliveries: Readonly<Record<string, Delivered>> = {},
+  intents = false
 ): Message[] {
   const out: Message[] = [];
   if (!view) return out;
@@ -711,7 +731,7 @@ export function toMessages(
     decisions: lickDecisions(view.entries),
     origins: origins(view.entries),
     outcomes: reviewed(view.entries),
-    trust: { tainted: view.before !== undefined },
+    trust: { tainted: view.before !== undefined, intents, gated: gatedCalls(view.entries) },
   };
   let previous: EntryRecord | undefined;
   for (const entry of view.entries) {
@@ -719,7 +739,7 @@ export function toMessages(
     entryMessage(entry, out, calls, deliveries[String(entry.id)] ?? steered, notes);
     previous = entry;
   }
-  live(view, out, calls, !notes.trust.tainted);
+  live(view, out, calls, trusted(notes.trust));
   return out;
 }
 

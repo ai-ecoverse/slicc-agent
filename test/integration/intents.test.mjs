@@ -57,9 +57,9 @@ const helpers = () => {
     window.agent.on('message', look);
     window.owner = owner;
   };
-  window.tools = () =>
+  window.tools = (agentId = 'cone') =>
     window.agent
-      .messages('cone')
+      .messages(agentId)
       .filter((message) => message.role === 'assistant' && message.id !== 'live')
       .flatMap((message) => message.parts.filter((part) => part.type === 'tool'))
       .map((part) => part.tool);
@@ -72,14 +72,38 @@ const helpers = () => {
           .join('')
           .trim()
       );
-  window.said = () =>
-    (window.local.views.value?.cone?.entries ?? []).flatMap((entry) =>
+  window.said = (agentId = 'cone') =>
+    (window.local.views.value?.[agentId]?.entries ?? []).flatMap((entry) =>
       entry.kind === 'pi.assistant'
         ? (entry.model?.[0]?.content ?? [])
             .filter((block) => block.type === 'text')
             .map((block) => block.text)
         : []
     );
+  window.until = (check, what) => when([changed, every(100)], check, what);
+  window.guest = async () => {
+    const minted = await window.model.guests.mint('cone', {
+      label: 'Anna',
+      expiresAt: null,
+      gates: { messages: 'off', tools: 'user' },
+    });
+    return window.owner
+      .port({ guest: { id: minted.seat.id, label: 'Anna' } })
+      .then(connectGuest)
+      .then(track);
+  };
+  window.asked = () =>
+    window.model.approvals.list().filter((approval) => approval.kind === 'guest-tool');
+  window.decide = async (decision) => {
+    const [first] = await window.until(
+      () => window.asked().length && window.asked(),
+      'a guest call to be asked'
+    );
+    const shown = { tool: first.tool, summary: first.summary, args: first.args };
+    await window.model.approvals.decide(first.id, decision, null);
+    await window.until(() => !window.asked().some((item) => item.id === first.id), 'the answer');
+    return shown;
+  };
   window.requests = () =>
     new Promise((resolve) => {
       const channel = new MessageChannel();
@@ -125,6 +149,7 @@ test('bash and codemode offer an optional intent as their first property', async
   for (const schema of [on.bash, on.codemode]) {
     assert.deepEqual(schema.properties.intent, {
       type: 'string',
+      maxLength: 120,
       description: INTENT_DESCRIPTION,
     });
     assert.equal(schema.required.includes('intent'), false);
@@ -244,8 +269,10 @@ test("a guest run's intent never shows: its title is the parsed one while it str
     const second = await decide();
     await until(() => window.said().includes('Script done.'), 'the guest script');
     const tools = window.tools();
+    const exposed = JSON.stringify(guest.transcript.value).includes('"intent"');
     await guest.close();
     return {
+      exposed,
       asked: [first, second],
       results: window.results(),
       titles: tools.map((tool) => tool.title),
@@ -253,6 +280,7 @@ test("a guest run's intent never shows: its title is the parsed one while it str
       inputs: tools.map((tool) => tool.input),
     };
   });
+  assert.equal(seen.exposed, false);
   assert.deepEqual(seen.asked, [
     { tool: 'bash', summary: command, args: JSON.stringify({ command }, null, 2) },
     {
@@ -270,4 +298,81 @@ test("a guest run's intent never shows: its title is the parsed one while it str
   );
   assert.deepEqual(seen.streamed[2], ['Running code']);
   assert.equal(seen.inputs[2], JSON.stringify({ code: 'return 1;' }, null, 2));
+});
+
+test('"toolIntents": false still strips a call\'s intent: its title is the parsed one, it runs without SLICC_INTENT, and it gets a step label', async (t) => {
+  const page = await chrome.page(t);
+  await boot(
+    page,
+    [bash({ intent: 'Printing the intent', command: 'echo "[$SLICC_INTENT]"' }), answer('Done.')],
+    { settings: { toolIntents: false } }
+  );
+  const seen = await staged(page, '"toolIntents": false still strips', async () => {
+    await window.agent.send(window.agent.active(), 'Go.');
+    await window.until(() => window.said().includes('Done.'), 'the answer');
+    const [tool] = window.tools();
+    return {
+      results: window.results(),
+      title: tool.title,
+      label: await window.agent.stepLabel('cone', tool.id),
+    };
+  });
+  assert.deepEqual(seen, {
+    results: ['[]'],
+    title: 'Running echo',
+    label: 'Run echo "[$SLICC_INTENT]',
+  });
+});
+
+test("a clean scoop's streamed call that a guest's taint gates before it runs shows the parsed title, also after a reload", async (t) => {
+  const page = await chrome.page(t);
+  const scoopCall = { intent: 'Reading notes', command: 'echo scoop-ran' };
+  await boot(
+    page,
+    [
+      bash({ command: "agent --async --name helper --prompt 'work'" }),
+      answer('Started.'),
+      bash({ command: 'agent rename $(agent list | cut -f1 | head -n1) Renamed' }),
+      answer('Renamed.'),
+    ],
+    {
+      extra: [
+        ['scoop-step', JSON.stringify({ gate: 'scoop', tool: { name: 'bash', args: scoopCall } })],
+        ['scoop-step', JSON.stringify({ answer: 'Scoop done.' })],
+      ],
+    }
+  );
+  const seen = await staged(page, "a clean scoop's streamed call", async () => {
+    const scoop = 'scoop:helper';
+    await window.agent.send(window.agent.active(), 'Start a helper.');
+    await window.until(() => window.said().includes('Started.'), 'the helper');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const guest = await window.guest();
+    await guest.control.send(
+      { text: 'Rename it.', whenBusy: 'followUp', requestId: null },
+      BACKGROUND_CONTEXT
+    );
+    const renamed = await window.decide('once');
+    await window.until(() => window.said().includes('Renamed.'), 'the rename');
+    await guest.close();
+    window.worker.postMessage({ gate: 'scoop' });
+    const asked = await window.decide('deny');
+    await window.until(() => window.said(scoop).includes('Scoop done.'), 'the scoop answer');
+    const title = window.tools(scoop).map((tool) => tool.title);
+    const again = createAgentModel(await window.owner.connect()).agent;
+    await again.ready();
+    await window.until(
+      () => again.messages(scoop).some((message) => message.role === 'assistant'),
+      'the reloaded scoop'
+    );
+    const reloaded = again
+      .messages(scoop)
+      .flatMap((message) => (message.parts ?? []).filter((part) => part.type === 'tool'))
+      .map((part) => part.tool.title);
+    return { renamed: renamed.summary, asked: asked.summary, title, reloaded };
+  });
+  assert.equal(seen.renamed, 'agent rename $(agent list | cut -f1 | head -n1) Renamed');
+  assert.equal(seen.asked, 'echo scoop-ran');
+  assert.deepEqual(seen.title, ['Running echo']);
+  assert.deepEqual(seen.reloaded, ['Running echo']);
 });

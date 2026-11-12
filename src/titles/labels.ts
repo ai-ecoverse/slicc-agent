@@ -168,6 +168,7 @@ export interface LabelsAttach {
   stepWaitMs?: number;
   pollMs?: number;
   settleMs?: number;
+  intents?: boolean;
 }
 
 export interface LabelsRuntime {
@@ -193,7 +194,7 @@ type Kept = Record<string, string>;
 interface StepsAttach
   extends Pick<
     LabelsAttach,
-    'harness' | 'agents' | 'label' | 'vault' | 'stepsPerMinute' | 'stepWaitMs'
+    'harness' | 'agents' | 'label' | 'vault' | 'stepsPerMinute' | 'stepWaitMs' | 'intents'
   > {
   labels: MutableReplicatedState<Kept>;
   keep(key: string, label: string, id: ConversationId, answer: AssistantMessage): Promise<Kept>;
@@ -260,7 +261,8 @@ function stepLabels(options: StepsAttach): LabelsRuntime['step'] {
   };
   const make = async (agentId: string, callId: string, key: string) => {
     const found = await appeared(agentId, callId);
-    if (!found || found.cluster.at < options.started || found.cluster.runs[0]?.intent) return null;
+    if (!found || found.cluster.at < options.started) return null;
+    if (options.intents && found.cluster.runs[0]?.intent) return null;
     if (vaultHold(options.vault?.value)) return null;
     const text = await scrubbed(found.cluster.runs.map(describeStep).join('\n'));
     const model = modelName((await found.conversation.agent(BACKGROUND_CONTEXT)).model);

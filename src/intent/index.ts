@@ -18,7 +18,9 @@ export const INTENT_ENV = 'SLICC_INTENT';
 export const INTENT_DESCRIPTION =
   'What this call does, as 2–6 words starting with a present participle, in the user\'s language, such as "Backing up the dataset\'s access list". No credentials, secrets or command output.';
 
-const INTENT = { type: 'string', description: INTENT_DESCRIPTION };
+export const INTENT_LENGTH = 120;
+
+const INTENT = { type: 'string', maxLength: INTENT_LENGTH, description: INTENT_DESCRIPTION };
 
 type Schema = { properties?: Record<string, unknown> };
 
@@ -69,9 +71,21 @@ function codemodeIntent(codemode: ToolRegistration): Wrap {
   }));
 }
 
-export function intentExtension(tools: readonly ToolRegistration[]): Extension {
+function stripped(tool: ToolRegistration): Wrap {
+  return wrapTool(tool, (inner) => ({
+    ...inner,
+    execute: (args, api, context: Context) =>
+      inner.execute(withoutIntent(inner.name, args as JsonObject), api, context),
+  }));
+}
+
+function offered(tool: ToolRegistration): Wrap {
+  return tool.name === 'bash' ? bashIntent(tool) : codemodeIntent(tool);
+}
+
+export function intentExtension(tools: readonly ToolRegistration[], on = true): Extension {
   const wraps = tools
     .filter((tool) => INTENT_TOOLS.has(tool.name))
-    .map((tool) => (tool.name === 'bash' ? bashIntent(tool) : codemodeIntent(tool)));
+    .map((tool) => (on ? offered(tool) : stripped(tool)));
   return defineExtension({ name: INTENTS, wraps });
 }

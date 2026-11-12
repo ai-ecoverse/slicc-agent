@@ -20,7 +20,7 @@ import { REASONS, scoopTier } from '../approvals/record.ts';
 import { boundedDeltas } from '../checkpoints.ts';
 import { withoutIntent } from '../intent/said.ts';
 import { scrubText, scrubTexts } from '../secrets/scrub.ts';
-import { TAINTED_KIND } from './attribution.ts';
+import { GATED_KIND, TAINTED_KIND } from './attribution.ts';
 import { type GuestPolicy, gateKind, gateRefusal } from './policy.ts';
 import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from './seats.ts';
 
@@ -379,6 +379,10 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
         await tx.appendEntry(conversationId, { kind: TAINTED_KIND, data: {} });
     }, context);
   };
+  const gatedCall = (conversationId: ConversationId, callId: string, context: Context) =>
+    (harness() as Held).commit(async (tx) => {
+      await tx.appendEntry(conversationId, { kind: GATED_KIND, data: { callId } });
+    }, context);
   return {
     extension: defineExtension({
       name: GUEST_GUARD,
@@ -402,7 +406,9 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
             const licks = (await api.snapshot(LickTaintDoc, context))?.licks ?? {};
             const licked = await lickTaints(inputs, licks, held, context);
             const taints = [...found, ...inheritedTaints([...inherited, ...licked], seats)];
-            if (taints.length) await api.memo(GUEST_GATED_MEMO, true, context);
+            if (!taints.length) return undefined;
+            await api.memo(GUEST_GATED_MEMO, true, context);
+            if (!call.parent) await gatedCall(api.conversationId, call.id, context);
             for (const taint of taints) {
               const block = await review(taint, call, api, context);
               if (block) return { block };
