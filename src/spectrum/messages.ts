@@ -27,16 +27,18 @@ import {
   REVIEWED_KIND,
   TAINTED_KIND,
 } from '../guests/attribution.ts';
-import { withoutIntent } from '../intent/said.ts';
+import { intentOf, withoutIntent } from '../intent/said.ts';
+import type { Ran } from '../kernel/trace.ts';
 import { type Lick, parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
+import { ranFailures, ranMeta, ranOf, ranTitle, saidIntent } from '../ran/shown.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
 import type { SecretName } from '../secrets/names.ts';
 import { listedLine, SECRETS_KIND } from '../secrets/view.ts';
 import type { Delivered } from '../services.ts';
 import { SPRINKLE_KIND } from '../sprinkles/kind.ts';
 import { warn } from './attempt.ts';
-import { toolTitle } from './tool-title.ts';
+import { shownTitle, toolTitle } from './tool-title.ts';
 
 type Json = Record<string, unknown>;
 
@@ -66,7 +68,7 @@ interface ModelMessage {
   };
   toolCallId?: string;
   isError?: boolean;
-  details?: { patch?: unknown };
+  details?: { patch?: unknown; ran?: unknown };
 }
 
 interface Slot {
@@ -509,15 +511,37 @@ function note(diagnostic: Diagnostic): Note {
   return { severity: diagnostic.severity as Note['severity'], text: phrased(diagnostic.message) };
 }
 
-function settle(calls: Map<string, ToolCall>, result: ModelMessage, data?: unknown): void {
+type Said = { trusted: boolean; intent: boolean };
+
+const ranked = (notes: Note[]) =>
+  notes.sort((a, b) => RANK.indexOf(a.severity) - RANK.indexOf(b.severity));
+
+function traced(call: Card, ran: Ran, said: Said | undefined): void {
+  const known = new Set((call.notes ?? []).map((item) => item.text));
+  const failures = ranFailures(ran)
+    .filter((text) => !known.has(text))
+    .map((text): Note => ({ severity: 'error', text }));
+  if (failures.length) call.notes = ranked([...(call.notes ?? []), ...failures]);
+  call.meta = [ranMeta(ran), call.meta].filter(Boolean).join(' · ');
+  if (said?.intent) return;
+  const intent = said?.trusted ? saidIntent(ran.intent) : '';
+  const title = intent || ranTitle(ran);
+  if (title) call.title = shownTitle(title);
+}
+
+function settle(
+  calls: Map<string, ToolCall>,
+  result: ModelMessage,
+  data?: unknown,
+  said?: ReadonlyMap<string, Said>
+): void {
   const call = calls.get(result.toolCallId ?? '') as Card | undefined;
   if (!call) return;
   const split = harness(result.content, data);
   call.output = textOf(split.content);
-  if (split.diagnostics.length)
-    call.notes = split.diagnostics
-      .map(note)
-      .sort((a, b) => RANK.indexOf(a.severity) - RANK.indexOf(b.severity));
+  if (split.diagnostics.length) call.notes = ranked(split.diagnostics.map(note));
+  const ran = call.name === 'bash' ? ranOf(result.details) : undefined;
+  if (ran) traced(call, ran, said?.get(call.id));
   call.status = result.isError ? 'error' : 'done';
   const image = Array.isArray(result.content)
     ? (result.content as { type: string; data?: string; mimeType?: string }[]).find(
@@ -631,6 +655,7 @@ function entryMessage(
     origins: ReadonlyMap<number, From>;
     outcomes: ReadonlyMap<string, GuestOutcome>;
     trust: { tainted: boolean; intents: boolean; gated: ReadonlySet<string> };
+    said: Map<string, Said>;
   }
 ): void {
   const id = `e${entry.id}`;
@@ -654,12 +679,25 @@ function entryMessage(
   else if (entry.kind === GUEST_INPUT_KIND && model)
     out.push(guestUser(id, model, delivered, entry.data));
   else if (entry.kind === 'pi.assistant' && model) {
-    const message = assistant(id, model, undefined, trusted(notes.trust));
+    const trust = trusted(notes.trust);
+    const message = assistant(id, model, undefined, trust);
+    remember(model, trust, notes.said);
     notes.trust.tainted = false;
     out.push(withoutLickTools(message));
     for (const [key, value] of tools([message])) calls.set(key, value);
-  } else if (entry.kind === 'pi.tool-result' && model) settle(calls, model, entry.data);
+  } else if (entry.kind === 'pi.tool-result' && model) settle(calls, model, entry.data, notes.said);
   else if (entry.kind === 'pi.compaction') out.push(system(id, entry, textOf(model?.content)));
+}
+
+function remember(message: ModelMessage, trust: Trust, said: Map<string, Said>): void {
+  for (const block of Array.isArray(message.content) ? message.content : [])
+    if (block.type === 'toolCall' && block.id) {
+      const trusted = trust(block.id);
+      said.set(block.id, {
+        trusted,
+        intent: trusted && intentOf(String(block.name), block.arguments) !== '',
+      });
+    }
 }
 
 const slotStatus: Record<string, ToolStatus> = {
@@ -731,6 +769,7 @@ export function toMessages(
     origins: origins(view.entries),
     outcomes: reviewed(view.entries),
     trust: { tainted: view.before !== undefined, intents, gated: gatedCalls(view.entries) },
+    said: new Map<string, Said>(),
   };
   let previous: EntryRecord | undefined;
   for (const entry of view.entries) {

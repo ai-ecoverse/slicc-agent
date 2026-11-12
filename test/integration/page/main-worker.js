@@ -303,14 +303,18 @@ const labelling = (context) =>
 const stepping = (context) =>
   context.messages.length === 1 &&
   JSON.stringify(context.messages[0].content).includes('Label this tool run');
+const stepInput = (context) =>
+  context.messages[0].content[0].text.split('\n\n').slice(1).join('\n\n');
 const stepCommand = (context) =>
   JSON.parse(
-    context.messages[0].content[0].text
-      .split('\n\n')
-      .slice(1)
-      .join('\n\n')
+    stepInput(context)
+      .split('\n')[0]
       .replace(/^\w+: /, '')
   ).command;
+const labelInputs = [];
+self.addEventListener('message', ({ data }) => {
+  data?.labelInputs?.postMessage(labelInputs);
+});
 const sayStats = { active: 0, most: 0, prompts: [] };
 self.addEventListener('message', ({ data }) => {
   data?.sayStats?.postMessage(sayStats);
@@ -424,6 +428,7 @@ self.addEventListener('message', ({ data }) => {
 const dispatch = (context, ...rest) => {
   if (judging(context)) return judgeSay(context, rest[0], rest[2]);
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
+  if (labelling(context) || stepping(context)) labelInputs.push(stepInput(context));
   if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
   if (stepping(context)) return fauxAssistantMessage(`Run ${stepCommand(context)}`);
   if (params.has('scoop-say') && JSON.stringify(context).includes('You are the scoop'))
@@ -739,7 +744,7 @@ const bootAs = (client) =>
       };
     },
   });
-const attach =
+const relayedAttach =
   relayed || params.has('gateway') || registry.length || params.has('xai')
     ? async (port) => Object.assign(await attachKernel(port), { transport: relay, ...routed })
     : params.has('no-sudo-run')
@@ -747,6 +752,29 @@ const attach =
       : params.has('btime')
         ? async (port) => bootAs(await attachKernel(port))
         : undefined;
+const unsupported = (what) =>
+  Object.assign(new Error(`this kernel speaks protocol 1.14, which has no ${what}`), {
+    code: 'ENOSYS',
+  });
+const tracelessKernel = async (port) => {
+  const client = await (relayedAttach ?? attachKernel)(port);
+  const spawn = client.spawn.bind(client);
+  const missing = params.get('older-kernel');
+  return Object.assign(client, {
+    ...(missing === 'trace'
+      ? {
+          trace: async () => {
+            throw unsupported('trace');
+          },
+        }
+      : {}),
+    spawn: async (argv, options = {}) => {
+      if (Array.isArray(options.tag)) throw unsupported('tag lists');
+      return spawn(argv, options);
+    },
+  });
+};
+const attach = params.has('older-kernel') ? tracelessKernel : relayedAttach;
 const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]
   : [];

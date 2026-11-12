@@ -40,7 +40,7 @@ export interface SpawnOptions {
   user?: string | number;
   env?: Record<string, string>;
   pgid?: number;
-  tag?: string;
+  tag?: string | readonly string[];
   stdin?: Uint8Array;
   onStdout?(bytes: Uint8Array): void;
   onStderr?(bytes: Uint8Array): void;
@@ -48,13 +48,33 @@ export interface SpawnOptions {
 
 export interface TraceExit {
   type: 'exit';
+  seq?: number;
   pid: number;
   status: number;
   signal?: string;
+  utime?: number;
+  stime?: number;
   at?: number;
 }
 
-export type TraceEvent = TraceExit | { type: 'exec' | 'fork'; pid: number };
+export type TraceEvent =
+  | {
+      type: 'exec' | 'fork';
+      seq: number;
+      pid: number;
+      ppid: number;
+      pgid?: number;
+      argv: readonly string[];
+      exe?: string;
+      at?: number;
+      replaced?: boolean;
+    }
+  | TraceExit;
+
+export interface TraceBatch {
+  events: readonly TraceEvent[];
+  dropped: number;
+}
 
 export interface SudoRunOptions {
   stdout?: string;
@@ -74,7 +94,7 @@ export interface KernelClient {
   sudoRun?(request: object, options: SudoRunOptions): Promise<SudoRunning>;
   trace?(
     tag: string,
-    onEvents: (batch: { events: TraceEvent[]; dropped: number }) => void | Promise<unknown>,
+    onEvents: (batch: TraceBatch) => void | Promise<unknown>,
     options?: { limit?: number }
   ): Promise<{ close(): void }>;
   spawn(argv: readonly string[], options: SpawnOptions): Promise<KernelProcess>;

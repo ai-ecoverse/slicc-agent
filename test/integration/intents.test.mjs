@@ -204,7 +204,7 @@ test("a trusted bash runs its command unchanged with SLICC_INTENT set and its ti
   assert.equal(seen.inputs[0], long);
   assert.deepEqual(seen.titles, [
     'Printing the intent',
-    'Running echo and cat',
+    'Running cat',
     'Checking the environment',
     'Running code',
   ]);
