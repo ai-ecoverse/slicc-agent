@@ -22,7 +22,7 @@ import type { VaultState } from '../secrets/vault.ts';
 import { vaultHold } from '../secrets/view.ts';
 import { callIdsOf, clusterOf, describe, describeStep } from './cluster.ts';
 import { type Labeler, STEP_PROMPT, scrubbed } from './generate.ts';
-import { callIdsOfKey, labelKey, shownLabel, stepKey } from './shown.ts';
+import { callIdsOfKey, cleanLabel, labelKey, shownLabel, stepKey } from './shown.ts';
 
 export type LabelsState = { labels: Record<string, string> };
 
@@ -38,8 +38,6 @@ export const LABELS_KEPT = 1000;
 export const LABELS_PER_MINUTE = 6;
 export const STEP_LABELS_PER_MINUTE = 30;
 const MINUTE = 60_000;
-const LABEL_WORDS = 8;
-const LABEL_LENGTH = 80;
 const RESERVED = 2;
 const POLL_MS = 1000;
 const SETTLE_MS = 600_000;
@@ -131,19 +129,6 @@ export function watchStep(labels: ReplicatedState<Record<string, string>>, waitM
     watching.set(key, waiting);
     return waiting;
   };
-}
-
-export function cleanLabel(text: string): string {
-  return text
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^["'“”]+|["'“”]+$/g, '')
-    .replace(/\.+$/, '')
-    .trim()
-    .split(' ')
-    .slice(0, LABEL_WORDS)
-    .join(' ')
-    .slice(0, LABEL_LENGTH);
 }
 
 type Counted = Record<'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'totalTokens', number> & {
@@ -275,7 +260,7 @@ function stepLabels(options: StepsAttach): LabelsRuntime['step'] {
   };
   const make = async (agentId: string, callId: string, key: string) => {
     const found = await appeared(agentId, callId);
-    if (!found || found.cluster.at < options.started) return null;
+    if (!found || found.cluster.at < options.started || found.cluster.runs[0]?.intent) return null;
     if (vaultHold(options.vault?.value)) return null;
     const text = await scrubbed(found.cluster.runs.map(describeStep).join('\n'));
     const model = modelName((await found.conversation.agent(BACKGROUND_CONTEXT)).model);

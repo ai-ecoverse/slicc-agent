@@ -304,6 +304,13 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     return entries.map((entry) => fresh.get(entry.id) ?? entry);
   }
 
+  #shown(agentId: string, view: ConversationView): ConversationView {
+    const entries = this.#entries(agentId, view);
+    if (!this.#paged() || this.#transcript(agentId, view).kept.earlier) return { ...view, entries };
+    const { before: _, ...whole } = view;
+    return { ...whole, entries };
+  }
+
   #fill(agentId: string, held: Held): void {
     if (held.filling || held.failed) return;
     held.filling = true;
@@ -324,7 +331,7 @@ export class AgentAdapter extends Emitter<AgentAdapterEvents> implements AgentPo
     const view = this.#view(agentId);
     if (!view) return false;
     const before = this.#messages.get(agentId) ?? [];
-    const shown = { ...view, entries: this.#entries(agentId, view) };
+    const shown = this.#shown(agentId, view);
     const after = this.#labelled(toMessages(shown, this.#connection.deliveries.value));
     this.#messages.set(agentId, after);
     if (older) this.#saw(agentId, after, before[0]?.id);

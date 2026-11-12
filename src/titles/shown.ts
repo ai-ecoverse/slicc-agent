@@ -19,3 +19,19 @@ export function shownLabel(
   const key = labelKey(callIds);
   return labels && Object.hasOwn(labels, key) ? labels[key] || null : undefined;
 }
+
+const LABEL_WORDS = 8;
+const LABEL_LENGTH = 80;
+
+export function cleanLabel(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^["'“”]+|["'“”]+$/g, '')
+    .replace(/\.+$/, '')
+    .trim()
+    .split(' ')
+    .slice(0, LABEL_WORDS)
+    .join(' ')
+    .slice(0, LABEL_LENGTH);
+}

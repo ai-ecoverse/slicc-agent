@@ -38,6 +38,7 @@ import { lateGelatiere } from './gelatiere/index.ts';
 import { runTag } from './guests/tags.ts';
 import { type AgentHost, hostAgent } from './host.ts';
 import { imageReads } from './images/index.ts';
+import { intentExtension } from './intent/index.ts';
 import { createActivity } from './kernel/activity.ts';
 import { type AgentUsers, agentUsers, modeOf, warnSupport } from './kernel/agent-users.ts';
 import type { KernelClient } from './kernel/client.ts';
@@ -95,7 +96,7 @@ import {
   transportName,
 } from './system.ts';
 import { titlesExtension } from './titles/extension.ts';
-import { labeler, settingsText, titler } from './titles/generate.ts';
+import { intentsOn, labeler, settingsText, titler } from './titles/generate.ts';
 import { attachLabels } from './titles/labels.ts';
 import { type KernelPorts, kernelPorts, serveConnections, type WorkerScope } from './worker.ts';
 
@@ -169,15 +170,19 @@ function privateStore(env: SliccKernelEnv, serverId: string): Promise<unknown> {
   );
 }
 
+async function settingsFile(client: KernelClient, dir = `${HOME}/.pi/agent`) {
+  const settings = await client.fs.readFile(`${dir}/settings.json`).catch(() => undefined);
+  return settings === undefined ? undefined : new TextDecoder().decode(settings);
+}
+
 export async function codemodeTools(
   client: KernelClient,
   options: AgentWorkerOptions,
   native: typeof fetch,
   extra: Parameters<typeof codemodeTool>[0]['extra'],
-  dir = `${HOME}/.pi/agent`
+  dir?: string
 ): Promise<{ tools: ToolRegistration[]; toolSearch: boolean }> {
-  const settings = await client.fs.readFile(`${dir}/settings.json`).catch(() => undefined);
-  const text = settings === undefined ? undefined : new TextDecoder().decode(settings);
+  const text = await settingsFile(client, dir);
   const toolSearch = !disabledBySettings(text, TOOL_SEARCH_TOOL_NAME);
   if (disabledBySettings(text)) return { tools: [], toolSearch };
   const sandbox = sandboxFactory(
@@ -512,6 +517,8 @@ export async function start(
   const chosen = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   const codemode = chosen.tools;
   registry.install(codemodeExtension(codemode));
+  if (intentsOn(await settingsFile(client, at.agentDir)))
+    registry.install(intentExtension([...coding, ...codemode]));
   if (chosen.toolSearch) registry.install(createToolSearchExtension());
   const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));

@@ -1,5 +1,5 @@
 import type { ConversationView, EntryRecord, JsonObject } from '@earendil-works/pi-durable';
-import { GUEST_INPUT_KIND } from './attribution.ts';
+import { GUEST_INPUT_KIND, TAINTED_KIND } from './attribution.ts';
 
 const SHOWN = new Set([
   'pi.user',
@@ -9,6 +9,7 @@ const SHOWN = new Set([
   'slicc.rewound',
   'slicc.from',
   GUEST_INPUT_KIND,
+  TAINTED_KIND,
 ]);
 
 export const EMPTY_VIEW = {

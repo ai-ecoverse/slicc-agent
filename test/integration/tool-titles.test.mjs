@@ -9,7 +9,7 @@ function query(steps) {
   return steps.map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`).join('&');
 }
 
-test('single tool cards get human titles while input stays the raw command or path', async (t) => {
+test("single tool cards get participle titles, or the trusted call's cleaned intent, while input stays the raw command or path", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const steps = [
@@ -31,6 +31,25 @@ test('single tool cards get human titles while input stays the raw command or pa
       },
     },
     { tool: { name: 'mcp__docs__search', args: { query: 'notes' } } },
+    {
+      tool: {
+        name: 'bash',
+        args: { intent: '  "Backing up   the access list."  ', command: 'cp acl.json acl.bak' },
+      },
+    },
+    {
+      tool: {
+        name: 'bash',
+        args: {
+          intent: 'Using token ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+          command: 'gh auth status',
+        },
+      },
+    },
+    { tool: { name: 'bash', args: { intent: ' ', command: 'ls' } } },
+    { tool: { name: 'codemode', args: { intent: 'Counting the open issues', code: 'return 1;' } } },
+    { tool: { name: 'codemode', args: { code: 'return 2;' } } },
+    { tool: { name: 'read', args: { intent: 'Reading the docs', path: '/home/a.md' } } },
     { answer: 'Done.' },
   ];
   const seen = await staged(
@@ -74,17 +93,31 @@ test('single tool cards get human titles while input stays the raw command or pa
     { query: query(steps) }
   );
   assert.deepEqual(seen, [
-    { name: 'bash', title: 'Run git', input: 'git status -sb' },
+    { name: 'bash', title: 'Running git', input: 'git status -sb' },
     {
       name: 'bash',
-      title: 'Run cd, rm, mkdir and more',
+      title: 'Running cd, rm, mkdir and more',
       input: 'cd /tmp; rm -rf stage && FOO=1 mkdir -p stage | sudo tee log',
     },
-    { name: 'bash', title: 'Run a, b, c and more', input: 'a; b; c; d' },
-    { name: 'bash', title: 'Run a command', input: '"$X" <<EOF' },
-    { name: 'read', title: 'Read foo.ts', input: '/home/src/foo.ts' },
-    { name: 'write', title: 'Write bar.ts', input: '/home/src/bar.ts' },
-    { name: 'edit', title: 'Edit baz.ts', input: '/home/src/baz.ts' },
-    { name: 'mcp__docs__search', title: 'docs · search', input: '{\n  "query": "notes"\n}' },
+    { name: 'bash', title: 'Running a, b, c and more', input: 'a; b; c; d' },
+    { name: 'bash', title: 'Running a command', input: '"$X" <<EOF' },
+    { name: 'read', title: 'Reading foo.ts', input: '/home/src/foo.ts' },
+    { name: 'write', title: 'Writing bar.ts', input: '/home/src/bar.ts' },
+    { name: 'edit', title: 'Editing baz.ts', input: '/home/src/baz.ts' },
+    {
+      name: 'mcp__docs__search',
+      title: 'Calling docs · search',
+      input: '{\n  "query": "notes"\n}',
+    },
+    { name: 'bash', title: 'Backing up the access list', input: 'cp acl.json acl.bak' },
+    { name: 'bash', title: 'Using token [redacted]', input: 'gh auth status' },
+    { name: 'bash', title: 'Running ls', input: 'ls' },
+    {
+      name: 'codemode',
+      title: 'Counting the open issues',
+      input: '{\n  "code": "return 1;"\n}',
+    },
+    { name: 'codemode', title: 'Running code', input: '{\n  "code": "return 2;"\n}' },
+    { name: 'read', title: 'Reading a.md', input: '/home/a.md' },
   ]);
 });

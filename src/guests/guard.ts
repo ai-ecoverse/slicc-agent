@@ -5,6 +5,7 @@ import {
   defineDoc,
   defineExtension,
   type Extension,
+  GenerationTask,
   type Harness,
   type HookApi,
   hook,
@@ -17,7 +18,9 @@ import {
 import type { Approval, Approvals } from '../approvals/index.ts';
 import { REASONS, scoopTier } from '../approvals/record.ts';
 import { boundedDeltas } from '../checkpoints.ts';
+import { withoutIntent } from '../intent/said.ts';
 import { scrubText, scrubTexts } from '../secrets/scrub.ts';
+import { TAINTED_KIND } from './attribution.ts';
 import { type GuestPolicy, gateKind, gateRefusal } from './policy.ts';
 import { type AlwaysTool, GuestsDoc, isGate, liveSeat, type SeatRecord } from './seats.ts';
 
@@ -50,7 +53,7 @@ export interface GuestToolGate {
   bind(host: GateHost): void;
 }
 
-type Held = Pick<Harness, 'submission' | 'commit' | 'waitForTask'>;
+type Held = Pick<Harness, 'submission' | 'commit' | 'waitForTask' | 'snapshot'>;
 
 type Taint = { seat: SeatRecord | null; tier: string };
 
@@ -316,7 +319,8 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
     const host = await awaitWithContext(bound, context);
     const policy = host.policy();
     const now = host.now ?? Date.now;
-    const hash = await argumentsHash(canonical(call.arguments));
+    const args = withoutIntent(call.name, call.arguments);
+    const hash = await argumentsHash(canonical(args));
     const always = policy.always.tools;
     const early = settledEarly(seat, taint.tier, policy, now(), call.name, hash);
     if (early !== null) return early || undefined;
@@ -326,7 +330,7 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
       context
     );
     const task = Number(api.taskId);
-    const shown = await scrubbedArguments(call.arguments);
+    const shown = await scrubbedArguments(args);
     const asked = await host.approvals.request(
       {
         id,
@@ -365,10 +369,26 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
       });
     return undefined;
   };
+  const marked = async (conversationId: ConversationId, context: Context) => {
+    const held = harness();
+    if (!held || !(await runTaints(held, conversationId, context)).length) return;
+    await held.commit(async (tx) => {
+      const query = { conversationId, order: 'descending' as const };
+      const [newest] = (await tx.scanEntries(query, 1)).items;
+      if (newest?.kind !== TAINTED_KIND)
+        await tx.appendEntry(conversationId, { kind: TAINTED_KIND, data: {} });
+    }, context);
+  };
   return {
     extension: defineExtension({
       name: GUEST_GUARD,
       hooks: [
+        hook(GenerationTask, {
+          async beforeRequest(_request, api, context) {
+            await marked(api.conversationId, context);
+            return undefined;
+          },
+        }),
         hook(ToolTask, {
           async beforeTool(call, api, context) {
             const live = await api.snapshot(LiveDoc, api.conversationId, context);
