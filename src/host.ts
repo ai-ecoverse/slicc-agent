@@ -334,7 +334,7 @@ export type HostOptions = {
   runs?: { kernel: RunKernel & { protocol?: readonly number[] }; boot: string | null } & RunTimes;
 } & ApprovalOptions;
 
-type RunTimes = Partial<
+export type RunTimes = Partial<
   Pick<SudoRunHost, 'pollMs' | 'killMs' | 'adoptMs' | 'outputCap' | 'keepMs'>
 >;
 

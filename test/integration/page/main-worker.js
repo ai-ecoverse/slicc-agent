@@ -725,12 +725,28 @@ const olderKernel = (client) =>
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
+const bootAs = (client) =>
+  new Proxy(client, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (key !== 'spawn') return typeof value === 'function' ? value.bind(target) : value;
+      return async (argv, options) => {
+        if (argv.join(' ') !== 'cat /proc/stat') return target.spawn(argv, options);
+        const btime = params.get('btime');
+        if (btime === 'none') throw new Error('EIO');
+        options.onStdout?.(new TextEncoder().encode(`btime ${btime}\n`));
+        return { pid: 0, pgid: 0, exited: Promise.resolve(0), signal: () => undefined };
+      };
+    },
+  });
 const attach =
   relayed || params.has('gateway') || registry.length || params.has('xai')
     ? async (port) => Object.assign(await attachKernel(port), { transport: relay, ...routed })
     : params.has('no-sudo-run')
       ? async (port) => olderKernel(await attachKernel(port))
-      : undefined;
+      : params.has('btime')
+        ? async (port) => bootAs(await attachKernel(port))
+        : undefined;
 const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]
   : [];
@@ -991,6 +1007,7 @@ const running = runAgentWorker(self, {
   model: { provider: 'faux', modelId: 'faux-1' },
   ...(params.has('ttl') ? { approvalMs: Number(params.get('ttl')) } : {}),
   ...(params.has('staged-ms') ? { stagedMs: Number(params.get('staged-ms')) } : {}),
+  ...(params.has('run-times') ? { runTimes: JSON.parse(params.get('run-times')) } : {}),
   providers: [
     faux.provider,
     ...judges,

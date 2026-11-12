@@ -19,6 +19,9 @@ export type LickHost = {
 
 const redacted = (text: string) => redactSecrets(text).text;
 
+export const sized = (bytes: number): string =>
+  bytes % MIB === 0 ? `${bytes / MIB} MiB` : `${Math.round(bytes / 1024)} KiB`;
+
 function typed(item: SudoApproval): string {
   return (item.replay?.argv ?? [])
     .map((word) => shellWord(String(word)))
@@ -54,8 +57,8 @@ function outcome(run: SudoRun): { text: string; sentence: string; ok: boolean } 
   const signal = run.signal ? ` (${run.signal})` : '';
   if (run.capped)
     return {
-      text: `stopped: its output passed ${run.capped / MIB} MiB`,
-      sentence: `was stopped because its output passed ${run.capped / MIB} MiB${signal}`,
+      text: `stopped: its output passed ${sized(run.capped)}`,
+      sentence: `was stopped because its output passed ${sized(run.capped)}${signal}`,
       ok: false,
     };
   if (run.state === 'stopped')

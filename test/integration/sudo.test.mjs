@@ -48,7 +48,7 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
       let running;
       const owner = await startTracked({
         worker: () => {
-          running = new Worker(`/dist-test/${worker}${query}`, { type: 'module' });
+          running = new Worker(`/dist-test/${worker}${held.query ?? query}`, { type: 'module' });
           return running;
         },
         ...(worker === 'main-worker.js' ? { kernel: { connect: () => kernel.connect() } } : {}),
@@ -148,6 +148,9 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         return { id: newest(local).id, status: ran.status };
       };
       globalThis.t = {
+        setQuery: (next) => {
+          held.query = next;
+        },
         kernel,
         ask,
         decideAs,
@@ -1127,17 +1130,18 @@ test('a replay whose script changed since the request is refused by the kernel, 
   assert.equal(seen.licks, 0);
 });
 
-async function lateRun(t, { argv, swap, stop, restart, secret, survive }) {
+async function lateRun(
+  t,
+  { argv, swap, stop, restart, secret, survive, extra = '', after = null }
+) {
   const page = await chrome.page(t);
   const persist = restart ? `&persist=/.slicc/late-run-${Date.now()}` : '';
-  await boot(page, {
-    worker: 'main-worker.js',
-    query: `?answer=Noted.&answer=Noted.&answer=Noted.${persist}`,
-  });
+  const query = `?answer=Noted.&answer=Noted.&answer=Noted.${persist}`;
+  await boot(page, { worker: 'main-worker.js', query: `${query}${extra}` });
   return staged(
     page,
     'a late sudo run',
-    async ({ argv, swap, stop, restart, secret, survive }) => {
+    async ({ argv, swap, stop, restart, secret, survive, query, after }) => {
       const { owner, until, kernel, timeOut } = globalThis.t;
       const sh = (script, user) => kernel.run(['bash', '-c', script], user ? { user } : {});
       if (secret)
@@ -1177,6 +1181,7 @@ async function lateRun(t, { argv, swap, stop, restart, secret, survive }) {
           await owner.release();
           await new Promise((resolve) => setTimeout(resolve, 4000));
         }
+        if (after !== null) globalThis.t.setQuery(`${query}${after}`);
         const restarted = owner.restart();
         await restarted;
         local = await owner.connect();
@@ -1221,7 +1226,7 @@ async function lateRun(t, { argv, swap, stop, restart, secret, survive }) {
       await owner.release();
       return result;
     },
-    { argv, swap, stop, restart, secret, survive }
+    { argv, swap, stop, restart, secret, survive, query, after }
   );
 }
 
@@ -1255,9 +1260,9 @@ test('a line the requester plants in the output file during the run never reache
   assert.match(seen.end, /Its output isn't shown here/);
 });
 
-test('a child that setsid moves out of the group keeps the run reported as still running until Stop ends it', async (t) => {
+test('a background job that job control moves out of the group keeps the run reported as still running until Stop ends it', async (t) => {
   const seen = await lateRun(t, {
-    argv: ['bash', '-c', 'setsid sleep 300 </dev/null >/dev/null 2>&1 &'],
+    argv: ['bash', '-c', 'set -m; sleep 300 </dev/null >/dev/null 2>&1 &'],
     survive: true,
   });
   assert.equal(seen.run.state, 'done');
@@ -1299,4 +1304,158 @@ test('a late run that ends while the worker restarts is done with its status unk
   assert.equal(seen.run.state, 'done');
   assert.equal(seen.run.status, undefined);
   assert.match(seen.end, /status unknown/);
+});
+
+for (const [name, after] of [
+  ['a changed boot id', '&btime=200'],
+  ['an unreadable boot id', '&btime=none'],
+]) {
+  test(`a late run that outlives a worker restart with ${name} is still watched and ends with its real status`, async (t) => {
+    const seen = await lateRun(t, {
+      argv: ['bash', '-c', 'sleep 4; exit 7'],
+      restart: 'exit',
+      extra: '&btime=100',
+      after,
+    });
+    assert.equal(seen.run.state, 'done');
+    assert.equal(seen.run.status, 7);
+    assert.equal(seen.run.error, undefined);
+    assert.match(seen.end, /exited with status 7/);
+  });
+}
+
+const RUN_TIMES = (times) => `&run-times=${encodeURIComponent(JSON.stringify(times))}`;
+
+test('a late run whose output passes the cap is stopped and says so', async (t) => {
+  const seen = await lateRun(t, {
+    argv: ['yes'],
+    extra: RUN_TIMES({ pollMs: 200, outputCap: 65_536 }),
+  });
+  assert.equal(seen.run.state, 'stopped');
+  assert.match(seen.end, /your late sudo run ended: stopped: its output passed 64 KiB/);
+  assert.match(seen.end, /was stopped because its output passed 64 KiB/);
+});
+
+async function lateRuns(t, extra, script) {
+  const page = await chrome.page(t);
+  await boot(page, {
+    worker: 'main-worker.js',
+    query: `?answer=Noted.&answer=Noted.&answer=Noted.&answer=Noted.&answer=Noted.&answer=Noted.${extra}`,
+  });
+  return staged(
+    page,
+    'late sudo runs',
+    async (script) => {
+      const { owner, until, kernel, timeOut } = globalThis.t;
+      const local = await owner.connect();
+      const model = createAgentModel(local);
+      const record = (id) => model.approvals.history().find((entry) => entry.approval.id === id);
+      const item = (id) => local.approvals.value.find((entry) => entry.id === id);
+      const start = async (argv) => {
+        const { id } = await timeOut(local, argv);
+        await until(() => record(id)?.runnable === true, 'Run now to be offered');
+        await model.approvals.run(id);
+        await until(() => record(id)?.run?.pid, 'the run to start');
+        return id;
+      };
+      const exists = async (path) =>
+        (await kernel.run(['test', '-f', path], { user: 'cone' })).status === 0;
+      const tools = { owner, until, kernel, local, model, record, item, start, exists };
+      const result = await new Function('tools', `return (${script})(tools);`)(tools);
+      await local.close();
+      await owner.release();
+      return result;
+    },
+    script.toString()
+  );
+}
+
+test('late run output is removed as the requester once kept long enough, but never while the run or a survivor still runs', async (t) => {
+  const seen = await lateRuns(t, RUN_TIMES({ keepMs: 3000, pollMs: 300 }), async (tools) => {
+    const { until, record, item, start, exists, model } = tools;
+    const lingering = await start(['bash', '-c', 'set -m; sleep 300 </dev/null >/dev/null 2>&1 &']);
+    await until(() => record(lingering)?.run?.survivors, 'the survivor');
+    const running = await start(['sleep', '60']);
+    const ran = await start(['ls', '/']);
+    await until(() => record(ran)?.run?.state === 'done', 'the short run to end');
+    const files = { out: record(ran).run.stdout, err: record(ran).run.stderr };
+    const before = { out: await exists(files.out), err: await exists(files.err) };
+    await until(() => item(ran)?.run?.removed, 'the first output to be removed', 20_000);
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    const kept = {
+      running: await exists(record(running).run.stdout),
+      lingering: await exists(record(lingering).run.stdout),
+    };
+    const result = {
+      before,
+      after: { out: await exists(files.out), err: await exists(files.err) },
+      run: item(ran).run,
+      kept,
+      removed: [item(running).run.removed ?? false, item(lingering).run.removed ?? false],
+    };
+    const stop = (id) =>
+      model.approvals.stopRun(id).then(
+        () => null,
+        (error) => error.message
+      );
+    result.stops = [
+      record(running).run,
+      record(lingering).run,
+      await stop(running),
+      await stop(lingering),
+    ];
+    return result;
+  });
+  assert.deepEqual(seen.before, { out: true, err: true });
+  assert.deepEqual(seen.after, { out: false, err: false });
+  assert.equal(seen.run.removed, true);
+  assert.equal(seen.run.stdout, undefined);
+  assert.equal(seen.run.stderr, undefined);
+  assert.deepEqual(seen.kept, { running: true, lingering: true });
+  assert.deepEqual(seen.removed, [false, false]);
+  assert.deepEqual(seen.stops.slice(2), [null, null], JSON.stringify(seen.stops));
+});
+
+test('a view seat gets the approvals without the replay and without the output paths, while the owner sees the paths', async (t) => {
+  const seen = await lateRuns(t, '', async (tools) => {
+    const { until, item, start, record } = tools;
+    const id = await start(['ls', '/']);
+    await until(() => record(id)?.run?.state === 'done', 'the run to end');
+    const viewer = await globalThis.t.follow('phone-9', true);
+    const shown = () => viewer.approvals.value?.find((entry) => entry.id === id);
+    await until(() => shown()?.run?.state === 'done', 'the viewer copy');
+    const result = { owner: item(id), viewer: shown() };
+    await viewer.close();
+    return result;
+  });
+  assert.equal(seen.owner.replay, undefined);
+  assert.match(seen.owner.run.stdout, /\.slicc\/sudo-runs\/apr-.+\.out$/);
+  assert.equal(seen.viewer.replay, undefined);
+  assert.equal(seen.viewer.run.stdout, undefined);
+  assert.equal(seen.viewer.run.stderr, undefined);
+  assert.equal(seen.viewer.run.state, 'done');
+});
+
+test('Run now is refused once the cone that asked is gone', async (t) => {
+  const seen = await lateRuns(t, '', async (tools) => {
+    const { until, record, local, model, kernel } = tools;
+    const { id } = await globalThis.t.timeOut(local, ['ls', '/']);
+    await until(() => record(id)?.runnable === true, 'Run now to be offered');
+    const frozen = await local.control.freeze('cone', BACKGROUND_CONTEXT);
+    await until(() => record(id)?.runnable?.reason?.startsWith('Thaw'), 'the frozen gate');
+    await local.control.discard(frozen.id, BACKGROUND_CONTEXT);
+    const reason = 'The agent that asked is gone, so it must be asked again.';
+    await until(() => record(id)?.runnable?.reason === reason, 'the gone gate');
+    const ran = await model.approvals.run(id).then(
+      () => null,
+      (error) => error.message
+    );
+    const runs = await kernel.run(['ls', '/home/cone/.slicc/sudo-runs']);
+    return { runnable: record(id).runnable, ran, run: record(id).run ?? null, listed: runs.stdout };
+  });
+  assert.deepEqual(seen.runnable, {
+    reason: 'The agent that asked is gone, so it must be asked again.',
+  });
+  assert.equal(seen.ran, 'The agent that asked is gone, so it must be asked again.');
+  assert.equal(seen.run, null);
 });
