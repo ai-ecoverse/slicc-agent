@@ -6,10 +6,11 @@ const chrome = await launch();
 after(() => chrome.close());
 
 function query(steps) {
-  return steps.map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`).join('&');
+  const listed = steps.map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`);
+  return [...listed, 'older-kernel=trace'].join('&');
 }
 
-test("single tool cards get participle titles, or the trusted call's cleaned intent, while input stays the raw command or path", async (t) => {
+test("without an exec trace, single tool cards get participle titles, or the trusted call's cleaned intent, while input stays the raw command or path", async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const steps = [

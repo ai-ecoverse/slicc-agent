@@ -1,10 +1,18 @@
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
 import { intentOf, withoutIntent } from '../intent/said.ts';
+import { ranLine, ranOf, saidIntent } from '../ran/shown.ts';
 
 const OUTPUT_LENGTH = 600;
 
-export type Run = { name: string; input: string; output: string; done: boolean; intent: string };
+export type Run = {
+  name: string;
+  input: string;
+  output: string;
+  done: boolean;
+  intent: string;
+  ran: string;
+};
 
 export type Cluster = { runs: Run[]; at: number; settled: boolean };
 
@@ -13,6 +21,7 @@ type Block = { type?: string; id?: string; name?: string; arguments?: unknown; t
 type Said = {
   content?: unknown;
   toolCallId?: string;
+  details?: unknown;
   timestamp?: number;
   stopReason?: string;
 };
@@ -46,7 +55,7 @@ export function clusterOf(
   callIds: readonly string[]
 ): Cluster | undefined {
   const calls = new Map<string, Pick<Run, 'name' | 'input' | 'intent'> & { at: number }>();
-  const results = new Map<string, { output: string; index: number }>();
+  const results = new Map<string, { output: string; index: number; ran: string; intent: string }>();
   entries.forEach((entry, index) => {
     const said = entry.model?.[0] as Said | undefined;
     for (const block of blocks(entry))
@@ -60,8 +69,15 @@ export function clusterOf(
           at: said?.timestamp ?? 0,
         });
       }
-    if (entry.kind === 'pi.tool-result' && said?.toolCallId)
-      results.set(said.toolCallId, { output: answerText(said.content), index });
+    if (entry.kind === 'pi.tool-result' && said?.toolCallId) {
+      const ran = ranOf(said.details);
+      results.set(said.toolCallId, {
+        output: answerText(said.content),
+        index,
+        ran: ranLine(ran),
+        intent: saidIntent(ran?.intent),
+      });
+    }
   });
   const runs: Run[] = [];
   let at = 0;
@@ -75,7 +91,8 @@ export function clusterOf(
       input: call.input,
       output: result?.output ?? '',
       done: !!result,
-      intent: call.intent,
+      intent: call.intent || (call.name === 'bash' ? (result?.intent ?? '') : ''),
+      ran: call.name === 'bash' ? (result?.ran ?? '') : '',
     });
     at = Math.max(at, call.at);
     last = Math.max(last, result?.index ?? Number.POSITIVE_INFINITY);
@@ -85,14 +102,14 @@ export function clusterOf(
 }
 
 export function describeStep(run: Run): string {
-  return `${run.name}: ${run.input}`;
+  return run.ran ? `${run.name}: ${run.input}\n${run.ran}` : `${run.name}: ${run.input}`;
 }
 
 export function describe(runs: readonly Run[]): string {
   return runs
     .map(
       (run) =>
-        `${run.name}: ${run.input}\n=> ${run.done ? run.output.slice(0, OUTPUT_LENGTH) : '(running)'}`
+        `${describeStep(run)}\n=> ${run.done ? run.output.slice(0, OUTPUT_LENGTH) : '(running)'}`
     )
     .join('\n\n');
 }

@@ -12,11 +12,14 @@ import type { ScrubStream } from '../secrets/scrub.ts';
 import type { KernelClient, KernelProcess, SpawnOptions } from './client.ts';
 import { descendants, REFUSED } from './groups.ts';
 import { resolve } from './paths.ts';
+import { type CallTrace, follow, LINGER_MS, type Tracer } from './trace.ts';
 
 export const SHELL = ['bash', '-c'] as const;
 export const HELD_LIMIT = 32 * 1024 * 1024;
 export const HELD = 'output held: waiting for the vault';
 export const GONE = 'the kernel went away mid-run, so the command may have partly run';
+
+export type TracedExecOptions = ShellExecOptions & { trace?: CallTrace };
 
 export interface ExecHooks {
   scrub?: () => ScrubStream;
@@ -187,19 +190,32 @@ export interface Join {
   refused(code: string): void;
 }
 
-type Started = { process: KernelProcess; tag?: string };
+type Started = { process: KernelProcess; tag?: string; traced?: boolean };
+
+type Spawning = Omit<SpawnOptions, 'tag'> & { tag?: string };
+
+const unsupported = (error: unknown) => (error as { code?: unknown }).code === 'ENOSYS';
 
 async function tagged(
   client: KernelClient,
   argv: readonly string[],
-  options: SpawnOptions
+  options: Spawning,
+  call: string | undefined
 ): Promise<Started> {
   const { tag, ...untagged } = options;
+  if (call !== undefined)
+    try {
+      const tags = tag === undefined ? [call] : [tag, call];
+      const process = await client.spawn(argv, { ...untagged, tag: tags });
+      return { process, ...(tag === undefined ? {} : { tag }), traced: true };
+    } catch (error) {
+      if (!unsupported(error)) throw error;
+    }
   if (tag === undefined) return { process: await client.spawn(argv, options) };
   try {
     return { process: await client.spawn(argv, options), tag };
   } catch (error) {
-    if ((error as { code?: unknown }).code !== 'ENOSYS') throw error;
+    if (!unsupported(error)) throw error;
     return { process: await client.spawn(argv, untagged) };
   }
 }
@@ -207,19 +223,47 @@ async function tagged(
 async function start(
   client: KernelClient,
   argv: readonly string[],
-  options: SpawnOptions,
-  join: Join | undefined
+  options: Spawning,
+  join: Join | undefined,
+  call?: string
 ): Promise<Started & { joined: boolean }> {
   if (join?.pgid !== undefined) {
     try {
-      return { ...(await tagged(client, argv, { ...options, pgid: join.pgid })), joined: true };
+      const process = await tagged(client, argv, { ...options, pgid: join.pgid }, call);
+      return { ...process, joined: true };
     } catch (error) {
       const code = String((error as { code?: unknown }).code ?? '');
       if (!REFUSED.has(code)) throw error;
       join.refused(code);
     }
   }
-  return { ...(await tagged(client, argv, options)), joined: false };
+  return { ...(await tagged(client, argv, options, call)), joined: false };
+}
+
+async function traceOf(
+  client: KernelClient,
+  trace: CallTrace | undefined,
+  argv: readonly string[],
+  given: readonly string[],
+  shell: boolean
+): Promise<Tracer | undefined> {
+  if (!trace) return undefined;
+  const launchers = argv.length - given.length + (shell ? 1 : 0);
+  return follow(client, trace.tag, argv, launchers);
+}
+
+async function traceEnded(
+  tracer: Tracer | undefined,
+  trace: CallTrace | undefined,
+  began: number,
+  exitCode: number | undefined | 'abandoned',
+  killed: boolean
+): Promise<void> {
+  if (!tracer || !trace) return;
+  const ms = Date.now() - began;
+  if (typeof exitCode === 'number') await tracer.collector.settled(LINGER_MS);
+  tracer.close();
+  trace.report(tracer.collector.facts(ms, killed));
 }
 
 export async function execute(
@@ -253,9 +297,14 @@ export async function execute(
     };
   const out = sink('stdout', spill, options, context, scrubbed());
   const errors = sink('stderr', spill, options, context, scrubbed());
+  const trace = (options as TracedExecOptions | undefined)?.trace;
+  let tracer: Tracer | undefined;
   let started: Started & { joined: boolean };
+  let began = Date.now();
   try {
     const tag = await hooks.tag?.(context);
+    tracer = await traceOf(client, trace, argv, given, typeof command === 'string');
+    began = Date.now();
     started = await start(
       client,
       argv,
@@ -266,13 +315,20 @@ export async function execute(
         onStdout: (bytes) => out.push(bytes),
         onStderr: (bytes) => errors.push(bytes),
       },
-      join
+      join,
+      tracer ? trace?.tag : undefined
     );
   } catch (error) {
+    tracer?.close();
     const message = error instanceof Error ? error.message : String(error);
     return err(new ExecutionError('spawn_error', message));
   }
   const { process } = started;
+  if (!started.traced) {
+    tracer?.close();
+    tracer = undefined;
+  }
+  tracer?.collector.begin(process.pid);
   spawned?.(process, started.tag);
   let killing: Promise<void> | undefined;
   const { abandon, release } = abandoning(hooks.abandonOnAbort);
@@ -284,6 +340,7 @@ export async function execute(
   over = () => watch.stop('held');
   if (overflowed) over();
   const exitCode = await waited(process, watch, abandon, () => killing);
+  await traceEnded(tracer, trace, began, exitCode, watch.ending !== undefined);
   if (exitCode === 'abandoned' || exitCode === undefined) {
     out.drop();
     errors.drop();

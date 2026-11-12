@@ -56,6 +56,7 @@ import { modelsCommand } from './models/index.ts';
 import { pageOnly, type Reach, type Transport, transportFetch, transportReach } from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { AZURE, azureBase } from './providers.ts';
+import { ranExtension } from './ran/index.ts';
 import { createPages } from './remote/pages.ts';
 import { identity } from './scoops/identity.ts';
 import { type Assets, packageAssets, type ScoopsRuntime, setupScoops } from './scoops/index.ts';
@@ -521,6 +522,7 @@ export async function start(
   registry.install(codemodeExtension(codemode));
   const intents = intentsOn(await settingsFile(client, at.agentDir));
   registry.install(intentExtension([...coding, ...codemode], intents));
+  registry.install(ranExtension(coding));
   if (chosen.toolSearch) registry.install(createToolSearchExtension());
   const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));

@@ -30,7 +30,18 @@ function shownMessage<T>(message: T): T {
   return Array.isArray(content) ? { ...message, content: withoutIntents(content) } : message;
 }
 
+type Details = { ran?: { intent?: unknown } };
+
+function unsaid<T>(message: T): T {
+  const details = (message as { details?: Details } | undefined)?.details;
+  if (details?.ran?.intent === undefined) return message;
+  const { intent: _, ...ran } = details.ran;
+  return { ...message, details: { ...details, ran } };
+}
+
 function shownEntry(entry: EntryRecord): EntryRecord {
+  if (entry.kind === 'pi.tool-result' && entry.model)
+    return { ...entry, model: entry.model.map(unsaid) };
   if (entry.kind !== 'pi.assistant' || !entry.model) return entry;
   return { ...entry, model: entry.model.map(shownMessage) };
 }
