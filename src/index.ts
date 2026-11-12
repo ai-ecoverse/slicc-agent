@@ -61,8 +61,23 @@ export {
   type ApprovalPolicyChange,
   type ApprovalPolicySet,
   DEFAULT_APPROVAL_POLICY,
+  type RunLatePolicy,
   type SudoPolicy,
+  type SudoPolicyChange,
 } from './approvals/policy.ts';
+export type { SudoFile, SudoReplay, SudoRun, SudoRunState } from './approvals/record.ts';
+export {
+  RUN_ERRORS,
+  type RunAnswer,
+  SUDO_RUN_TASK,
+} from './approvals/run.ts';
+export {
+  RUN_REASONS,
+  type RunGates,
+  type Runnable,
+  runnable,
+  SUDO_RUN_PROTOCOL,
+} from './approvals/runnable.ts';
 export type {
   AgentSudo,
   SudoAnswer,

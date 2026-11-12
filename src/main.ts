@@ -36,7 +36,7 @@ import { codexFetch } from './codex.ts';
 import { attachFreezer } from './freezer/index.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
 import { runTag } from './guests/tags.ts';
-import { type AgentHost, hostAgent } from './host.ts';
+import { type AgentHost, hostAgent, type RunTimes } from './host.ts';
 import { imageReads } from './images/index.ts';
 import { intentExtension } from './intent/index.ts';
 import { createActivity } from './kernel/activity.ts';
@@ -121,6 +121,7 @@ export interface AgentWorkerOptions {
   mcpRedirect?: string;
   approvalMs?: number;
   stagedMs?: number;
+  runTimes?: RunTimes;
 }
 
 export function usersOf(
@@ -663,6 +664,7 @@ export async function start(
       sees: (ref) => seesImages(models, ref),
       staging,
     },
+    runs: { kernel: client, boot: booted.boot, ...options.runTimes },
     monitor: {
       kernel: client,
       groups,

@@ -381,8 +381,6 @@ export function origins(entries: readonly EntryRecord[]): Map<number, From> {
   return out;
 }
 
-type NotifyLick = LickMessage & { summary?: string; report?: string };
-
 export function shownChannel(channel: Lick['channel']): LickMessage['channel'] {
   return channel === 'cone-message' ? 'bash' : channel;
 }
@@ -391,7 +389,7 @@ function lickMessage(
   id: string,
   entry: EntryRecord,
   decisions: ReadonlyMap<string, LickDecision>
-): NotifyLick | undefined {
+): LickMessage | undefined {
   const lick = entryLick(entry);
   if (!lick) return undefined;
   const state = lick.actions?.length ? (decisions.get(lick.id) ?? 'pending') : undefined;
@@ -408,6 +406,7 @@ function lickMessage(
     ...(lick.severity ? { severity: lick.severity } : {}),
     ...(lick.summary ? { summary: lick.summary } : {}),
     ...(lick.report ? { report: lick.report } : {}),
+    ...(lick.channel === 'sudo-run' && lick.source ? { approval: lick.source } : {}),
   };
 }
 

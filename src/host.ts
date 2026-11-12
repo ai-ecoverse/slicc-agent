@@ -21,6 +21,16 @@ import {
   stoppingAttach,
 } from './approvals/index.ts';
 import { type ApprovalPolicies, attachApprovalPolicy } from './approvals/policy.ts';
+import { publishedApprovals } from './approvals/published.ts';
+import type { RunKernel, Runner, SudoRunHost } from './approvals/run.ts';
+import {
+  frozenOf,
+  goneOf,
+  kernelGate,
+  type RunGates,
+  type RunnableWatch,
+  watchRunnable,
+} from './approvals/runnable.ts';
 import { type AgentSudo, createSudo, ownedSudo } from './approvals/sudo.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { ChangesRuntime } from './changes/index.ts';
@@ -321,7 +331,47 @@ export type HostOptions = {
   uploads?: Uploads;
   thumbnail?: Thumbnail;
   labels?: LabelsRuntime;
+  runs?: { kernel: RunKernel & { protocol?: readonly number[] }; boot: string | null } & RunTimes;
 } & ApprovalOptions;
+
+export type RunTimes = Partial<
+  Pick<SudoRunHost, 'pollMs' | 'killMs' | 'adoptMs' | 'outputCap' | 'keepMs'>
+>;
+
+function runsOf(
+  agent: Agent,
+  sources: { policy: ApprovalPolicies; approvals: Approvals; agents: ReplicatedState<unknown> },
+  options: HostOptions,
+  serverId: string
+) {
+  const { policy } = sources;
+  const runs = options.runs;
+  if (runs)
+    agent.sudoRuns.bind({
+      ...runs,
+      harness: agent.harness,
+      agents: agent.agents,
+      ...(options.licks ? { licks: options.licks.licks } : {}),
+      server: serverId,
+      conversation: Number(agent.root.id),
+    });
+  const gates = (): RunGates => ({
+    maxAgeMinutes: policy.current().sudo.runLate.maxAgeMinutes,
+    kernel: kernelGate(runs?.kernel),
+    frozen: frozenOf(() => agent.agents.state()),
+    gone: goneOf(() => agent.agents.state()),
+  });
+  const serve: Served['runs'] = (runner) => ({
+    approvalRun: (id, using) => agent.sudoRuns.claim(id, runner, gates(), using),
+    approvalRunStop: (id, using) => agent.sudoRuns.stop(id, runner, using),
+  });
+  const runnable: RunnableWatch = watchRunnable(
+    sources.approvals.state,
+    [policy.state, sources.agents, ...(options.freezer ? [options.freezer.frozen] : [])],
+    gates
+  );
+  return { serve, runnable };
+}
 
 const captureOf = (agent: Agent, approvals: Approvals, guests: Guests, options: HostOptions) =>
   captureGate({
@@ -330,6 +380,19 @@ const captureOf = (agent: Agent, approvals: Approvals, guests: Guests, options: 
     policy: () => guests.policy(),
     ...(options.scoops ? { lineage: options.scoops.scoops.lineage } : {}),
   });
+
+const sudoOf = (agent: Agent, approvals: Approvals, guests: Guests, options: HostOptions) =>
+  createSudo({
+    approvals,
+    capture: captureOf(agent, approvals, guests, options),
+    agents: () => agent.agents.state(),
+    ...(options.licks ? { licks: options.licks.licks } : {}),
+  });
+
+const viewStates = (viewMonitor: ReplicatedState<unknown>, approvals: Approvals['state']) => ({
+  viewMonitor,
+  viewApprovals: publishedApprovals(approvals, true),
+});
 
 export async function hostAgent(agent: Agent, options: HostOptions = {}): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -360,6 +423,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     context,
   });
   const guests = await guestsOf(agent, approvals, policy, context);
+  const runs = runsOf(agent, { policy, approvals, agents: mounted.agents }, options, serverId);
   const control: AgentControl = {
     ...createAgentControl(
       agent.harness,
@@ -412,22 +476,18 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     vault: options.secrets?.vault ?? idleVault,
     labels: labels.state,
     guests: guests.seats,
-    approvals: approvals.state,
+    approvals: publishedApprovals(approvals.state, false),
     approvalPolicy: policy.state,
+    approvalRunnable: runs.runnable.state,
   };
-  const sudo = createSudo({
-    approvals,
-    capture: captureOf(agent, approvals, guests, options),
-    agents: () => agent.agents.state(),
-    ...(options.licks ? { licks: options.licks.licks } : {}),
-  });
+  const sudo = sudoOf(agent, approvals, guests, options);
   const settings = options.settings ?? noSettings;
   const { trusted, viewed } = gatedControls(control, slims, shownViews, labels.state);
   const host = serveAgent({
     trusted,
     viewed,
     transcript: transcriptService,
-    viewMonitor: monitor.viewState,
+    ...viewStates(monitor.viewState, approvals.state),
     sudo,
     settings,
     remote,
@@ -435,6 +495,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     inventory: inventory.state,
     guest: guestOpener(guests, agent.agents, mounted.views, context),
     ...serving,
+    runs: runs.serve,
   });
   const offGuests = guests.onEnd((id) => {
     void host.invalidatePrincipal(
@@ -477,6 +538,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
       await remote.dispose();
       deliveries.dispose();
       sudo.close();
+      runs.runnable.dispose();
       approvals.close();
       transcript.dispose();
       mounted.dispose();
@@ -503,6 +565,7 @@ interface Served {
   viewed: () => AgentControl;
   transcript: Record<keyof AgentTranscript, ReplicatedState<unknown>>;
   viewMonitor: ReplicatedState<unknown>;
+  viewApprovals: ReplicatedState<unknown>;
   sudo?: AgentSudo;
   settings: AgentSettings;
   remote: AgentRemote;
@@ -510,6 +573,7 @@ interface Served {
   inventory?: ReplicatedState<InventoryState>;
   guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
   decide: (by: Decider) => AgentControl['decide'];
+  runs: (runner: Runner) => Pick<AgentControl, 'approvalRun' | 'approvalRunStop'>;
   owners?: Attendance;
 }
 
@@ -553,13 +617,17 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
   };
 }
 
-const seated = (serving: Served, principal: AgentPrincipal): AgentControl => ({
-  ...(principal.seat === 'view' ? serving.viewed() : serving.trusted),
-  decide: serving.decide({
+const seated = (serving: Served, principal: AgentPrincipal): AgentControl => {
+  const runner: Runner = {
     by: principal.seat === 'owner' ? 'owner' : 'follower',
     ...('device' in principal && principal.device ? { device: principal.device } : {}),
-  }),
-});
+  };
+  return {
+    ...(principal.seat === 'view' ? serving.viewed() : serving.trusted),
+    decide: serving.decide(runner),
+    ...serving.runs(runner),
+  };
+};
 
 const VIEW_METHODS = [...CONTROL_READS, ...OWNER_DEVICE_METHODS];
 
@@ -580,7 +648,11 @@ export function serveAgent(serving: Served): Host<AgentPrincipal> {
   const host = closedToGuests(
     createHost<AgentPrincipal>({ name: AGENT_HOST, self: SELF, principalKey })
   );
-  const viewing = { ...serving.transcript, monitor: serving.viewMonitor };
+  const viewing = {
+    ...serving.transcript,
+    monitor: serving.viewMonitor,
+    approvals: serving.viewApprovals,
+  };
   host.serve(AgentControl, (_input, principal, self) => {
     const control = seated(serving, principal);
     if (serving.owners && principal.seat !== 'host' && principal.seat !== 'guest')

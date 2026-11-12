@@ -63,6 +63,45 @@ export type SudoDetail = {
   validate?: true;
 };
 
+export type SudoFile = { path: string; sha256: string };
+
+export type SudoReplay = {
+  id: string;
+  user: string;
+  uid?: number;
+  target?: string;
+  argv: string[];
+  path?: string;
+  cwd?: string;
+  stdin?: SudoStdin;
+  rootOnly?: Record<string, boolean>;
+  userWritable?: SudoFile[];
+  tag?: string;
+  tags?: string[];
+  validate?: boolean;
+};
+
+export type SudoRunState = 'starting' | 'running' | 'done' | 'failed' | 'stopped';
+
+export type SudoRun = {
+  state: SudoRunState;
+  by: DecidedBy;
+  device?: string;
+  at: number;
+  pid?: number;
+  pgid?: number;
+  status?: number;
+  signal?: string;
+  endedAt?: number;
+  error?: string;
+  stdout?: string;
+  stderr?: string;
+  stopBy?: DecidedBy;
+  survivors?: number[];
+  capped?: number;
+  removed?: true;
+};
+
 export type CaptureWhat = 'screen' | 'camera' | 'microphone';
 
 export type CaptureMode = 'still' | 'video' | 'audio';
@@ -100,7 +139,12 @@ type Base = {
 
 export type GuestMessageApproval = Base & { kind: 'guest-message'; detail: GuestMessageDetail };
 export type GuestToolApproval = Base & { kind: 'guest-tool'; detail: GuestToolDetail };
-export type SudoApproval = Base & { kind: 'sudo'; detail: SudoDetail };
+export type SudoApproval = Base & {
+  kind: 'sudo';
+  detail: SudoDetail;
+  replay?: SudoReplay;
+  run?: SudoRun;
+};
 export type CaptureApproval = Base & { kind: 'capture'; detail: CaptureDetail };
 
 export type Approval = GuestMessageApproval | GuestToolApproval | SudoApproval | CaptureApproval;
@@ -115,7 +159,7 @@ type DraftOf<T extends Approval> = Pick<T, 'kind' | 'detail' | 'agentId' | 'requ
 export type ApprovalDraft =
   | DraftOf<GuestMessageApproval>
   | DraftOf<GuestToolApproval>
-  | DraftOf<SudoApproval>
+  | (DraftOf<SudoApproval> & { replay?: SudoReplay })
   | DraftOf<CaptureApproval>;
 
 export type ApprovalsState = { items: Approval[] };
@@ -224,8 +268,16 @@ export function cleanReason(reason: unknown): string | undefined {
 
 const decided = (item: Approval) => item.decidedAt ?? item.createdAt;
 
+export const runLive = (item: Approval): boolean =>
+  item.kind === 'sudo' && (item.run?.state === 'starting' || item.run?.state === 'running');
+
+const runHeld = (item: Approval): boolean =>
+  item.kind === 'sudo' &&
+  !!item.run &&
+  (runLive(item) || !!item.run.survivors?.length || (!!item.run.stdout && !item.run.removed));
+
 export function prune(items: Approval[], kept = APPROVALS_KEPT): Approval[] {
-  const settled = items.filter((item) => item.state !== 'pending');
+  const settled = items.filter((item) => item.state !== 'pending' && !runHeld(item));
   settled.sort((a, b) => decided(a) - decided(b));
   const drop = new Set(settled.slice(0, Math.max(0, settled.length - kept)));
   return items.filter((item) => !drop.has(item));

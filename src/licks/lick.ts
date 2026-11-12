@@ -16,6 +16,7 @@ export const LICK_CHANNELS = [
   'scoop-idle',
   'scoop-wait',
   'sudo-request',
+  'sudo-run',
   'cone-message',
 ] as const;
 

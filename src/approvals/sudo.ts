@@ -11,6 +11,8 @@ import {
   cleanReason,
   REASONS,
   type SudoDetail,
+  type SudoFile,
+  type SudoReplay,
   type SudoStdin,
 } from './record.ts';
 
@@ -40,6 +42,7 @@ export interface SudoRequest {
   always?: boolean;
   stdin?: SudoStdin;
   rootOnly?: Record<string, boolean>;
+  userWritable?: SudoFile[];
   timestamp?: boolean;
   validate?: boolean;
 }
@@ -160,6 +163,37 @@ export function sudoDetail(request: SudoRequest): SudoDetail {
   };
 }
 
+function filesOf(value: unknown): SudoFile[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter(
+      (file): file is SudoFile =>
+        typeof file === 'object' && file !== null && text(file.path) && text(file.sha256)
+    )
+    .map(({ path, sha256 }) => ({ path, sha256 }));
+}
+
+export function sudoReplay(request: SudoRequest): SudoReplay {
+  const rootOnly = rootOnlyOf(request.rootOnly);
+  const userWritable = filesOf(request.userWritable);
+  const tags = Array.isArray(request.tags) ? request.tags.filter(text) : undefined;
+  return {
+    id: request.id,
+    user: request.user,
+    ...(typeof request.uid === 'number' ? { uid: request.uid } : {}),
+    ...(text(request.target) ? { target: request.target } : {}),
+    argv: [...request.argv],
+    ...(text(request.path) ? { path: request.path } : {}),
+    ...(text(request.cwd) ? { cwd: request.cwd } : {}),
+    ...(STDIN.includes(request.stdin) ? { stdin: request.stdin } : {}),
+    ...(rootOnly ? { rootOnly } : {}),
+    ...(userWritable ? { userWritable } : {}),
+    ...(text(request.tag) ? { tag: request.tag } : {}),
+    ...(tags ? { tags } : {}),
+    ...(validating(request) ? { validate: true } : {}),
+  };
+}
+
 function scoopLick(
   id: string,
   agentId: string,
@@ -223,6 +257,7 @@ export function createSudo(options: SudoAttach): AgentSudo & { close(): void } {
           always: request.always !== false && !validating(request),
           expiresAt: request.expiresAt,
           detail,
+          replay: sudoReplay(request),
         },
         context
       );

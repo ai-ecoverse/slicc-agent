@@ -6,6 +6,8 @@ import type {
   ApprovalPolicyChange,
   ApprovalPolicySet,
 } from './approvals/policy.ts';
+import type { RunAnswer } from './approvals/run.ts';
+import type { Runnable } from './approvals/runnable.ts';
 import type { AgentSudo } from './approvals/sudo.ts';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
 import type { ChangesView } from './changes/git.ts';
@@ -133,6 +135,8 @@ export interface AgentControl {
     reason: string | null,
     context: Context
   ): Promise<ApprovalDecided>;
+  approvalRun(id: string, context: Context): Promise<RunAnswer>;
+  approvalRunStop(id: string, context: Context): Promise<RunAnswer>;
 }
 
 export interface ImportRequest {
@@ -327,10 +331,14 @@ export const CONTROL_METHODS = keys<AgentControl>({
   guestAlwaysForget: true,
   approvalPolicySet: true,
   decide: true,
+  approvalRun: true,
+  approvalRunStop: true,
 });
 
 export const OWNER_DEVICE_METHODS: readonly (keyof AgentControl & string)[] = [
   'decide',
+  'approvalRun',
+  'approvalRunStop',
   'guestOpen',
   'guestRevoke',
   'guestAlwaysForget',
@@ -374,6 +382,7 @@ export interface AgentTranscript {
   readonly guests: ReplicatedState<GuestSeat[]>;
   readonly approvals: ReplicatedState<Approval[]>;
   readonly approvalPolicy: ReplicatedState<ApprovalPolicy>;
+  readonly approvalRunnable: ReplicatedState<Record<string, Runnable>>;
 }
 
 export interface PrivateRevision {
@@ -407,6 +416,7 @@ export const TRANSCRIPT_STATES = keys<AgentTranscript>({
   guests: true,
   approvals: true,
   approvalPolicy: true,
+  approvalRunnable: true,
 });
 
 export const AgentTranscript: RemoteContract = contract('slicc.agent.transcript', {

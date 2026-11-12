@@ -14,6 +14,7 @@ import {
   type Storage,
 } from '@earendil-works/pi-durable';
 import { type Agents, openAgents } from './agents.ts';
+import { type SudoRuns, sudoRuns } from './approvals/run.ts';
 import type { Clock } from './clock.ts';
 import type { Cones } from './cone.ts';
 import { type GuestToolGate, guestToolGate } from './guests/guard.ts';
@@ -43,6 +44,7 @@ export interface Agent extends Cones {
   readonly reviews: GuestReviews;
   readonly gate: GuestToolGate;
   readonly scoopReviews: ScoopReviews;
+  readonly sudoRuns: SudoRuns;
   readonly reports: Reports;
   readonly timings: Timings;
   onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
@@ -92,6 +94,8 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   registry.install(reviews.extension);
   const scooped = scoopReviews();
   registry.install(scooped.extension);
+  const runs = sudoRuns();
+  registry.install(runs.extension);
   const reports = createReports();
   const timings = createTimings({
     onError: (error) => reports.record({ kind: 'listener_error', error }),
@@ -124,6 +128,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     reviews,
     gate,
     scoopReviews: scooped,
+    sudoRuns: runs,
     reports,
     timings,
     cone: () => agents.cone(),
