@@ -22,6 +22,7 @@ export interface ExecHooks {
   scrub?: () => ScrubStream;
   spawn?: (argv: readonly string[]) => readonly string[];
   tag?: (context: Context) => Promise<string | undefined>;
+  abandonOnAbort?: boolean;
 }
 
 class Spill {
@@ -126,9 +127,11 @@ export async function sweep(
   client: Pick<KernelClient, 'kill' | 'ps'>,
   process: KernelProcess
 ): Promise<void> {
-  const table = (await client.ps?.().catch(() => undefined)) ?? [];
-  const pids = [process.pid, ...descendants(table, process.pid)];
-  await Promise.all(pids.map((pid) => client.kill?.(pid, 'SIGKILL').catch(() => undefined)));
+  for (let round = 0; round < 2; round++) {
+    const table = (await client.ps?.().catch(() => undefined)) ?? [];
+    const pids = [process.pid, ...descendants(table, process.pid)];
+    await Promise.all(pids.map((pid) => client.kill?.(pid, 'SIGKILL').catch(() => undefined)));
+  }
 }
 
 function guard(
@@ -271,17 +274,40 @@ export async function execute(
   }
   const { process } = started;
   spawned?.(process, started.tag);
-  const watch = guard(process, options, context, () =>
-    join ? void sweep(client, process) : process.signal('SIGKILL')
-  );
+  let killing: Promise<void> | undefined;
+  const { abandon, release } = abandoning(hooks.abandonOnAbort);
+  const watch = guard(process, options, context, () => {
+    if (release()) return;
+    if (join) killing = sweep(client, process);
+    else void Promise.resolve(process.signal('SIGKILL'));
+  });
   over = () => watch.stop('held');
   if (overflowed) over();
-  const exitCode = await process.exited.finally(() => watch.release()).catch(() => undefined);
-  if (exitCode === undefined) {
+  const exitCode = await waited(process, watch, abandon, () => killing);
+  if (exitCode === 'abandoned' || exitCode === undefined) {
     out.drop();
     errors.drop();
-    return err(new ExecutionError('unknown', GONE));
+    if (exitCode === 'abandoned') watch.release();
+    return err(earlyError(exitCode));
   }
+  return settled(client, watch, out, errors, spill, exitCode, context);
+}
+
+function earlyError(exitCode: 'abandoned' | undefined): ExecutionError {
+  return exitCode === 'abandoned'
+    ? new ExecutionError('aborted', 'The command was aborted')
+    : new ExecutionError('unknown', GONE);
+}
+
+async function settled(
+  client: KernelClient,
+  watch: ReturnType<typeof guard>,
+  out: Sink,
+  errors: Sink,
+  spill: Spill,
+  exitCode: number,
+  context: Context
+): Promise<Result<ShellExecResult, ExecutionError>> {
   const ended = watch.ending ?? (await drained([out, errors], context));
   if (ended) {
     out.drop();
@@ -290,15 +316,52 @@ export async function execute(
   const spillPath = await spill.write(client);
   const ending = watch.ending ?? ended;
   if (ending) {
-    const error =
-      ending === 'held'
-        ? new ExecutionError('unknown', HELD)
-        : new ExecutionError(
-            ending,
-            `The command was ${ending === 'timeout' ? 'timed out' : 'aborted'}`
-          );
+    const error = endedError(ending);
     if (spillPath) error.spillPath = spillPath;
     return err(error);
   }
   return ok(spillPath ? { exitCode, spillPath } : { exitCode });
+}
+
+function abandoning(on: boolean | undefined): {
+  abandon: Promise<'abandoned'> | undefined;
+  release: () => boolean;
+} {
+  if (!on) return { abandon: undefined, release: () => false };
+  let abandoned: (() => void) | undefined;
+  const abandon = new Promise<'abandoned'>((resolve) => {
+    abandoned = () => resolve('abandoned');
+  });
+  return {
+    abandon,
+    release: () => {
+      abandoned?.();
+      return true;
+    },
+  };
+}
+
+function endedError(ending: Exclude<Ending, undefined>): ExecutionError {
+  return ending === 'held'
+    ? new ExecutionError('unknown', HELD)
+    : new ExecutionError(
+        ending,
+        `The command was ${ending === 'timeout' ? 'timed out' : 'aborted'}`
+      );
+}
+
+async function waited(
+  process: KernelProcess,
+  watch: ReturnType<typeof guard>,
+  abandon: Promise<'abandoned'> | undefined,
+  killingOf: () => Promise<void> | undefined
+): Promise<number | undefined | 'abandoned'> {
+  const raced: Array<Promise<number | undefined | 'abandoned'>> = [
+    process.exited.finally(() => watch.release()).catch(() => undefined),
+  ];
+  if (abandon !== undefined) raced.push(abandon);
+  const exitCode = await Promise.race(raced);
+  const killing = killingOf();
+  if (killing !== undefined) await killing.catch(() => undefined);
+  return exitCode;
 }

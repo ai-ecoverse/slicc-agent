@@ -18,9 +18,9 @@ import {
   attachApprovals,
   attendance,
   type Decider,
-  ownerPresent,
+  stoppingAttach,
 } from './approvals/index.ts';
-import { type ApprovalPolicies, alwaysFor, attachApprovalPolicy } from './approvals/policy.ts';
+import { type ApprovalPolicies, attachApprovalPolicy } from './approvals/policy.ts';
 import { type AgentSudo, createSudo, ownedSudo } from './approvals/sudo.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { ChangesRuntime } from './changes/index.ts';
@@ -246,20 +246,7 @@ async function approving(
   owners: Attendance,
   context: Context
 ): Promise<Approvals> {
-  const approvals = await attachApprovals(
-    {
-      harness: agent.harness,
-      guestAlways: alwaysFor(policy),
-      sudoApprover: () => policy.current().sudo.approver,
-      present: ownerPresent({ attended: owners.attended, agents: agent.agents }),
-      scoops: agent.scoopReviews,
-      stop: async (agentId, using) =>
-        (await agent.agents.conversation(agentId, using))?.abort(using),
-      ...(options.judge ? { judge: options.judge } : {}),
-      ...(options.approvalMs ? { ttlMs: options.approvalMs } : {}),
-    },
-    context
-  );
+  const approvals = await attachApprovals(stoppingAttach(agent, policy, owners, options), context);
   agent.scoopReviews.bind({
     approvals,
     agents: agent.agents,

@@ -970,6 +970,7 @@ if (version) {
       : fetched(input, init);
 }
 if (params.has('at')) Object.defineProperty(self, 'location', { value: new URL(params.get('at')) });
+if (params.has('abandon-abort')) globalThis.sliccAbandonOnAbort = true;
 const running = runAgentWorker(self, {
   ...(attach ? { attach } : {}),
   ...(params.has('redirect')
