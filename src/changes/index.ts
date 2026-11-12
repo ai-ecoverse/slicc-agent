@@ -47,9 +47,15 @@ export interface ChangesOptions {
 }
 
 const WATCHED = [HOME, '/mnt', '/scoops'];
+const ROOT = '/';
 const EXCLUDED = ['/tmp', '/var/lib/slicc'];
 
 type Env = ChangesOptions['env'];
+
+const git = (env: Env, repo: string, args: readonly string[], context: Context) =>
+  run(env, ['git', '-C', repo, ...args], ROOT, context);
+
+const gitIn = (repo: string, args: string) => `git -C ${quote(repo)} ${args}`;
 
 async function walk(env: Env, dir: string, depth: number, out: Set<string>, context: Context) {
   const listed = await env.listDir(dir, context);
@@ -86,7 +92,7 @@ async function discover(options: ChangesOptions, context: Context): Promise<stri
   const { env } = options;
   const found: string[] = [];
   for (const cwd of await cwds(options.agents, context)) {
-    const top = await run(env, ['git', 'rev-parse', '--show-toplevel'], cwd, context);
+    const top = await git(env, cwd, ['rev-parse', '--show-toplevel'], context);
     if (top.code === 0 && top.out.trim()) found.push(top.out.trim());
   }
   const walked = new Set<string>();
@@ -105,7 +111,7 @@ const piped = (words: readonly string[], command: string) =>
   `printf '%s\\n' ${words.map(quote).join(' ')} | ${command}`;
 
 async function shownOne(env: Env, repo: string, path: string, context: Context) {
-  const ran = await run(env, ['git', 'show', `:${path}`], repo, context);
+  const ran = await git(env, repo, ['show', `:${path}`], context);
   return ran.code === 0 ? shown(ran.out) : null;
 }
 
@@ -138,9 +144,9 @@ async function befores(
         env,
         piped(
           paths.map((path) => `:${path}`),
-          'git cat-file --batch-check'
+          gitIn(repo, 'cat-file --batch-check')
         ),
-        repo,
+        ROOT,
         context
       );
   const checked = listing?.code === 0 ? parseCheck(listing.out, paths) : null;
@@ -155,9 +161,9 @@ async function befores(
       env,
       piped(
         chunk.map((item) => item.oid),
-        'git cat-file --batch'
+        gitIn(repo, 'cat-file --batch')
       ),
-      repo,
+      ROOT,
       context
     );
     const parsed =
@@ -192,7 +198,7 @@ async function sideOf(
 }
 
 async function statusOf(env: Env, repo: string, context: Context): Promise<FileChange[] | null> {
-  const ran = await run(env, STATUS, repo, context);
+  const ran = await git(env, repo, STATUS, context);
   if (ran.code !== 0) return null;
   const pending = parseStatus(ran.out).slice(0, MAX_FILES);
   const before = await befores(env, repo, pending, context);
@@ -275,7 +281,7 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     const repo = listed()?.repo;
     if (!repo) return null;
     const rel = relative(path, repo);
-    const ran = await run(env, [...STATUS, '--', `:(literal)${rel}`], repo, context);
+    const ran = await git(env, repo, [...STATUS, '--', `:(literal)${rel}`], context);
     if (ran.code !== 0) throw failure(ran, `git status ${rel}`);
     const fresh = parseStatus(ran.out).find((item) => item.path === rel);
     if (fresh) return { path, repo, kind: fresh.kind };
@@ -336,7 +342,7 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
     accept: (path, context) =>
       change(path, context, async (found) => {
         const rel = relative(found.path, found.repo);
-        const ran = await run(env, ['git', 'add', '-A', '--', rel], found.repo, context);
+        const ran = await git(env, found.repo, ['add', '-A', '--', rel], context);
         if (ran.code !== 0) throw failure(ran, `git add ${rel}`);
       }),
     revert: (path, context) =>
@@ -348,7 +354,7 @@ export function attachChanges(options: ChangesOptions): ChangesRuntime {
           const removed = await env.remove(found.path, { force: true }, context);
           if (!removed.ok) throw removed.error;
         } else {
-          const ran = await run(env, ['git', 'restore', '--', rel], found.repo, context);
+          const ran = await git(env, found.repo, ['restore', '--', rel], context);
           if (ran.code !== 0) throw failure(ran, `git restore ${rel}`);
         }
       }),

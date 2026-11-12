@@ -179,7 +179,7 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
           .map(({ path, status, before, after }) => ({ path, status, before, after }));
       const until = (check, what) =>
         when([...agentSources(connection, model), connection.changes], check, what);
-      globalThis.git = { owner, model, text, listed, until, answer: null };
+      globalThis.git = { owner, client, model, text, listed, until, answer: null };
       listed();
       globalThis.progress = activity(connection);
       stage('the answer and three changes');
@@ -210,16 +210,14 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
     await until(() => listed().length === 0, 'no changes left');
   });
   const after = await staged(page, 'the files after', async () => {
-    const { text, listed, model, owner } = globalThis.git;
-    const out = {
+    const { text, listed, model } = globalThis.git;
+    return {
       a: await text('/home/proj/a.txt'),
       gone: await text('/home/proj/gone.txt'),
       added: await text('/home/proj/new.txt'),
       left: listed(),
       unavailable: model.changes.unavailable(),
     };
-    await owner.release();
-    return out;
   });
   assert.deepEqual(after, {
     a: 'one\n',
@@ -228,4 +226,18 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
     left: [],
     unavailable: null,
   });
+  const removed = await staged(page, 'the removed repository', async () => {
+    const { client, model, until, owner } = globalThis.git;
+    await client.run(['rm', '-rf', '/home/proj'], { cwd: '/' });
+    await until(() => model.changes.unavailable() !== null, 'the empty state again');
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const out = {
+      unavailable: model.changes.unavailable(),
+      home: (await client.fs.readdir('/home')).sort(),
+    };
+    await owner.release();
+    return out;
+  });
+  assert.match(removed.unavailable, /there are none here yet/);
+  assert.ok(!removed.home.includes('proj'), JSON.stringify(removed.home));
 });
