@@ -654,6 +654,7 @@ export async function start(
       sees: (ref) => seesImages(models, ref),
       staging,
     },
+    runs: { kernel: client, boot: booted.boot },
     monitor: {
       kernel: client,
       groups,

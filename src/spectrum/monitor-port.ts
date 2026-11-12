@@ -90,6 +90,7 @@ const KINDS: Record<string, string> = {
   'slicc.memory-extract': 'memory extraction',
   'slicc.memory-idle': 'memory idle watch',
   'slicc.title-idle': 'title idle watch',
+  'slicc.sudo-run': 'sudo run now',
 };
 
 export function age(ms: number): string {

@@ -131,12 +131,40 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
       const decideAs = (id, answer, by) => call((reply) => ({ decide: { id, answer, by }, reply }));
       const judged = () => call((port) => ({ judged: port }));
       const setTable = (judgeTable) => running.postMessage({ judgeTable });
+      const timeOut = async (local, id) => {
+        const expiresAt = Date.now() + 1500;
+        const stop = new AbortController();
+        const asked = owner.approve(
+          {
+            id,
+            kind: 'sudo',
+            user: 'cone',
+            uid: 1000,
+            target: 'root',
+            argv: ['ls', '/'],
+            path: '/usr/bin/ls',
+            cwd: '/',
+            tag: tags.cone,
+            expiresAt,
+            always: true,
+            stdin: 'none',
+            userWritable: [],
+          },
+          { signal: stop.signal }
+        );
+        await until(() => newest(local)?.replay?.id === id, 'the request');
+        setTimeout(() => stop.abort('expired'), expiresAt - Date.now() - 300);
+        await asked;
+        await until(() => newest(local).state === 'unanswered', 'the timeout');
+        return newest(local).id;
+      };
       globalThis.t = {
         kernel,
         ask,
         decideAs,
         judged,
         setTable,
+        timeOut,
         owner,
         asked,
         replies,
@@ -981,4 +1009,109 @@ test("a level 3 verdict on the owner's sudo asks an attached owner device, for a
     assert.notEqual(run.status, 0);
     assert.doesNotMatch(run.stderr, /withdrawn/);
   }
+});
+
+test("Run now replays a cone's timed-out sudo through the kernel, shows it in the approvals history and tells the cone when it starts and ends", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    worker: 'main-worker.js',
+    query: '?sudo-run&answer=Noted.&answer=Noted.',
+  });
+  const seen = await staged(page, 'a late sudo run', async () => {
+    const { owner, until, kernel, timeOut } = globalThis.t;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    const id = await timeOut(local, 'sudo-late');
+    const record = () => model.approvals.history().find((entry) => entry.approval.id === id);
+    await until(() => record()?.runnable === true, 'Run now to be offered');
+    const offered = record();
+    await model.approvals.run(id);
+    const twice = await model.approvals.run(id).then(
+      () => null,
+      (error) => error.message
+    );
+    await until(() => record()?.run?.state === 'done', 'the run to end');
+    const licks = () =>
+      (local.transcript.value?.entries ?? [])
+        .filter((entry) => entry.kind === 'pi.user')
+        .map((entry) => JSON.stringify(entry.model?.[0]?.content ?? ''))
+        .filter((text) => text.includes('channel=\\"sudo-run\\"'));
+    await until(() => licks().length === 2, 'both licks');
+    const out = await kernel.run(['cat', record().run.stdout]);
+    const result = {
+      offered,
+      twice,
+      run: record().run,
+      runnable: record().runnable,
+      licks: licks(),
+      out: out.stdout,
+      cards: model.agent
+        .messages()
+        .filter((message) => message.role === 'lick' && message.channel === 'sudo-run')
+        .map((message) => message.approval),
+    };
+    await local.close();
+    await owner.release();
+    return result;
+  });
+  assert.equal(seen.offered.state, 'unanswered');
+  assert.equal(seen.offered.reason, 'timeout');
+  assert.equal(seen.offered.approval.command, '/usr/bin/ls /');
+  assert.equal(seen.offered.approval.stoppable, undefined);
+  assert.equal(seen.twice, 'This request is already running.');
+  assert.equal(seen.run.state, 'done');
+  assert.equal(seen.run.status, 0);
+  assert.equal(seen.run.by, 'owner');
+  assert.match(seen.run.stdout, /^\/home\/cone\/\.slicc\/sudo-runs\/apr-.+\.out$/);
+  assert.match(seen.out, /home/);
+  assert.deepEqual(seen.runnable, { reason: 'This request already ran.' });
+  assert.match(seen.licks[0], /the owner ran your timed-out sudo request/);
+  assert.match(seen.licks[1], /your late sudo run ended: exit 0/);
+  assert.equal(seen.cards.length, 2);
+  assert.ok(seen.cards.every((approval) => approval === seen.offered.approval.id));
+});
+
+async function refusedRun(t, query) {
+  const page = await chrome.page(t);
+  await boot(page, { worker: 'main-worker.js', query });
+  return staged(page, 'a refused late sudo', async () => {
+    const { owner, until, timeOut } = globalThis.t;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    const id = await timeOut(local, 'sudo-refused');
+    const record = () => model.approvals.history().find((entry) => entry.approval.id === id);
+    await until(() => record()?.runnable, 'the gate');
+    const runnable = record().runnable;
+    const ran = await model.approvals.run(id).then(
+      () => null,
+      (error) => error.message
+    );
+    if (!ran) await until(() => record()?.run?.state === 'failed', 'the refusal');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const licks = (local.transcript.value?.entries ?? []).filter((entry) =>
+      JSON.stringify(entry.model ?? '').includes('sudo-run')
+    ).length;
+    const result = { runnable, ran, run: record().run ?? null, licks };
+    await local.close();
+    await owner.release();
+    return result;
+  });
+}
+
+test('Run now is refused with the reason when the kernel has no sudo replay', async (t) => {
+  const seen = await refusedRun(t, '');
+  assert.deepEqual(seen.runnable, { reason: 'Needs slicc-kernel protocol 1.16 or later.' });
+  assert.equal(seen.ran, 'Needs slicc-kernel protocol 1.16 or later.');
+  assert.equal(seen.run, null);
+  assert.equal(seen.licks, 0);
+});
+
+test("a replay the kernel refuses fails with the kernel's sentence and sends no lick", async (t) => {
+  const sentence = 'sudo: /usr/bin/ls changed since it was requested';
+  const seen = await refusedRun(t, `?sudo-run&sudo-run-refuse=${encodeURIComponent(sentence)}`);
+  assert.equal(seen.runnable, true);
+  assert.equal(seen.ran, null);
+  assert.equal(seen.run.state, 'failed');
+  assert.equal(seen.run.error, sentence);
+  assert.equal(seen.licks, 0);
 });

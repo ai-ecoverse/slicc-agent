@@ -10,6 +10,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ApprovalPolicy } from './approvals/policy.ts';
 import type { Approval } from './approvals/record.ts';
+import type { Runnable } from './approvals/runnable.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { ImportProgress } from './freezer/v6.ts';
@@ -79,6 +80,7 @@ export interface AgentConnection {
   readonly owner?: boolean;
   readonly approvals?: ReplicatedState<Approval[]>;
   readonly approvalPolicy?: ReplicatedState<ApprovalPolicy>;
+  readonly approvalRunnable?: ReplicatedState<Record<string, Runnable>>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly history?: boolean;
@@ -295,6 +297,7 @@ export async function connectAgent(
     owner: pagesHandle.variant === 'pages',
     approvals: hold<Approval[]>(state('approvals')),
     approvalPolicy: hold<ApprovalPolicy>(state('approvalPolicy')),
+    approvalRunnable: hold<Record<string, Runnable>>(state('approvalRunnable')),
     settings: lastingSettings(settings, hold),
     remote,
     history: offers(controlHandle, 'entries'),

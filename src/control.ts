@@ -85,6 +85,13 @@ const noApprovals: AgentControl['decide'] = async () => ({
   error: 'This agent has no approvals.',
 });
 
+const noRun: AgentControl['approvalRun'] = async () => ({
+  done: false,
+  error: 'This agent has no approvals.',
+});
+
+const noRuns = { approvalRun: noRun, approvalRunStop: noRun };
+
 type FreezerControl = Pick<
   FreezerRuntime,
   'freeze' | 'newChat' | 'thaw' | 'discard' | 'importProfile' | 'cancelImport'
@@ -593,5 +600,6 @@ export function createAgentControl(
     ...labelControls(labels),
     entries: pager(conversationFor),
     decide: noApprovals,
+    ...noRuns,
   };
 }
