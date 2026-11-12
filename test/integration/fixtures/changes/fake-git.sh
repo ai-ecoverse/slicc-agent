@@ -1,4 +1,8 @@
 #!/bin/bash
+if [ "$1" = "-C" ]; then
+  cd "$2" 2>/dev/null || { echo "fatal: cannot change to '$2': No such file or directory" >&2; exit 128; }
+  shift 2
+fi
 d="$PWD"
 while [ "$d" != "/" ] && [ ! -d "$d/.git" ]; do d="$(dirname "$d")"; done
 if [ ! -d "$d/.git" ]; then echo "fatal: not a git repository" >&2; exit 128; fi

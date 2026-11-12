@@ -58,7 +58,6 @@ export function parseStatus(out: string): Pending[] {
 }
 
 export const STATUS = [
-  'git',
   '--no-optional-locks',
   'status',
   '--porcelain=v1',
