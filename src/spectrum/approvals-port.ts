@@ -2,7 +2,9 @@ import type {
   Approval,
   ApprovalDecision,
   ApprovalEnd,
+  ApprovalRecord,
   ApprovalRequester,
+  ApprovalRun,
   ApprovalsEvents,
   ApprovalsPort,
   GuestToolApproval,
@@ -116,41 +118,9 @@ export function shown(item: Item, agentName: string | undefined): Approval {
   };
 }
 
-export type ApprovalRunShown = {
-  state: SudoRun['state'];
-  by: string;
-  device?: string;
-  at: number;
-  pid?: number;
-  status?: number;
-  signal?: string;
-  endedAt?: number;
-  error?: string;
-  stdout?: string;
-  stderr?: string;
-};
+export type HostApprovals = ApprovalsPort;
 
-export type ApprovalRecord = {
-  approval: Approval;
-  state: Item['state'];
-  reason?: string;
-  decidedBy?: string;
-  device?: string;
-  decidedAt?: number;
-  answer?: 'once' | 'always';
-  run?: ApprovalRunShown;
-  runnable?: Runnable;
-};
-
-export type HistoryEvents = ApprovalsEvents & { history: readonly ApprovalRecord[] };
-
-export type HostApprovals = ApprovalsPort & {
-  history?(): readonly ApprovalRecord[];
-  run?(id: string): Promise<void>;
-  stopRun?(id: string): Promise<void>;
-};
-
-export function runShown(run: SudoRun): ApprovalRunShown {
+export function runShown(run: SudoRun): ApprovalRun {
   const { state, by, device, at, pid, status, signal, endedAt, error, stdout, stderr } = run;
   return {
     state,
@@ -191,7 +161,7 @@ export const NOT_HERE = "This request can't be answered in this tab.";
 
 const asked = (item: Item) => item.state === 'pending' && item.tier === 'user';
 
-export class ApprovalsAdapter extends Emitter<HistoryEvents> implements ApprovalsPort {
+export class ApprovalsAdapter extends Emitter<ApprovalsEvents> implements ApprovalsPort {
   readonly #connection: AgentConnection;
   readonly #host: HostApprovals | undefined;
   readonly #ours: boolean;
@@ -218,8 +188,7 @@ export class ApprovalsAdapter extends Emitter<HistoryEvents> implements Approval
     connection.approvalRunnable?.subscribe(() => this.#historyChanged());
     host?.on('approvals', () => this.emit('approvals', this.list()));
     host?.on('ended', (detail) => this.emit('ended', detail));
-    if (host?.history)
-      (host as unknown as Emitter<HistoryEvents>).on('history', () => this.#historyChanged());
+    if (host?.history) host.on('history', () => this.#historyChanged());
   }
 
   #historyChanged(): void {

@@ -369,17 +369,15 @@ export function origins(entries: readonly EntryRecord[]): Map<number, From> {
   return out;
 }
 
-type NotifyLick = LickMessage & { summary?: string; report?: string; approval?: string };
-
 export function shownChannel(channel: Lick['channel']): LickMessage['channel'] {
-  return (channel === 'cone-message' ? 'bash' : channel) as LickMessage['channel'];
+  return channel === 'cone-message' ? 'bash' : channel;
 }
 
 function lickMessage(
   id: string,
   entry: EntryRecord,
   decisions: ReadonlyMap<string, LickDecision>
-): NotifyLick | undefined {
+): LickMessage | undefined {
   const lick = entryLick(entry);
   if (!lick) return undefined;
   const state = lick.actions?.length ? (decisions.get(lick.id) ?? 'pending') : undefined;
