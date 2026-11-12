@@ -226,18 +226,40 @@ test('changes with the real wasm-git: a local repo with a modified, an added and
     left: [],
     unavailable: null,
   });
-  const removed = await staged(page, 'the removed repository', async () => {
-    const { client, model, until, owner } = globalThis.git;
-    await client.run(['rm', '-rf', '/home/proj'], { cwd: '/' });
-    await until(() => model.changes.unavailable() !== null, 'the empty state again');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const out = {
-      unavailable: model.changes.unavailable(),
-      home: (await client.fs.readdir('/home')).sort(),
-    };
+  const rounds = await staged(page, 'the removed repository', async () => {
+    const { client, model, until, listed, owner } = globalThis.git;
+    const sh = (script) => client.run(['bash', '-c', script], { cwd: '/' });
+    const setup = [
+      'mkdir -p /home/proj && cd /home/proj && git init -q',
+      "printf 'one\\n' > a.txt && git add -A",
+      'git -c user.email=test@example.com -c user.name=Test commit -qm init',
+    ].join(' && ');
+    const out = [];
+    for (let round = 0; round < 5; round++) {
+      if (!(await client.fs.exists('/home/proj/.git'))) await sh(setup);
+      await sh("printf 'three\\n' > /home/proj/a.txt");
+      await until(
+        () => listed().some((item) => item.path === '/home/proj/a.txt'),
+        'the change to remove'
+      );
+      await sh('rm -rf /home/proj');
+      const error = await model.changes.revert('/home/proj/a.txt').then(
+        () => null,
+        (err) => err.message
+      );
+      await until(
+        () => !listed().some((item) => item.path === '/home/proj/a.txt'),
+        'the change gone'
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      out.push({ error, back: (await client.fs.readdir('/home')).includes('proj') });
+    }
     await owner.release();
     return out;
   });
-  assert.match(removed.unavailable, /there are none here yet/);
-  assert.ok(!removed.home.includes('proj'), JSON.stringify(removed.home));
+  for (const round of rounds) assert.equal(round.back, false, JSON.stringify(rounds));
+  assert.ok(
+    rounds.some((round) => round.error && !/has no pending change/.test(round.error)),
+    JSON.stringify(rounds)
+  );
 });
