@@ -1,9 +1,9 @@
-import type { AgentRecord } from '@ai-ecoverse/slicc-vault';
 import { type Context, type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Vault } from './vault.ts';
+import type { AgentRecord } from './vault-types.ts';
 
-export type { AgentRecord } from '@ai-ecoverse/slicc-vault';
+export type { AgentRecord } from './vault-types.ts';
 
 export interface VaultRecords {
   readonly state: MutableReplicatedState<AgentRecord[]>;

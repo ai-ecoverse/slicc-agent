@@ -1,14 +1,14 @@
 import type { Hit } from '@ai-ecoverse/slicc-scrub';
+import { type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { Scrub, Scrubbable, ScrubStream } from './scrub.ts';
 import type {
   AgentRecord,
   ErrorCode,
   McpServerEntry,
   OAuthConfig,
   OutgoingRequest,
-} from '@ai-ecoverse/slicc-vault';
-import { type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { Scrub, Scrubbable, ScrubStream } from './scrub.ts';
+} from './vault-types.ts';
 import { vaultHold } from './view.ts';
 
 export type ScrubPair = { needed: boolean; version: number; ready?: boolean };

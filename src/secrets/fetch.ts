@@ -1,6 +1,6 @@
-import type { OAuthConfig, OutgoingRequest } from '@ai-ecoverse/slicc-vault';
 import { type HeaderList, headerList } from '../net.ts';
 import { type RefreshTarget, type Vault, VaultRefusal } from './vault.ts';
+import type { OAuthConfig, OutgoingRequest } from './vault-types.ts';
 
 type Fetch = typeof fetch;
 
