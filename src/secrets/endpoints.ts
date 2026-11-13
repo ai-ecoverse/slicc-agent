@@ -1,7 +1,7 @@
-import type { McpServerEntry } from '@ai-ecoverse/slicc-vault';
 import type { ModelRoute } from './fetch.ts';
 import type { AgentRecord } from './records.ts';
 import type { Vault } from './vault.ts';
+import type { McpServerEntry } from './vault-types.ts';
 
 export const BEDROCK_ENDPOINTS = [
   'https://bedrock-runtime.{region}.amazonaws.com',
