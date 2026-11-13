@@ -412,8 +412,8 @@ export function fakeVault(values, version = 1, options = {}) {
 
 export function fakeSealed(secrets, log = [], typed = {}) {
   const tickets = new Map();
-  const hex = () =>
-    Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+  const hex = (bytes = 12) =>
+    Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (byte) =>
       byte.toString(16).padStart(2, '0')
     ).join('');
   const find = (name) => secrets.find((item) => item.name === name);
@@ -431,7 +431,7 @@ export function fakeSealed(secrets, log = [], typed = {}) {
         ? secrets.filter((item) => item.exec === 'shell').map((item) => item.name)
         : req.names;
       const real = Object.fromEntries(names.map((name) => [name, Boolean(find(name)?.exec)]));
-      const ticket = hex();
+      const ticket = hex(16);
       tickets.set(
         ticket,
         names.filter((name) => real[name])
@@ -446,7 +446,7 @@ export function fakeSealed(secrets, log = [], typed = {}) {
         else {
           found = {
             name: req.name,
-            placeholder: `fnox_proxy_${hex().slice(0, 24)}`,
+            placeholder: `fnox_proxy_${hex()}`,
             value,
             rules: [],
           };

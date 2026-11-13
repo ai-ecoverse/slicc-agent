@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { launch, staged } from './chrome.mjs';
+import { proxyId } from './fixtures/seeds.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -59,7 +60,7 @@ test('scrub receipts: an empty vault installs protection before receipt and imme
   await page.init(helpers);
   await page.goto('/');
   const value = 'fake-receipt-access-value-001';
-  const placeholder = 'fnox_proxy_000000000000000000000001';
+  const placeholder = proxyId(1);
   const seen = await staged(
     page,
     'receipt before tool output',
