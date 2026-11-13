@@ -21,7 +21,7 @@ export type RunNotice = {
   capped?: number;
   stdout?: string;
   stderr?: string;
-  tags?: string[];
+  tags: string[];
 };
 
 export type NoticeAnswer = { delivered: boolean; reason?: string };
@@ -53,10 +53,13 @@ export const NOTICE_REASONS = {
   stopped: 'stopped is true or false.',
   capped: 'capped is a size in bytes.',
   path: `stdout and stderr are absolute paths, at most ${NOTICE_LIMITS.path} characters.`,
+  tagsMissing:
+    "A run notice needs tags, the kernel's tags for the run exactly (an empty list when it has none).",
   tags: `tags is a list of at most ${NOTICE_LIMITS.tags} tags of at most ${NOTICE_LIMITS.tag} characters.`,
   licks: 'This agent has no licks.',
   gone: 'The agent that asked is gone, so nobody was told.',
   seen: 'This notice was already delivered.',
+  ended: 'This run already ended.',
   failed: "The notice couldn't be delivered.",
 } as const;
 
@@ -84,8 +87,9 @@ const KEYS = new Set([
 ]);
 
 const ID = /^bios:[\w.:-]+$/;
-const AGENT = /^[^\s\p{Cc}\p{Cf}]+$/u;
-const PATH = /^\/[^\p{Cc}\p{Cf}]*$/u;
+const AGENT = /^[^\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u;
+const PATH = /^\/[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]*$/u;
+const TAG = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u;
 const SIGNAL = /^SIG[A-Z0-9+-]{1,12}$/;
 
 const shown = (text: string) =>
@@ -118,7 +122,11 @@ const CHECKS: [keyof RunNotice, (value: unknown, notice: Record<string, unknown>
   ['capped', (value) => whole(value, 1)],
   ['stdout', path],
   ['stderr', path],
-  ['tags', (value) => list(value, NOTICE_LIMITS.tags, (one) => text(one, NOTICE_LIMITS.tag))],
+  [
+    'tags',
+    (value) =>
+      list(value, NOTICE_LIMITS.tags, (one) => text(one, NOTICE_LIMITS.tag) && TAG.test(one)),
+  ],
 ];
 
 const REASON_OF: Partial<Record<keyof RunNotice, string>> = {
@@ -145,6 +153,7 @@ export function checkNotice(raw: unknown): RunNotice | string {
   if (!(text(agentId, NOTICE_LIMITS.agentId) && AGENT.test(agentId))) return NOTICE_REASONS.agentId;
   if (!(text(command, NOTICE_LIMITS.command) && shown(command))) return NOTICE_REASONS.command;
   if (!time(notice.requestedAt) || !time(notice.at)) return NOTICE_REASONS.time;
+  if (!Array.isArray(notice.tags)) return NOTICE_REASONS.tagsMissing;
   return optional(notice) ?? (notice as RunNotice);
 }
 
@@ -169,7 +178,7 @@ function factsOf(notice: RunNotice, agentId: string): RunFacts {
     where: command,
     requestedAt: notice.requestedAt,
     run,
-    tags: notice.tags ?? [],
+    tags: notice.tags,
     started: paths.length ? ` Output: ${paths.join(' and ')}` : '',
     ended: paths.length ? ` Read it with your shell if you need it: ${paths.join(' and ')}.` : '',
   };
@@ -194,6 +203,11 @@ export async function deliverNotice(host: NoticeHost, raw: unknown): Promise<Not
   if (goneOf(state)(agentId)) return { delivered: false, reason: NOTICE_REASONS.gone };
   const eventId = `${notice.id}:${notice.phase}`;
   try {
+    if (
+      notice.phase === 'start' &&
+      (await seen(host, notice.id, `${notice.id}:end`, BACKGROUND_CONTEXT))
+    )
+      return { delivered: false, reason: NOTICE_REASONS.ended };
     if (await seen(host, notice.id, eventId, BACKGROUND_CONTEXT))
       return { delivered: false, reason: NOTICE_REASONS.seen };
     const facts = factsOf(notice, agentId);

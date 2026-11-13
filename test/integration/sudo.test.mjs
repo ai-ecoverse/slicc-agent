@@ -1481,6 +1481,7 @@ const biosHelpers = () => {
     at: now,
     stdout: '/home/cone/.slicc/sudo-runs/k-7.out',
     stderr: '/home/cone/.slicc/sudo-runs/k-7.err',
+    tags: [],
     ...extra,
   });
   const licks = (connection) =>
@@ -1508,8 +1509,13 @@ test("the owner's bios reports a sudo it ran from any owner device: start and en
     );
     const endAgain = await viewer.approvalRunNotice(notice('end', { status: 0 }));
     await until(() => licks(local).length === 2, 'the end lick');
+    const early = await local.approvalRunNotice(notice('end', { id: 'bios:k-9', status: 1 }));
+    await until(() => licks(local).length === 3, 'the early end lick');
+    const late = await local.approvalRunNotice(notice('start', { id: 'bios:k-9', pid: 5 }));
     await settle();
     const result = {
+      early,
+      late,
       start,
       again,
       end,
@@ -1535,7 +1541,10 @@ test("the owner's bios reports a sudo it ran from any owner device: start and en
     delivered: false,
     reason: 'This notice was already delivered.',
   });
-  assert.equal(seen.licks.length, 2);
+  assert.deepEqual(seen.early, { delivered: true });
+  assert.deepEqual(seen.late, { delivered: false, reason: 'This run already ended.' });
+  assert.equal(seen.licks.length, 3);
+  assert.match(seen.licks[2], /your late sudo run ended: exit 1/);
   assert.match(seen.licks[0], /sudo runs now: ls \/root/);
   assert.match(seen.licks[0], /the owner ran your timed-out sudo request/);
   assert.match(seen.licks[0], /pid 4242/);
@@ -1544,7 +1553,7 @@ test("the owner's bios reports a sudo it ran from any owner device: start and en
   assert.match(seen.licks[1], /after 3 s/);
   assert.match(seen.licks[1], /Its output isn't shown here/);
   assert.match(seen.licks[1], /k-7\.out and \/home\/cone\/\.slicc\/sudo-runs\/k-7\.err/);
-  assert.deepEqual(seen.cards, ['bios:k-7', 'bios:k-7']);
+  assert.deepEqual(seen.cards, ['bios:k-7', 'bios:k-7', 'bios:k-9']);
 });
 
 test('a bios run notice for a scoop that has ended goes to its cone and says so, and one for a frozen or missing agent tells nobody and says why', async (t) => {
@@ -1623,6 +1632,12 @@ test('a guest seat cannot send a bios run notice, and a malformed notice or one 
       phase: notice('run'),
       tags: notice('start', { tags: Array.from({ length: 40 }, (_, at) => `tag-${at}`) }),
       status: notice('end', { status: 'zero' }),
+      lineInPath: notice('end', { stdout: '/home/cone/a\u2028b.out' }),
+      paragraphInPath: notice('end', { stderr: '/home/cone/a\u2029b.err' }),
+      lineInAgent: notice('start', { agentId: 'cone\u2028' }),
+      lineInTag: notice('start', { tags: ['slicc-taint:a\u2029b'] }),
+      noTags: (({ tags: _, ...rest }) => rest)(notice('start')),
+      tagsNotList: notice('start', { tags: 'slicc-taint:a' }),
       empty: null,
     };
     const answers = {};
@@ -1646,5 +1661,11 @@ test('a guest seat cannot send a bios run notice, and a malformed notice or one 
   assert.equal(seen.answers.title.reason, 'A run notice has no title field.');
   assert.match(seen.answers.outputText.reason, /absolute paths/);
   assert.match(seen.answers.longCommand.reason, /at most 1024 characters/);
+  assert.match(seen.answers.lineInPath.reason, /absolute paths/);
+  assert.match(seen.answers.paragraphInPath.reason, /absolute paths/);
+  assert.match(seen.answers.lineInAgent.reason, /agentId/);
+  assert.match(seen.answers.lineInTag.reason, /^tags is a list/);
+  assert.match(seen.answers.noTags.reason, /needs tags/);
+  assert.match(seen.answers.tagsNotList.reason, /needs tags/);
   assert.deepEqual(seen.licks, []);
 });
