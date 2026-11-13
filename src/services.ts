@@ -7,6 +7,7 @@ import type {
   ApprovalPolicySet,
 } from './approvals/policy.ts';
 import type { RunAnswer } from './approvals/run.ts';
+import type { NoticeAnswer, RunNotice } from './approvals/run-notice.ts';
 import type { Runnable } from './approvals/runnable.ts';
 import type { AgentSudo } from './approvals/sudo.ts';
 import type { SendAttachment, ShownAttachment } from './attachments.ts';
@@ -137,6 +138,7 @@ export interface AgentControl {
   ): Promise<ApprovalDecided>;
   approvalRun(id: string, context: Context): Promise<RunAnswer>;
   approvalRunStop(id: string, context: Context): Promise<RunAnswer>;
+  approvalRunNotice(notice: RunNotice, context: Context): Promise<NoticeAnswer>;
 }
 
 export interface ImportRequest {
@@ -333,12 +335,14 @@ export const CONTROL_METHODS = keys<AgentControl>({
   decide: true,
   approvalRun: true,
   approvalRunStop: true,
+  approvalRunNotice: true,
 });
 
 export const OWNER_DEVICE_METHODS: readonly (keyof AgentControl & string)[] = [
   'decide',
   'approvalRun',
   'approvalRunStop',
+  'approvalRunNotice',
   'guestOpen',
   'guestRevoke',
   'guestAlwaysForget',

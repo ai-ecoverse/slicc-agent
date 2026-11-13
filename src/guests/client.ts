@@ -140,6 +140,7 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     propose,
     prompt: refuse,
     webhook: refuse,
+    approvalRunNotice: refuse,
     async close() {
       finish();
       link.close('closed');

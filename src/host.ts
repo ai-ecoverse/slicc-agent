@@ -23,6 +23,7 @@ import {
 import { type ApprovalPolicies, attachApprovalPolicy } from './approvals/policy.ts';
 import { publishedApprovals } from './approvals/published.ts';
 import type { RunKernel, Runner, SudoRunHost } from './approvals/run.ts';
+import { deliverNotice } from './approvals/run-notice.ts';
 import {
   frozenOf,
   goneOf,
@@ -365,12 +366,17 @@ function runsOf(
     approvalRun: (id, using) => agent.sudoRuns.claim(id, runner, gates(), using),
     approvalRunStop: (id, using) => agent.sudoRuns.stop(id, runner, using),
   });
+  const notices = { harness: agent.harness, agents: agent.agents, licks: options.licks?.licks };
+  const controls: Pick<AgentControl, 'approvalPolicySet' | 'approvalRunNotice'> = {
+    approvalPolicySet: (change, using) => policy.set(change, using),
+    approvalRunNotice: (raw) => deliverNotice(notices, raw),
+  };
   const runnable: RunnableWatch = watchRunnable(
     sources.approvals.state,
     [policy.state, sources.agents, ...(options.freezer ? [options.freezer.frozen] : [])],
     gates
   );
-  return { serve, runnable };
+  return { serve, runnable, controls };
 }
 
 const captureOf = (agent: Agent, approvals: Approvals, guests: Guests, options: HostOptions) =>
@@ -442,7 +448,7 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
       options.labels,
       guests
     ),
-    approvalPolicySet: (change, using) => policy.set(change, using),
+    ...runs.controls,
   };
   const remote = createRemote({
     harness: agent.harness,

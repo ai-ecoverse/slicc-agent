@@ -416,7 +416,7 @@ export function createAgentControl(
   uploads?: Uploads,
   labels?: Pick<LabelsRuntime, 'label' | 'step'>,
   guests?: Pick<Guests, 'open' | 'revoke' | 'forgetAlways'>
-): Omit<AgentControl, 'approvalPolicySet'> {
+): Omit<AgentControl, 'approvalPolicySet' | 'approvalRunNotice'> {
   const cone = cones(target);
   const current = () => cone.cone();
   const agents = (target as WithAgents).agents;
