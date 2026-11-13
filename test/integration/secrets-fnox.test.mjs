@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { after, test } from 'node:test';
 import { launch } from './chrome.mjs';
+import { proxyId } from './fixtures/seeds.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
 
 const FNOX = { 'node_modules/@ai-ecoverse/wasi-fnox/': ['package.json', 'bin/fnox.wasm'] };
-const GH = 'fnox_proxy_000000000000000000000071';
-const SHELLY = 'fnox_proxy_000000000000000000000072';
+const GH = proxyId(71);
+const SHELLY = proxyId(72);
+const VAULT_ONLY = proxyId(73);
 const SHELL_VALUE = 'shell-granted-value-0072';
 const CONFIG = `default_provider = "seven"
 
@@ -36,7 +38,7 @@ const SEALED = [
   { name: 'SHELLY', placeholder: SHELLY, value: SHELL_VALUE, exec: 'shell', rules: [] },
   {
     name: 'VAULT_ONLY',
-    placeholder: 'fnox_proxy_000000000000000000000073',
+    placeholder: VAULT_ONLY,
     value: 'v',
     exec: false,
     rules: [],
@@ -130,10 +132,7 @@ test('fnox secrets: a sealed secret is in the prompt with its placeholder and wh
   );
   assert.ok(system.includes(`- SHELLY = ${SHELLY}: in every bash`), system);
   assert.ok(system.includes('- LOCAL = $LOCAL: not sealed'), system);
-  assert.ok(
-    system.includes('- VAULT_ONLY = fnox_proxy_000000000000000000000073: not in the fnox config'),
-    system
-  );
+  assert.ok(system.includes(`- VAULT_ONLY = ${VAULT_ONLY}: not in the fnox config`), system);
   assert.ok(!system.includes('plain-local-value'));
   assert.equal(seen.listed, 'The user listed secrets: GH_TOKEN, SHELLY, LOCAL, VAULT_ONLY.');
 });
@@ -228,7 +227,7 @@ test('fnox secrets: an empty config with no sealed secrets shows no secrets', as
 
 test('sealed ask: a revealed value reaches the command, and the model sees only its placeholder', async (t) => {
   const value = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
-  const placeholder = 'fnox_proxy_000000000000000000000001';
+  const placeholder = proxyId(0);
   const command = [
     'sealed ask GH_TOKEN --reveal --prompt "to log in"; echo " reveal=$?"',
     'sealed ask GH_TOKEN | wc -c; echo " plain=$?"',

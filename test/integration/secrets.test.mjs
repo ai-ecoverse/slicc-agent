@@ -6,12 +6,13 @@ import { after, afterEach, test } from 'node:test';
 import { compile } from '@ai-ecoverse/slicc-scrub';
 import vectors from '@ai-ecoverse/slicc-scrub/vectors.json' with { type: 'json' };
 import { launch, staged } from './chrome.mjs';
-import { seeded } from './fixtures/seeds.mjs';
+import { proxyId, seeded } from './fixtures/seeds.mjs';
 
 const seeds = seeded(vectors);
 const scrubber = compile(seeds.values);
 const leaks = (text) => scrubber.text(text).hits;
 const [alpha, beta, gamma] = seeds.values.map((item) => item.value);
+const [ghPlaceholder, uniPlaceholder] = seeds.values.map((item) => item.placeholder);
 const split = (value) => (value.match(/.{1,10}/gu) ?? []).map((part) => `'${part}'`).join('');
 
 const types = { '.html': 'text/html', '.mjs': 'text/javascript', '.json': 'application/json' };
@@ -119,6 +120,23 @@ const helpers = () => {
   };
 };
 
+test('secrets: a realistic placeholder next to a long zero run stays intact under the fake vault scrub', () => {
+  const placeholder = proxyId(900);
+  const zeros = '0'.repeat(20);
+  const scrubber = compile([
+    {
+      name: 'GCLOUD_CREDENTIALS',
+      value: `{"client_id":"118${zeros}1"}`,
+      placeholder: proxyId(901),
+    },
+    { name: 'TOKEN', value: 'token-value-no-long-runs', placeholder },
+  ]);
+  const done = scrubber.text(`keep ${placeholder} beside ${zeros}`);
+  assert.ok(done.text.includes(placeholder), done.text);
+  assert.ok(!done.text.includes(zeros), done.text);
+  captured.push({ what: 'realistic placeholder beside a long zero run', text: done.text });
+});
+
 test('secrets: bash, read, codemode, a user send, memory, a lick and compaction all reach the model scrubbed', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
@@ -219,14 +237,9 @@ test('secrets: bash, read, codemode, a user send, memory, a lick and compaction 
   assert.equal(seen.answer, 'Done.');
   assert.equal(seen.compacted, true);
   assert.deepEqual(seen.vault, { port: 'ready', needed: true, version: 1, locked: 'no', held: 0 });
-  for (const shown of [
-    'fnox_proxy_000000000000000000000001',
-    'fnox_proxy_000000000000000000000004',
-    '[redacted:UNI_KEY]',
-    '[redacted:GH_TOKEN]',
-  ])
+  for (const shown of [ghPlaceholder, uniPlaceholder, '[redacted:UNI_KEY]', '[redacted:GH_TOKEN]'])
     assert.ok(seen.before.includes(shown), shown);
-  assert.ok(seen.memory.includes('remember fnox_proxy_000000000000000000000004'));
+  assert.ok(seen.memory.includes(`remember ${uniPlaceholder}`));
   assert.ok(seen.requests.length >= 5);
   assert.ok(seen.requests.some((text) => text.includes('context summarization assistant')));
 });
@@ -363,7 +376,7 @@ test('secrets: a model call goes out prepared by the vault, with the key filled 
   const turns = seen.upstream.filter((request) => !request.body.includes('Give this chat a title'));
   assert.equal(turns.length, 1);
   assert.equal(turns[0].authorization, `Bearer ${key}`);
-  assert.match(turns[0].body, /My key is fnox_proxy_000000000000000000000001\./);
+  assert.match(turns[0].body, new RegExp(`My key is ${ghPlaceholder}\\.`));
   for (const request of seen.upstream) assert.ok(!request.body.includes(alpha));
   assert.ok(seen.vault.some((message) => message.op === 'model' && message.provider === 'adobe'));
   assert.ok(seen.vault.some((message) => message.op === 'endpoints'));
