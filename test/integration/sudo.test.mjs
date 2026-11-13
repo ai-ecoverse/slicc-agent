@@ -1459,3 +1459,192 @@ test('Run now is refused once the cone that asked is gone', async (t) => {
   assert.equal(seen.ran, 'The agent that asked is gone, so it must be asked again.');
   assert.equal(seen.run, null);
 });
+
+async function biosNotices(t, body) {
+  const page = await chrome.page(t);
+  await boot(page, {
+    worker: 'main-worker.js',
+    query: '?answer=Noted.&answer=Noted.&answer=Noted.&answer=Noted.',
+  });
+  await page.evaluate(biosHelpers);
+  return staged(page, "the owner's bios reporting a run", body);
+}
+
+const biosHelpers = () => {
+  const now = Date.now();
+  const notice = (phase, extra = {}) => ({
+    id: 'bios:k-7',
+    phase,
+    agentId: 'cone',
+    command: 'ls /root',
+    requestedAt: now - 120_000,
+    at: now,
+    stdout: '/home/cone/.slicc/sudo-runs/k-7.out',
+    stderr: '/home/cone/.slicc/sudo-runs/k-7.err',
+    ...extra,
+  });
+  const licks = (connection) =>
+    (connection.transcript.value?.entries ?? [])
+      .filter((entry) => entry.kind === 'pi.user')
+      .map((entry) => JSON.stringify(entry.model?.[0]?.content ?? ''))
+      .filter((text) => text.includes('channel=\\"sudo-run\\"'));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 500));
+  globalThis.bios = { now, notice, licks, settle };
+};
+
+test("the owner's bios reports a sudo it ran from any owner device: start and end reach the cone that asked as sudo-run licks, each eventId once, with paths and no output", async (t) => {
+  const seen = await biosNotices(t, async () => {
+    const { owner, until, follow } = globalThis.t;
+    const { notice, licks, settle } = globalThis.bios;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    await model.agent.ready();
+    const viewer = await follow('phone-9', true);
+    const start = await viewer.approvalRunNotice(notice('start', { pid: 4242 }));
+    const again = await local.approvalRunNotice(notice('start', { pid: 4242 }));
+    await until(() => licks(local).length === 1, 'the start lick');
+    const end = await local.approvalRunNotice(
+      notice('end', { endedAt: notice('end').at + 3000, status: 0 })
+    );
+    const endAgain = await viewer.approvalRunNotice(notice('end', { status: 0 }));
+    await until(() => licks(local).length === 2, 'the end lick');
+    await settle();
+    const result = {
+      start,
+      again,
+      end,
+      endAgain,
+      licks: licks(local),
+      cards: model.agent
+        .messages()
+        .filter((message) => message.role === 'lick' && message.channel === 'sudo-run')
+        .map((message) => message.approval),
+    };
+    await viewer.close();
+    await local.close();
+    await owner.release();
+    return result;
+  });
+  assert.deepEqual(seen.start, { delivered: true });
+  assert.deepEqual(seen.again, {
+    delivered: false,
+    reason: 'This notice was already delivered.',
+  });
+  assert.deepEqual(seen.end, { delivered: true });
+  assert.deepEqual(seen.endAgain, {
+    delivered: false,
+    reason: 'This notice was already delivered.',
+  });
+  assert.equal(seen.licks.length, 2);
+  assert.match(seen.licks[0], /sudo runs now: ls \/root/);
+  assert.match(seen.licks[0], /the owner ran your timed-out sudo request/);
+  assert.match(seen.licks[0], /pid 4242/);
+  assert.match(seen.licks[0], /\/home\/cone\/\.slicc\/sudo-runs\/k-7\.out/);
+  assert.match(seen.licks[1], /your late sudo run ended: exit 0/);
+  assert.match(seen.licks[1], /after 3 s/);
+  assert.match(seen.licks[1], /Its output isn't shown here/);
+  assert.match(seen.licks[1], /k-7\.out and \/home\/cone\/\.slicc\/sudo-runs\/k-7\.err/);
+  assert.deepEqual(seen.cards, ['bios:k-7', 'bios:k-7']);
+});
+
+test('a bios run notice for a scoop that has ended goes to its cone and says so, and one for a frozen or missing agent tells nobody and says why', async (t) => {
+  const seen = await biosNotices(t, async () => {
+    const { owner, until } = globalThis.t;
+    const { notice, licks, settle } = globalThis.bios;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    await model.agent.ready();
+    const scoop = await local.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
+    await local.control.drop(scoop.id, BACKGROUND_CONTEXT);
+    const handed = await local.approvalRunNotice(notice('start', { agentId: scoop.id }));
+    await until(() => licks(local).length === 1, 'the lick in the cone');
+    const missing = await local.approvalRunNotice(
+      notice('start', { id: 'bios:k-8', agentId: 'nobody' })
+    );
+    await settle();
+    const shown = licks(local);
+    await local.control.freeze('cone', BACKGROUND_CONTEXT);
+    const frozen = await local.approvalRunNotice(notice('end', { status: 0 }));
+    const result = { handed, missing, frozen, licks: shown };
+    await local.close();
+    await owner.release();
+    return result;
+  });
+  assert.deepEqual(seen.handed, { delivered: true });
+  assert.equal(seen.licks.length, 1);
+  assert.match(
+    seen.licks[0],
+    /The scoop that asked, helper, has ended, so this goes to its cone\./
+  );
+  assert.deepEqual(seen.missing, {
+    delivered: false,
+    reason: 'The agent that asked is gone, so nobody was told.',
+  });
+  assert.equal(seen.frozen.delivered, false);
+  assert.match(seen.frozen.reason, /is frozen, so nobody was told\.$/);
+});
+
+test('a guest seat cannot send a bios run notice, and a malformed notice or one naming its own channel or text is refused without a lick', async (t) => {
+  const seen = await biosNotices(t, async () => {
+    const { owner } = globalThis.t;
+    const { notice, licks, settle } = globalThis.bios;
+    const local = await owner.connect();
+    const model = createAgentModel(local);
+    await model.agent.ready();
+    await local.control.guestOpen(
+      {
+        id: 'pat',
+        label: 'Pat',
+        agentId: 'cone',
+        expiresAt: null,
+        gates: { messages: 'off', tools: 'user' },
+      },
+      BACKGROUND_CONTEXT
+    );
+    const guest = await connectGuest(await owner.port({ guest: { id: 'pat', label: 'Pat' } }));
+    const refused = (call) =>
+      call.then(
+        (answer) => answer,
+        (error) => error.message
+      );
+    const guestSaid = await refused(guest.approvalRunNotice(notice('start')));
+    const guestControl = await refused(
+      guest.control.approvalRunNotice(notice('start'), BACKGROUND_CONTEXT)
+    );
+    const bad = {
+      agentPrefix: notice('start', { id: 'apr-1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed' }),
+      bare: notice('start', { id: 'k-7' }),
+      longId: notice('start', { id: `bios:${'k'.repeat(200)}` }),
+      channel: notice('start', { channel: 'webhook' }),
+      title: notice('start', { title: 'forged' }),
+      body: notice('start', { body: 'root:x:0:0' }),
+      longCommand: notice('start', { command: 'x'.repeat(2000) }),
+      outputText: notice('end', { stdout: 'root:x:0:0:root:/root:/bin/bash' }),
+      phase: notice('run'),
+      tags: notice('start', { tags: Array.from({ length: 40 }, (_, at) => `tag-${at}`) }),
+      status: notice('end', { status: 'zero' }),
+      empty: null,
+    };
+    const answers = {};
+    for (const [name, value] of Object.entries(bad))
+      answers[name] = await local.approvalRunNotice(value);
+    await settle();
+    const result = { guestSaid, guestControl, answers, licks: licks(local) };
+    await guest.close();
+    await local.close();
+    await owner.release();
+    return result;
+  });
+  assert.match(seen.guestSaid, /a guest can only watch and send messages/);
+  assert.match(seen.guestControl, /a guest can only watch and send messages/);
+  for (const [name, answer] of Object.entries(seen.answers)) {
+    assert.equal(answer.delivered, false, name);
+    assert.ok(answer.reason, name);
+  }
+  assert.equal(seen.answers.agentPrefix.reason, 'A run notice id is bios:<kernel id>.');
+  assert.equal(seen.answers.channel.reason, 'A run notice has no channel field.');
+  assert.equal(seen.answers.title.reason, 'A run notice has no title field.');
+  assert.match(seen.answers.outputText.reason, /absolute paths/);
+  assert.match(seen.answers.longCommand.reason, /at most 1024 characters/);
+  assert.deepEqual(seen.licks, []);
+});

@@ -72,6 +72,12 @@ export {
   SUDO_RUN_TASK,
 } from './approvals/run.ts';
 export {
+  NOTICE_LIMITS,
+  NOTICE_REASONS,
+  type NoticeAnswer,
+  type RunNotice,
+} from './approvals/run-notice.ts';
+export {
   RUN_REASONS,
   type RunGates,
   type Runnable,

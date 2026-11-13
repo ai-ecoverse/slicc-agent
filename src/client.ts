@@ -10,6 +10,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ApprovalPolicy } from './approvals/policy.ts';
 import type { Approval } from './approvals/record.ts';
+import type { NoticeAnswer, RunNotice } from './approvals/run-notice.ts';
 import type { Runnable } from './approvals/runnable.ts';
 import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
@@ -93,6 +94,7 @@ export interface AgentConnection {
     name: string,
     delivery: { id?: string | null; headers?: Record<string, string>; body: string }
   ): Promise<{ delivered: boolean }>;
+  approvalRunNotice(notice: RunNotice): Promise<NoticeAnswer>;
   close(): Promise<void>;
 }
 
@@ -312,6 +314,9 @@ export async function connectAgent(
         { id: delivery.id ?? null, headers: delivery.headers ?? {}, body: delivery.body },
         context
       );
+    },
+    approvalRunNotice(notice) {
+      return control.approvalRunNotice(notice, context);
     },
     async prompt(text, whenBusy = 'followUp') {
       const sent = await control.send({ text, whenBusy, requestId: null }, context);
