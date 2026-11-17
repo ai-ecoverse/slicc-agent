@@ -49,6 +49,9 @@
     [data-state="failed"] .mark {
       background: var(--bad);
     }
+    [data-state="unknown"] .mark {
+      background: var(--muted);
+    }
     h1 {
       font-size: 1.25rem;
       margin: 0 0 0.5rem;
@@ -80,7 +83,6 @@
     const answer = {};
     for (const key of ['code', 'state', 'iss', 'error', 'error_description'])
       if (params.has(key)) answer[key] = params.get(key);
-    history.replaceState(null, '', location.pathname);
     const main = document.querySelector('main');
     const show = (state, title, text, mark) => {
       main.dataset.state = state;
@@ -88,8 +90,14 @@
       main.querySelector('p').textContent = text;
       main.querySelector('.mark').textContent = mark;
     };
-    const named = answer.state ? localStorage.getItem(`slicc-mcp-oauth:${answer.state}`) : null;
-    const where = named ? ` to ${named}` : '';
+    const named = (() => {
+      if (!answer.state) return null;
+      try {
+        return localStorage.getItem(`slicc-mcp-oauth:${answer.state}`);
+      } catch {
+        return null;
+      }
+    })();
     if (!answer.state)
       show(
         'failed',
@@ -97,7 +105,19 @@
         'This page only works as the end of a sign-in from SLICC.',
         '!'
       );
-    else {
+    else if (named === null) {
+      const said = answer.error
+        ? `The authorization server answered: ${answer.error_description ?? answer.error}. `
+        : '';
+      show(
+        'unknown',
+        'No sign-in from SLICC was waiting for this',
+        `${said}SLICC didn't start this sign-in, so nothing was handed over. The full address is still in the address bar if you need to copy it.`,
+        '?'
+      );
+    } else {
+      const where = named ? ` to ${named}` : '';
+      history.replaceState(null, '', location.pathname);
       new BroadcastChannel('slicc-mcp-oauth').postMessage(answer);
       if (answer.error)
         show('failed', `Couldn't sign in${where}`, answer.error_description ?? answer.error, '!');
