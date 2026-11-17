@@ -884,3 +884,95 @@ test('an MCP account carries its server URL without the query or fragment, for t
   assert.equal(account.group, 'mcp');
   assert.equal(account.secret, 'token');
 });
+
+async function callback(t, query, name) {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  await page.evaluate(
+    (query, name) => {
+      const state = new URLSearchParams(query).get('state');
+      if (name) localStorage.setItem(`slicc-mcp-oauth:${state}`, name);
+      window.heard = [];
+      new BroadcastChannel('slicc-mcp-oauth').onmessage = ({ data }) => window.heard.push(data);
+    },
+    query,
+    name
+  );
+  await page.send('Runtime.evaluate', {
+    expression: `window.callback = window.open(${JSON.stringify(`/dist/oauth/mcp-callback.html?${query}`)}, 'slicc-mcp-oauth'), null`,
+    userGesture: true,
+  });
+  await page.within(
+    30000,
+    () =>
+      !['signing-in', undefined].includes(
+        window.callback.document?.querySelector('main')?.dataset.state
+      )
+  );
+  const shown = await page.evaluate(() => {
+    const main = window.callback.document.querySelector('main');
+    return {
+      state: main.dataset.state,
+      title: main.querySelector('h1').textContent,
+      text: main.querySelector('p').textContent,
+      body: main.textContent,
+      search: window.callback.location.search,
+    };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  const after = await page.evaluate(() => ({
+    closed: window.callback.closed,
+    kept: window.callback.closed ? null : window.callback.location.search,
+    heard: window.heard,
+  }));
+  return { ...shown, ...after };
+}
+
+test('the MCP callback page keeps a sign-in SLICC never started open with its address intact, hands over nothing and never shows the code', async (t) => {
+  const query = 'code=secret-code-123&state=nobody-asked&iss=https%3A%2F%2Fidp.test';
+  const seen = await callback(t, query);
+  assert.equal(seen.state, 'unknown');
+  assert.equal(seen.title, 'No sign-in from SLICC was waiting for this');
+  assert.match(seen.text, /SLICC didn't start this sign-in/);
+  assert.match(seen.text, /still in the address bar/);
+  assert.doesNotMatch(seen.body, /secret-code-123/);
+  assert.doesNotMatch(seen.body, /Signed in/);
+  assert.deepEqual(
+    { search: seen.search, closed: seen.closed, kept: seen.kept, heard: seen.heard },
+    { search: `?${query}`, closed: false, kept: `?${query}`, heard: [] }
+  );
+});
+
+test('the MCP callback page names no sign-in for an error answer SLICC never started', async (t) => {
+  const query = 'error=access_denied&error_description=User%20said%20no&state=nobody-asked';
+  const seen = await callback(t, query);
+  assert.equal(seen.state, 'unknown');
+  assert.equal(seen.title, 'No sign-in from SLICC was waiting for this');
+  assert.match(seen.text, /^The authorization server answered: User said no\. /);
+  assert.doesNotMatch(seen.body, /Couldn't sign in/);
+  assert.deepEqual(
+    { search: seen.search, closed: seen.closed, kept: seen.kept, heard: seen.heard },
+    { search: `?${query}`, closed: false, kept: `?${query}`, heard: [] }
+  );
+});
+
+test('the MCP callback page hands a sign-in SLICC started back, strips its address and closes', async (t) => {
+  const seen = await callback(t, 'code=secret-code-123&state=asked', 'docs');
+  assert.deepEqual(
+    {
+      state: seen.state,
+      title: seen.title,
+      search: seen.search,
+      closed: seen.closed,
+      heard: seen.heard,
+    },
+    {
+      state: 'done',
+      title: 'Signed in to docs',
+      search: '',
+      closed: true,
+      heard: [{ code: 'secret-code-123', state: 'asked' }],
+    }
+  );
+  assert.doesNotMatch(seen.body, /secret-code-123/);
+});
