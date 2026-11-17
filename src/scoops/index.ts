@@ -63,9 +63,14 @@ export interface AttachOptions {
   agentDir?: string;
 }
 
+export interface Spool {
+  user: string;
+  dir: string;
+}
+
 export interface Spools {
   users(): readonly string[];
-  prepare(user: string, dir: string, context: Context): Promise<void>;
+  prepare(spools: readonly Spool[], context: Context): Promise<void>;
 }
 
 export interface ScoopsRuntime {
@@ -105,12 +110,20 @@ export interface Installed {
   skipped: string[];
 }
 
-async function theirs(env: ExecutionEnv, path: string, context: Context): Promise<boolean> {
+type Placed = 'theirs' | 'current' | 'stale';
+
+async function placed(
+  env: ExecutionEnv,
+  path: string,
+  script: string,
+  context: Context
+): Promise<Placed> {
   const found = await env.fileInfo(path, context);
-  if (!found.ok) return found.error.code !== 'not_found';
-  if (found.value.kind !== 'file') return true;
+  if (!found.ok) return found.error.code === 'not_found' ? 'stale' : 'theirs';
+  if (found.value.kind !== 'file') return 'theirs';
   const read = await env.readTextFile(path, context);
-  return !read.ok || !read.value.includes(PROTOCOL_MARK);
+  if (!read.ok || !read.value.includes(PROTOCOL_MARK)) return 'theirs';
+  return read.value === script ? 'current' : 'stale';
 }
 
 async function install(
@@ -122,14 +135,20 @@ async function install(
   const skipped: string[] = [];
   if (!(await env.createDir(binDir, { recursive: true }, context)).ok)
     return { done: false, skipped };
+  const ours: string[] = [];
   for (const name of COMMANDS) {
     const path = `${binDir}/${name}`;
-    if (await theirs(env, path, context)) {
+    const found = await placed(env, path, script, context);
+    if (found === 'theirs') {
       skipped.push(name);
       continue;
     }
-    if (!(await env.writeFile(path, script, context)).ok) return { done: false, skipped };
-    const mode = await env.exec(['chmod', '755', path], undefined, context);
+    if (found === 'stale' && !(await env.writeFile(path, script, context)).ok)
+      return { done: false, skipped };
+    ours.push(path);
+  }
+  if (ours.length) {
+    const mode = await env.exec(['chmod', '755', ...ours], undefined, context);
     if (!mode.ok || mode.value.exitCode !== 0) return { done: false, skipped };
   }
   for (const name of RETIRED_COMMANDS) {
@@ -205,7 +224,7 @@ function planeOf(
   return spooled(env, cli, options.spools, options.agents, common, context);
 }
 
-function spooled(
+export function spooled(
   env: ExecutionEnv,
   cli: ReturnType<typeof createCli>,
   spools: Spools,
@@ -216,10 +235,10 @@ function spooled(
   const planes = new Map<string, Promise<ControlPlane | undefined>>();
   let off: () => void = () => undefined;
   let chain: Promise<unknown> = Promise.resolve();
-  const open = async (user: string): Promise<ControlPlane | undefined> => {
+  const open = async (user: string, prepared: Promise<void>): Promise<ControlPlane | undefined> => {
     const dir = `${options.dir}/${user}`;
     try {
-      await spools.prepare(user, dir, context);
+      await prepared;
       const plane = controlPlane(env, cli, { ...options, dir, user });
       await plane.start(context);
       return plane;
@@ -231,12 +250,18 @@ function spooled(
   const sync = () => {
     const step = async () => {
       const wanted = new Set(spools.users());
-      for (const user of wanted)
-        if (!planes.has(user)) {
-          const opened = open(user);
-          planes.set(user, opened);
-          await opened;
-        }
+      const fresh = [...wanted].filter((user) => !planes.has(user));
+      const prepared = spools.prepare(
+        fresh.map((user) => ({ user, dir: `${options.dir}/${user}` })),
+        context
+      );
+      prepared.catch(() => undefined);
+      const opening = fresh.map((user) => {
+        const opened = open(user, prepared);
+        planes.set(user, opened);
+        return opened;
+      });
+      await Promise.all(opening);
       for (const [user, plane] of [...planes])
         if (!wanted.has(user)) {
           planes.delete(user);
