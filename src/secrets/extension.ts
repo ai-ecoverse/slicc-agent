@@ -20,10 +20,10 @@ export const SECRETS_COMMAND = '/secrets';
 export const SHELL_GRANTS = ['fnox', 'exec', '--shell-grants', '--'] as const;
 
 export const MODEL_LINE =
-  'Credentials are env vars (`$NAME`) holding placeholders, listed below with where each works (`fnox list` shows the fnox config). The vault fills in the real value only in the listed header, for the listed domain, method and path, over HTTPS (curl, git, fetch). Adding a rule means editing `/etc/fnox/config.toml` with sudo, which the user approves. `fnox exec` gives real values only for secrets the user enabled for exec, and the secrets listed as \'in every bash\' already hold real values in your commands. Prefer an argv grant in `/etc/slicc/secrets-policy.toml` (`NAME = { argv = [["/absolute/program"]] }`) for a secret one program needs; `{ shell = true }` hands it to every bash. Everything is logged, and stored values are replaced by their placeholder in everything you see; edit around placeholders, since files show them too. Never ask the user to paste a credential into the chat.';
+  'Credentials are env vars (`$NAME`) holding placeholders, listed below with where each works (`fnox list` shows the fnox config). The vault fills in the real value only in the listed header, for the listed domain, method and path, over HTTPS (curl, git, fetch). Adding a rule means editing `/etc/fnox/config.toml` with sudo: the user approving that sudo is the only acceptance there is, and the vault uses the rules in it as soon as it is written (`sealed list --json` shows the rules it uses now; the list below is read at start and can lag behind). It uses the rules of a secret only while the file is root-owned and not writable by others, and its `[secrets]` entry holds the placeholder of that secret: `NAME = { provider = "seven", value = "<placeholder>" }` (`sealed placeholder NAME` prints it); without the `value` the vault ignores the entry and every rule naming it, though `fnox check` passes. `fnox exec` gives real values only for secrets the user enabled for exec, and the secrets listed as \'in every bash\' already hold real values in your commands. Prefer an argv grant in `/etc/slicc/secrets-policy.toml` (`NAME = { argv = [["/absolute/program"]] }`) for a secret one program needs; `{ shell = true }` hands it to every bash. Everything is logged, and stored values are replaced by their placeholder in everything you see; edit around placeholders, since files show them too. Never ask the user to paste a credential into the chat.';
 
 export const ASK_LINE =
-  "When a secret you need is missing, ask the user for it: `fnox set NAME --ask` adds it to the fnox config, and `sealed ask NAME` keeps it in the vault only (`--prompt TEXT` says why you need it). The user types the value in a dialog, and the command prints only its placeholder. `fnox set` always asks for a new value and replaces an existing one, so use it only for a missing secret. Add `--reveal` to `sealed ask` only when a tool needs the plaintext itself, not where the vault fills it in a header, and pipe it straight into that tool (`sealed ask NAME --reveal | tool --password-stdin`): the user must allow every reveal, and you still see only the placeholder. A non-zero exit means the user declined or the request ended; don't ask again unless the user wants you to.";
+  "When a secret you need is missing, ask the user for it: `fnox set NAME --ask` seals it and writes its entry to `fnox.toml` in the current directory, which the vault doesn't read (copy the entry into `/etc/fnox/config.toml` with sudo before adding its rules there), and `sealed ask NAME` keeps it in the vault only (`--prompt TEXT` says why you need it). The user types the value in a dialog, and the command prints only its placeholder. `fnox set` always asks for a new value and replaces an existing one, so use it only for a missing secret. Add `--reveal` to `sealed ask` only when a tool needs the plaintext itself, not where the vault fills it in a header, and pipe it straight into that tool (`sealed ask NAME --reveal | tool --password-stdin`): the user must allow every reveal, and you still see only the placeholder. A non-zero exit means the user declined or the request ended; don't ask again unless the user wants you to.";
 
 type Leaf = { get(): string; set(text: string): void };
 
@@ -95,6 +95,9 @@ export async function scrubResult(
   };
 }
 
+export const unusedLine = (name: string, placeholder: string) =>
+  `the vault uses none of these rules yet, and there is nothing for the user to accept: it takes rules only from a root-owned \`/etc/fnox/config.toml\` whose \`[secrets]\` entry is \`${name} = { provider = "seven", value = "${placeholder}" }\`; fix the file with sudo, then \`sealed list --json\` shows the rules the vault uses`;
+
 function where(name: SecretName, granted: boolean): string {
   const rules = name.rules.map((rule) =>
     [
@@ -102,15 +105,19 @@ function where(name: SecretName, granted: boolean): string {
       rule.header ? `header ${rule.header}` : '',
       rule.methods?.length ? rule.methods.join(' ') : '',
       rule.paths?.length ? rule.paths.join(' ') : '',
-      rule.proposed ? 'proposed in the fnox config, not yet accepted by the vault' : '',
+      rule.proposed ? 'in the fnox config but not in effect' : '',
     ]
       .filter(Boolean)
       .join(', ')
   );
+  const idle =
+    name.placeholder !== null && name.rules.some((rule) => rule.proposed)
+      ? [unusedLine(name.name, name.placeholder)]
+      : [];
   const shell = name.exec === 'shell' && granted ? ['in every bash'] : [];
   const sealed = name.placeholder === null ? ['not sealed'] : [];
   const config = name.fnox ? [] : ['not in the fnox config'];
-  const parts = [...rules, ...shell, ...sealed, ...config];
+  const parts = [...rules, ...idle, ...shell, ...sealed, ...config];
   return parts.length ? `: ${parts.join('; ')}` : '';
 }
 

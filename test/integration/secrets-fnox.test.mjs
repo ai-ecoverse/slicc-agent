@@ -137,6 +137,59 @@ test('fnox secrets: a sealed secret is in the prompt with its placeholder and wh
   assert.equal(seen.listed, 'The user listed secrets: GH_TOKEN, SHELLY, LOCAL, VAULT_ONLY.');
 });
 
+test('fnox secrets: config rules the vault ignores say what the vault needs, with nothing to accept', async (t) => {
+  const pat = proxyId(74);
+  const config = `default_provider = "seven"
+
+[providers.seven]
+type = "sealed"
+
+[secrets]
+GITHUB_PAT = { provider = "seven", description = "GitHub PAT" }
+
+[[proxy.rules]]
+secret = "GITHUB_PAT"
+domain = "api.github.com"
+header = "authorization"
+methods = ["GET", "POST", "PATCH"]
+paths = ["/repos/cpilsworth/skills", "/repos/cpilsworth/skills/**"]
+`;
+  const command =
+    'cd /home && fnox set NEW_PAT --ask >/dev/null 2>&1; l=$(cat fnox.toml); e=$(cat /etc/fnox/config.toml); [[ $l == *NEW_PAT*value* ]] && echo local-has; [[ $e == *NEW_PAT* ]] || echo etc-lacks';
+  const seen = await agentWith(t, {
+    config,
+    fnox: true,
+    sealed: [
+      {
+        name: 'GITHUB_PAT',
+        placeholder: pat,
+        value: 'ghp-real-value-0074',
+        exec: false,
+        rules: [],
+      },
+    ],
+    typed: { NEW_PAT: 'typed-in-the-dialog-0074' },
+    steps: [{ tool: { name: 'bash', args: { command } } }, { answer: 'Seen.' }],
+  });
+  const system = systemOf(seen.requests);
+  assert.ok(
+    system.includes(
+      `- GITHUB_PAT = ${pat}: api.github.com, header authorization, GET POST PATCH, /repos/cpilsworth/skills /repos/cpilsworth/skills/**, in the fnox config but not in effect; the vault uses none of these rules yet, and there is nothing for the user to accept: it takes rules only from a root-owned \`/etc/fnox/config.toml\` whose \`[secrets]\` entry is \`GITHUB_PAT = { provider = "seven", value = "${pat}" }\`; fix the file with sudo, then \`sealed list --json\` shows the rules the vault uses\n`
+    ),
+    system
+  );
+  assert.ok(!system.includes('accepted by the vault'), system);
+  assert.ok(system.includes('the user approving that sudo is the only acceptance'), system);
+  assert.ok(system.includes('without the `value` the vault ignores the entry'), system);
+  assert.ok(
+    system.includes(
+      "writes its entry to `fnox.toml` in the current directory, which the vault doesn't read"
+    ),
+    system
+  );
+  assert.ok(seen.entries.includes('local-has\\netc-lacks'), seen.entries);
+});
+
 test('fnox secrets: a shell-granted secret wraps bash in fnox exec --shell-grants, and the command sees its value', async (t) => {
   const hash = createHash('sha256').update(SHELL_VALUE).digest('hex');
   const command = `test "$(printf %s "$SHELLY" | sha256sum | cut -c1-64)" = ${hash} && echo granted-match || echo "no-match:$SHELLY"`;
