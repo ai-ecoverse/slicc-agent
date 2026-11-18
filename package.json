@@ -44,6 +44,10 @@
     "./agent-worker": {
       "types": "./dist/types/agent-worker.d.ts",
       "default": "./dist/agent-worker.js"
+    },
+    "./testing": {
+      "types": "./dist/types/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "files": [

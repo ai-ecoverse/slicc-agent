@@ -77,6 +77,8 @@ export function contract(name: string, variants: Variants): Contract {
   return made;
 }
 
+export const variantsOf = (made: Contract): Variants | undefined => shapes.get(made);
+
 export const fingerprints = (contracts: readonly Contract[]): string =>
   contracts
     .map((made) => `${made.name}@${made.fingerprint}`)
