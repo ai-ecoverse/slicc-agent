@@ -84,6 +84,7 @@ import {
   createSliccModels,
   keylessOf,
   providerFields,
+  readyOf,
   resolveDefaultModel,
   sliccProviders,
 } from './settings.ts';
@@ -302,7 +303,7 @@ export async function modelsOf(
   const fields = await providerFields(store, providers);
   const keyless = keylessOf(records, fields);
   const bare = () => providers.map((provider) => provider.id).filter(keyless);
-  const credentials = vaultCredentials(records, fields.env, fields.ready, bare);
+  const credentials = vaultCredentials(records, fields.env, readyOf(records, fields), bare);
   const models = createSliccModels(
     credentials,
     providers,
