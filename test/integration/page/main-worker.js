@@ -1135,7 +1135,10 @@ if (params.has('vault')) {
     records,
     models,
     ...(params.has('vault-mcp') ? { mcp: JSON.parse(params.get('vault-mcp')) } : {}),
+    ...(params.has('vault-http') ? { httpModels: true } : {}),
   });
   self.fakeVault = fake;
   self.dispatchEvent(new MessageEvent('message', { data: { vault: fake.port, scrub: fake.pair } }));
+  if (params.has('vault-release'))
+    fake.welcome({ version: params.get('vault-release'), scrub: fake.pair, locked: false });
 }

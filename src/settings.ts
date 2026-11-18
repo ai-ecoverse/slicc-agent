@@ -217,11 +217,13 @@ export function keylessOf(
 
 export function readyOf(
   records: Pick<VaultRecords, 'model'>,
-  fields: Pick<ProviderFields, 'ready' | 'env'>
+  fields: Pick<ProviderFields, 'ready' | 'env'>,
+  httpKeys: () => boolean = () => false
 ): (providerId: string) => boolean {
   return (providerId) =>
     fields.ready(providerId) &&
     !(
+      !httpKeys() &&
       LISTINGS.get(providerId)?.keyless &&
       records.model(providerId) &&
       fields.env(providerId)?.[LOCAL_BASE]?.startsWith('http:')
@@ -256,10 +258,10 @@ function accounts(
   providers: Provider[],
   given: Pick<ProviderFields, 'ready' | 'get' | 'env'>,
   blocked: (providerId: string) => boolean,
-  models: MutableModels
+  models: MutableModels,
+  ready: (providerId: string) => boolean
 ): AccountState[] {
   const keyless = keylessOf(records, given);
-  const ready = readyOf(records, given);
   return providers.map((provider) => {
     const record = ready(provider.id) ? records.model(provider.id) : undefined;
     const fields = ACCOUNT_FIELDS[provider.id];
@@ -437,7 +439,7 @@ export function grokBudgets(
 }
 
 async function probeLocal(
-  { records, fields }: SettingsSources,
+  { records, fields, httpKeys = () => false }: SettingsSources,
   given: Record<string, string> | null,
   reread: () => Promise<unknown>
 ): Promise<void> {
@@ -445,7 +447,7 @@ async function probeLocal(
   if (typeof base !== 'string') throw new Error(base.problem);
   await reread();
   const key = records.model(LOCAL)?.placeholder;
-  if (key && base.startsWith('http:')) throw new Error(KEY_OVER_HTTP);
+  if (key && base.startsWith('http:') && !httpKeys()) throw new Error(KEY_OVER_HTTP);
   await listLocal(base, {
     ...(key ? { key } : {}),
     fetch: (input, init) => globalThis.fetch(input, init),
@@ -455,6 +457,7 @@ async function probeLocal(
 export interface SettingsSources {
   records: VaultRecords;
   fields: ProviderFields;
+  httpKeys?: () => boolean;
 }
 
 function blockedBy(reach: Reach | undefined): (providerId: string) => boolean {
@@ -513,7 +516,7 @@ export async function createAgentSettings(
       (found): found is BudgetState => found !== null
     );
   const keyless = keylessOf(records, fields);
-  const ready = readyOf(records, fields);
+  const ready = readyOf(records, fields, sources.httpKeys);
   const snapshot = async (): Promise<SettingsState> => {
     const stored = new Set(
       providers
@@ -530,7 +533,7 @@ export async function createAgentSettings(
       models: choices(models, open(providers), stored),
       labels: labels(models, open(shown), stored),
       accounts: [
-        ...accounts(records, shown, fields, blocked, models),
+        ...accounts(records, shown, fields, blocked, models, ready),
         ...((await mcp?.accounts()) ?? []),
       ],
       providers: offered(providers, blocked),

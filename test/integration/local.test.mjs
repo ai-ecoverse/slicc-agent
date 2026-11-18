@@ -339,3 +339,72 @@ test('a local endpoint on https takes a key from the vault, which fills it only 
   assert.ok(sent.some((entry) => new URL(entry.url).pathname === '/v1/chat/completions'));
   for (const entry of sent) assert.equal(entry.authorization, 'Bearer hosted-key-0001');
 });
+
+for (const release of ['1.28.0', '1.27.9']) {
+  test(`with vault ${release}, a key on a kernel-loopback http endpoint is ${release === '1.28.0' ? 'filled' : 'refused'}, and a public http endpoint is always refused`, async (t) => {
+    const page = await chrome.page(t);
+    await page.init(helpers);
+    await page.goto('/');
+    await staged(page, 'the kernel', (files) => window.boot(files), {
+      '/node_modules/local-llm/package.json': manifest,
+      '/node_modules/local-llm/server.mjs': program,
+    });
+    const fresh = release === '1.28.0';
+    const seen = await staged(
+      page,
+      'the keyed http provider',
+      async ({ query, fresh }) => {
+        const { owner, settings, agent, put, register } = await window.start(query);
+        await window.until(() => settings.providers().length > 0);
+        const option = settings.providers().find((entry) => entry.id === 'local');
+        await put({
+          kind: 'model',
+          name: option.vaultName,
+          provider: 'local',
+          placeholder: 'fnox_proxy_local',
+          value: 'http-key-0001',
+        });
+        await register({ provider: 'local', url: 'http://8820.kernel.localhost/v1' });
+        const attempt = (endpoint) =>
+          settings.connect('local', undefined, { endpoint }).then(
+            () => null,
+            (error) => error.message
+          );
+        const public_ = await attempt('http://example.com/v1');
+        const refused = await attempt('http://8820.kernel.localhost/v1');
+        const row = () => settings.accounts().find((entry) => entry.id === 'local');
+        if (!fresh) {
+          const result = { public_, refused, status: row()?.status, requests: window.seen };
+          await owner.release();
+          return result;
+        }
+        await window.until(
+          () =>
+            row()?.status === 'connected' && settings.models().some((m) => m.id === 'local/chat-1')
+        );
+        const turn = await window.reply(agent, 'local/chat-1', 'Run the local tool.');
+        const result = { public_, refused, status: row()?.status, turn, requests: window.seen };
+        await owner.release();
+        return result;
+      },
+      {
+        query: `registry&vault&vault-release=${release}${fresh ? '&vault-http' : ''}`,
+        fresh,
+      }
+    );
+    assert.match(seen.public_, /^An http:\/\/ address must be on this machine/);
+    if (!fresh) {
+      assert.match(seen.refused, /^Seven’s vault sends keys over https:\/\/ only/);
+      assert.notEqual(seen.status, 'connected');
+      assert.ok(seen.requests.every((entry) => entry.authorization === null));
+      return;
+    }
+    assert.equal(seen.refused, null);
+    assert.equal(seen.status, 'connected');
+    assert.equal(seen.turn.answer, 'From the local server: local-tool');
+    const keyed = seen.requests.filter((entry) => entry.authorization !== null);
+    assert.ok(keyed.some((entry) => entry.target === '/v1/models'));
+    assert.ok(keyed.some((entry) => entry.target === '/v1/chat/completions'));
+    for (const entry of seen.requests) assert.equal(entry.authorization, 'Bearer http-key-0001');
+  });
+}

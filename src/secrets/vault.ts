@@ -23,6 +23,19 @@ export interface VaultState {
 }
 
 export const WAITING_MS = 2000;
+export const HTTP_KEYS_FROM = '1.28.0';
+
+const RELEASE = /^(\d+)\.(\d+)\.(\d+)$/;
+
+export function keysOverHttp(release: string | undefined): boolean {
+  const given = RELEASE.exec(release ?? '')
+    ?.slice(1)
+    .map(Number);
+  const from = (RELEASE.exec(HTTP_KEYS_FROM) as RegExpExecArray).slice(1).map(Number);
+  if (!given) return false;
+  const at = given.findIndex((part, index) => part !== from[index]);
+  return at < 0 || (given[at] as number) > (from[at] as number);
+}
 export const WAITING = 'waiting for the vault';
 
 type Message = Record<string, unknown> & { v: 1; id: number; op: string };
@@ -110,6 +123,7 @@ export class Vault implements Scrub {
   #port: MessagePort | undefined;
   #pair: ScrubPair = { needed: false, version: 0 };
   #locked: Locked = 'no';
+  #release: string | undefined;
   #seen = 0;
   #serial = 0;
   #streamSerial = 0;
@@ -122,6 +136,10 @@ export class Vault implements Scrub {
 
   get needed(): boolean {
     return this.#pair.needed || this.#seen > this.#pair.version;
+  }
+
+  get release(): string | undefined {
+    return this.#release;
   }
 
   get connected(): boolean {
@@ -269,7 +287,8 @@ export class Vault implements Scrub {
   }
 
   #welcome(status: unknown): void {
-    const given = status as { scrub?: unknown; locked?: unknown } | null;
+    const given = status as { scrub?: unknown; locked?: unknown; version?: unknown } | null;
+    this.#release = typeof given?.version === 'string' ? given.version : undefined;
     this.#apply(given?.scrub);
     if (typeof given?.locked === 'boolean') this.#locked = given.locked ? 'passkey' : 'no';
   }

@@ -120,7 +120,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       message.request,
       (record) => record.kind === 'model' && record.provider === provider,
       reaches,
-      false
+      Boolean(options.httpModels) && reaches
     );
   };
   const mcp = (message) => {
