@@ -1,6 +1,6 @@
 import type { Hit } from '@ai-ecoverse/slicc-scrub';
-import { type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { createState, type MutableState } from '../state.ts';
 import type { Scrub, Scrubbable, ScrubStream } from './scrub.ts';
 import type {
   AgentRecord,
@@ -115,7 +115,7 @@ function receiptOf(value: unknown): ScrubReceipt | undefined {
 }
 
 export class Vault implements Scrub {
-  readonly state: MutableReplicatedState<VaultState>;
+  readonly state: MutableState<VaultState>;
   readonly #pending = new Map<number, Pending>();
   readonly #streams = new Set<string>();
   readonly #waiters = new Set<() => void>();
@@ -131,7 +131,7 @@ export class Vault implements Scrub {
 
   constructor(now: () => number = Date.now) {
     this.#now = now;
-    this.state = replicatedState<VaultState>(this.#snapshot());
+    this.state = createState<VaultState>(this.#snapshot());
   }
 
   get needed(): boolean {

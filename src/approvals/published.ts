@@ -1,4 +1,4 @@
-import { type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import { createState, type State } from '../state.ts';
 import type { Approval } from './record.ts';
 
 function stripped(item: Approval, view: boolean): Approval {
@@ -9,13 +9,10 @@ function stripped(item: Approval, view: boolean): Approval {
   return { ...rest, run };
 }
 
-export function publishedApprovals(
-  state: ReplicatedState<Approval[]>,
-  view: boolean
-): ReplicatedState<Approval[]> {
+export function publishedApprovals(state: State<Approval[]>, view: boolean): State<Approval[]> {
   const shown = (items: readonly Approval[] | undefined) =>
     (items ?? []).map((item) => stripped(item, view));
-  const out = replicatedState<Approval[]>(shown(state.value));
+  const out = createState<Approval[]>(shown(state.value));
   state.subscribe((items, context) => out.replace(context, shown(items)));
   return out;
 }

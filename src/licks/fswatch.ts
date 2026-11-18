@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ExecutionEnv, FileChange, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Activity } from '../kernel/activity.ts';
 import { type ConfigError, parseWatch, type WatchEntry } from './config.ts';

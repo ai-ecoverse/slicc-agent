@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ConversationId, EntryRecord, TaskId } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
 import type { ScoopRecord } from '../agents.ts';

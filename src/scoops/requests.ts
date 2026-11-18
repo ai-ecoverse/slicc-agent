@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { CronRun } from '../licks/crontab.ts';
 import type { Answer } from './service.ts';

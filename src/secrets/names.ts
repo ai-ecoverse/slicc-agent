@@ -1,5 +1,6 @@
-import { type Context, type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { createState, type MutableState } from '../state.ts';
 import type { Vault } from './vault.ts';
 
 export interface SecretRule {
@@ -252,7 +253,7 @@ export async function listNames(env: ExecutionEnv, context: Context): Promise<Li
 }
 
 export interface Names {
-  readonly state: MutableReplicatedState<SecretListing>;
+  readonly state: MutableState<SecretListing>;
   refresh(context: Context): Promise<void>;
   close(): void;
 }
@@ -262,7 +263,7 @@ export function secretNames(
   vault: Pick<Vault, 'state' | 'texts'>,
   warn: (message: string) => void = (message) => console.warn(message)
 ): Names {
-  const state = replicatedState<SecretListing>({ names: [], error: null, exposed: [] });
+  const state = createState<SecretListing>({ names: [], error: null, exposed: [] });
   let version = vault.state.value.version;
   let warned: string | null = null;
   let lock: Promise<unknown> = Promise.resolve();

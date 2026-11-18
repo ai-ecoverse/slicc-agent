@@ -1,8 +1,8 @@
-import { type ReplicatedState, replicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { type AgentsState, live } from '../agents.ts';
 import { frozenTarget } from '../freezer/index.ts';
 import type { LickTarget } from '../licks/lick.ts';
+import { createState, type State } from '../state.ts';
 import { type Approval, MAX_DELAY, REASONS } from './record.ts';
 
 export type Runnable = true | { reason: string };
@@ -108,7 +108,7 @@ export function kernelGate(client: Protocol | undefined): true | string {
 type Watched = { subscribe(listener: () => void): () => void };
 
 export interface RunnableWatch {
-  readonly state: ReplicatedState<Record<string, Runnable>>;
+  readonly state: State<Record<string, Runnable>>;
   refresh(): void;
   dispose(): void;
 }
@@ -129,7 +129,7 @@ export function watchRunnable(
       const timer = setTimeout(callback, ms);
       return () => clearTimeout(timer);
     });
-  const state = replicatedState<Record<string, Runnable>>({});
+  const state = createState<Record<string, Runnable>>({});
   let shown = '{}';
   let disarm: () => void = () => undefined;
   const refresh = () => {

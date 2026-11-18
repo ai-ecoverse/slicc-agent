@@ -1,5 +1,4 @@
-import type { Context, ReplicatedState } from '@earendil-works/chord';
-import { replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ConversationView, Harness } from '@earendil-works/pi-durable';
 import { type AgentsState, live } from './agents.ts';
 import { LicksOutbox } from './licks/licks.ts';
@@ -7,6 +6,7 @@ import { lastAssistant } from './monitor/index.ts';
 import { landsOn, type Outbox, type Work } from './remote/busy.ts';
 import { ScoopWorkDoc } from './scoops/service.ts';
 import type { InventoryAgent, InventoryRow, InventoryState, InventoryStatus } from './services.ts';
+import { createState, type State } from './state.ts';
 
 export interface InventoryModels {
   getModel(provider: string, modelId: string): unknown;
@@ -15,7 +15,7 @@ export interface InventoryModels {
 
 export interface InventoryOptions {
   agents: { state(): Readonly<AgentsState>; onChange(listener: () => void): () => void };
-  views: ReplicatedState<Record<string, ConversationView>>;
+  views: State<Record<string, ConversationView>>;
   harness: Pick<Harness, 'observeCommits' | 'snapshot'>;
   models?: InventoryModels;
   now?: () => number;
@@ -23,7 +23,7 @@ export interface InventoryOptions {
 }
 
 export interface Inventory {
-  readonly state: ReplicatedState<InventoryState>;
+  readonly state: State<InventoryState>;
   dispose(): void;
 }
 
@@ -114,7 +114,7 @@ export function createInventory(options: InventoryOptions): Inventory {
   const since = new Map<string, { status: InventoryStatus; at: number }>();
   let last = '';
   let disposed = false;
-  const state = replicatedState<InventoryState>({ seq: 0, changedAt: 0, active: '', agents: [] });
+  const state = createState<InventoryState>({ seq: 0, changedAt: 0, active: '', agents: [] });
   const build = () => {
     if (disposed) return;
     const registry = options.agents.state();

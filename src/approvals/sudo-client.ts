@@ -1,10 +1,10 @@
-import type { Readable } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
-import { clientHost, holding } from '../client.ts';
+import { type Client, openClient } from '../client.ts';
 import type { CaptureReply } from '../guests/capture.ts';
 import { AgentSudoService, SUDO_METHODS } from '../services.ts';
-import { bound, type Remote, type Root } from '../serving.ts';
-import { type PortEndpoint, PortLink } from '../wire.ts';
+import { bound, type Remote } from '../serving.ts';
+import type { State } from '../state.ts';
+import type { PortEndpoint } from '../wire.ts';
 import { attributed, UNATTRIBUTED } from './attributed.ts';
 import { personal } from './people.ts';
 import { REASONS } from './reasons.ts';
@@ -56,37 +56,46 @@ function halted(stop: AbortSignal | undefined): Promise<never> {
 }
 
 async function open(endpoint: PortEndpoint, stop: AbortSignal | undefined) {
-  const link = new PortLink(endpoint);
-  let host: ReturnType<typeof clientHost> | undefined;
-  const close = async () => {
-    link.close('closed');
-    await host?.close().catch(() => undefined);
-  };
-  const ended = link.ended.then((reason) => {
-    throw reason ?? new Error('the agent closed the link');
-  });
-  ended.catch(() => undefined);
   const stopped = halted(stop);
   stopped.catch(() => undefined);
+  let client: Client | undefined;
+  const opening = openClient(endpoint).then((made) => {
+    client = made;
+    if (stop?.aborted) void made.close();
+    return made;
+  });
   try {
-    await Promise.race([link.hello, ended, stopped]);
-    const client = clientHost(link, 'sudo');
-    host = client;
-    const [handle] = (await Promise.race([holding(client, link, [AgentSudoService]), stopped])) as [
-      Remote,
-    ];
+    const made = await Promise.race([opening, stopped]);
+    const [handle] = (await Promise.race([made.hold([AgentSudoService]), stopped])) as [Remote];
     if (handle.variant !== 'sudo') throw unavailable();
-    const root: Root = (run, options) => client.root(run, options);
-    const sudo = bound<Omit<AgentSudo, 'approvals'>>(handle, root, SUDO_METHODS, missing);
-    return { sudo, approvals: handle.approvals as Readable<Approval[]>, ended, close };
+    const sudo = bound<Omit<AgentSudo, 'approvals'>>(
+      AgentSudoService,
+      handle,
+      SUDO_METHODS,
+      missing
+    );
+    const ended = made.link.ended.then((reason) => {
+      throw reason ?? new Error('the agent closed the link');
+    });
+    ended.catch(() => undefined);
+    return {
+      sudo,
+      approvals: made.follow<Approval[]>(handle.approvals),
+      ended,
+      close: () => made.close(),
+    };
   } catch (error) {
-    await close();
+    void opening.then(
+      (made) => made.close(),
+      () => undefined
+    );
+    await client?.close();
     throw (error as { code?: unknown })?.code === 'EAGAIN' ? error : unavailable(error);
   }
 }
 
 function settled(
-  approvals: Readable<Approval[]>,
+  approvals: State<Approval[]>,
   id: string,
   signals: { signal: AbortSignal | undefined; stop: AbortSignal | undefined; stamps: boolean },
   ended: Promise<never>
@@ -126,7 +135,7 @@ export const WITHDRAW_MS = 5000;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function timedOut(
-  link: { approvals: Readable<Approval[]>; ended: Promise<never> },
+  link: { approvals: State<Approval[]>; ended: Promise<never> },
   id: string,
   expiresAt: number
 ): Promise<unknown> {

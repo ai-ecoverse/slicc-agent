@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { parseFrontmatter } from '../roles/frontmatter.ts';
 import type { Diagnostic, SkillFiles } from './skills.ts';
 

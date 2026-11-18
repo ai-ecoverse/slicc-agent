@@ -1,9 +1,10 @@
-import type { Context, ReplicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AgentsState } from '../agents.ts';
 import type { AgentCapture } from '../guests/capture.ts';
 import type { Licks } from '../licks/licks.ts';
 import { sprinklesOf } from '../sprinkles/cgi.ts';
+import type { State } from '../state.ts';
 import type { Approvals } from './index.ts';
 import {
   type Approval,
@@ -50,7 +51,7 @@ export interface SudoRequest {
 export type SudoAsked = { id: string; error: null } | { id: null; error: string };
 
 export interface AgentSudo extends AgentCapture {
-  readonly approvals: ReplicatedState<Approval[]>;
+  readonly approvals: State<Approval[]>;
   request(request: SudoRequest, where: string | null, context: Context): Promise<SudoAsked>;
   withdraw(id: string, reason: string | null, context: Context): Promise<void>;
 }

@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { type ConversationId, defineDoc, type Harness } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
 import { TAINT_TAG } from '../kernel/sightings.ts';

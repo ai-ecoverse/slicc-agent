@@ -11,7 +11,7 @@ export {
   STOPPED,
   UNAVAILABLE,
 } from './approvals/sudo-client.ts';
-export { type AgentConnection, connectAgent } from './client.ts';
+export { type AgentConnection, connectAgent, type State } from './client.ts';
 export {
   connectGuest,
   GUEST_ONLY,

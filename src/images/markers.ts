@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { boundOutput, OutputBuffer, type OutputLimits } from '@earendil-works/chord/output';
 import { type ToolRegistration, type Wrap, wrapTool } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, ShellExecOptions } from '@earendil-works/pi-durable/env';

@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai';
 import { type CallToolResult, type ContentBlock, toLlmContent } from '@earendil-works/pi-mcp';
 import { scrubItems } from '../secrets/scrub.ts';

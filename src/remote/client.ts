@@ -1,10 +1,10 @@
-import type { ReplicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ApprovalDecision } from '../approvals/record.ts';
 import type { SendAttachment } from '../attachments.ts';
 import type { AgentConnection } from '../client.ts';
 import { NO_APPROVALS, VIEW_ONLY } from '../readonly.ts';
 import type { Delivered, InventorySnapshot, InventoryState, SendMode } from '../services.ts';
+import type { State } from '../state.ts';
 import { type LinkApproval, pendingApprovals } from './approvals.ts';
 import type { RemoteEvent } from './events.ts';
 import type { AgentRemote, RemoteOpened } from './host.ts';
@@ -94,7 +94,7 @@ function events(remote: AgentRemote, stream: string): AsyncIterable<RemoteEvent>
   };
 }
 
-function current(state: ReplicatedState<InventoryState>): Promise<InventoryState> {
+function current(state: State<InventoryState>): Promise<InventoryState> {
   if (state.value?.seq) return Promise.resolve(state.value);
   return new Promise((resolve) => {
     let off: (() => void) | undefined;
@@ -110,7 +110,7 @@ function current(state: ReplicatedState<InventoryState>): Promise<InventoryState
 }
 
 function following<T>(
-  sources: readonly Pick<ReplicatedState<unknown>, 'subscribe'>[],
+  sources: readonly Pick<State<unknown>, 'subscribe'>[],
   compute: () => T | undefined,
   key: (value: T) => string,
   first: T

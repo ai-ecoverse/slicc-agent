@@ -1,12 +1,6 @@
-import {
-  type Context,
-  createHost,
-  type Host,
-  isChordError,
-  type Readable,
-  type ReplicatedState,
-} from '@earendil-works/chord';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { type Contract, createHost, type Host } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ApprovalPolicy } from './approvals/policy.ts';
 import type { Approval } from './approvals/record.ts';
@@ -34,59 +28,65 @@ import {
   type Delivered,
   type GuestProposal,
   type GuestShown,
+  helloOf,
   type InventoryState,
   type MonitorFeed,
   OWNER_SETTINGS_METHODS,
   PAGE_METHODS,
   type PrivateRevision,
   REMOTE_METHODS,
+  SETTINGS_MEMBER,
   type SendMode,
   type SettingsState,
-  TRANSCRIPT_STATES,
+  type TRANSCRIPT_STATES,
+  transcriptMember,
 } from './services.ts';
 import {
   type AgentPrincipal,
   bound,
   offers,
   type Remote,
-  type Root,
-  replicated,
+  type Replica,
+  replica,
   SELF,
 } from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import { otherVersion, type PortEndpoint, PortLink } from './wire.ts';
+import type { State } from './state.ts';
+import { type PortEndpoint, PortLink } from './wire.ts';
+
+export type { State } from './state.ts';
 
 export interface AgentConnection {
   readonly serverId: string;
   readonly control: AgentControl;
-  readonly transcript: ReplicatedState<ConversationView>;
-  readonly deliveries: ReplicatedState<Record<string, Delivered>>;
-  readonly agents?: ReplicatedState<AgentsSummary>;
-  readonly views?: ReplicatedState<Record<string, ConversationView>>;
-  readonly commands?: ReplicatedState<Command[]>;
-  readonly privateRevision?: ReplicatedState<PrivateRevision>;
-  readonly sprinkles?: ReplicatedState<Sprinkle[]>;
-  readonly memories?: ReplicatedState<MemoryEntry[]>;
-  readonly memoryScopes?: ReplicatedState<MemoryScope[]>;
-  readonly frozen?: ReplicatedState<FrozenCone[]>;
-  readonly importing?: ReplicatedState<ImportProgress>;
-  readonly changes?: ReplicatedState<ChangesView>;
-  readonly monitor?: ReplicatedState<MonitorFeed>;
-  readonly vault?: ReplicatedState<VaultState>;
-  readonly labels?: ReplicatedState<Record<string, string>>;
-  readonly guests?: ReplicatedState<GuestSeat[]>;
+  readonly transcript: State<ConversationView>;
+  readonly deliveries: State<Record<string, Delivered>>;
+  readonly agents?: State<AgentsSummary>;
+  readonly views?: State<Record<string, ConversationView>>;
+  readonly commands?: State<Command[]>;
+  readonly privateRevision?: State<PrivateRevision>;
+  readonly sprinkles?: State<Sprinkle[]>;
+  readonly memories?: State<MemoryEntry[]>;
+  readonly memoryScopes?: State<MemoryScope[]>;
+  readonly frozen?: State<FrozenCone[]>;
+  readonly importing?: State<ImportProgress>;
+  readonly changes?: State<ChangesView>;
+  readonly monitor?: State<MonitorFeed>;
+  readonly vault?: State<VaultState>;
+  readonly labels?: State<Record<string, string>>;
+  readonly guests?: State<GuestSeat[]>;
   readonly viewOnly?: boolean;
   readonly guest?: GuestShown;
-  readonly proposals?: ReplicatedState<GuestProposal[]>;
+  readonly proposals?: State<GuestProposal[]>;
   readonly owner?: boolean;
-  readonly approvals?: ReplicatedState<Approval[]>;
-  readonly approvalPolicy?: ReplicatedState<ApprovalPolicy>;
-  readonly approvalRunnable?: ReplicatedState<Record<string, Runnable>>;
+  readonly approvals?: State<Approval[]>;
+  readonly approvalPolicy?: State<ApprovalPolicy>;
+  readonly approvalRunnable?: State<Record<string, Runnable>>;
   readonly settings: AgentSettings;
   readonly remote?: AgentRemote;
   readonly history?: boolean;
   readonly pages?: AgentPages;
-  readonly inventory?: ReplicatedState<InventoryState>;
+  readonly inventory?: State<InventoryState>;
   readonly closed: Promise<Error | undefined>;
   readonly readOnly?: boolean;
   prompt(text: string, whenBusy?: SendMode): Promise<string>;
@@ -98,41 +98,12 @@ export interface AgentConnection {
   close(): Promise<void>;
 }
 
-export interface Lasting<T> {
-  readonly state: ReplicatedState<T>;
-  freeze(): void;
-}
-
-export function lasting<T>(state: ReplicatedState<T>): Lasting<T> {
-  let last: T | undefined;
-  let frozen = false;
-  const read = () => {
-    if (frozen) return last;
-    try {
-      last = state.value;
-    } catch {}
-    return last;
-  };
-  return {
-    state: {
-      get value() {
-        return read();
-      },
-      subscribe: (listener) => (frozen ? () => undefined : state.subscribe(listener)),
-    },
-    freeze() {
-      read();
-      frozen = true;
-    },
-  };
-}
-
 export function lastingSettings(
   settings: AgentSettings,
-  hold: <T>(state: ReplicatedState<T>) => ReplicatedState<T>
+  state: State<SettingsState>
 ): AgentSettings {
   return {
-    state: hold(settings.state),
+    state,
     connect: (providerId, secret, fields, context) =>
       settings.connect(providerId, secret, fields, context),
     disconnect: (providerId, context) => settings.disconnect(providerId, context),
@@ -146,66 +117,83 @@ export function lastingSettings(
   };
 }
 
-const VERSIONS = new Set(['upgrade_required', 'contract_mismatch']);
-
-export const final = (error: unknown): unknown =>
-  isChordError(error) && VERSIONS.has(error.code) ? otherVersion(error) : error;
-
 export const ended = (link: PortLink): Promise<never> =>
   link.ended.then((reason) => {
     throw reason ?? new Error('the agent closed the link');
   });
 
-type Contract = Parameters<Host<AgentPrincipal>['get']>[0];
+export const reportClient = (error: unknown): void => {
+  if ((error as { kind?: unknown } | null)?.kind !== 'protocol_error') return;
+  console.warn('slicc-agent client:', error);
+};
 
-export function clientHost(link: PortLink, name: string): Host<AgentPrincipal> {
-  const host = createHost<AgentPrincipal>({
-    name: `${name}:${crypto.randomUUID()}`,
-    kind: 'client',
-    self: SELF,
-  });
-  host.connect(link, { principal: SELF, onProtocolMismatch: () => link.mismatched() });
-  return host;
+export interface Client {
+  readonly host: Host<AgentPrincipal>;
+  readonly link: PortLink;
+  readonly serverId: string;
+  readonly context: Context;
+  hold(contracts: readonly Contract[]): Promise<Remote[]>;
+  follow<T extends object>(member: unknown): State<T>;
+  close(): Promise<void>;
 }
 
-export async function holding(
-  host: Host<AgentPrincipal>,
-  link: PortLink,
-  contracts: readonly Contract[]
-): Promise<Remote[]> {
+export async function openClient(endpoint: PortEndpoint): Promise<Client> {
+  const link = new PortLink(endpoint, helloOf());
+  const hello = await link.peer;
   const stop = new AbortController();
-  const getting = contracts.map(
-    (contract) =>
-      host.get(contract, {}, { signal: stop.signal }) as Promise<unknown> as Promise<Remote>
-  );
-  try {
-    return await Promise.race([Promise.all(getting), ended(link)]);
-  } catch (error) {
+  const context = withAbortSignal(stop.signal, BACKGROUND_CONTEXT);
+  const host = createHost<AgentPrincipal>({ onError: reportClient });
+  await host.load([], context);
+  host.connect(link, { principal: SELF }, context);
+  const replicas: Replica<unknown>[] = [];
+  let open = true;
+  const finish = () => {
+    if (!open) return;
+    open = false;
+    for (const made of replicas) made.stop();
     stop.abort();
-    for (const got of getting)
-      void got.then(
-        (ref) => ref.release(),
-        () => undefined
+    return host.close(BACKGROUND_CONTEXT).catch(() => undefined);
+  };
+  void link.ended.then(finish);
+  return {
+    host,
+    link,
+    serverId: hello.server ?? '',
+    context,
+    async hold(contracts) {
+      const getting = contracts.map(
+        (made) => host.get(made, {} as never, context) as Promise<unknown> as Promise<Remote>
       );
-    link.close('handshake failed');
-    void host.close().catch(() => undefined);
-    throw error;
-  }
+      return Promise.race([Promise.all(getting), ended(link)]);
+    },
+    follow<T extends object>(member: unknown) {
+      const made = replica(member as Parameters<typeof replica<T>>[0], context);
+      if (open) replicas.push(made as Replica<unknown>);
+      else made.stop();
+      return made.state;
+    },
+    async close() {
+      const closing = finish();
+      link.close();
+      await closing;
+    },
+  };
 }
 
-export async function optional(
-  host: Host<AgentPrincipal>,
-  link: PortLink,
-  contract: Contract
-): Promise<Remote | undefined> {
-  const got = host.get(contract, {}) as Promise<unknown> as Promise<Remote>;
-  return Promise.race([got, ended(link)]).catch(() => {
-    void got.then(
-      (ref) => ref.release(),
-      () => undefined
-    );
-    return undefined;
+export async function handshake(
+  endpoint: PortEndpoint,
+  contracts: readonly Contract[],
+  failed: (error: unknown) => unknown = (error) => error
+): Promise<{ client: Client; handles: Remote[] }> {
+  const client = await openClient(endpoint).catch((error: unknown) => {
+    throw failed(error);
   });
+  try {
+    return { client, handles: await client.hold(contracts) };
+  } catch (error) {
+    await client.close();
+    throw failed(error);
+  }
 }
 
 export async function connectAgent(
@@ -213,99 +201,63 @@ export async function connectAgent(
   options: { context?: Context } = {}
 ): Promise<AgentConnection> {
   const context = options.context ?? BACKGROUND_CONTEXT;
-  const link = new PortLink(endpoint);
-  const serverId = await link.hello;
-  const host = clientHost(link, 'follower');
-  const inventory = optional(host, link, AgentInventoryService);
-  const handles = await holding(host, link, [
+  const { client, handles } = await handshake(endpoint, [
     AgentControl,
     AgentTranscript,
     AgentSettings,
     AgentRemoteService,
     AgentPagesService,
-  ]).catch((error: unknown) => {
-    void inventory.then((handle) => handle?.release());
-    throw final(error);
-  });
-  const [controlHandle, transcriptHandle, settingsHandle, remoteHandle, pagesHandle] = handles as [
-    Remote,
-    Remote,
-    Remote,
-    Remote,
-    Remote,
-  ];
-  const inventoryHandle = await inventory;
-  const release = () => {
-    for (const handle of handles) handle.release();
-    inventoryHandle?.release();
-  };
-  const root: Root = (run, rootOptions) => host.root(run, rootOptions);
-  const control = bound<AgentControl>(controlHandle, root, CONTROL_METHODS, controlAnswer);
-  const members = Object.fromEntries(
-    TRANSCRIPT_STATES.map((name) => [name, transcriptHandle[name] as Readable<unknown>])
-  ) as Record<(typeof TRANSCRIPT_STATES)[number], Readable<unknown>>;
-  const settingsState = settingsHandle.state as Readable<SettingsState>;
-  const settings: AgentSettings = {
-    ...bound<Omit<AgentSettings, 'state'>>(
-      settingsHandle,
-      root,
-      OWNER_SETTINGS_METHODS,
-      settingsAnswer
-    ),
-    state: replicated(settingsState),
-  };
-  const remote = bound<AgentRemote>(remoteHandle, root, REMOTE_METHODS, remoteAnswer);
-  const pages = bound<AgentPages>(pagesHandle, root, PAGE_METHODS, pageAnswer);
-  const state = <K extends keyof typeof members>(name: K) =>
-    replicated(members[name] as Readable<never>);
-  const held: Lasting<unknown>[] = [];
-  const hold = <T>(state: ReplicatedState<T>): ReplicatedState<T> => {
-    const kept = lasting(state);
-    held.push(kept as Lasting<unknown>);
-    return kept.state;
-  };
-  let open = true;
-  const finish = () => {
-    if (!open) return;
-    open = false;
-    for (const kept of held) kept.freeze();
-    release();
-  };
-  const closed = link.ended.then((reason) => {
-    finish();
-    return reason;
-  });
+    AgentInventoryService,
+  ]);
+  const [
+    controlHandle,
+    transcriptHandle,
+    settingsHandle,
+    remoteHandle,
+    pagesHandle,
+    inventoryHandle,
+  ] = handles as [Remote, Remote, Remote, Remote, Remote, Remote];
+  const control = bound<AgentControl>(AgentControl, controlHandle, CONTROL_METHODS, controlAnswer);
+  const settings = lastingSettings(
+    bound<AgentSettings>(AgentSettings, settingsHandle, OWNER_SETTINGS_METHODS, settingsAnswer),
+    client.follow<SettingsState>(settingsHandle[SETTINGS_MEMBER])
+  );
+  const remote = bound<AgentRemote>(AgentRemoteService, remoteHandle, REMOTE_METHODS, remoteAnswer);
+  const pages = bound<AgentPages>(AgentPagesService, pagesHandle, PAGE_METHODS, pageAnswer);
+  const state = <T extends object>(name: (typeof TRANSCRIPT_STATES)[number]): State<T> =>
+    client.follow<T>(transcriptHandle[transcriptMember(name)]);
+  const closed = client.link.ended;
   return {
-    serverId,
+    serverId: client.serverId,
     readOnly: controlHandle.variant === 'view',
     control,
-    transcript: hold<ConversationView>(state('state')),
-    deliveries: hold<Record<string, Delivered>>(state('deliveries')),
-    agents: hold<AgentsSummary>(state('agents')),
-    views: hold<Record<string, ConversationView>>(state('views')),
-    commands: hold<Command[]>(state('commands')),
-    privateRevision: hold<PrivateRevision>(state('privateRevision')),
-    sprinkles: hold<Sprinkle[]>(state('sprinkles')),
-    memories: hold<MemoryEntry[]>(state('memories')),
-    memoryScopes: hold<MemoryScope[]>(state('memoryScopes')),
-    frozen: hold<FrozenCone[]>(state('frozen')),
-    importing: hold<ImportProgress>(state('importing')),
-    changes: hold<ChangesView>(state('changes')),
-    monitor: hold<MonitorFeed>(state('monitor')),
-    vault: hold<VaultState>(state('vault')),
-    labels: hold<Record<string, string>>(state('labels')),
-    guests: hold<GuestSeat[]>(state('guests')),
+    transcript: state<ConversationView>('state'),
+    deliveries: state<Record<string, Delivered>>('deliveries'),
+    agents: state<AgentsSummary>('agents'),
+    views: state<Record<string, ConversationView>>('views'),
+    commands: state<Command[]>('commands'),
+    privateRevision: state<PrivateRevision>('privateRevision'),
+    sprinkles: state<Sprinkle[]>('sprinkles'),
+    memories: state<MemoryEntry[]>('memories'),
+    memoryScopes: state<MemoryScope[]>('memoryScopes'),
+    frozen: state<FrozenCone[]>('frozen'),
+    importing: state<ImportProgress>('importing'),
+    changes: state<ChangesView>('changes'),
+    monitor: state<MonitorFeed>('monitor'),
+    vault: state<VaultState>('vault'),
+    labels: state<Record<string, string>>('labels'),
+    guests: state<GuestSeat[]>('guests'),
     viewOnly: controlHandle.variant === 'view',
     owner: pagesHandle.variant === 'pages',
-    approvals: hold<Approval[]>(state('approvals')),
-    approvalPolicy: hold<ApprovalPolicy>(state('approvalPolicy')),
-    approvalRunnable: hold<Record<string, Runnable>>(state('approvalRunnable')),
-    settings: lastingSettings(settings, hold),
+    approvals: state<Approval[]>('approvals'),
+    approvalPolicy: state<ApprovalPolicy>('approvalPolicy'),
+    approvalRunnable: state<Record<string, Runnable>>('approvalRunnable'),
+    settings,
     remote,
-    history: offers(controlHandle, 'entries'),
+    history: offers(AgentControl, controlHandle.variant, 'entries'),
     pages,
-    ...(inventoryHandle?.variant === 'owner'
-      ? { inventory: hold(replicated(inventoryHandle.inventory as Readable<InventoryState>)) }
+    ...(inventoryHandle.variant === 'owner'
+      ? { inventory: client.follow<InventoryState>(inventoryHandle.inventory) }
       : {}),
     closed,
     webhook(name, delivery) {
@@ -326,10 +278,8 @@ export async function connectAgent(
       return settled.text;
     },
     async close() {
-      finish();
-      link.close('closed');
+      await client.close();
       await closed;
-      await host.close();
     },
   };
 }

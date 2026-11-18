@@ -1,4 +1,5 @@
-import type { Context, JsonValue } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
+import type { JsonValue } from '@earendil-works/chord/json';
 import type { InheritedTaint } from '../guests/guard.ts';
 import type { LickTarget } from '../licks/lick.ts';
 import type { Licks } from '../licks/licks.ts';

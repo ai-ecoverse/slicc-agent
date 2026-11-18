@@ -1,11 +1,12 @@
-import { type Context, type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ConversationView, Harness, SubmissionId } from '@earendil-works/pi-durable';
 import type { Delivered } from './services.ts';
+import { createState, type MutableState } from './state.ts';
 
 type WhenBusy = 'steer' | 'followUp' | 'reject' | undefined;
 
 export interface Deliveries {
-  readonly state: MutableReplicatedState<Record<string, Delivered>>;
+  readonly state: MutableState<Record<string, Delivered>>;
   expect(submissionId: SubmissionId, whenBusy: WhenBusy): void;
   settle(): Promise<void>;
   dispose(): void;
@@ -33,7 +34,7 @@ export function trackDeliveries(
   },
   context: Context
 ): Deliveries {
-  const state = replicatedState<Record<string, Delivered>>({});
+  const state = createState<Record<string, Delivered>>({});
   const pending = new Map<SubmissionId, { whenBusy: WhenBusy; queued: boolean }>();
   const settle = async () => {
     for (const [id, item] of [...pending]) {

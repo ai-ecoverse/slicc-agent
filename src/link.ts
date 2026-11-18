@@ -16,19 +16,39 @@ export interface LinkEnd {
   end(error?: Error): void;
 }
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+const json = (value: unknown): Uint8Array =>
+  value === undefined ? new Uint8Array() : encoder.encode(JSON.stringify(value));
+
+function bodyOf(frame: Frame): [number, Uint8Array] {
+  if (frame instanceof Uint8Array) return [DATA, frame];
+  if ('hello' in frame) return [HELLO, json(frame.hello)];
+  return [CLOSE, json(frame.reason === undefined ? undefined : { reason: frame.reason })];
+}
+
 export function encodeFrame(frame: Frame): Uint8Array {
-  const body =
-    frame instanceof Uint8Array
-      ? frame
-      : 'hello' in frame
-        ? new TextEncoder().encode(frame.hello)
-        : new Uint8Array();
-  const tag = frame instanceof Uint8Array ? DATA : 'hello' in frame ? HELLO : CLOSE;
+  const [tag, body] = bodyOf(frame);
   const out = new Uint8Array(5 + body.length);
   new DataView(out.buffer).setUint32(0, body.length + 1);
   out[4] = tag;
   out.set(body, 5);
   return out;
+}
+
+function parsed(body: Uint8Array): unknown {
+  const text = decoder.decode(body);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function closeOf(body: Uint8Array): Frame {
+  const reason = body.length ? (parsed(body) as { reason?: unknown } | null)?.reason : undefined;
+  return typeof reason === 'string' ? { close: true, reason } : { close: true };
 }
 
 export class FrameReader {
@@ -77,8 +97,8 @@ export class FrameReader {
       const tag = frame[0];
       const body = frame.subarray(1);
       if (tag === DATA) frames.push(body.slice());
-      else if (tag === HELLO) frames.push({ hello: new TextDecoder().decode(body) });
-      else if (tag === CLOSE) frames.push({ close: true });
+      else if (tag === HELLO) frames.push({ hello: parsed(body) });
+      else if (tag === CLOSE) frames.push(closeOf(body));
       else throw new Error(`agent link frame tag ${tag}`);
     }
     return frames;

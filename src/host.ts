@@ -1,13 +1,16 @@
 import {
-  type Context,
+  broken,
+  type Contract,
   createHost,
+  defineFacet,
+  type FacetHost,
   forbidden,
   type Host,
-  type Readable,
-  type ReplicatedState,
-  replicatedState,
+  type HostError,
+  isChordError,
   type Self,
 } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agent } from './agent.ts';
@@ -43,9 +46,10 @@ import { IDLE, type ImportProgress } from './freezer/v6.ts';
 import { captureGate } from './guests/capture.ts';
 import { createGuests, type Guests } from './guests/index.ts';
 import type { ScoopReviewHost } from './guests/scoop.ts';
-import { admitGuest, guestOpener } from './guests/serve.ts';
+import { admitGuest, GUEST_CALLS, guestOpener, limited } from './guests/serve.ts';
 import { createInventory } from './inventory.ts';
 import type { UserClients } from './kernel/users.ts';
+import { MAX_FRAME } from './link.ts';
 import type { McpRuntime } from './mcp/index.ts';
 import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
@@ -70,6 +74,7 @@ import {
   CONTROL_READS,
   type Command,
   GUEST_METHODS,
+  helloOf,
   type InventoryState,
   OWNER_DEVICE_METHODS,
   OWNER_SETTINGS_METHODS,
@@ -77,16 +82,18 @@ import {
   type PrivateRevision,
   REMOTE_METHODS,
   REMOTE_READS,
+  SETTINGS_MEMBER,
   SETTINGS_METHODS,
   SUDO_METHODS,
+  TRANSCRIPT_STATES,
+  transcriptMember,
 } from './services.ts';
 import {
-  AGENT_HOST,
+  Agent as AgentAddress,
   type AgentPrincipal,
+  following,
   type GuestPrincipal,
   principalKey,
-  readable,
-  readablesOf,
   SELF,
   type Seat,
   served,
@@ -94,6 +101,7 @@ import {
 import type { SkillsRuntime } from './skills/index.ts';
 import type { SprinklesRuntime } from './sprinkles/index.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
+import { createState, type State } from './state.ts';
 import { type Slimmer, slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
 import { type LabelsRuntime, visibleLabels, watchLabel, watchStep } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
@@ -125,7 +133,7 @@ const NO_SERVERS = {
 };
 
 export const noSettings: AgentSettings = {
-  state: replicatedState({ models: [], accounts: [] }),
+  state: createState({ models: [], accounts: [] }),
   connect: async () => {
     throw new Error('this agent has no accounts');
   },
@@ -145,7 +153,7 @@ export async function follow(
   slim: (view: ConversationView) => ConversationView
 ) {
   let watch = await agent.cone().watch(context);
-  const state = replicatedState<ConversationView>(slim(watch.value));
+  const state = createState<ConversationView>(slim(watch.value));
   const mirror = (value: ConversationView, from: Context) => state.replace(from, slim(value));
   const listen = (current: typeof watch) => {
     current.start(async (call, using) => {
@@ -172,12 +180,12 @@ export async function follow(
 }
 
 export interface HostSecrets {
-  vault: ReplicatedState<VaultState>;
+  vault: State<VaultState>;
   list(): SecretListing;
   close?(): void;
 }
 
-const idleVault = replicatedState<VaultState>({
+const idleVault = createState<VaultState>({
   port: 'none',
   needed: false,
   version: 0,
@@ -212,7 +220,7 @@ export function gatedControls(
   control: AgentControl,
   slims: Pick<Slimmer, 'entries' | 'shown'>,
   views: () => readonly ConversationView[],
-  labels: ReplicatedState<Record<string, string>>
+  labels: State<Record<string, string>>
 ) {
   const slimmed: AgentControl['entries'] = async (request, using) => {
     const page = await control.entries(request, using);
@@ -303,7 +311,7 @@ async function guestsOf(
 
 const inventoryOf = (
   agent: Agent,
-  views: ReplicatedState<Record<string, ConversationView>>,
+  views: State<Record<string, ConversationView>>,
   context: Context
 ) =>
   createInventory({
@@ -314,7 +322,7 @@ const inventoryOf = (
     context,
   });
 
-const noRevision = () => replicatedState<PrivateRevision>({ revision: 0 });
+const noRevision = () => createState<PrivateRevision>({ revision: 0 });
 
 export type HostOptions = {
   serverId?: string;
@@ -346,7 +354,7 @@ export type RunTimes = Partial<
 
 function runsOf(
   agent: Agent,
-  sources: { policy: ApprovalPolicies; approvals: Approvals; agents: ReplicatedState<unknown> },
+  sources: { policy: ApprovalPolicies; approvals: Approvals; agents: State<unknown> },
   options: HostOptions,
   serverId: string
 ) {
@@ -402,10 +410,32 @@ const sudoOf = (agent: Agent, approvals: Approvals, guests: Guests, options: Hos
     ...(options.licks ? { licks: options.licks.licks } : {}),
   });
 
-const viewStates = (viewMonitor: ReplicatedState<unknown>, approvals: Approvals['state']) => ({
+const viewStates = (viewMonitor: State<unknown>, approvals: Approvals['state']) => ({
   viewMonitor,
   viewApprovals: publishedApprovals(approvals, true),
 });
+
+const seatOf = (options: ConnectOptions | undefined): Exclude<Seat, 'guest'> =>
+  options?.readOnly ? 'view' : options?.pages === false ? 'control' : 'owner';
+
+function connector(
+  host: Host<AgentPrincipal, Revocation>,
+  guests: Guests,
+  serverId: string,
+  context: Context
+): AgentHost['connect'] {
+  let links = 0;
+  return (endpoint, options) => {
+    links += 1;
+    if (options?.guest) {
+      admitGuest(guests, endpoint, options.guest, serverId, links, host, context);
+      return;
+    }
+    const device = options?.device ? { device: options.device } : {};
+    const principal: AgentPrincipal = { kind: seatOf(options), link: links, ...device };
+    host.accept(new PortLink(endpoint, helloOf(serverId)), { principal, limits: LIMITS }, context);
+  };
+}
 
 export async function hostAgent(agent: Agent, options: HostOptions = {}): Promise<AgentHost> {
   const context = options.context ?? BACKGROUND_CONTEXT;
@@ -469,22 +499,21 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     },
   });
   const shownViews = () => [state.value, ...Object.values(mounted.views.value)];
-  const kept = options.labels?.labels ?? replicatedState<Record<string, string>>({});
+  const kept = options.labels?.labels ?? createState<Record<string, string>>({});
   const labels = visibleLabels(kept, [state, mounted.views], shownViews);
   const transcriptService = {
     state,
     deliveries: deliveries.state,
     agents: mounted.agents,
     views: mounted.views,
-    commands: options.skills?.commands ?? replicatedState<Command[]>([]),
+    commands: options.skills?.commands ?? createState<Command[]>([]),
     privateRevision: options.skills?.privateRevision ?? noRevision(),
-    sprinkles: options.sprinkles?.sprinkles ?? replicatedState<Sprinkle[]>([]),
-    memories: options.memory?.memories ?? replicatedState<MemoryEntry[]>([]),
-    memoryScopes: options.memory?.scopes ?? replicatedState<MemoryScope[]>([]),
-    frozen: options.freezer?.frozen ?? replicatedState<FrozenCone[]>([]),
-    importing: options.freezer?.importing ?? replicatedState<ImportProgress>(IDLE),
-    changes:
-      options.changes?.view ?? replicatedState<ChangesView>({ unavailable: null, changes: [] }),
+    sprinkles: options.sprinkles?.sprinkles ?? createState<Sprinkle[]>([]),
+    memories: options.memory?.memories ?? createState<MemoryEntry[]>([]),
+    memoryScopes: options.memory?.scopes ?? createState<MemoryScope[]>([]),
+    frozen: options.freezer?.frozen ?? createState<FrozenCone[]>([]),
+    importing: options.freezer?.importing ?? createState<ImportProgress>(IDLE),
+    changes: options.changes?.view ?? createState<ChangesView>({ unavailable: null, changes: [] }),
     monitor: monitor.state,
     vault: options.secrets?.vault ?? idleVault,
     labels: labels.state,
@@ -496,26 +525,24 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
   const sudo = sudoOf(agent, approvals, guests, options);
   const settings = options.settings ?? noSettings;
   const { trusted, viewed } = gatedControls(control, slims, shownViews, labels.state);
-  const host = serveAgent({
-    trusted,
-    viewed,
-    transcript: transcriptService,
-    ...viewStates(monitor.viewState, approvals.state),
-    sudo,
-    settings,
-    remote,
-    pages,
-    inventory: inventory.state,
-    guest: guestOpener(guests, agent.agents, mounted.views, context),
-    ...serving,
-    runs: runs.serve,
-  });
-  const offGuests = guests.onEnd((id) => {
-    void host.invalidatePrincipal(
-      (principal) => principal.seat === 'guest' && principal.guest.id === id
-    );
-  });
-  let links = 0;
+  const host = await serveAgent(
+    {
+      trusted,
+      viewed,
+      transcript: transcriptService,
+      ...viewStates(monitor.viewState, approvals.state),
+      sudo,
+      settings,
+      remote,
+      pages,
+      inventory: inventory.state,
+      guest: guestOpener(guests, agent.agents, mounted.views, context),
+      ...serving,
+      runs: runs.serve,
+    },
+    context
+  );
+  const offGuests = guests.onEnd((id) => host.revoke({ guest: id }, context));
   return {
     serverId,
     agent,
@@ -523,28 +550,10 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
     guests,
     approvals,
     ...(options.users ? { users: options.users } : {}),
-    connect(endpoint, connectOptions) {
-      if (connectOptions?.guest) {
-        links += 1;
-        admitGuest(guests, endpoint, connectOptions.guest, serverId, links, host);
-        return;
-      }
-      const seat: Exclude<Seat, 'guest'> = connectOptions?.readOnly
-        ? 'view'
-        : connectOptions?.pages === false
-          ? 'control'
-          : 'owner';
-      links += 1;
-      const link = new PortLink(endpoint);
-      link.greet(serverId);
-      const device = connectOptions?.device ? { device: connectOptions.device } : {};
-      host.accept(link, {
-        principal: { seat, link: links, ...device } satisfies AgentPrincipal,
-      });
-    },
+    connect: connector(host, guests, serverId, context),
     async close() {
       offGuests();
-      await host.close();
+      await host.close(context);
       guests.dispose();
       await pages.dispose();
       await monitor.dispose();
@@ -576,14 +585,14 @@ export async function hostAgent(agent: Agent, options: HostOptions = {}): Promis
 interface Served {
   trusted: AgentControl;
   viewed: () => AgentControl;
-  transcript: Record<keyof AgentTranscript, ReplicatedState<unknown>>;
-  viewMonitor: ReplicatedState<unknown>;
-  viewApprovals: ReplicatedState<unknown>;
+  transcript: Record<keyof AgentTranscript, State<unknown>>;
+  viewMonitor: State<unknown>;
+  viewApprovals: State<unknown>;
   sudo?: AgentSudo;
   settings: AgentSettings;
   remote: Omit<AgentRemote, 'decide'>;
   pages: Pages;
-  inventory?: ReplicatedState<InventoryState>;
+  inventory?: State<InventoryState>;
   guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
   decide: (by: Decider) => AgentControl['decide'];
   runs: (runner: Runner) => Pick<AgentControl, 'approvalRun' | 'approvalRunStop'>;
@@ -592,42 +601,28 @@ interface Served {
 
 export const CLOSED_TO_GUESTS = 'a guest seat has only its transcript and propose';
 
+export const LIMITS = { part: MAX_FRAME, decoded: MAX_FRAME };
+
+type Factory = (params: unknown, principal: AgentPrincipal, self: Self<AgentPrincipal>) => unknown;
+
 const opened = new WeakSet<object>();
 
-export const openToGuests = <F extends object>(factory: F): F => {
+export const openToGuests = <F extends Factory>(factory: F): F => {
   opened.add(factory);
   return factory;
 };
 
-export function closedToGuests(host: Host<AgentPrincipal>): Host<AgentPrincipal> {
-  const serve = ((type: never, factory: (...args: unknown[]) => unknown, options?: never) =>
+export function closedToGuests(host: FacetHost<AgentPrincipal>) {
+  return (type: Contract, factory: Factory): void =>
     host.serve(
       type,
       (opened.has(factory)
         ? factory
-        : (input: unknown, principal: AgentPrincipal, self: unknown) => {
-            if (principal.seat === 'guest') throw forbidden(CLOSED_TO_GUESTS);
-            return factory(input, principal, self);
-          }) as never,
-      options
-    )) as Host<AgentPrincipal>['serve'];
-  return new Proxy(host, {
-    get(target, key) {
-      if (key === 'serve') return serve;
-      const value = Reflect.get(target, key, target) as unknown;
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
-}
-
-export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
-  return {
-    get value() {
-      return readable(state()).value;
-    },
-    subscribe: (listener) => readable(state()).subscribe(listener),
-    events: (listener) => readable(state()).events(listener),
-  };
+        : (params: unknown, principal: AgentPrincipal, self: Self<AgentPrincipal>) => {
+            if (principal.kind === 'guest') throw forbidden(CLOSED_TO_GUESTS);
+            return factory(params, principal, self);
+          }) as never
+    );
 }
 
 const deviceOf = (principal: AgentPrincipal): string | undefined =>
@@ -635,11 +630,11 @@ const deviceOf = (principal: AgentPrincipal): string | undefined =>
 
 const seated = (serving: Served, principal: AgentPrincipal): AgentControl => {
   const runner: Runner = {
-    by: principal.seat === 'owner' ? 'owner' : 'follower',
+    by: principal.kind === 'owner' ? 'owner' : 'follower',
     ...(deviceOf(principal) ? { device: deviceOf(principal) } : {}),
   };
   return {
-    ...(principal.seat === 'view' ? serving.viewed() : serving.trusted),
+    ...(principal.kind === 'view' ? serving.viewed() : serving.trusted),
     decide: serving.decide(runner),
     ...serving.runs(runner),
   };
@@ -648,104 +643,144 @@ const seated = (serving: Served, principal: AgentPrincipal): AgentControl => {
 const VIEW_METHODS = [...CONTROL_READS, ...OWNER_DEVICE_METHODS];
 
 export function settingsFor(serving: Pick<Served, 'settings'>) {
-  return (_input: unknown, principal: AgentPrincipal) => {
-    const state = readable(serving.settings.state);
-    if (principal.seat === 'view') return { variant: 'view' as const, state };
-    const owner = principal.seat === 'owner';
+  return (_params: unknown, principal: AgentPrincipal, self: Self<AgentPrincipal>) => {
+    const members = { [SETTINGS_MEMBER]: self.follow(following(() => serving.settings.state)) };
+    if (principal.kind === 'view') return { variant: 'view', members };
+    const owner = principal.kind === 'owner';
     return {
-      variant: owner ? ('owner' as const) : ('settings' as const),
-      state,
-      ...served(() => serving.settings, owner ? OWNER_SETTINGS_METHODS : SETTINGS_METHODS),
+      variant: owner ? 'owner' : 'settings',
+      members: {
+        ...members,
+        ...served(() => serving.settings, owner ? OWNER_SETTINGS_METHODS : SETTINGS_METHODS),
+      },
     };
   };
 }
 
-export function serveAgent(serving: Served): Host<AgentPrincipal> {
-  const host = closedToGuests(
-    createHost<AgentPrincipal>({ name: AGENT_HOST, self: SELF, principalKey })
-  );
-  const viewing = {
+const quiet = (error: HostError) =>
+  error.kind === 'activation_failed' && isChordError(error.failure.error, 'forbidden');
+
+export const reportHost = (error: HostError): void => {
+  if (!quiet(error)) console.warn('slicc-agent host:', error.kind, error);
+};
+
+type Revocation = { guest: string };
+
+function facetOf(serving: Served) {
+  const viewing: Record<keyof AgentTranscript, State<unknown>> = {
     ...serving.transcript,
     monitor: serving.viewMonitor,
     approvals: serving.viewApprovals,
   };
-  host.serve(AgentControl, (_input, principal, self) => {
-    const control = seated(serving, principal);
-    if (serving.owners && principal.seat !== 'host' && principal.seat !== 'guest')
-      self.resource('owner-device', {
-        version: 1,
-        open: () => (serving.owners as Attendance).attend(),
-        close: (leave) => leave(),
-      });
-    return principal.seat === 'view'
-      ? { variant: 'view', ...served(() => control, VIEW_METHODS) }
-      : { variant: 'control', ...served(() => control, CONTROL_METHODS) };
-  });
-  host.serve(AgentTranscript, (_input, principal) => ({
-    variant: 'transcript',
-    ...readablesOf(principal.seat === 'view' ? viewing : serving.transcript),
-  }));
-  host.serve(AgentSettings, settingsFor(serving));
-  host.serve(AgentRemoteService, (_input, principal) => {
-    if (principal.seat !== 'view') {
-      const remote: AgentRemote = {
-        ...serving.remote,
-        decide: linkDecide(serving.decide, deviceOf(principal)),
-      };
-      return { variant: 'remote', ...served(() => remote, REMOTE_METHODS) };
-    }
-    const scoped = viewRemote(serving.remote);
-    return { variant: 'watch', ...served(() => scoped, REMOTE_READS) };
-  });
-  host.serve(AgentPagesService, (_input, principal, self) => {
-    if (principal.seat !== 'owner') return { variant: 'none' };
-    const mine = self.resource('mine', {
-      version: 1,
-      open: () => ownedPages(serving.pages),
-      close: (owned) => owned.release(),
+  return defineFacet<AgentPrincipal>((facetHost) => {
+    const serve = closedToGuests(facetHost);
+    serve(AgentControl, (_params, principal, self) => {
+      const control = seated(serving, principal);
+      const owners = serving.owners;
+      if (owners && principal.kind !== 'host' && principal.kind !== 'guest')
+        self.open(
+          async () => owners.attend(),
+          (leave) => leave()
+        );
+      return principal.kind === 'view'
+        ? { variant: 'view', members: served(() => control, VIEW_METHODS) }
+        : { variant: 'control', members: served(() => control, CONTROL_METHODS) };
     });
-    return { variant: 'pages', ...served(() => mine.value, PAGE_METHODS) };
-  });
-  host.serve(
-    AgentGuestService,
-    openToGuests((_input: unknown, principal: AgentPrincipal, self: Self<AgentPrincipal>) => {
-      if (principal.seat !== 'guest') return { variant: 'none' };
-      const opening = serving.guest?.(principal.guest);
-      if (!opening) throw forbidden(CLOSED_TO_GUESTS);
-      const seat = self.resource('seat', {
-        version: 1,
-        open: () => opening,
-        close: (made) => made.dispose(),
-      });
-      const later = (name: 'transcript' | 'seat' | 'proposals') =>
-        lazily(() => seat.value.value[name] as ReplicatedState<unknown>);
+    serve(AgentTranscript, (_params, principal, self) => {
+      const states = principal.kind === 'view' ? viewing : serving.transcript;
       return {
-        variant: 'guest',
-        transcript: later('transcript'),
-        seat: later('seat'),
-        proposals: later('proposals'),
-        ...served(() => seat.value.value, GUEST_METHODS),
+        variant: 'transcript',
+        members: Object.fromEntries(
+          TRANSCRIPT_STATES.map((name) => [
+            transcriptMember(name),
+            self.follow(following(() => states[name])),
+          ])
+        ),
       };
-    })
-  );
-  host.serve(AgentInventoryService, (_input, principal) => {
-    const inventory = serving.inventory;
-    if (principal.seat !== 'owner' || !inventory) return { variant: 'none' };
-    return { variant: 'owner', inventory: readable(inventory) };
-  });
-  host.serve(AgentSudoService, (_input, principal, self) => {
-    const sudo = serving.sudo;
-    if (principal.seat !== 'owner' || !sudo) return { variant: 'none' };
-    const mine = self.resource('mine', {
-      version: 1,
-      open: () => ownedSudo(sudo),
-      close: (owned) => owned.release(),
     });
-    return {
-      variant: 'sudo',
-      approvals: readable(sudo.approvals),
-      ...served(() => mine.value, SUDO_METHODS),
-    };
+    serve(AgentSettings, settingsFor(serving));
+    serve(AgentRemoteService, (_params, principal) => {
+      if (principal.kind !== 'view') {
+        const remote: AgentRemote = {
+          ...serving.remote,
+          decide: linkDecide(serving.decide, deviceOf(principal)),
+        };
+        return { variant: 'remote', members: served(() => remote, REMOTE_METHODS) };
+      }
+      const scoped = viewRemote(serving.remote);
+      return { variant: 'watch', members: served(() => scoped, REMOTE_READS) };
+    });
+    serve(AgentPagesService, (_params, principal, self) => {
+      if (principal.kind !== 'owner') return { variant: 'none', members: {} };
+      const mine = self.open(
+        async () => ownedPages(serving.pages),
+        (owned) => owned.release()
+      );
+      return { variant: 'pages', members: served(() => mine.value, PAGE_METHODS) };
+    });
+    serve(
+      AgentGuestService,
+      openToGuests((_params, principal, self) => {
+        if (principal.kind !== 'guest') return { variant: 'none', members: {} };
+        const guest = principal.guest;
+        const seat = self.open(
+          async () => {
+            const opening = serving.guest?.(guest);
+            if (!opening) throw broken(forbidden(CLOSED_TO_GUESTS));
+            return opening;
+          },
+          (made) => made.dispose()
+        );
+        const later = (name: 'transcript' | 'seat' | 'proposals') =>
+          self.follow(following(() => seat.value.value[name] as State<unknown>));
+        return {
+          variant: 'guest',
+          members: {
+            transcript: later('transcript'),
+            seat: later('seat'),
+            proposals: later('proposals'),
+            ...limited(
+              served(() => seat.value.value, GUEST_METHODS),
+              GUEST_CALLS
+            ),
+          },
+        };
+      })
+    );
+    serve(AgentInventoryService, (_params, principal, self) => {
+      const inventory = serving.inventory;
+      if (principal.kind !== 'owner' || !inventory) return { variant: 'none', members: {} };
+      return { variant: 'owner', members: { inventory: self.follow(following(() => inventory)) } };
+    });
+    serve(AgentSudoService, (_params, principal, self) => {
+      const sudo = serving.sudo;
+      if (principal.kind !== 'owner' || !sudo) return { variant: 'none', members: {} };
+      const mine = self.open(
+        async () => ownedSudo(sudo),
+        (owned) => owned.release()
+      );
+      return {
+        variant: 'sudo',
+        members: {
+          approvals: self.follow(following(() => sudo.approvals)),
+          ...served(() => mine.value, SUDO_METHODS),
+        },
+      };
+    });
   });
+}
+
+export async function serveAgent(
+  serving: Served,
+  context: Context
+): Promise<Host<AgentPrincipal, Revocation>> {
+  const host = createHost<AgentPrincipal, Revocation>({
+    address: AgentAddress(),
+    principal: SELF,
+    principalKey,
+    onError: reportHost,
+    revokedBy: (principal) => (principal.kind === 'guest' ? [{ guest: principal.guest.id }] : []),
+  });
+  await host.load([{ name: '@ai-ecoverse/slicc-agent', facet: facetOf(serving) }], context);
   return host;
 }

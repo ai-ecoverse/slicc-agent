@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { type Conversation, defineDoc } from '@earendil-works/pi-durable';
 import { boundedDeltas } from './checkpoints.ts';
 

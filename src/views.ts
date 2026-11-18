@@ -1,8 +1,9 @@
-import { type Context, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ConversationView, ConversationWatch } from '@earendil-works/pi-durable';
 import type { Agent } from './agent.ts';
 import { type AgentsState, live } from './agents.ts';
 import type { AgentsSummary } from './services.ts';
+import { createState } from './state.ts';
 
 export function summarize(state: Readonly<AgentsState>): AgentsSummary {
   const cones = Object.entries(state.cones).map(([id, cone]) => ({
@@ -44,8 +45,8 @@ export async function agentViews(
   context: Context,
   slim: (view: ConversationView) => ConversationView = (view) => view
 ) {
-  const agents = replicatedState<AgentsSummary>(summarize(agent.agents.state()));
-  const views = replicatedState<Record<string, ConversationView>>({});
+  const agents = createState<AgentsSummary>(summarize(agent.agents.state()));
+  const views = createState<Record<string, ConversationView>>({});
   const mounted = new Map<string, Mounted>();
   let lock: Promise<unknown> = Promise.resolve();
   const sync = () => {

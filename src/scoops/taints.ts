@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ConversationId, Harness } from '@earendil-works/pi-durable';
 import { type AgentsState, live } from '../agents.ts';
 import { distinctTaints, type InheritedTaint, runTaints } from '../guests/guard.ts';

@@ -1,12 +1,9 @@
-import {
-  type Context,
-  type ReplicatedState,
-  replicatedState,
-  type WatchHandle,
-} from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { WatchHandle } from '@earendil-works/chord/watch';
 import type { Conversation, ConversationView, Harness } from '@earendil-works/pi-durable';
 import type { Clock } from '../clock.ts';
+import { createState, type State } from '../state.ts';
 import { type ApprovalJudge, ASK_MIN_MS, JUDGE_RESTARTED, type Judgement } from './judge.ts';
 import { type ApprovalPolicies, alwaysFor } from './policy.ts';
 import { type Attendance, ownerPresent } from './present.ts';
@@ -54,7 +51,7 @@ export type Decider = DecidedBy | { by: DecidedBy; device?: string };
 const deciderOf = (decider: Decider) => (typeof decider === 'string' ? { by: decider } : decider);
 
 export interface Approvals {
-  readonly state: ReplicatedState<Approval[]>;
+  readonly state: State<Approval[]>;
   request(draft: ApprovalDraft & { id?: string }, context: Context): Promise<Approval>;
   decide(
     id: string,
@@ -403,11 +400,7 @@ function following(
   };
 }
 
-function settledIn(
-  state: ReplicatedState<Approval[]>,
-  id: string,
-  using: Context
-): Promise<Approval> {
+function settledIn(state: State<Approval[]>, id: string, using: Context): Promise<Approval> {
   return new Promise((resolve, reject) => {
     const signal = using.abortSignal;
     let done = false;
@@ -474,7 +467,7 @@ export async function attachApprovals(
       }
     }
   }, context);
-  const state = replicatedState<Approval[]>(startup.items);
+  const state = createState<Approval[]>(startup.items);
   const watch = await harness.watchDoc(ApprovalsDoc, context);
   if (!watch) throw new Error('approvals document is missing');
   const follow = following(watch, (using, items) => {

@@ -230,141 +230,100 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
   assert.equal(seen.stillBusy, true);
 });
 
-test('a follower or guest of an owner on another agent version is refused once with EVERSION, and the link ends', async (t) => {
+const SENTENCE =
+  "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
+
+test('a follower or guest of an owner on another wire, Chord or contract version, or of a 7.x owner, is refused once with EVERSION, and both ends close', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await page.evaluate(async () => {
     await import('/dist-test/page.js');
-    await import('/dist-test/other-owner.js');
-    const owner = otherOwner([
-      'slicc.agent.control',
-      'slicc.agent.transcript',
-      'slicc.agent.settings',
-      'slicc.agent.remote',
-      'slicc.agent.pages',
-      'slicc.agent.guest',
-    ]);
-    const refused = async (connect, seat) => {
+    const owner = (hello) => {
+      const { port1, port2 } = new MessageChannel();
+      const heard = [];
+      port1.onmessage = ({ data }) =>
+        heard.push(data instanceof Uint8Array ? { bytes: data.length } : data);
+      port1.postMessage(hello);
+      return { port: port2, heard };
+    };
+    const ours = { wire: 2, chord: 1, contracts: 'x', server: 'other' };
+    const hellos = {
+      wire: { hello: { ...ours, wire: 3 } },
+      chord: { hello: { ...ours, chord: 2 } },
+      contracts: { hello: ours },
+      seven: { hello: 'a-7.x-server-id' },
+      refusing: { close: true, reason: 'version' },
+    };
+    const refused = async (connect, hello) => {
+      const { port, heard } = owner(hello);
       const started = performance.now();
-      const outcome = await connect(owner.port(seat)).then(
+      const outcome = await connect(port).then(
         () => ({ connected: true }),
         (error) => ({ code: error.code, message: error.message })
       );
-      return { ...outcome, ms: performance.now() - started };
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return { ...outcome, ms: performance.now() - started, heard };
     };
-    const follower = await refused(connectAgent, { seat: 'control', link: 1 });
-    const guest = await refused(connectGuest, {
-      seat: 'guest',
-      link: 2,
-      guest: { id: 'seat-1', name: 'Anna', epoch: 1 },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const result = {
-      follower,
-      guest,
-      links: owner.links.length,
-      closed: owner.links.map((link) => link.closed),
-    };
-    await owner.close();
+    const result = {};
+    for (const [name, hello] of Object.entries(hellos)) {
+      result[name] = {
+        follower: await refused(connectAgent, hello),
+        guest: await refused(connectGuest, hello),
+      };
+    }
     return result;
   });
-  const sentence =
-    "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
-  for (const outcome of [seen.follower, seen.guest]) {
-    assert.equal(outcome.code, 'EVERSION', JSON.stringify(outcome));
-    assert.equal(outcome.message, sentence);
-    assert.ok(outcome.ms < 2000, `${outcome.ms}`);
-  }
-  assert.equal(seen.links, 2);
-  assert.deepEqual(seen.closed, [true, true]);
+  for (const [name, { follower, guest }] of Object.entries(seen))
+    for (const outcome of [follower, guest]) {
+      assert.equal(outcome.code, 'EVERSION', `${name}: ${JSON.stringify(outcome)}`);
+      assert.equal(outcome.message, SENTENCE);
+      assert.ok(outcome.ms < 2000, `${outcome.ms}`);
+      assert.ok(outcome.heard[0]?.hello, `${name}: the client says hello first`);
+      assert.equal(outcome.heard[0].hello.server, undefined);
+      assert.ok(
+        outcome.heard.every((message) => !('bytes' in message)),
+        `${name}: nothing of Chord crosses before a matching hello`
+      );
+      if (name !== 'refusing')
+        assert.deepEqual(outcome.heard.at(-1), { close: true, reason: 'version' }, name);
+    }
 });
 
-test('a 5.x follower or guest from the npm tarball meeting a 6.x owner is refused once with EVERSION, and the owner keeps serving its own', async (t) => {
+test('an owner refuses a peer that speaks Chord before its hello or says another version, and keeps serving its own links', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await page.evaluate(async () => {
     await import('/dist-test/page.js');
-    await import('/dist-test/agent-5.js');
     const owner = await startAgent({
       worker: () =>
         new Worker('/dist-test/agent-worker.js?answer=Still%20here.', { type: 'module' }),
     });
     const local = await owner.connect();
-    const opened = await local.control.guestOpen(
-      {
-        id: 'seat-5',
-        label: 'Anna',
-        agentId: 'cone',
-        expiresAt: null,
-        gates: { messages: 'user', tools: 'user' },
-      },
-      BACKGROUND_CONTEXT
-    );
-    const refused = async (connect, options) => {
-      const port = await owner.port(options);
-      const started = performance.now();
-      const outcome = await Promise.race([
-        connect(port).then(
-          () => ({ connected: true }),
-          (error) => ({ code: error.code, message: error.message })
-        ),
-        new Promise((resolve) => setTimeout(() => resolve({ pending: true }), 5000)),
-      ]);
-      return { ...outcome, ms: performance.now() - started };
+    const peer = async (first) => {
+      const port = await owner.port({ pages: false });
+      const heard = [];
+      port.onmessage = ({ data }) =>
+        heard.push(data instanceof Uint8Array ? { bytes: data.length } : data);
+      port.postMessage(first);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return heard;
     };
-    const follower = await refused(oldConnectAgent, { pages: false });
-    const guest = await refused(oldConnectGuest, { guest: { id: 'seat-5', label: 'Anna' } });
+    const old = new TextEncoder().encode(
+      JSON.stringify({ t: 'hello', name: 'old', kind: 'client' })
+    );
+    const sevenClient = await peer(old);
+    const otherWire = await peer({
+      hello: { wire: 1, chord: 1, contracts: local.serverId },
+    });
     const still = await local.prompt('Are you there?');
     await local.close();
     await owner.release();
-    return { opened: opened.error, follower, guest, still };
+    return { sevenClient, otherWire, still, serverId: local.serverId };
   });
-  assert.equal(seen.opened, null);
-  const sentence =
-    "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
-  for (const outcome of [seen.follower, seen.guest]) {
-    assert.equal(outcome.code, 'EVERSION', JSON.stringify(outcome));
-    assert.equal(outcome.message, sentence);
-    assert.ok(outcome.ms < 2000, `${outcome.ms}`);
+  for (const heard of [seen.sevenClient, seen.otherWire]) {
+    assert.equal(heard[0].hello.server, seen.serverId);
+    assert.equal(heard[0].hello.wire, 2);
+    assert.deepEqual(heard.slice(1), [{ close: true, reason: 'version' }], JSON.stringify(heard));
   }
   assert.equal(seen.still, 'Still here.');
-});
-
-test('a follower or guest meeting a 5.x owner is refused once with EVERSION, and the link ends', async (t) => {
-  const page = await chrome.page(t);
-  await page.goto('/');
-  const seen = await page.evaluate(async () => {
-    await import('/dist-test/page.js');
-    await import('/dist-test/agent-5.js');
-    const owner = oldOwner();
-    const refused = async (connect, seat) => {
-      const started = performance.now();
-      const outcome = await Promise.race([
-        connect(owner.port(seat)).then(
-          () => ({ connected: true }),
-          (error) => ({ code: error.code, message: error.message })
-        ),
-        new Promise((resolve) => setTimeout(() => resolve({ pending: true }), 5000)),
-      ]);
-      return { ...outcome, ms: performance.now() - started };
-    };
-    const follower = await refused(connectAgent, { seat: 'control', link: 1 });
-    const guest = await refused(connectGuest, {
-      seat: 'guest',
-      link: 2,
-      guest: { id: 'seat-1', name: 'Anna', epoch: 1 },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const closed = owner.links.map((link) => link.closed);
-    await owner.close();
-    return { follower, guest, closed };
-  });
-  const sentence =
-    "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
-  for (const outcome of [seen.follower, seen.guest]) {
-    assert.equal(outcome.code, 'EVERSION', JSON.stringify(outcome));
-    assert.equal(outcome.message, sentence);
-    assert.ok(outcome.ms < 2000, `${outcome.ms}`);
-  }
-  assert.deepEqual(seen.closed, [true, true]);
 });

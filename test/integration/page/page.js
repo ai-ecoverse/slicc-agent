@@ -1,8 +1,15 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { SliccKernelEnv, startAgent } from '../../../src/index.ts';
-import { bridgePort, connectAgent, connectGuest, linkEndpoint } from '../../../src/page.ts';
+import {
+  bridgePort,
+  connectAgent,
+  connectGuest,
+  linkEndpoint,
+  SEAT_REFUSED,
+} from '../../../src/page.ts';
 import { remoteControl } from '../../../src/remote/client.ts';
 import { createAgentModel } from '../../../src/spectrum/index.ts';
+import { openRawLink, partText } from '../../../src/testing.ts';
 import { fakeSealed } from '../fixtures/fake-vault.mjs';
 
 globalThis.startAgent = startAgent;
@@ -12,9 +19,12 @@ globalThis.BACKGROUND_CONTEXT = BACKGROUND_CONTEXT;
 globalThis.remoteControl = remoteControl;
 globalThis.connectAgent = connectAgent;
 globalThis.connectGuest = connectGuest;
+globalThis.SEAT_REFUSED = SEAT_REFUSED;
 globalThis.bridgePort = bridgePort;
 globalThis.linkEndpoint = linkEndpoint;
 globalThis.fakeSealed = fakeSealed;
+globalThis.openRawLink = openRawLink;
+globalThis.partText = partText;
 let stages = 0;
 globalThis.stage = (what) => {
   stages += 1;

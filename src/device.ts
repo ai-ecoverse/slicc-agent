@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { AuthEvent, AuthPrompt, OAuthCredential, Provider } from '@earendil-works/pi-ai';
 import { COPILOT, copilotSettings } from './copilot.ts';
 import { VaultRefusal } from './secrets/vault.ts';

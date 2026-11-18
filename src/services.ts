@@ -1,4 +1,6 @@
-import type { Context, JsonValue, RemoteContract, ReplicatedState } from '@earendil-works/chord';
+import type { Contract } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
+import type { JsonValue } from '@earendil-works/chord/json';
 import type { BlockedReason, ConversationView } from '@earendil-works/pi-durable';
 import type { Approval, ApprovalDecided, ApprovalDecision } from './approvals/index.ts';
 import type {
@@ -21,10 +23,12 @@ import type { EntriesPage, EntriesRequest } from './remote/history.ts';
 import type { AgentRemote } from './remote/host.ts';
 import type { AgentPages } from './remote/pages.ts';
 import type { VaultState } from './secrets/vault.ts';
-import { contract } from './serving.ts';
+import { contract, fingerprints } from './serving.ts';
 import type { DeviceSignIn } from './sign-ins.ts';
 import type { SkillPackage, SkillSource } from './skills/skills.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
+import type { State } from './state.ts';
+import { CHORD_PROTOCOL, type Hello, WIRE } from './wire.ts';
 
 export type SendMode = 'steer' | 'followUp' | 'reject';
 
@@ -366,7 +370,7 @@ export const CONTROL_READS: readonly (keyof AgentControl & string)[] = [
   'entries',
 ];
 
-export const AgentControl: RemoteContract = contract('slicc.agent.control', {
+export const AgentControl: Contract = contract('slicc.agent.control', {
   control: { methods: CONTROL_METHODS },
   view: { methods: [...CONTROL_READS, ...OWNER_DEVICE_METHODS] },
 });
@@ -374,25 +378,25 @@ export const AgentControl: RemoteContract = contract('slicc.agent.control', {
 export type Delivered = 'run' | 'steer' | 'follow-up';
 
 export interface AgentTranscript {
-  readonly state: ReplicatedState<ConversationView>;
-  readonly deliveries: ReplicatedState<Record<string, Delivered>>;
-  readonly agents: ReplicatedState<AgentsSummary>;
-  readonly views: ReplicatedState<Record<string, ConversationView>>;
-  readonly commands: ReplicatedState<Command[]>;
-  readonly privateRevision: ReplicatedState<PrivateRevision>;
-  readonly sprinkles: ReplicatedState<Sprinkle[]>;
-  readonly memories: ReplicatedState<MemoryEntry[]>;
-  readonly memoryScopes: ReplicatedState<MemoryScope[]>;
-  readonly frozen: ReplicatedState<FrozenCone[]>;
-  readonly importing: ReplicatedState<ImportProgress>;
-  readonly changes: ReplicatedState<ChangesView>;
-  readonly monitor: ReplicatedState<MonitorFeed>;
-  readonly vault: ReplicatedState<VaultState>;
-  readonly labels: ReplicatedState<Record<string, string>>;
-  readonly guests: ReplicatedState<GuestSeat[]>;
-  readonly approvals: ReplicatedState<Approval[]>;
-  readonly approvalPolicy: ReplicatedState<ApprovalPolicy>;
-  readonly approvalRunnable: ReplicatedState<Record<string, Runnable>>;
+  readonly state: State<ConversationView>;
+  readonly deliveries: State<Record<string, Delivered>>;
+  readonly agents: State<AgentsSummary>;
+  readonly views: State<Record<string, ConversationView>>;
+  readonly commands: State<Command[]>;
+  readonly privateRevision: State<PrivateRevision>;
+  readonly sprinkles: State<Sprinkle[]>;
+  readonly memories: State<MemoryEntry[]>;
+  readonly memoryScopes: State<MemoryScope[]>;
+  readonly frozen: State<FrozenCone[]>;
+  readonly importing: State<ImportProgress>;
+  readonly changes: State<ChangesView>;
+  readonly monitor: State<MonitorFeed>;
+  readonly vault: State<VaultState>;
+  readonly labels: State<Record<string, string>>;
+  readonly guests: State<GuestSeat[]>;
+  readonly approvals: State<Approval[]>;
+  readonly approvalPolicy: State<ApprovalPolicy>;
+  readonly approvalRunnable: State<Record<string, Runnable>>;
 }
 
 export interface PrivateRevision {
@@ -429,8 +433,13 @@ export const TRANSCRIPT_STATES = keys<AgentTranscript>({
   approvalRunnable: true,
 });
 
-export const AgentTranscript: RemoteContract = contract('slicc.agent.transcript', {
-  transcript: { state: TRANSCRIPT_STATES },
+export const TRANSCRIPT_MEMBER = 'transcript';
+
+export const transcriptMember = (name: (typeof TRANSCRIPT_STATES)[number]): string =>
+  name === 'state' ? TRANSCRIPT_MEMBER : name;
+
+export const AgentTranscript: Contract = contract('slicc.agent.transcript', {
+  transcript: { state: TRANSCRIPT_STATES.map(transcriptMember) },
 });
 
 export const REMOTE_METHODS = keys<AgentRemote>({
@@ -469,9 +478,9 @@ export interface GuestProposal {
 }
 
 export interface AgentGuest {
-  readonly transcript: ReplicatedState<ConversationView>;
-  readonly seat: ReplicatedState<GuestShown>;
-  readonly proposals: ReplicatedState<GuestProposal[]>;
+  readonly transcript: State<ConversationView>;
+  readonly seat: State<GuestShown>;
+  readonly proposals: State<GuestProposal[]>;
   propose(request: ProposeRequest, context: Context): Promise<Proposed>;
   guestOpen(draft: GuestDraft, context: Context): Promise<GuestOpened>;
   guestRevoke(id: string, context: Context): Promise<{ revoked: boolean }>;
@@ -481,12 +490,12 @@ export const GUEST_STATES = ['transcript', 'seat', 'proposals'] as const;
 
 export const GUEST_METHODS = ['propose', 'guestOpen', 'guestRevoke'] as const;
 
-export const AgentGuestService: RemoteContract = contract('slicc.agent.guest', {
+export const AgentGuestService: Contract = contract('slicc.agent.guest', {
   guest: { state: GUEST_STATES, methods: GUEST_METHODS },
   none: {},
 });
 
-export const AgentRemoteService: RemoteContract = contract('slicc.agent.remote', {
+export const AgentRemoteService: Contract = contract('slicc.agent.remote', {
   remote: { methods: REMOTE_METHODS },
   watch: { methods: REMOTE_READS },
 });
@@ -499,7 +508,7 @@ export const PAGE_METHODS = keys<AgentPages>({
   close: true,
 });
 
-export const AgentPagesService: RemoteContract = contract('slicc.agent.pages', {
+export const AgentPagesService: Contract = contract('slicc.agent.pages', {
   pages: { methods: PAGE_METHODS },
   none: {},
 });
@@ -510,7 +519,7 @@ export const SUDO_METHODS = keys<Omit<AgentSudo, 'approvals'>>({
   capture: true,
 });
 
-export const AgentSudoService: RemoteContract = contract('slicc.agent.sudo', {
+export const AgentSudoService: Contract = contract('slicc.agent.sudo', {
   sudo: { state: ['approvals'], methods: SUDO_METHODS },
   none: {},
 });
@@ -636,7 +645,7 @@ export interface SettingsState {
 }
 
 export interface AgentSettings {
-  readonly state: ReplicatedState<SettingsState>;
+  readonly state: State<SettingsState>;
   connect(
     providerId: string,
     secret: string | null,
@@ -671,10 +680,12 @@ export const OWNER_SETTINGS_METHODS: readonly (keyof Omit<AgentSettings, 'state'
   'refusals',
 ];
 
-export const AgentSettings: RemoteContract = contract('slicc.agent.settings', {
-  owner: { state: ['state'], methods: OWNER_SETTINGS_METHODS },
-  settings: { state: ['state'], methods: SETTINGS_METHODS },
-  view: { state: ['state'] },
+export const SETTINGS_MEMBER = 'settings';
+
+export const AgentSettings: Contract = contract('slicc.agent.settings', {
+  owner: { state: [SETTINGS_MEMBER], methods: OWNER_SETTINGS_METHODS },
+  settings: { state: [SETTINGS_MEMBER], methods: SETTINGS_METHODS },
+  view: { state: [SETTINGS_MEMBER] },
 });
 
 export type InventoryStatus = 'running' | 'queued' | 'waiting' | 'error' | 'idle';
@@ -717,10 +728,30 @@ export interface InventorySnapshot {
 }
 
 export interface AgentInventory {
-  readonly inventory: ReplicatedState<InventoryState>;
+  readonly inventory: State<InventoryState>;
 }
 
-export const AgentInventoryService: RemoteContract = contract('slicc.agent.inventory', {
+export const AgentInventoryService: Contract = contract('slicc.agent.inventory', {
   owner: { state: ['inventory'] },
   none: {},
+});
+
+export const CONTRACTS: readonly Contract[] = [
+  AgentControl,
+  AgentTranscript,
+  AgentSettings,
+  AgentRemoteService,
+  AgentPagesService,
+  AgentGuestService,
+  AgentInventoryService,
+  AgentSudoService,
+];
+
+export const CONTRACT_PRINTS = fingerprints(CONTRACTS);
+
+export const helloOf = (server?: string): Hello => ({
+  wire: WIRE,
+  chord: CHORD_PROTOCOL,
+  contracts: CONTRACT_PRINTS,
+  ...(server === undefined ? {} : { server }),
 });

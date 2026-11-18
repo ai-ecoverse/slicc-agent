@@ -2,7 +2,7 @@
   "pi-codemode-worker-threads": {
     "kind": "environment",
     "package": "@earendil-works/pi-codemode",
-    "patchedVersion": "1.5.0",
+    "patchedVersion": "1.5.2",
     "marker": {
       "file": "dist/runtime/host.js",
       "includes": "import { Worker } from \"node:worker_threads\""
@@ -14,7 +14,7 @@
   "pi-ai-google-genai-lazy": {
     "kind": "environment",
     "package": "@earendil-works/pi-ai",
-    "patchedVersion": "1.5.0",
+    "patchedVersion": "1.5.2",
     "marker": {
       "file": "dist/api/google-generative-ai.lazy.js",
       "includes": "import(\"./google-generative-ai.js\")"
@@ -26,7 +26,7 @@
   "pi-ai-google-vertex-lazy": {
     "kind": "environment",
     "package": "@earendil-works/pi-ai",
-    "patchedVersion": "1.5.0",
+    "patchedVersion": "1.5.2",
     "marker": {
       "file": "dist/api/google-vertex.lazy.js",
       "includes": "import(\"./google-vertex.js\")"
@@ -38,7 +38,7 @@
   "pi-mcp-stdio-node-only": {
     "kind": "environment",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.5.0",
+    "patchedVersion": "1.5.2",
     "marker": {
       "file": "dist/index.js",
       "includes": "export { StdioTransport } from \"./transports/stdio.js\""
@@ -47,10 +47,22 @@
     "removeWhen": "pi-mcp exports its Streamable HTTP transport without the stdio one (a subpath export or a lazy stdio module), or SLICC runs stdio servers through the kernel after slicc-kernel#68.",
     "verify": "npm test"
   },
+  "pi-mcp-crypto-node-only": {
+    "kind": "environment",
+    "package": "@earendil-works/pi-mcp",
+    "patchedVersion": "1.5.2",
+    "marker": {
+      "file": "dist/naming.js",
+      "includes": "import { createHash } from \"node:crypto\""
+    },
+    "reason": "pi-mcp 1.5.1 and later import createHash from node:crypto at the top of naming.js (re-exported by its index for createMcpToolName) and oauth/client-settings.js (reached from the oauth subpath). SLICC calls neither createMcpToolName nor the sign-in helpers that hash, so the module only has to load: the slicc-bios service worker serves node:crypto as a stub whose named exports throw when called. The integration bundles alias node:crypto to test/integration/shims/node-only.js, which exports a throwing createHash.",
+    "removeWhen": "pi-mcp hashes without node:crypto (Web Crypto) or keeps its naming and sign-in helpers off the modules SLICC imports.",
+    "verify": "npm test"
+  },
   "pi-mcp-sse-buffer": {
     "kind": "monkeypatch",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.5.0",
+    "patchedVersion": "1.5.2",
     "marker": {
       "file": "dist/transports/streamable-http.js",
       "includes": "Buffer.byteLength(value)"
@@ -62,7 +74,7 @@
   "pi-mcp-oauth-browser": {
     "kind": "environment",
     "package": "@earendil-works/pi-mcp",
-    "patchedVersion": "1.5.0",
+    "patchedVersion": "1.5.2",
     "marker": {
       "file": "dist/oauth/flow.js",
       "includes": "Buffer.from(bytes).toString(\"base64url\")"
