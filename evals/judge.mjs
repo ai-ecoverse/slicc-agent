@@ -14,6 +14,7 @@ import {
   verdictOf,
 } from '../src/approvals/index.ts';
 import { CLOUDFLARE, ensureJudgeCreds, judgeCredentials } from './judge-creds.mjs';
+import { LOCAL, localProvider } from './local.mjs';
 
 const file = new URL('./judge.json', import.meta.url);
 const named = argv.flatMap((arg, i) => (argv[i - 1] === '--model' ? [arg] : []));
@@ -29,6 +30,13 @@ ensureJudgeCreds(providers, env);
 const models = createModels({ credentials: judgeCredentials(env) });
 if (providers.has(ADOBE)) models.setProvider(adobeProvider());
 if (providers.has(CLOUDFLARE)) models.setProvider(cloudflareWorkersAIProvider());
+if (providers.has(LOCAL))
+  models.setProvider(
+    localProvider(
+      refs.filter((ref) => ref.provider === LOCAL).map((ref) => ref.modelId),
+      env.SLICC_LOCAL_BASE
+    )
+  );
 const set = JSON.parse(await readFile(file, 'utf8'));
 const detailOf = (entry) => {
   if (entry.kind === 'sudo')
