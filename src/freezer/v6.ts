@@ -394,6 +394,7 @@ async function licksIn(opened: Opened, data?: Map<string, Uint8Array>): Promise<
 const ACCOUNTS: Record<string, string> = {
   'bedrock-camp': 'amazon-bedrock',
   bedrock: 'amazon-bedrock',
+  'local-llm': 'local',
 };
 
 export function accountsOf(providers: readonly string[]): string[] {
@@ -423,7 +424,7 @@ const NAMES: Record<string, string> = {
   groq: 'Groq',
   xai: 'xAI',
   deepseek: 'DeepSeek',
-  'local-llm': 'Local LLM',
+  local: 'Local or self-hosted',
 };
 
 export function listed(names: readonly string[]): string {

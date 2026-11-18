@@ -49,6 +49,7 @@ import { adminOver, type UserClient, type UserClients, userClients } from './ker
 import { AGENT_DIR, ROOT_HOME, ROOT_USER } from './layout.ts';
 import { type Licks, setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
+import { LOCAL, LOCAL_BASE } from './local.ts';
 import { type McpAccounts, setupMcp } from './mcp/index.ts';
 import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
@@ -81,6 +82,7 @@ import {
   catalogStore,
   createAgentSettings,
   createSliccModels,
+  keylessOf,
   providerFields,
   resolveDefaultModel,
   sliccProviders,
@@ -249,6 +251,7 @@ export function modelBases(
           ...models.getModels(provider.id).map((model) => model.baseUrl),
           ...(provider.id === BEDROCK ? BEDROCK_ENDPOINTS : []),
           ...(provider.id === AZURE ? [azureBase(env(provider.id) ?? {})] : []),
+          ...(provider.id === LOCAL ? [env(provider.id)?.[LOCAL_BASE]] : []),
         ].filter((url): url is string => typeof url === 'string' && url !== '')
       ),
     ],
@@ -286,7 +289,7 @@ function hostSecrets(
   };
 }
 
-async function modelsOf(
+export async function modelsOf(
   scope: AgentWorkerScope,
   options: AgentWorkerOptions,
   given: { vault: Vault; home: SliccKernelEnv; transport: typeof fetch; version: string }
@@ -297,14 +300,17 @@ async function modelsOf(
   const loaded = records.refresh(BACKGROUND_CONTEXT).catch(() => undefined);
   const providers = options.providers ?? sliccProviders(version);
   const fields = await providerFields(store, providers);
-  const credentials = vaultCredentials(records, fields.env, fields.ready);
+  const keyless = keylessOf(records, fields);
+  const bare = () => providers.map((provider) => provider.id).filter(keyless);
+  const credentials = vaultCredentials(records, fields.env, fields.ready, bare);
   const models = createSliccModels(
     credentials,
     providers,
     catalogStore(fileStore(home, MODELS_FILE))
   );
   await models.refresh({ allowNetwork: false }).catch(() => undefined);
-  const bases = () => modelBases(providers, models, fields.env);
+  const bases = () =>
+    modelBases(providers, models, fields.env).filter((entry) => !keyless(entry.provider));
   scope.fetch = codexFetch(
     vaultFetch(
       vault,

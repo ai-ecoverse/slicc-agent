@@ -15,6 +15,7 @@ import {
 import { abortableBedrock } from './bedrock.ts';
 import { codexProvider } from './codex.ts';
 import { type DeviceFlows, deviceFlows } from './device.ts';
+import { KEY_OVER_HTTP, LOCAL, listLocal, localBase, SMALL_CONTEXT } from './local.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import type { Reach } from './net.ts';
@@ -201,12 +202,48 @@ function filled(
   });
 }
 
+export function keylessOf(
+  records: Pick<VaultRecords, 'model'>,
+  fields: Pick<ProviderFields, 'get' | 'ready'>
+): (providerId: string) => boolean {
+  return (providerId) =>
+    Boolean(LISTINGS.get(providerId)?.keyless) &&
+    !records.model(providerId) &&
+    fields.get(providerId) !== undefined &&
+    fields.ready(providerId);
+}
+
+function small(models: MutableModels, providerId: string): string {
+  return providerId === LOCAL &&
+    models.getModels(providerId).some((model) => model.contextWindow < SMALL_CONTEXT)
+    ? ', context under 16k tokens'
+    : '';
+}
+
+function connection(
+  providerId: string,
+  record: { state?: string; expiresAt?: number } | undefined,
+  bare: boolean,
+  models: MutableModels
+): Pick<AccountState, 'identity' | 'status'> {
+  if (!record)
+    return bare
+      ? { identity: `No key${small(models, providerId)}`, status: 'connected' }
+      : { identity: '', status: 'disconnected' };
+  return {
+    identity: `${identityOf(providerId, record)}${small(models, providerId)}`,
+    status: record.state === 'expired' ? 'expired' : 'connected',
+  };
+}
+
 function accounts(
   records: Pick<VaultRecords, 'model'>,
   providers: Provider[],
   given: Pick<ProviderFields, 'ready' | 'get'>,
-  blocked: (providerId: string) => boolean
+  blocked: (providerId: string) => boolean,
+  models: MutableModels
 ): AccountState[] {
+  const keyless = keylessOf(records, given);
   return providers.map((provider) => {
     const record = given.ready(provider.id) ? records.model(provider.id) : undefined;
     const fields = ACCOUNT_FIELDS[provider.id];
@@ -214,8 +251,7 @@ function accounts(
     return {
       id: provider.id,
       provider: provider.name ?? provider.id,
-      identity: record ? identityOf(provider.id, record) : '',
-      status: !record ? 'disconnected' : record.state === 'expired' ? 'expired' : 'connected',
+      ...connection(provider.id, record, keyless(provider.id), models),
       auth: oauth(provider.id) ? 'oauth' : 'api-key',
       ...(DEVICE_SIGN_INS.has(provider.id) && listing?.keyUrl
         ? { secret: 'api-key' as const }
@@ -382,6 +418,22 @@ export function grokBudgets(
   };
 }
 
+async function probeLocal(
+  { records, fields }: SettingsSources,
+  given: Record<string, string> | null,
+  reread: () => Promise<unknown>
+): Promise<void> {
+  const base = localBase(given?.endpoint?.trim() || fields.get(LOCAL)?.endpoint || '');
+  if (typeof base !== 'string') throw new Error(base.problem);
+  await reread();
+  const key = records.model(LOCAL)?.placeholder;
+  if (key && base.startsWith('http:')) throw new Error(KEY_OVER_HTTP);
+  await listLocal(base, {
+    ...(key ? { key } : {}),
+    fetch: (input, init) => globalThis.fetch(input, init),
+  });
+}
+
 export interface SettingsSources {
   records: VaultRecords;
   fields: ProviderFields;
@@ -442,10 +494,14 @@ export async function createAgentSettings(
     (await Promise.all([adobeBudget(records, usage), polled ? grok() : null])).filter(
       (found): found is BudgetState => found !== null
     );
+  const keyless = keylessOf(records, fields);
   const snapshot = async (): Promise<SettingsState> => {
     const stored = new Set(
       providers
-        .filter((provider) => records.model(provider.id) && fields.ready(provider.id))
+        .filter(
+          (provider) =>
+            (records.model(provider.id) && fields.ready(provider.id)) || keyless(provider.id)
+        )
         .map((provider) => provider.id)
     );
     const show = listed(records, fields);
@@ -455,7 +511,10 @@ export async function createAgentSettings(
     return {
       models: choices(models, open(providers), stored),
       labels: labels(models, open(shown), stored),
-      accounts: [...accounts(records, shown, fields, blocked), ...((await mcp?.accounts()) ?? [])],
+      accounts: [
+        ...accounts(records, shown, fields, blocked, models),
+        ...((await mcp?.accounts()) ?? []),
+      ],
       providers: offered(providers, blocked),
       budget: held[0] ?? null,
       budgets: held,
@@ -472,17 +531,17 @@ export async function createAgentSettings(
     latest = next.catch(() => undefined);
     return next;
   };
-  const signedIn = providers
-    .filter((provider) => signIn.has(provider.id))
+  const discovered = providers
+    .filter((provider) => signIn.has(provider.id) || provider.id === LOCAL)
     .map((provider) => provider.id);
   const discover = (ids: string[]) =>
     models.refresh({ providers: ids }).then(
       () => undefined,
       () => undefined
     );
-  if (signedIn.length || polled) {
+  if (discovered.length || polled) {
     const cycle = () =>
-      void (signedIn.length ? discover(signedIn) : Promise.resolve())
+      void (discovered.length ? discover(discovered) : Promise.resolve())
         .then(() => refresh(BACKGROUND_CONTEXT))
         .catch(() => undefined);
     cycle();
@@ -492,14 +551,14 @@ export async function createAgentSettings(
   mcp?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
   reach?.onChange(() => void refresh(BACKGROUND_CONTEXT).catch(() => undefined));
   moved?.state.subscribe((_value, context) => void refresh(context).catch(() => undefined));
-  const held = () => signedIn.filter((id) => records.model(id)).join(' ');
+  const held = () => discovered.filter((id) => records.model(id)).join(' ');
   let seen = held();
   records.state.subscribe(() => {
     const now = held();
     const added = now !== seen;
     seen = now;
-    const discovered = added ? discover(signedIn) : Promise.resolve();
-    void discovered.then(() => refresh(BACKGROUND_CONTEXT)).catch(() => undefined);
+    const found = added ? discover(discovered) : Promise.resolve();
+    void found.then(() => refresh(BACKGROUND_CONTEXT)).catch(() => undefined);
   });
   const reread = (context: Context) => records.refresh(context).catch(() => undefined);
   return {
@@ -514,11 +573,12 @@ export async function createAgentSettings(
       if (secret !== null)
         throw new Error(signIn.has(providerId) ? SIGN_IN_NEEDS_VAULT : KEY_NEEDS_VAULT);
       if (flows.has(providerId)) await flows.finish(providerId, context);
+      if (providerId === LOCAL) await probeLocal(sources, given, () => reread(context));
       if (given !== null) await fields.set(providerId, given);
       if (LISTINGS.has(providerId)) await fields.add(providerId);
       records.reconnected(providerId);
       await reread(context);
-      if (signIn.has(providerId)) await discover([providerId]);
+      if (discovered.includes(providerId)) await discover([providerId]);
       await refresh(context);
     },
     async signIn(providerId, context) {
@@ -541,7 +601,10 @@ export async function createAgentSettings(
       flows.stop(providerId);
       const server = routed(providerId);
       if (server) await server.disconnect(providerId);
-      else if (LISTINGS.has(providerId)) await fields.add(providerId);
+      else if (LISTINGS.get(providerId)?.keyless) {
+        await fields.set(providerId, undefined);
+        await fields.add(providerId);
+      } else if (LISTINGS.has(providerId)) await fields.add(providerId);
       else await fields.set(providerId, undefined);
       await reread(context);
       await refresh(context);

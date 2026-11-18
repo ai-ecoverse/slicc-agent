@@ -34,6 +34,7 @@ import { xiaomiTokenPlanCnProvider } from '@earendil-works/pi-ai/providers/xiaom
 import { xiaomiTokenPlanSgpProvider } from '@earendil-works/pi-ai/providers/xiaomi-token-plan-sgp';
 import { zaiProvider } from '@earendil-works/pi-ai/providers/zai';
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn';
+import { LOCAL, localContext, localEndpoint, localProvider } from './local.ts';
 import { CODEX } from './sign-ins.ts';
 
 export interface FieldOption {
@@ -62,9 +63,10 @@ export interface KeyProvider {
   make: () => Provider;
   env: string;
   description: string;
-  keyUrl: string;
+  keyUrl?: string;
   cors: boolean;
   signIn?: true;
+  keyless?: true;
   fields?: readonly FieldSpec[];
 }
 
@@ -475,6 +477,33 @@ export const KEY_PROVIDERS: readonly KeyProvider[] = [
     keyUrl: 'https://modelstudio.console.alibabacloud.com',
     cors: false,
   },
+  {
+    id: LOCAL,
+    make: localProvider,
+    env: 'LOCAL_API_KEY',
+    description:
+      'Any OpenAI-compatible server, such as Ollama, LM Studio, llama.cpp, vLLM, SGLang or slicc-ortllama, on this machine, your network or https://. A key is optional.',
+    cors: true,
+    keyless: true,
+    fields: [
+      {
+        name: 'endpoint',
+        label: 'Endpoint',
+        required: true,
+        placeholder: 'http://127.0.0.1:11434/v1',
+        help: 'Ollama http://127.0.0.1:11434/v1, LM Studio :1234/v1, llama.cpp :8080/v1, vLLM :8000/v1, ortllama :11435/v1 or http://11435.kernel.localhost/v1. An http:// address must be on this machine, your network or your tailnet.',
+        customBase: true,
+        env: localEndpoint,
+      },
+      {
+        name: 'context',
+        label: 'Context window',
+        placeholder: '32768',
+        help: 'In tokens, for a server that doesn’t report it.',
+        env: localContext,
+      },
+    ],
+  },
 ];
 
 export type ProviderAuth = 'api-key' | 'oauth' | 'fields' | 'local';
@@ -485,6 +514,7 @@ export interface Listing {
   auth: ProviderAuth;
   corsFree: boolean;
   vaultName: string;
+  keyless?: true;
   fields?: readonly FieldSpec[];
 }
 
@@ -527,10 +557,11 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
     entry.id,
     {
       description: entry.description,
-      keyUrl: entry.keyUrl,
+      ...(entry.keyUrl ? { keyUrl: entry.keyUrl } : {}),
       auth: entry.signIn ? 'oauth' : entry.fields ? 'fields' : 'api-key',
       corsFree: !entry.cors,
       vaultName: named.get(entry.id) as string,
+      ...(entry.keyless ? { keyless: entry.keyless } : {}),
       ...(entry.fields ? { fields: entry.fields } : {}),
     },
   ]),

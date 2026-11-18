@@ -12,11 +12,14 @@ export type FieldsOf = (providerId: string) => Readonly<Record<string, string>> 
 export function vaultCredentials(
   records: Pick<VaultRecords, 'model' | 'state'>,
   env: FieldsOf = () => undefined,
-  ready: (providerId: string) => boolean = () => true
+  ready: (providerId: string) => boolean = () => true,
+  keyless: () => readonly string[] = () => []
 ): CredentialStore {
   return {
     async read(providerId) {
       const record = records.model(providerId);
+      if (!record && keyless().includes(providerId))
+        return { type: 'api_key', env: { ...env(providerId) } } satisfies Credential;
       if (!record || !ready(providerId)) return undefined;
       const carried = Object.fromEntries(
         RECORD_ENV.flatMap((name) => {
@@ -36,7 +39,7 @@ export function vaultCredentials(
         .filter((record) => record.kind === 'model' && record.provider !== undefined)
         .map((record) => record.provider as string)
         .filter(ready);
-      return [...new Set(providers)].map(
+      return [...new Set([...providers, ...keyless()])].map(
         (providerId): CredentialInfo => ({ providerId, type: 'api_key' })
       );
     },
