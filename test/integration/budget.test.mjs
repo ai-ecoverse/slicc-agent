@@ -9,7 +9,8 @@ const DAY = 86400000;
 
 const helpers = () => {
   const owner = new BroadcastChannel('slicc-held');
-  owner.onmessage = ({ data }) => owner.postMessage({ type: 'held', marker: data.marker });
+  owner.onmessage = ({ data }) =>
+    owner.postMessage({ type: data.type === 'base' ? 'based' : 'held', marker: data.marker });
   window.open = (url) => {
     const popup = { closed: false, location: { href: url }, close: () => (popup.closed = true) };
     return popup;

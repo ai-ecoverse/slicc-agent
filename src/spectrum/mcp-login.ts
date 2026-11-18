@@ -1,5 +1,5 @@
 import type { McpSignIn, SignIn } from '../services.ts';
-import { askHold, markerUrl, refusal, unlessRefused } from './held.ts';
+import { askBase, askHold, markerUrl, refusal, unlessRefused } from './held.ts';
 
 export const MCP_CHANNEL = 'slicc-mcp-oauth';
 export const MCP_NAME_KEY = 'slicc-mcp-oauth:';
@@ -17,7 +17,8 @@ export interface Channel {
 
 export interface SignInWindow {
   open(url: string): Popup | null;
-  hold(marker: string, signal: AbortSignal): Promise<boolean>;
+  base(marker: string, signal: AbortSignal): Promise<boolean>;
+  hold(marker: string, signal: AbortSignal, based: boolean): Promise<boolean>;
 }
 
 export interface McpLoginHost extends SignInWindow {
@@ -28,7 +29,8 @@ export interface McpLoginHost extends SignInWindow {
 
 const browser: McpLoginHost = {
   open: (url) => globalThis.open?.(url, 'slicc-mcp-oauth', 'popup,width=520,height=720') ?? null,
-  hold: (marker, signal) => askHold(marker, signal),
+  base: (marker, signal) => askBase(marker, signal),
+  hold: (marker, signal, based) => askHold(marker, signal, { based }),
   channel: () => new BroadcastChannel(MCP_CHANNEL) as unknown as Channel,
   remember: (state, name) => {
     const key = `${MCP_NAME_KEY}${state}`;
@@ -85,8 +87,12 @@ export function mcpLogin(host: McpLoginHost = browser) {
     options: { signal: AbortSignal }
   ): Promise<string> => {
     const marker = crypto.randomUUID();
+    const based = await host.base(marker, options.signal);
+    options.signal.throwIfAborted();
     const popup = host.open(markerUrl(marker));
-    const refused = refusal(popup ? host.hold(marker, options.signal) : Promise.resolve(true));
+    const refused = refusal(
+      popup ? host.hold(marker, options.signal, based) : Promise.resolve(true)
+    );
     const channel = host.channel();
     let state: string | undefined;
     try {

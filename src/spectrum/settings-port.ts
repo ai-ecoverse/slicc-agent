@@ -25,8 +25,8 @@ import {
 import type { AgentAdapter } from './agent-port.ts';
 import { attempt } from './attempt.ts';
 import { Emitter } from './emitter.ts';
-import { askHold, markerUrl, refusal, unlessRefused } from './held.ts';
-import { mcpLogin, type SignInWindow, untilAborted } from './mcp-login.ts';
+import { askBase, askHold, markerUrl, refusal, unlessRefused } from './held.ts';
+import { mcpLogin, type Popup, type SignInWindow, untilAborted } from './mcp-login.ts';
 
 export const SETTINGS_KEY = 'slicc-agent.settings';
 
@@ -56,7 +56,8 @@ export const NOTHING_TO_CONNECT =
 
 const signInWindow: SignInWindow = {
   open: (url) => globalThis.open?.(url, 'slicc-sign-in', 'popup,width=520,height=720') ?? null,
-  hold: (marker, signal) => askHold(marker, signal),
+  base: (marker, signal) => askBase(marker, signal),
+  hold: (marker, signal, based) => askHold(marker, signal, { based }),
 };
 
 export function readable(error: unknown): Error {
@@ -282,16 +283,23 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
 
   async #device(id: string, given: Record<string, string> | null): Promise<void> {
     const marker = crypto.randomUUID();
-    const popup = this.#window.open(markerUrl(marker));
     const controller = this.#begin(id);
     const { signal } = controller;
-    const unheld = new AbortController();
-    const refused = refusal(popup ? this.#window.hold(marker, signal) : Promise.resolve(true), () =>
-      unheld.abort(new DOMException('The sign-in window was not held.', 'AbortError'))
-    );
-    const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
-    const discovery = withAbortSignal(AbortSignal.any([signal, unheld.signal]), BACKGROUND_CONTEXT);
+    let popup: Popup | null = null;
     try {
+      const based = await this.#window.base(marker, signal);
+      signal.throwIfAborted();
+      popup = this.#window.open(markerUrl(marker));
+      const unheld = new AbortController();
+      const refused = refusal(
+        popup ? this.#window.hold(marker, signal, based) : Promise.resolve(true),
+        () => unheld.abort(new DOMException('The sign-in window was not held.', 'AbortError'))
+      );
+      const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
+      const discovery = withAbortSignal(
+        AbortSignal.any([signal, unheld.signal]),
+        BACKGROUND_CONTEXT
+      );
       const started = (await untilAborted(
         unlessRefused(this.#settings.signIn(id, discovery), refused),
         signal
