@@ -23,7 +23,7 @@ export interface VaultState {
 }
 
 export const WAITING_MS = 2000;
-export const HTTP_KEYS_FROM = '1.28.0';
+export const HTTP_KEYS_FROM = '1.28.2';
 
 const RELEASE = /^(\d+)\.(\d+)\.(\d+)$/;
 

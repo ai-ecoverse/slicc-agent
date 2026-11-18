@@ -340,8 +340,8 @@ test('a local endpoint on https takes a key from the vault, which fills it only 
   for (const entry of sent) assert.equal(entry.authorization, 'Bearer hosted-key-0001');
 });
 
-for (const release of ['1.28.0', '1.27.9']) {
-  test(`with vault ${release}, a key on a kernel-loopback http endpoint is ${release === '1.28.0' ? 'filled' : 'refused'}, and a public http endpoint is always refused`, async (t) => {
+for (const release of ['1.28.2', '1.28.1']) {
+  test(`with vault ${release}, a key on a kernel-loopback http endpoint is ${release === '1.28.2' ? 'filled' : 'refused'}, and a public http endpoint is always refused`, async (t) => {
     const page = await chrome.page(t);
     await page.init(helpers);
     await page.goto('/');
@@ -349,7 +349,7 @@ for (const release of ['1.28.0', '1.27.9']) {
       '/node_modules/local-llm/package.json': manifest,
       '/node_modules/local-llm/server.mjs': program,
     });
-    const fresh = release === '1.28.0';
+    const fresh = release === '1.28.2';
     const seen = await staged(
       page,
       'the keyed http provider',
