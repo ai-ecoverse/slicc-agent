@@ -154,12 +154,14 @@ async function attached(
   const users = usersOf(admin, options.users, attach);
   await warnSupport(users, client, options.users);
   const home = new SliccKernelEnv(client, { cwd: HOME });
-  await privateStore(home, serverId);
+  const stored = privateStore(home, serverId);
+  stored.catch(() => undefined);
   return {
     client,
     users,
     home,
     wiped,
+    stored,
     at: { home: HOME, ...(users ? { agentDir: AGENT_DIR } : {}) },
   };
 }
@@ -331,12 +333,12 @@ function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>) {
 }
 
 async function factsOf(client: KernelClient & { transport: Transport }, native: typeof fetch) {
-  return {
-    version: await agentVersion((url) => native(url)),
-    commands: await commandsOnPath(client),
-    transport: transportName(client.transport),
-    browser: await browserConnected(client),
-  };
+  const [version, commands, browser] = await Promise.all([
+    agentVersion((url) => native(url)),
+    commandsOnPath(client),
+    browserConnected(client),
+  ]);
+  return { version, commands, transport: transportName(client.transport), browser };
 }
 
 function routeFetch(scope: AgentWorkerScope, client: KernelClient & { transport: Transport }) {
@@ -349,12 +351,20 @@ function routeFetch(scope: AgentWorkerScope, client: KernelClient & { transport:
 
 async function prepare(
   scope: AgentWorkerScope,
-  kernel: { client: KernelClient & { transport: Transport }; home: SliccKernelEnv; vault: Vault },
+  kernel: {
+    client: KernelClient & { transport: Transport };
+    home: SliccKernelEnv;
+    vault: Vault;
+    stored: Promise<unknown>;
+  },
   options: AgentWorkerOptions
 ) {
-  const names = await secretsFor(kernel.home, kernel.vault);
   const { native, transport } = routeFetch(scope, kernel.client);
-  const facts = await factsOf(kernel.client, native);
+  const [names, facts] = await Promise.all([
+    secretsFor(kernel.home, kernel.vault),
+    factsOf(kernel.client, native),
+    kernel.stored,
+  ]);
   const made = await modelsOf(scope, options, {
     vault: kernel.vault,
     home: kernel.home,
@@ -511,8 +521,8 @@ export async function start(
   vault: Vault
 ): Promise<AgentHost> {
   const serverId = crypto.randomUUID();
-  const { client, users, home, at, wiped } = await attached(ports, options, serverId);
-  const ready = await prepare(scope, { client, home, vault }, options);
+  const { client, users, home, at, wiped, stored } = await attached(ports, options, serverId);
+  const ready = await prepare(scope, { client, home, vault, stored }, options);
   const { names, native, transport, facts, models, registry, records, endpoints } = ready;
   const memory = setupMemory(registry);
   const coding = CodingTools.tools as readonly ToolRegistration[];

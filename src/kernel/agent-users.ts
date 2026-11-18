@@ -16,7 +16,7 @@ import {
 } from '../layout.ts';
 import type { LickTarget } from '../licks/lick.ts';
 import type { LickDir } from '../licks/sources.ts';
-import type { Spools } from '../scoops/index.ts';
+import type { Spool, Spools } from '../scoops/index.ts';
 import { findScoop } from '../scoops/service.ts';
 import type { SkillPeople } from '../skills/index.ts';
 import type { SprinklePlace, SprinklesAttach } from '../sprinkles/index.ts';
@@ -111,6 +111,58 @@ export function spoolScript(user: string, dir: string): string {
   const made = `mkdir -p ${at}/in ${at}/out`;
   if (user === ROOT_USER) return made;
   return `${made} && chown -R ${quote(`${user}:${user}`)} ${at} && chmod 700 ${at} ${at}/in ${at}/out`;
+}
+
+const spoolPaths = (dir: string) => [dir, `${dir}/in`, `${dir}/out`];
+
+export function spoolReady(spool: Spool, found: ReadonlyMap<string, string>): boolean {
+  const [dir, ...inner] = spoolPaths(spool.dir);
+  if (spool.user === ROOT_USER) return inner.every((path) => found.has(path));
+  const want = `${spool.user}:${spool.user}\t700`;
+  return [dir, ...inner].every((path) => found.get(path) === want);
+}
+
+async function owners(
+  root: SliccKernelEnv,
+  paths: readonly string[],
+  context: Context
+): Promise<Map<string, string>> {
+  let out = '';
+  await root.exec(
+    ['stat', '-c', '%n\t%U:%G\t%a', ...paths],
+    {
+      onOutput: (text, _context, info) => {
+        if (info.stream === 'stdout') out += text;
+      },
+    },
+    context
+  );
+  const found = new Map<string, string>();
+  for (const line of out.split('\n')) {
+    const [path, owner, mode, ...rest] = line.split('\t');
+    if (path && owner && mode && !rest.length) found.set(path, `${owner}\t${mode}`);
+  }
+  return found;
+}
+
+export async function prepareSpools(
+  root: SliccKernelEnv,
+  spools: readonly Spool[],
+  context: Context
+): Promise<void> {
+  if (!spools.length) return;
+  const found = await owners(
+    root,
+    spools.flatMap(({ dir }) => spoolPaths(dir)),
+    context
+  );
+  const missing = spools.filter((spool) => !spoolReady(spool, found));
+  if (!missing.length) return;
+  await root.exec(
+    missing.map(({ user, dir }) => spoolScript(user, dir)).join('\n'),
+    undefined,
+    context
+  );
 }
 
 export function agentUsers(
@@ -232,9 +284,7 @@ export function agentUsers(
     },
     spools: {
       users: () => [ROOT_USER, ...wanted(state()).map((entry) => entry.spec.name)],
-      async prepare(user, dir, context) {
-        await root.exec(spoolScript(user, dir), undefined, context);
-      },
+      prepare: (spools, context) => prepareSpools(root, spools, context),
     },
     async route(target) {
       await started;
