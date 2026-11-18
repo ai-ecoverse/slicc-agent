@@ -37,6 +37,7 @@ export {
   startAgent,
 } from './owner.ts';
 export {
+  type LinkApproval,
   type RemoteControl,
   type RemoteEvent,
   type RemoteOptions,

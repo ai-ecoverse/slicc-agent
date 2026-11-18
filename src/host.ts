@@ -50,6 +50,7 @@ import type { MemoryEntry, MemoryScope } from './memory/format.ts';
 import type { MemoryRuntime } from './memory/index.ts';
 import { createMonitor, type MonitorOptions } from './monitor/index.ts';
 import { viewRemote } from './readonly.ts';
+import { linkDecide } from './remote/decide.ts';
 import { type AgentRemote, createRemote } from './remote/host.ts';
 import { createPages, ownedPages, type Pages } from './remote/pages.ts';
 import type { SecretListing } from './secrets/names.ts';
@@ -574,7 +575,7 @@ interface Served {
   viewApprovals: ReplicatedState<unknown>;
   sudo?: AgentSudo;
   settings: AgentSettings;
-  remote: AgentRemote;
+  remote: Omit<AgentRemote, 'decide'>;
   pages: Pages;
   inventory?: ReplicatedState<InventoryState>;
   guest?: (principal: GuestPrincipal) => { value: AgentGuest; dispose(): void } | undefined;
@@ -623,10 +624,13 @@ export function lazily<T>(state: () => ReplicatedState<T>): Readable<T> {
   };
 }
 
+const deviceOf = (principal: AgentPrincipal): string | undefined =>
+  'device' in principal && principal.device ? principal.device : undefined;
+
 const seated = (serving: Served, principal: AgentPrincipal): AgentControl => {
   const runner: Runner = {
     by: principal.seat === 'owner' ? 'owner' : 'follower',
-    ...('device' in principal && principal.device ? { device: principal.device } : {}),
+    ...(deviceOf(principal) ? { device: deviceOf(principal) } : {}),
   };
   return {
     ...(principal.seat === 'view' ? serving.viewed() : serving.trusted),
@@ -677,8 +681,13 @@ export function serveAgent(serving: Served): Host<AgentPrincipal> {
   }));
   host.serve(AgentSettings, settingsFor(serving));
   host.serve(AgentRemoteService, (_input, principal) => {
-    if (principal.seat !== 'view')
-      return { variant: 'remote', ...served(() => serving.remote, REMOTE_METHODS) };
+    if (principal.seat !== 'view') {
+      const remote: AgentRemote = {
+        ...serving.remote,
+        decide: linkDecide(serving.decide, deviceOf(principal)),
+      };
+      return { variant: 'remote', ...served(() => remote, REMOTE_METHODS) };
+    }
     const scoped = viewRemote(serving.remote);
     return { variant: 'watch', ...served(() => scoped, REMOTE_READS) };
   });

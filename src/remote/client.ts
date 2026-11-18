@@ -1,18 +1,22 @@
 import type { ReplicatedState } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { ApprovalDecision } from '../approvals/record.ts';
 import type { SendAttachment } from '../attachments.ts';
 import type { AgentConnection } from '../client.ts';
 import type { Delivered, InventorySnapshot, InventoryState, SendMode } from '../services.ts';
+import { type LinkApproval, pendingApprovals } from './approvals.ts';
 import type { RemoteEvent } from './events.ts';
 import type { AgentRemote, RemoteOpened } from './host.ts';
 import { narrowInventory } from './inventory.ts';
 
+export type { LinkApproval } from './approvals.ts';
 export type { RemoteEvent } from './events.ts';
 
 export const POLL_MS = 25000;
 
 export interface RemoteOptions {
   agent?: () => string | null;
+  device?: string;
 }
 
 export interface RemoteControl {
@@ -38,6 +42,14 @@ export interface RemoteControl {
   inventory(request?: {
     watch?: boolean;
   }): Promise<{ snapshot: InventorySnapshot; events?: AsyncIterable<InventorySnapshot> }>;
+  approvals(request?: {
+    watch?: boolean;
+  }): Promise<{ approvals: LinkApproval[]; events?: AsyncIterable<LinkApproval[]> }>;
+  decide(request: {
+    id: string;
+    answer: ApprovalDecision;
+    reason?: string | null;
+  }): Promise<{ ok: true }>;
 }
 
 function failure(code: string, message: string): Error {
@@ -96,40 +108,43 @@ function current(state: ReplicatedState<InventoryState>): Promise<InventoryState
   });
 }
 
-function snapshots(
-  state: ReplicatedState<InventoryState>,
-  cone: () => string | null,
-  first: InventorySnapshot
-): AsyncIterable<InventorySnapshot> {
+function following<T>(
+  sources: readonly Pick<ReplicatedState<unknown>, 'subscribe'>[],
+  compute: () => T | undefined,
+  key: (value: T) => string,
+  first: T
+): AsyncIterable<T> {
   return {
     [Symbol.asyncIterator]() {
-      let last = JSON.stringify(first.agents);
-      let latest: InventorySnapshot | undefined;
+      let last = key(first);
+      let latest: T | undefined;
       let wake: (() => void) | undefined;
       let closed = false;
-      const off = state.subscribe((value) => {
-        if (!value?.seq || closed) return;
-        const next = narrowInventory(value, cone());
-        const key = JSON.stringify(next.agents);
-        if (key === last) return;
-        last = key;
+      const look = () => {
+        const next = compute();
+        if (next === undefined) return;
+        const seen = key(next);
+        if (seen === last) return;
+        last = seen;
         latest = next;
         wake?.();
-      });
+      };
+      const offs = sources.map((source) => source.subscribe(look));
       const close = () => {
         closed = true;
-        off();
+        for (const off of offs) off();
         wake?.();
       };
       return {
-        async next(): Promise<IteratorResult<InventorySnapshot>> {
-          while (!latest && !closed) await new Promise<void>((resolve) => (wake = resolve));
+        async next(): Promise<IteratorResult<T>> {
+          while (latest === undefined && !closed)
+            await new Promise<void>((resolve) => (wake = resolve));
           wake = undefined;
           const value = latest;
           latest = undefined;
-          return value ? { value, done: false } : { value: undefined, done: true };
+          return value === undefined ? { value: undefined, done: true } : { value, done: false };
         },
-        async return(): Promise<IteratorResult<InventorySnapshot>> {
+        async return(): Promise<IteratorResult<T>> {
           close();
           return { value: undefined, done: true };
         },
@@ -139,7 +154,8 @@ function snapshots(
 }
 
 export function remoteControl(
-  connection: Pick<AgentConnection, 'remote'> & Pick<Partial<AgentConnection>, 'inventory'>,
+  connection: Pick<AgentConnection, 'remote'> &
+    Pick<Partial<AgentConnection>, 'inventory' | 'approvals' | 'agents'>,
   options: RemoteOptions = {}
 ): RemoteControl {
   const remote = connection.remote;
@@ -195,7 +211,26 @@ export function remoteControl(
       const state = connection.inventory;
       if (!state) throw failure('EOPNOTSUPP', 'this agent has no inventory');
       const snapshot = narrowInventory(await current(state), agent());
-      return watch ? { snapshot, events: snapshots(state, agent, snapshot) } : { snapshot };
+      if (!watch) return { snapshot };
+      const compute = () => (state.value?.seq ? narrowInventory(state.value, agent()) : undefined);
+      const key = (next: InventorySnapshot) => JSON.stringify(next.agents);
+      return { snapshot, events: following([state], compute, key, snapshot) };
+    },
+    async approvals({ watch = false } = {}) {
+      const items = connection.approvals;
+      if (!items) throw failure('EOPNOTSUPP', 'this agent has no approvals');
+      const agents = connection.agents;
+      const compute = () => pendingApprovals(items.value, agents?.value);
+      const approvals = compute();
+      if (!watch) return { approvals };
+      const sources = agents ? [items, agents] : [items];
+      return { approvals, events: following(sources, compute, JSON.stringify, approvals) };
+    },
+    async decide({ id, answer, reason = null }) {
+      const request = { id, answer, reason, device: options.device ?? null };
+      const result = await need().decide(request, BACKGROUND_CONTEXT);
+      if (!result.ok) throw failure(result.code, result.message);
+      return { ok: true };
     },
   };
 }

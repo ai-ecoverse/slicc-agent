@@ -52,7 +52,7 @@ export const pageAnswer = (name: string): Answer =>
   (viewPages() as unknown as Record<string, Answer>)[name] as Answer;
 
 export function viewRemote(
-  remote: AgentRemote
+  remote: Pick<AgentRemote, 'watch' | 'history' | 'next' | 'close'>
 ): Pick<AgentRemote, 'watch' | 'history' | 'next' | 'close'> {
   const mine = new Set<string>();
   return {
