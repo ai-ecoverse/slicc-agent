@@ -33,6 +33,7 @@ import {
   sandboxFactory,
 } from './codemode/index.ts';
 import { codexFetch } from './codex.ts';
+import { COPILOT, COPILOT_BASES, copilotFetch } from './copilot.ts';
 import { attachFreezer } from './freezer/index.ts';
 import { lateGelatiere } from './gelatiere/index.ts';
 import { runTag } from './guests/tags.ts';
@@ -252,6 +253,7 @@ export function modelBases(
           ...(provider.id === BEDROCK ? BEDROCK_ENDPOINTS : []),
           ...(provider.id === AZURE ? [azureBase(env(provider.id) ?? {})] : []),
           ...(provider.id === LOCAL ? [env(provider.id)?.[LOCAL_BASE]] : []),
+          ...(provider.id === COPILOT ? COPILOT_BASES : []),
         ].filter((url): url is string => typeof url === 'string' && url !== '')
       ),
     ],
@@ -319,6 +321,7 @@ export async function modelsOf(
       records.rejecting
     )
   );
+  scope.fetch = copilotFetch(scope.fetch, transport);
   const endpoints = vaultEndpoints(vault);
   const defaultModel = async () => {
     await Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, WAITING_MS))]);

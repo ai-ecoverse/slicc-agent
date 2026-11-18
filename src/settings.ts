@@ -14,6 +14,7 @@ import {
 } from './adobe.ts';
 import { abortableBedrock } from './bedrock.ts';
 import { codexProvider } from './codex.ts';
+import { copilotProvider } from './copilot.ts';
 import { type DeviceFlows, deviceFlows } from './device.ts';
 import { KEY_OVER_HTTP, LOCAL, listLocal, localBase, SMALL_CONTEXT } from './local.ts';
 import type { McpAccounts } from './mcp/index.ts';
@@ -94,6 +95,7 @@ export function sliccProviders(version?: string): Provider[] {
     adobeProvider({ version }),
     ...KEY_PROVIDERS.map((entry) => entry.make()),
     codexProvider(),
+    copilotProvider(),
   ];
 }
 

@@ -56,7 +56,15 @@ export function serveVault(port, values, version = 1, options = {}) {
   const failures = [];
   const sent = [];
   let paused = false;
-  const head = (request) => [request.url, ...request.headers.map(([, value]) => value)];
+  const fixed = (raw) => {
+    const found = /^https:\/\/([^/?#]+)/i.exec(raw);
+    const host = found?.[1].toLowerCase();
+    const own = builtIn.some(
+      (entry) => !String(entry.url).includes('{') && URL.parse(entry.url)?.host === host
+    );
+    return own ? raw.slice(found[0].length) : raw;
+  };
+  const head = (request) => [fixed(request.url), ...request.headers.map(([, value]) => value)];
   const fill = (text, owns, reaches, url) => {
     let out = text;
     for (const placeholder of new Set(text.match(FOUND) ?? [])) {
@@ -128,7 +136,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       Boolean(entry) && (Boolean(options.mcp) || (loopback(url) && loopback(new URL(entry.url))))
     );
   };
-  const SIGN_INS = ['xai', 'kimi-coding', 'openai-codex'];
+  const SIGN_INS = ['xai', 'kimi-coding', 'openai-codex', 'github-copilot'];
   const stashed = new Map();
   const dead = new Set();
   const signIn = (message) => {

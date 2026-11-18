@@ -779,6 +779,85 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
   assert.deepEqual(seen.leaks, []);
 });
 
+test('a GitHub Copilot sign-in exchanges in the worker, seals its plan as a setting, and a turn goes to that plan’s host without a User-Agent', async (t) => {
+  const page = await opened(t);
+  const seen = await staged(
+    page,
+    'a GitHub Copilot sign-in',
+    async (query) => {
+      const it = await window.openSignIns(query);
+      const offered = it.settings.providers().find((option) => option.id === 'github-copilot');
+      const started = await it.signIn('github-copilot');
+      const shown = await it.shown('github-copilot');
+      await it.device('approve');
+      const failure = await started.done;
+      await window.until(() => it.account('github-copilot')?.status === 'connected');
+      const copilot = () =>
+        it.settings.models().filter((entry) => entry.id.startsWith('github-copilot/'));
+      await window.until(() => copilot().length > 0);
+      const preferred = copilot()
+        .filter((entry) => entry.default)
+        .map((entry) => entry.id);
+      const reply = await window.reply(it.agent, 'github-copilot/gemini-4-argon', 'Hello Copilot.');
+      const { upstream } = await it.log();
+      const github = upstream.filter((entry) => /github(copilot)?\.com\//.test(entry.url ?? ''));
+      const turn = github.find((entry) => entry.url.endsWith('/chat/completions'));
+      const sealed = (await it.records()).find((entry) => entry.name === offered.vaultName);
+      const again = await it.signIn('github-copilot');
+      await it.shown('github-copilot');
+      const resigned = await again.done;
+      const result = {
+        resigned,
+        offered: {
+          name: offered.name,
+          auth: offered.auth,
+          keyUrl: offered.keyUrl ?? null,
+          corsFree: offered.needs ?? null,
+        },
+        secret: shown.secret ?? null,
+        shown: shown.signIn,
+        failure,
+        preferred,
+        reply,
+        calls: github.map((entry) => `${entry.method ?? 'POST'} ${entry.url}`),
+        agents: github.filter((entry) => entry.names.includes('user-agent')).length,
+        authorization: turn?.authorization,
+        settings: sealed?.settings,
+        leaks: await it.leaks(),
+      };
+      await it.owner.release();
+      return result;
+    },
+    QUERY
+  );
+  assert.deepEqual(seen.offered, {
+    name: 'GitHub Copilot',
+    auth: 'oauth',
+    keyUrl: null,
+    corsFree: 'cors-free-transport',
+  });
+  assert.equal(seen.secret, null);
+  assert.deepEqual(seen.shown, { url: 'https://github.com/login/device', code: 'CODE-0001' });
+  assert.equal(seen.failure, null);
+  assert.deepEqual(seen.preferred, ['github-copilot/claude-sonnet-5.5']);
+  assert.equal(seen.reply, 'From api.business.githubcopilot.com.');
+  assert.deepEqual(seen.calls.slice(0, 2), [
+    'POST https://github.com/login/device/code',
+    'POST https://github.com/login/oauth/access_token',
+  ]);
+  assert.ok(seen.calls.includes('GET https://api.github.com/copilot_internal/v2/token'));
+  assert.ok(seen.calls.includes('GET https://api.business.githubcopilot.com/models'));
+  assert.equal(seen.calls.at(-1), 'POST https://api.business.githubcopilot.com/chat/completions');
+  assert.equal(seen.agents, 0);
+  assert.match(
+    seen.authorization,
+    /^Bearer tid=e2e;proxy-ep=proxy\.business\.githubcopilot\.com;sig=SECRET\d+VALUE$/
+  );
+  assert.deepEqual(seen.settings, { COPILOT_ENDPOINT: 'business' });
+  assert.equal(seen.resigned, null);
+  assert.deepEqual(seen.leaks, []);
+});
+
 test('Settings shows an xAI sign-in’s code and its page link while the account is signing in', async (t) => {
   const page = await opened(t);
   const seen = await staged(

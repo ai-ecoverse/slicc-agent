@@ -112,6 +112,49 @@ function signIn(request) {
   if (device.mode === 'approve') return reply(200, issue(provider));
   return reply(400, { error: 'authorization_pending' });
 }
+const GITHUB_HOSTS = new Set(['github.com', 'api.github.com']);
+const COPILOT_API = 'api.business.githubcopilot.com';
+function github(request) {
+  const url = new URL(request.url);
+  upstream.push({
+    url: request.url,
+    method: request.method,
+    names: request.headers.map(([name]) => name.toLowerCase()),
+  });
+  if (url.pathname === '/login/device/code')
+    return reply(200, {
+      device_code: 'dc-github-copilot',
+      user_code: 'CODE-0001',
+      verification_uri: 'https://github.com/login/device',
+      interval: 1,
+      expires_in: 600,
+    });
+  if (url.pathname === '/login/oauth/access_token') {
+    device.polls += 1;
+    if (device.mode !== 'approve') return reply(200, { error: 'authorization_pending' });
+    device.issued += 1;
+    return reply(200, { access_token: `ghu_SECRET${device.issued}VALUE`, token_type: 'bearer' });
+  }
+  if (url.pathname === '/copilot_internal/v2/token') {
+    device.issued += 1;
+    return reply(200, {
+      token: `tid=e2e;proxy-ep=proxy.business.githubcopilot.com;sig=SECRET${device.issued}VALUE`,
+      expires_at: Math.floor(Date.now() / 1000) + 1800,
+    });
+  }
+  if (url.pathname === '/models')
+    return reply(200, {
+      data: [
+        {
+          id: 'gemini-4-argon',
+          model_picker_enabled: true,
+          policy: { state: 'enabled' },
+          capabilities: { supports: { tool_calls: true } },
+        },
+      ],
+    });
+  return reply(404, { message: 'Not Found' });
+}
 function codexTurn(request) {
   const header = (wanted) =>
     request.headers.find(([name]) => name.toLowerCase() === wanted)?.[1] ?? null;
@@ -677,6 +720,9 @@ const relay = {
     const answer = params.has('moved') ? moved(request) : undefined;
     if (answer) return answer;
     if (AUTH_HOSTS.has(new URL(request.url).host)) return signIn(request);
+    const { host, pathname } = new URL(request.url);
+    if (GITHUB_HOSTS.has(host) || (host === COPILOT_API && !pathname.endsWith('/chat/completions')))
+      return github(request);
     if (new URL(request.url).host === GROK_HOST) return billing(request);
     if (new URL(request.url).host === 'chatgpt.com') return codexTurn(request);
     if (registry.length && new URL(request.url).pathname.endsWith('/chat/completions'))
@@ -1071,6 +1117,7 @@ if (params.has('vault')) {
     ...registry.flatMap((provider) =>
       provider.getModels().map((model) => ({ provider: provider.id, url: model.baseUrl }))
     ),
+    ...(registry.length ? [{ provider: 'github-copilot', url: `https://${COPILOT_API}` }] : []),
   ];
   const fake = fakeVault(params.has('scrub') ? seeded(vectors).values : [], 1, {
     records,
