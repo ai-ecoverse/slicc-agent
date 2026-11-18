@@ -5,7 +5,7 @@ import { launch, staged } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-const BUDGET = 3400;
+const BUDGET = 3250;
 const FNOX = { 'node_modules/@ai-ecoverse/wasi-fnox/': ['package.json', 'bin/fnox.wasm'] };
 const CONFIG = 'default_provider = "seven"\n\n[providers.seven]\ntype = "sealed"\n';
 const KEPT = [
