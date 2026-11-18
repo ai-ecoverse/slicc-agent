@@ -15,7 +15,7 @@ import {
 import { abortableBedrock } from './bedrock.ts';
 import { codexProvider } from './codex.ts';
 import { type DeviceFlows, deviceFlows } from './device.ts';
-import { KEY_OVER_HTTP, LOCAL, listLocal, localBase, SMALL_CONTEXT } from './local.ts';
+import { KEY_OVER_HTTP, LOCAL, LOCAL_BASE, listLocal, localBase, SMALL_CONTEXT } from './local.ts';
 import type { McpAccounts } from './mcp/index.ts';
 import { MCP_ACCOUNT } from './mcp/label.ts';
 import type { Reach } from './net.ts';
@@ -213,6 +213,19 @@ export function keylessOf(
     fields.ready(providerId);
 }
 
+export function readyOf(
+  records: Pick<VaultRecords, 'model'>,
+  fields: Pick<ProviderFields, 'ready' | 'env'>
+): (providerId: string) => boolean {
+  return (providerId) =>
+    fields.ready(providerId) &&
+    !(
+      LISTINGS.get(providerId)?.keyless &&
+      records.model(providerId) &&
+      fields.env(providerId)?.[LOCAL_BASE]?.startsWith('http:')
+    );
+}
+
 function small(models: MutableModels, providerId: string): string {
   return providerId === LOCAL &&
     models.getModels(providerId).some((model) => model.contextWindow < SMALL_CONTEXT)
@@ -239,13 +252,14 @@ function connection(
 function accounts(
   records: Pick<VaultRecords, 'model'>,
   providers: Provider[],
-  given: Pick<ProviderFields, 'ready' | 'get'>,
+  given: Pick<ProviderFields, 'ready' | 'get' | 'env'>,
   blocked: (providerId: string) => boolean,
   models: MutableModels
 ): AccountState[] {
   const keyless = keylessOf(records, given);
+  const ready = readyOf(records, given);
   return providers.map((provider) => {
-    const record = given.ready(provider.id) ? records.model(provider.id) : undefined;
+    const record = ready(provider.id) ? records.model(provider.id) : undefined;
     const fields = ACCOUNT_FIELDS[provider.id];
     const listing = LISTINGS.get(provider.id);
     return {
@@ -495,12 +509,12 @@ export async function createAgentSettings(
       (found): found is BudgetState => found !== null
     );
   const keyless = keylessOf(records, fields);
+  const ready = readyOf(records, fields);
   const snapshot = async (): Promise<SettingsState> => {
     const stored = new Set(
       providers
         .filter(
-          (provider) =>
-            (records.model(provider.id) && fields.ready(provider.id)) || keyless(provider.id)
+          (provider) => (records.model(provider.id) && ready(provider.id)) || keyless(provider.id)
         )
         .map((provider) => provider.id)
     );

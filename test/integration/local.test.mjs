@@ -181,6 +181,24 @@ test('a local OpenAI-compatible server on the kernel loopback is added without a
         const item = (await items()).find((entry) => entry.id === id);
         return item && !item.judging && item.verdict ? item : undefined;
       });
+      stage('late key');
+      await put({
+        kind: 'model',
+        name: option.vaultName,
+        provider: 'local',
+        placeholder: 'fnox_proxy_local',
+        value: 'local-key-0002',
+      });
+      const late = await refused(undefined);
+      await window.until(() => row()?.status === 'disconnected');
+      const lateKey = {
+        late,
+        status: row()?.status,
+        models: settings.models().filter((entry) => entry.id.startsWith('local/')).length,
+      };
+      await unput(option.vaultName);
+      await settings.connect('local');
+      await window.until(() => row()?.status === 'connected');
       stage('disconnect');
       settings.disconnect('local');
       await window.until(() => row()?.status === 'disconnected');
@@ -199,6 +217,7 @@ test('a local OpenAI-compatible server on the kernel loopback is added without a
         asked: asked.error ?? null,
         verdict: judged?.verdict ?? null,
         gone,
+        lateKey,
         requests: window.seen,
       };
       await owner.release();
@@ -247,12 +266,16 @@ test('a local OpenAI-compatible server on the kernel loopback is added without a
   assert.equal(seen.verdict.via, 'classifier');
   assert.equal(seen.verdict.level, 1);
   assert.equal(seen.gone, 0);
+  assert.match(seen.lateKey.late, /^Seven’s vault sends keys over https:\/\/ only/);
+  assert.equal(seen.lateKey.status, 'disconnected');
+  assert.equal(seen.lateKey.models, 0);
   const chats = seen.requests.filter((entry) => entry.target === '/v1/chat/completions');
   assert.ok(chats.length >= 2);
   for (const entry of chats) {
     assert.equal(entry.model, 'chat-1');
     assert.equal(entry.authorization, 'Bearer local');
   }
+  assert.ok(seen.requests.every((entry) => !entry.authorization?.includes('fnox_proxy_local')));
   assert.ok(seen.requests.some((entry) => entry.method === 'GET' && entry.target === '/v1/models'));
   const decisions = seen.requests.filter((entry) => entry.target === '/v1/systemone');
   assert.ok(decisions.length > 0);
