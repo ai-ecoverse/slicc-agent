@@ -1,6 +1,6 @@
 ---
 name: licks
-description: Set up event-driven automation in SLICC (schedules in the kernel crontab, and file watches and webhooks in ~/.slicc) that wakes the cone or a scoop. Also explains the <lick> events you receive and how to decide licks that ask for a confirmation.
+description: Set up schedules (the kernel crontab), file watches and webhooks (~/.slicc) that wake the cone or a scoop, and decide licks that ask for a confirmation.
 ---
 
 # Licks

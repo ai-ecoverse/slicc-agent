@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Use this when the user asks what you remember, tells you to remember or forget something, corrects how you work, or when you learn a durable fact worth keeping across conversations. Covers the memory files, the memory_write tool, scopes and the `memory` command.
+description: Use this when the user asks what you remember, tells you to remember or forget something or corrects how you work. Covers the memory files, scopes and the `memory` command.
 ---
 
 # Memory

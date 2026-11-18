@@ -1,6 +1,6 @@
 ---
 name: gelatiere
-description: Use this when you receive a <lick channel="sprinkle" source="sprinkle:suggestions"> with the action gelatiere-suggestions, gelatiere-install or gelatiere-try, or when the user asks about suggestions or the gelatiere. Covers the suggestions sprinkle, the store and the `gelatiere` command.
+description: Use this for a sprinkle:suggestions lick (gelatiere-suggestions, gelatiere-install, gelatiere-try), or when the user asks about suggestions or the `gelatiere` command.
 ---
 
 # Gelatiere

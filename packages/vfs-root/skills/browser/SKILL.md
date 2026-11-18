@@ -1,6 +1,6 @@
 ---
 name: browser
-description: Use this before you browse, open a website, read or check a page, click, fill or submit a form, take a screenshot of a web page, record a page's network traffic as a HAR, or call a web app's own API as the logged-in user. SLICC drives the user's own browser with the playwright-cli and curlwright commands; this covers how, and what needs the user's yes first.
+description: Use this before you browse: open or read a website, click, fill a form, screenshot a page, record a HAR, or call a web app's API as the logged-in user. Covers playwright-cli, curlwright and what needs the user's yes first.
 ---
 
 # Browser

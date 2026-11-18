@@ -208,35 +208,27 @@ export async function labelPackages(
   );
 }
 
-function escapeXml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+function escapeText(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeAttribute(text: string): string {
+  return escapeText(text).replace(/"/g, '&quot;');
 }
 
 export function formatSkillsForPrompt(skills: readonly Skill[]): string {
   const visible = skills.filter((skill) => !skill.disableModelInvocation);
   if (!visible.length) return '';
-  const lines = [
-    'The following skills provide specialized instructions for specific tasks.',
-    "Use the read tool to load a skill's file when the task matches its description.",
-    'When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.',
+  return [
+    "When a task matches a skill's description, read the skill's file with the read tool, and resolve relative paths in it against the skill's folder.",
     '',
     '<available_skills>',
-  ];
-  for (const skill of visible)
-    lines.push(
-      '  <skill>',
-      `    <name>${escapeXml(skill.name)}</name>`,
-      `    <description>${escapeXml(skill.description)}</description>`,
-      `    <location>${escapeXml(skill.filePath)}</location>`,
-      '  </skill>'
-    );
-  lines.push('</available_skills>');
-  return lines.join('\n');
+    ...visible.map(
+      (skill) =>
+        `<skill name="${escapeAttribute(skill.name)}" location="${escapeAttribute(skill.filePath)}">${escapeText(skill.description)}</skill>`
+    ),
+    '</available_skills>',
+  ].join('\n');
 }
 
 export async function expandSkillCommand(

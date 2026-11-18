@@ -1,6 +1,6 @@
 ---
 name: skill-authoring
-description: Write, edit or debug a skill or a prompt template for SLICC, or explain how SLICC finds and loads them. Covers SKILL.md frontmatter, writing a description that routes well, where skills and templates live, and /skill:name and /template commands.
+description: Write, edit or debug a SLICC skill or prompt template: frontmatter, descriptions that route well, where they live and how they load.
 ---
 
 # Writing skills and prompt templates

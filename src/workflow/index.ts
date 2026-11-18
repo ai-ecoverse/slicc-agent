@@ -10,7 +10,7 @@ import {
   type ToolRegistration,
 } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
-import { bool, lit, num, obj, opt, str, union, unknown } from '@earendil-works/pi-schema';
+import { bool, num, obj, oneOf, opt, str, unknown } from '@earendil-works/pi-schema';
 import type { Agents } from '../agents.ts';
 import { MEMORY_LIMIT_BYTES, sharedSandbox } from '../codemode/index.ts';
 import { type InheritedTaint, runTaints } from '../guests/guard.ts';
@@ -246,12 +246,18 @@ export const USAGE = `usage:
   agent workflow run --script '<js>' [same options]
   agent workflow list | status <run> | wait <run> | stop <run> | save <run> <name> [--force]
 
-Globals: agent(prompt, { label, phase, schema, model, effort, agentType }), parallel(thunks),
-pipeline(items, ...stages), phase(title), log(message), console, args, budget (output tokens).
-
 Runs a Claude Code .workflow.js as a durable task; it survives a reload. Without --wait it prints
-the run id. --budget caps output tokens, --concurrency caps agents running at once. save keeps a
-run's source as ~/.slicc/workflows/<name>.workflow.js, which agent workflow run <name> runs.
+the run id. --budget caps output tokens, --concurrency caps agents running at once (default 8).
+save keeps a run's source as ~/.slicc/workflows/<name>.workflow.js, which agent workflow run <name>
+runs. The workflow tool takes the same options.
+
+The script starts with \`export const meta = { name, description }\`; its body may use top-level
+await and returns a JSON result. Globals:
+  agent(prompt, { label, phase, schema, model: 'provider/model', effort, agentType }) runs one
+    scoop and resolves to its answer (JSON matching schema, if given), or rejects when it fails
+  parallel(thunks), pipeline(items, ...stages): a failed branch becomes null
+  phase(title), log(message), console.*, args, budget ({ total, spent(), remaining() } in output tokens)
+No Date.now(), Math.random(), timers, require, fs or nested workflow().
 `;
 
 const VALUES = new Set(['--args', '--budget', '--concurrency', '--script']);
@@ -411,13 +417,10 @@ export async function command(
   return handler(workflows, who, parseArgv(rest), context);
 }
 
-export const TOOL_DESCRIPTION = `Run a Claude Code dynamic workflow (.workflow.js) as a durable background task that survives a reload, or manage runs.
-action run: give file (a path, or the name of a saved workflow) or script (the source). The source starts with \`export const meta = { name, description }\`; the body may use top-level await and return a JSON result. Globals: \`agent(prompt, { label, phase, schema, model: 'provider/model', effort, agentType })\` runs one scoop and resolves to its answer (JSON matching schema, when given), and rejects when it fails; \`parallel(thunks)\` and \`pipeline(items, ...stages)\` turn a failed branch into null; \`phase(title)\`, \`log(message)\`, \`console.*\`, \`args\`, \`budget\` ({ total, spent(), remaining() } in output tokens). No Date.now(), Math.random(), timers, require, fs or nested workflow().
-budget caps output tokens, concurrency caps agents running at once (default 8). wait: true blocks until the run ends and returns its result; otherwise the run id comes back at once.
-action list | status (run) | stop (run) | save (run, name, force): manage runs; save keeps the source as ~/.slicc/workflows/<name>.workflow.js.`;
+export const TOOL_DESCRIPTION = `Run a Claude Code dynamic workflow (.workflow.js) as a durable background task that survives a reload, or manage runs (list, status, stop, save). Read \`agent workflow help\` first: this tool takes its options. wait: true returns the result when the run ends, else the run id.`;
 
 const parameters = obj({
-  action: union([lit('run'), lit('list'), lit('status'), lit('stop'), lit('save')]),
+  action: oneOf(['run', 'list', 'status', 'stop', 'save']),
   file: opt(str()),
   script: opt(str()),
   args: opt(unknown()),

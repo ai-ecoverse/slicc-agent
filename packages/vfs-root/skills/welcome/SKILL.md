@@ -1,6 +1,6 @@
 ---
 name: welcome
-description: Use this when you receive a <lick channel="sprinkle" source="sprinkle:welcome"> with the action onboarding-complete, sent once when the user finishes the welcome card. Covers the reply it expects.
+description: Use this for the sprinkle:welcome lick with the action onboarding-complete.
 ---
 
 # Welcome
