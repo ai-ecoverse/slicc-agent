@@ -351,7 +351,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       if (!handler) throw new Refused('ENOTSUP', `this vault has no op ${op}`);
       port.postMessage({ v: 1, id, op, ...(await handler(message)) });
     } catch (error) {
-      errors.push({ op, code: error.code ?? null, message: error.message, at: Date.now() });
+      errors.push({ op, code: error.code ?? null, message: error.message, stack: error.stack });
       port.postMessage({
         v: 1,
         id,
