@@ -156,6 +156,17 @@ test('freezer import --preview checks a SLICC 6 profile export and says what is 
   assert.equal(usage.status, 2);
 });
 
+test("a SLICC 6 local-llm account maps to seven's Local or self-hosted provider, to re-enter in Settings", async (t) => {
+  const page = await booted(t, '&registry');
+  await upload(page, '/tmp/local.zip', profile({ overrides: { providers: ['local-llm'] } }));
+  const ran = await staged(page, 'the local preview', () =>
+    window.imported('/tmp/local.zip', '--preview')
+  );
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.match(ran.stdout, / Re-enter in Settings: Local or self-hosted\. /);
+  assert.doesNotMatch(ran.stdout, /has no accounts/);
+});
+
 const coneDoc = () => JSON.parse(files()['transcripts/cone.json']);
 const plain = () => manifest(files());
 
