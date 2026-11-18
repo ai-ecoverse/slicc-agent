@@ -73,6 +73,8 @@ const helpers = () => {
       ...model,
       put: (record) => post({ seal: record }, 'sealed'),
       unput: (name) => post({ unseal: name }, 'sealed'),
+      register: (entry) => post({ register: entry }, 'sealed'),
+      log: () => post({}, 'upstream'),
       approve: (draft) => post({ approve: draft }, 'reply'),
       items: () => post({}, 'items'),
     };
@@ -229,6 +231,8 @@ test('a local OpenAI-compatible server on the kernel loopback is added without a
   assert.equal(seen.option.name, 'Local or self-hosted');
   assert.equal(seen.option.needs, undefined);
   assert.equal(seen.option.vaultName, 'LOCAL_API_KEY');
+  assert.equal(seen.option.keyOptional, true);
+  assert.equal(seen.account.keyOptional, true);
   assert.deepEqual(
     seen.option.fields.map((field) => [
       field.name,
@@ -280,4 +284,58 @@ test('a local OpenAI-compatible server on the kernel loopback is added without a
   const decisions = seen.requests.filter((entry) => entry.target === '/v1/systemone');
   assert.ok(decisions.length > 0);
   assert.ok(decisions.every((entry) => entry.model === 'judge-1'));
+});
+
+test('a local endpoint on https takes a key from the vault, which fills it only on the URL registered for it', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await staged(page, 'the kernel', (files) => window.boot(files), {
+    '/node_modules/local-llm/package.json': manifest,
+    '/node_modules/local-llm/server.mjs': program,
+  });
+  const seen = await staged(
+    page,
+    'the keyed local provider',
+    async (query) => {
+      const { owner, settings, agent, put, register, log } = await window.start(query);
+      await window.until(() => settings.providers().length > 0);
+      const option = settings.providers().find((entry) => entry.id === 'local');
+      await put({
+        kind: 'model',
+        name: option.vaultName,
+        provider: 'local',
+        placeholder: 'fnox_proxy_local',
+        value: 'hosted-key-0001',
+      });
+      const unregistered = await settings
+        .connect('local', undefined, { endpoint: 'https://llm.test' })
+        .then(
+          () => null,
+          (error) => error.message
+        );
+      await register({ provider: 'local', url: 'https://llm.test/v1' });
+      const row = () => settings.accounts().find((entry) => entry.id === 'local');
+      await settings.connect('local', undefined, { endpoint: 'https://llm.test' });
+      await window.until(
+        () =>
+          row()?.status === 'connected' && settings.models().some((m) => m.id === 'local/hosted-1')
+      );
+      const account = row();
+      const turn = await window.reply(agent, 'local/hosted-1', 'Hello hosted.');
+      const { upstream } = await log();
+      const result = { unregistered, account, turn, upstream };
+      await owner.release();
+      return result;
+    },
+    'registry&vault'
+  );
+  assert.match(seen.unregistered, /llm\.test\/v1\/models: it answered 403\./);
+  assert.equal(seen.account.identity, 'API key');
+  assert.equal(seen.account.keyOptional, true);
+  assert.equal(seen.turn.answer, 'From llm.test.');
+  const sent = seen.upstream.filter((entry) => new URL(entry.url).host === 'llm.test');
+  assert.ok(sent.some((entry) => new URL(entry.url).pathname === '/v1/models'));
+  assert.ok(sent.some((entry) => new URL(entry.url).pathname === '/v1/chat/completions'));
+  for (const entry of sent) assert.equal(entry.authorization, 'Bearer hosted-key-0001');
 });

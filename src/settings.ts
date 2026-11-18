@@ -274,6 +274,7 @@ function accounts(
       ...(blocked(provider.id) ? { blocked: 'cors-free-transport' as const } : {}),
       group: 'providers',
       store: 'vault',
+      ...(listing?.keyless ? { keyOptional: true as const } : {}),
       ...(fields ? { fields: filled(fields, given.get(provider.id)) } : {}),
       ...about(listing),
     };
@@ -311,6 +312,7 @@ function offered(
           name: provider.name,
           description: listing.description,
           auth: listing.auth,
+          ...(listing.keyless ? { keyOptional: true as const } : {}),
           vaultName: listing.vaultName,
           ...(fields ? { fields: filled(fields, undefined) } : {}),
           ...(listing.keyUrl ? { keyUrl: listing.keyUrl } : {}),

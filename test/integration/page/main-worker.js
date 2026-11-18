@@ -223,6 +223,10 @@ self.addEventListener('message', ({ data }) => {
     self.fakeVault.publish({ needed: true, version: self.fakeVault.version });
     data.sealed?.postMessage(true);
   }
+  if (data?.register && self.fakeVault) {
+    self.fakeVault.registered.model.push(data.register);
+    data.sealed?.postMessage(true);
+  }
   if (data?.seal && self.fakeVault) {
     self.fakeVault.remove(data.seal.name);
     self.fakeVault.add(data.seal);
@@ -644,6 +648,13 @@ const completions = (request) => {
     })(),
   };
 };
+const LOCAL_HOST = 'llm.test';
+const localModels = (request) => {
+  const authorization =
+    request.headers.find(([name]) => name.toLowerCase() === 'authorization')?.[1] ?? null;
+  upstream.push({ url: request.url, authorization });
+  return json({ data: [{ id: 'hosted-1', context_length: 65536 }] });
+};
 const moves = JSON.parse(params.get('moved') ?? '{}');
 const moved = (request) => {
   const url = new URL(request.url);
@@ -681,6 +692,7 @@ const relay = {
     if (new URL(request.url).host === 'chatgpt.com') return codexTurn(request);
     if (registry.length && new URL(request.url).pathname.endsWith('/chat/completions'))
       return completions(request);
+    if (registry.length && new URL(request.url).host === LOCAL_HOST) return localModels(request);
     if (new URL(request.url).host === GATEWAY_HOST && params.has('gateway'))
       return gateway(request);
     if (new URL(request.url).host === MODEL_HOST && params.has('e2e')) return model(request);

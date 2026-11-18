@@ -535,6 +535,7 @@ export interface AccountState {
   group?: 'providers' | 'mcp';
   secret?: 'api-key' | 'token';
   store?: 'vault';
+  keyOptional?: true;
   fields?: AccountField[];
   description?: string;
   keyUrl?: string;
@@ -596,6 +597,7 @@ export interface ProviderOption {
   name: string;
   description?: string;
   auth: 'api-key' | 'oauth' | 'fields' | 'local';
+  keyOptional?: true;
   fields?: AccountField[];
   keyUrl?: string;
   needs?: 'cors-free-transport';
