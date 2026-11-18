@@ -29,10 +29,29 @@ const helpers = () => {
     };
   }
   window.holds = [];
+  window.bases = [];
   window.holding = 'held';
+  window.basing = 'based';
   const owner = new BroadcastChannel('slicc-held');
   window.answerHold = (marker, type) => owner.postMessage({ type, marker });
+  const Channel = BroadcastChannel;
+  window.live = new Set();
+  window.BroadcastChannel = class extends Channel {
+    constructor(name) {
+      super(name);
+      if (name === 'slicc-held') window.live.add(this);
+    }
+    close() {
+      window.live.delete(this);
+      super.close();
+    }
+  };
   owner.onmessage = ({ data }) => {
+    if (data.type === 'base') {
+      window.bases.push({ ...data, opened: window.opens.length });
+      if (window.basing === 'based') window.answerHold(data.marker, 'based');
+      return;
+    }
     window.holds.push({ ...data, href: window.opens.at(-1)?.popup.location.href });
     if (['held', 'none', 'unheld'].includes(window.holding))
       window.answerHold(data.marker, window.holding);
@@ -75,12 +94,17 @@ const helpers = () => {
     const { settings } = model;
     await window.until(() => settings.providers().length > 0, 'the providers');
     const account = (id) => settings.accounts().find((entry) => entry.id === id);
-    const signIn = (id) => {
+    const signIn = async (id) => {
       const before = window.opens.length;
+      let settled = false;
       const done = settings.connect(id, undefined, undefined, { method: 'sign-in' }).then(
         () => null,
         (error) => ({ name: error.name, message: error.message })
       );
+      done.then(() => {
+        settled = true;
+      });
+      await window.until(() => settled || window.opens.length > before, `the ${id} window`);
       return { done, opened: window.opens.length - before, popup: window.opens.at(-1)?.popup };
     };
     const shown = async (id) => {
@@ -159,7 +183,7 @@ test('a Kimi sign-in opens its window in the click, shows the code, grants the t
       const it = await window.openSignIns(query);
       const listed = Boolean(it.account('kimi-coding'));
       const offered = it.settings.providers().find((option) => option.id === 'kimi-coding');
-      const started = it.signIn('kimi-coding');
+      const started = await it.signIn('kimi-coding');
       const blank = started.popup.location.href;
       const shown = await it.shown('kimi-coding');
       const navigated = started.popup.location.href;
@@ -235,7 +259,7 @@ for (const answer of ['held', 'none']) {
       async ({ query, answer }) => {
         const it = await window.openSignIns(query);
         window.holding = 'later';
-        const started = it.signIn('kimi-coding');
+        const started = await it.signIn('kimi-coding');
         const marked = started.popup.location.href;
         await window.until(() => window.holds.length === 1);
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -264,6 +288,8 @@ for (const answer of ['held', 'none']) {
     assert.deepEqual(seen.asked, {
       type: 'hold',
       marker: seen.marked.slice('about:blank#slicc-sign-in-'.length),
+      based: true,
+      expect: 1,
       href: seen.marked,
     });
     assert.deepEqual(seen.waiting, { href: seen.marked, status: 'signing-in', signIn: null });
@@ -277,6 +303,119 @@ for (const answer of ['held', 'none']) {
   });
 }
 
+test('a device sign-in asks the owner for a baseline before its window opens, then asks for the hold against that baseline', async (t) => {
+  const page = await opened(t);
+  const seen = await page.evaluate(async (query) => {
+    const it = await window.openSignIns(query);
+    window.basing = 'later';
+    const done = it.settings
+      .connect('kimi-coding', undefined, undefined, { method: 'sign-in' })
+      .then(
+        () => null,
+        (error) => ({ name: error.name, message: error.message })
+      );
+    await window.until(() => window.bases.length === 1, 'the baseline ask');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const [base] = window.bases;
+    const waiting = { opens: window.opens.length, holds: window.holds.length };
+    window.answerHold('another', 'based');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const early = window.opens.length;
+    window.answerHold(base.marker, 'based');
+    await window.until(() => window.holds.length === 1, 'the hold ask');
+    const [asked] = window.holds;
+    const shown = await it.shown('kimi-coding');
+    await it.device('approve');
+    const failure = await done;
+    const result = { base, waiting, early, asked, code: shown.signIn.code, failure };
+    result.live = window.live.size;
+    await it.owner.release();
+    return result;
+  }, QUERY);
+  const { marker } = seen.base;
+  assert.match(marker, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(seen, {
+    base: { type: 'base', marker, opened: 0 },
+    waiting: { opens: 0, holds: 0 },
+    early: 0,
+    asked: {
+      type: 'hold',
+      marker,
+      based: true,
+      expect: 1,
+      href: `about:blank#slicc-sign-in-${marker}`,
+    },
+    code: 'CODE-0001',
+    failure: null,
+    live: 0,
+  });
+});
+
+test('a device sign-in whose baseline goes unanswered still opens its window held, with a plain hold ask', async (t) => {
+  const page = await opened(t);
+  const seen = await page.evaluate(async (query) => {
+    const it = await window.openSignIns(query);
+    window.basing = 'silent';
+    const begun = Date.now();
+    const started = await it.signIn('kimi-coding');
+    const waited = Date.now() - begun;
+    await window.until(() => window.holds.length === 1, 'the hold ask');
+    const [asked] = window.holds;
+    await it.shown('kimi-coding');
+    await it.device('approve');
+    const failure = await started.done;
+    const result = { waited, bases: window.bases.length, asked, failure };
+    await it.owner.release();
+    return result;
+  }, QUERY);
+  const { marker } = seen.asked;
+  assert.ok(seen.waited >= 5500, `opened after ${seen.waited} ms`);
+  assert.deepEqual(seen, {
+    waited: seen.waited,
+    bases: 1,
+    asked: { type: 'hold', marker, href: `about:blank#slicc-sign-in-${marker}` },
+    failure: null,
+  });
+});
+
+test('Cancel while a device sign-in waits for its baseline opens no window, asks for no hold and leaves no channel open', async (t) => {
+  const page = await opened(t);
+  const seen = await page.evaluate(async (query) => {
+    const it = await window.openSignIns(query);
+    window.basing = 'later';
+    const done = it.settings
+      .connect('kimi-coding', undefined, undefined, { method: 'sign-in' })
+      .then(
+        () => null,
+        (error) => ({ name: error.name, message: error.message })
+      );
+    await window.until(() => window.bases.length === 1, 'the baseline ask');
+    it.settings.cancel('kimi-coding');
+    const failure = await done;
+    const live = window.live.size;
+    window.answerHold(window.bases[0].marker, 'based');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const result = {
+      failure,
+      live,
+      opens: window.opens.length,
+      holds: window.holds.length,
+      signingIn: it.account('kimi-coding')?.status === 'signing-in',
+      issued: (await it.polls()).issued,
+    };
+    await it.owner.release();
+    return result;
+  }, QUERY);
+  assert.deepEqual(seen, {
+    failure: { name: 'AbortError', message: 'The sign-in was cancelled.' },
+    live: 0,
+    opens: 0,
+    holds: 0,
+    signingIn: false,
+    issued: 0,
+  });
+});
+
 for (const holding of ['unheld', 'silent']) {
   test(`a device sign-in whose window the owner doesn't hold (${holding}) never sends the window anywhere, never shows the code and fails closed`, async (t) => {
     const page = await opened(t);
@@ -284,7 +423,7 @@ for (const holding of ['unheld', 'silent']) {
       async ({ query, holding }) => {
         const it = await window.openSignIns(query);
         window.holding = holding;
-        const started = it.signIn('kimi-coding');
+        const started = await it.signIn('kimi-coding');
         const marked = started.popup.location.href;
         let shown = false;
         const watch = setInterval(() => {
@@ -325,7 +464,7 @@ test('a device sign-in whose window the owner refuses fails at once, even while 
     const it = await window.openSignIns(query);
     await it.device('stall');
     window.holding = 'unheld';
-    const started = it.signIn('kimi-coding');
+    const started = await it.signIn('kimi-coding');
     const failure = await started.done;
     const result = {
       failure,
@@ -351,7 +490,7 @@ test('Cancel ends a waiting sign-in at once, stops its polling, and a new sign-i
     'a cancelled sign-in',
     async (query) => {
       const it = await window.openSignIns(query);
-      const started = it.signIn('kimi-coding');
+      const started = await it.signIn('kimi-coding');
       await it.shown('kimi-coding');
       while ((await it.polls()).polls === 0)
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -361,7 +500,7 @@ test('Cancel ends a waiting sign-in at once, stops its polling, and a new sign-i
       const { polls } = await it.polls();
       await new Promise((resolve) => setTimeout(resolve, 2500));
       const later = (await it.polls()).polls;
-      const again = it.signIn('kimi-coding');
+      const again = await it.signIn('kimi-coding');
       await it.shown('kimi-coding');
       await it.device('approve');
       const second = await again.done;
@@ -396,11 +535,11 @@ test('a refused code reads "The sign-in was refused.", and a malformed token ans
     async (query) => {
       const it = await window.openSignIns(query);
       await it.device('deny');
-      const refused = it.signIn('xai');
+      const refused = await it.signIn('xai');
       const failure = await refused.done;
       const afterRefusal = it.account('xai');
       await it.device('malformed');
-      const malformed = it.signIn('kimi-coding');
+      const malformed = await it.signIn('kimi-coding');
       const broken = await malformed.done;
       const result = {
         failure,
@@ -441,7 +580,7 @@ test('a sign-in under a name that holds another provider’s key is refused with
     async (given) => {
       const it = await window.openSignIns(given);
       await it.device('approve');
-      const started = it.signIn('kimi-coding');
+      const started = await it.signIn('kimi-coding');
       const failure = await started.done;
       const result = {
         failure,
@@ -479,14 +618,14 @@ test('signing in again rotates the token under the same placeholder, and after i
           .filter((entry) => entry.url?.startsWith('https://api.kimi.com/'))
           .at(-1)?.authorization;
       await it.device('approve');
-      const first = it.signIn('kimi-coding');
+      const first = await it.signIn('kimi-coding');
       await first.done;
       await window.until(() => it.account('kimi-coding')?.status === 'connected');
       const kimi = it.settings.models().find((entry) => entry.id.startsWith('kimi-coding/')).id;
       const one = await placeholder();
       await window.reply(it.agent, kimi, 'First.');
       const firstSent = await sent();
-      const second = it.signIn('kimi-coding');
+      const second = await it.signIn('kimi-coding');
       const rotated = await second.done;
       const two = await placeholder();
       await window.reply(it.agent, kimi, 'Second.');
@@ -496,7 +635,7 @@ test('signing in again rotates the token under the same placeholder, and after i
       const expiredReply = await window.reply(it.agent, kimi, 'Third.');
       await window.until(() => it.account('kimi-coding')?.status === 'expired');
       const expired = it.account('kimi-coding');
-      const third = it.signIn('kimi-coding');
+      const third = await it.signIn('kimi-coding');
       const renewed = await third.done;
       await window.until(() => it.account('kimi-coding')?.status === 'connected');
       const fourth = await window.reply(it.agent, kimi, 'Fourth.');
@@ -549,7 +688,7 @@ test('xAI keeps API-key entry next to sign-in, and a sign-in over a pasted key k
       const before = window.opens.length;
       await it.settings.connect('xai', undefined, undefined, { method: 'key' });
       const keyed = { opened: window.opens.length - before, ...it.account('xai') };
-      const started = it.signIn('xai');
+      const started = await it.signIn('xai');
       const shown = await it.shown('xai');
       await it.device('approve');
       const failure = await started.done;
@@ -595,7 +734,7 @@ test('a ChatGPT sign-in seals the account id as a setting, and a turn sends the 
     async (query) => {
       const it = await window.openSignIns(query);
       const offered = it.settings.providers().find((option) => option.id === 'openai-codex');
-      const started = it.signIn('openai-codex');
+      const started = await it.signIn('openai-codex');
       const shown = await it.shown('openai-codex');
       await it.device('approve');
       const failure = await started.done;
@@ -661,7 +800,7 @@ test('Settings shows an xAI sign-in’s code and its page link while the account
       const settings = document.createElement('slicc-settings');
       settings.model = it;
       document.body.append(settings);
-      const started = it.signIn('xai');
+      const started = await it.signIn('xai');
       const account = await it.shown('xai');
       const details = () => find(settings.shadowRoot, '[data-sign-in]');
       await window.until(details, 'the sign-in details');

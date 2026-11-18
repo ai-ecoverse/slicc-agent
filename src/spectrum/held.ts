@@ -17,31 +17,46 @@ export function markerUrl(marker: string): string {
   return `about:blank#${HELD_MARK}${marker}`;
 }
 
-export function askHold(
-  marker: string,
+type Options = { listen?: Listen; wait?: number };
+
+function ask(
+  message: { type: string; marker: string },
+  answers: Readonly<Record<string, boolean>>,
   signal: AbortSignal,
-  options: { listen?: Listen; wait?: number } = {}
+  options: Options
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const channel = (options.listen ?? listen)(HELD_CHANNEL);
-    const finish = (held: boolean) => {
+    const finish = (answer: boolean) => {
       clearTimeout(timer);
       signal.removeEventListener('abort', stop);
       channel.close();
-      resolve(held);
+      resolve(answer);
     };
     const stop = () => finish(false);
     const timer = setTimeout(stop, options.wait ?? HOLD_WAIT_MS);
     signal.addEventListener('abort', stop, { once: true });
     channel.onmessage = ({ data }) => {
       const answer = data as { type?: unknown; marker?: unknown } | null;
-      if (answer?.marker !== marker) return;
-      if (answer.type === 'held' || answer.type === 'none') finish(true);
-      else if (answer.type === 'unheld') finish(false);
+      if (answer?.marker !== message.marker || typeof answer.type !== 'string') return;
+      if (Object.hasOwn(answers, answer.type)) finish(answers[answer.type]);
     };
     if (signal.aborted) stop();
-    else channel.postMessage({ type: 'hold', marker });
+    else channel.postMessage(message);
   });
+}
+
+export function askBase(marker: string, signal: AbortSignal, options: Options = {}) {
+  return ask({ type: 'base', marker }, { based: true }, signal, options);
+}
+
+export function askHold(
+  marker: string,
+  signal: AbortSignal,
+  options: Options & { based?: boolean } = {}
+): Promise<boolean> {
+  const message = { type: 'hold', marker, ...(options.based ? { based: true, expect: 1 } : {}) };
+  return ask(message, { held: true, none: true, unheld: false }, signal, options);
 }
 
 export function refusal(held: Promise<boolean>, refuse: () => void = () => {}): Promise<void> {

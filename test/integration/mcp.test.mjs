@@ -9,13 +9,37 @@ after(() => chrome.close());
 
 const helpers = () => {
   window.holds = [];
+  window.bases = [];
   window.holding = 'held';
+  window.basing = 'based';
   const owner = new BroadcastChannel('slicc-held');
   window.answerHold = (marker, type) => owner.postMessage({ type, marker });
   owner.onmessage = ({ data }) => {
+    if (data.type === 'base') {
+      window.bases.push({ ...data, opened: window.opens?.length ?? 0 });
+      if (window.basing === 'based') window.answerHold(data.marker, 'based');
+      return;
+    }
     window.holds.push({ ...data, href: window.opens?.at(-1)?.location.href });
     if (['held', 'none', 'unheld'].includes(window.holding))
       window.answerHold(data.marker, window.holding);
+  };
+  const Channel = BroadcastChannel;
+  window.live = new Set();
+  window.BroadcastChannel = class extends Channel {
+    constructor(name) {
+      super(name);
+      if (name === 'slicc-held') window.live.add(this);
+    }
+    close() {
+      window.live.delete(this);
+      super.close();
+    }
+  };
+  window.opened = async (before) => {
+    for (let n = 0; n < 1500 && window.opens.length <= before; n++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    return window.opens.at(-1);
   };
   window.write = async (path, text) => {
     let dir = await navigator.storage.getDirectory();
@@ -294,12 +318,13 @@ test('Cancel during an MCP sign-in closes its window, drops its state and reject
       release = resolve;
     });
     const sign = () =>
-      page.evaluate(() => {
+      page.evaluate(async () => {
         const before = window.opens.length;
         window.signing = window.model.settings.connect('mcp:docs').then(
           () => 'ok',
           (error) => error.name
         );
+        await window.opened(before);
         return window.opens.length - before;
       });
     const cancel = () =>
@@ -396,7 +421,7 @@ for (const answer of ['held', 'none']) {
           () => 'ok',
           (error) => error.message
         );
-        return window.opens.at(-1).location.href;
+        return (await window.opened(0)).location.href;
       });
       assert.match(marked, /^about:blank#slicc-sign-in-[0-9a-f-]{36}$/);
       await page.within(30000, () => window.holds.length === 1);
@@ -411,6 +436,8 @@ for (const answer of ['held', 'none']) {
         asked: {
           type: 'hold',
           marker: marked.slice('about:blank#slicc-sign-in-'.length),
+          based: true,
+          expect: 1,
           href: marked,
         },
         href: marked,
@@ -431,6 +458,146 @@ for (const answer of ['held', 'none']) {
     }
   });
 }
+
+test('an MCP sign-in asks the owner for a baseline before its window opens, then asks for the hold against that baseline', async (t) => {
+  const docs = await serve(true, { oauth: {} });
+  try {
+    const page = await mcpPage(t, docs);
+    const waiting = await page.evaluate(async () => {
+      window.basing = 'later';
+      window.signing = window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.message
+      );
+      for (let n = 0; n < 1500 && !window.bases.length; n++)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return { bases: window.bases, opens: window.opens.length, holds: window.holds.length };
+    });
+    const [{ marker }] = waiting.bases;
+    assert.match(marker, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(waiting, { bases: [{ type: 'base', marker, opened: 0 }], opens: 0, holds: 0 });
+    const seen = await page.evaluate(async (marker) => {
+      window.answerHold('another', 'based');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const early = window.opens.length;
+      window.answerHold(marker, 'based');
+      await window.opened(0);
+      for (let n = 0; n < 1500 && !window.holds.length; n++)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      return { early, opens: window.opens.length, asked: window.holds };
+    }, marker);
+    assert.deepEqual(seen, {
+      early: 0,
+      opens: 1,
+      asked: [
+        {
+          type: 'hold',
+          marker,
+          based: true,
+          expect: 1,
+          href: `about:blank#slicc-sign-in-${marker}`,
+        },
+      ],
+    });
+    await page.within(30000, () => window.opens.at(-1).location.href.includes('/authorize'));
+    const result = await page.evaluate(() => {
+      const state = new URL(window.opens.at(-1).location.href).searchParams.get('state');
+      new BroadcastChannel('slicc-mcp-oauth').postMessage({ code: 'code-x', state });
+      return window.signing;
+    });
+    assert.match(result, /MCP sign-in needs seven's vault: update seven/);
+    assert.equal(await page.evaluate(() => window.live.size), 0);
+  } finally {
+    docs.close();
+  }
+});
+
+test('an MCP sign-in whose baseline goes unanswered still opens its window held, with a plain hold ask', async (t) => {
+  const docs = await serve(true, { oauth: {} });
+  try {
+    const page = await mcpPage(t, docs);
+    const seen = await page.evaluate(async () => {
+      window.basing = 'silent';
+      const started = Date.now();
+      window.signing = window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.message
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const early = window.opens.length;
+      const popup = await window.opened(0);
+      const waited = Date.now() - started;
+      for (let n = 0; n < 1500 && !window.holds.length; n++)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      return { early, waited, bases: window.bases.length, asked: window.holds, popup: !!popup };
+    });
+    const marker = seen.asked[0]?.marker;
+    assert.ok(seen.waited >= 5500, `opened after ${seen.waited} ms`);
+    assert.deepEqual(seen, {
+      early: 0,
+      waited: seen.waited,
+      bases: 1,
+      asked: [{ type: 'hold', marker, href: `about:blank#slicc-sign-in-${marker}` }],
+      popup: true,
+    });
+    await page.within(30000, () => window.opens.at(-1).location.href.includes('/authorize'));
+    const result = await page.evaluate(() => {
+      const state = new URL(window.opens.at(-1).location.href).searchParams.get('state');
+      new BroadcastChannel('slicc-mcp-oauth').postMessage({ code: 'code-x', state });
+      return window.signing;
+    });
+    assert.match(result, /MCP sign-in needs seven's vault: update seven/);
+  } finally {
+    docs.close();
+  }
+});
+
+test('Cancel while an MCP sign-in waits for its baseline opens no window, asks for no hold and leaves no channel open', async (t) => {
+  const docs = await serve(true, { oauth: {} });
+  try {
+    const page = await mcpPage(t, docs);
+    const seen = await page.evaluate(async () => {
+      window.basing = 'later';
+      window.signing = window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.name
+      );
+      for (let n = 0; n < 1500 && !window.bases.length; n++)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      window.model.settings.cancel('mcp:docs');
+      let result;
+      window.signing.then((value) => {
+        result = value;
+      });
+      for (let n = 0; n < 50 && result === undefined; n++)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      const live = window.live.size;
+      window.answerHold(window.bases[0].marker, 'based');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return {
+        result,
+        live,
+        opens: window.opens.length,
+        holds: window.holds.length,
+        states: Object.keys(localStorage).filter((key) => key.startsWith('slicc-mcp-oauth:')),
+        status: window.model.settings.accounts().find((account) => account.id === 'mcp:docs')
+          .status,
+      };
+    });
+    assert.deepEqual(seen, {
+      result: 'AbortError',
+      live: 0,
+      opens: 0,
+      holds: 0,
+      states: [],
+      status: 'disconnected',
+    });
+    assert.deepEqual(docs.fake.state.oauth.authorizations, []);
+  } finally {
+    docs.close();
+  }
+});
 
 for (const holding of ['unheld', 'silent']) {
   test(`an MCP sign-in whose window the owner doesn't hold (${holding}) never sends the window anywhere and fails closed`, async (t) => {
