@@ -59,7 +59,8 @@ export function serveVault(port, values, version = 1, options = {}) {
   let paused = false;
   const fixed = (raw) => {
     const found = /^https:\/\/([^/?#]+)/i.exec(raw);
-    const host = found?.[1].toLowerCase();
+    if (!found) return raw;
+    const host = found[1].toLowerCase();
     const own = builtIn.some(
       (entry) => !String(entry.url).includes('{') && URL.parse(entry.url)?.host === host
     );
