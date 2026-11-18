@@ -35,8 +35,14 @@ const settingsAnswers: Record<string, Answer> = {
 
 export const settingsAnswer = (name: string): Answer => settingsAnswers[name] ?? refuse;
 
-export const remoteAnswer = (name: string): Answer =>
-  name === 'prompt' ? async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY }) : refuse;
+export const NO_APPROVALS = 'this agent has no approvals';
+
+export const remoteAnswer = (name: string): Answer => {
+  if (name === 'decide')
+    return async () => ({ ok: false, code: 'EOPNOTSUPP', message: NO_APPROVALS });
+  if (name === 'prompt') return async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY });
+  return refuse;
+};
 
 export function viewPages(): AgentPages {
   return {
@@ -52,7 +58,7 @@ export const pageAnswer = (name: string): Answer =>
   (viewPages() as unknown as Record<string, Answer>)[name] as Answer;
 
 export function viewRemote(
-  remote: AgentRemote
+  remote: Pick<AgentRemote, 'watch' | 'history' | 'next' | 'close'>
 ): Pick<AgentRemote, 'watch' | 'history' | 'next' | 'close'> {
   const mine = new Set<string>();
   return {

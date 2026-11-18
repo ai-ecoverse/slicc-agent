@@ -10,10 +10,10 @@ import type {
   GuestToolApproval,
 } from '@ai-ecoverse/slicc-spectrum/ui';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { fits } from '../approvals/aligned.ts';
 import type { Approval as Item, SudoRun } from '../approvals/record.ts';
 import type { Runnable } from '../approvals/runnable.ts';
 import { stoppable } from '../approvals/stoppable.ts';
+import { verdictOf } from '../approvals/verdict-shown.ts';
 import type { AgentConnection } from '../client.ts';
 import { Emitter } from './emitter.ts';
 
@@ -53,23 +53,6 @@ function requesterOf(item: Item): ApprovalRequester {
     name,
     ...(agentId ? { agentId } : {}),
     ...(where ? { where } : {}),
-  };
-}
-
-function verdictOf(item: Item) {
-  const { verdict, judging, verdictError } = item;
-  return {
-    ...(verdict
-      ? {
-          verdict: {
-            ...(verdict.level ? { level: verdict.level } : {}),
-            ...(verdict.aligned === undefined ? {} : { aligned: fits(verdict.aligned) }),
-            reason: verdict.reason,
-          },
-        }
-      : {}),
-    ...(judging ? { judging: true } : {}),
-    ...(verdictError ? { verdictError } : {}),
   };
 }
 

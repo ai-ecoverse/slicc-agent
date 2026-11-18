@@ -261,6 +261,8 @@ export function alwaysOffered(item: Approval): boolean {
   return verdict?.level === 1 && verdict.always === true && writable;
 }
 
+export const noApproval = (id: string): string => `There is no approval ${id}.`;
+
 export function gone(state: ApprovalState): string {
   if (state === 'unanswered') return 'This request timed out.';
   if (state === 'withdrawn') return 'This request was withdrawn.';

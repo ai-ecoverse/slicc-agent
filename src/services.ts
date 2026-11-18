@@ -440,6 +440,7 @@ export const REMOTE_METHODS = keys<AgentRemote>({
   next: true,
   close: true,
   abort: true,
+  decide: true,
 });
 
 export const REMOTE_READS: readonly (keyof AgentRemote & string)[] = [

@@ -17,6 +17,7 @@ import type { SendAttachment } from '../attachments.ts';
 import { holdText, type VaultState } from '../secrets/vault.ts';
 import type { Delivered, SendMode, SendRequest, SendResponse } from '../services.ts';
 import { watchBusy } from './busy.ts';
+import type { RemoteDecide, RemoteDecided } from './decide.ts';
 import {
   arrange,
   clip,
@@ -89,6 +90,7 @@ export interface AgentRemote {
   next(stream: string, waitMs: number, context: Context): Promise<RemoteBatch>;
   close(stream: string, context: Context): Promise<void>;
   abort(agentId: string | null, context: Context): Promise<{ aborted: boolean }>;
+  decide(request: RemoteDecide, context: Context): Promise<RemoteDecided>;
 }
 
 export interface RemoteHost {
@@ -440,7 +442,9 @@ async function attachWatch(
   };
 }
 
-export function createRemote(host: RemoteHost): AgentRemote & { dispose(): Promise<void> } {
+export function createRemote(
+  host: RemoteHost
+): Omit<AgentRemote, 'decide'> & { dispose(): Promise<void> } {
   const now = host.now ?? Date.now;
   const streams = new Map<string, Stream>();
   let serial = 0;
