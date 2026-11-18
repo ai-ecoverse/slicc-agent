@@ -252,6 +252,7 @@ self.addEventListener('message', ({ data }) => {
   data?.served?.postMessage(served);
   data?.upstream?.postMessage({
     upstream,
+    errors: self.fakeVault?.errors ?? [],
     vault:
       self.fakeVault?.log.map(({ op, provider, server, model, oauth }) => ({
         op,

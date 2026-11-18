@@ -54,6 +54,7 @@ export function serveVault(port, values, version = 1, options = {}) {
   const log = [];
   const queue = [];
   const failures = [];
+  const errors = [];
   const sent = [];
   let paused = false;
   const fixed = (raw) => {
@@ -350,6 +351,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       if (!handler) throw new Refused('ENOTSUP', `this vault has no op ${op}`);
       port.postMessage({ v: 1, id, op, ...(await handler(message)) });
     } catch (error) {
+      errors.push({ op, code: error.code ?? null, message: error.message, at: Date.now() });
       port.postMessage({
         v: 1,
         id,
@@ -368,6 +370,7 @@ export function serveVault(port, values, version = 1, options = {}) {
   port.start?.();
   return {
     log,
+    errors,
     sent,
     records,
     registered,

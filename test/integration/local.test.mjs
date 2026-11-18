@@ -354,7 +354,7 @@ for (const release of ['1.28.2', '1.28.1']) {
       page,
       'the keyed http provider',
       async ({ query, fresh }) => {
-        const { owner, settings, agent, put, register } = await window.start(query);
+        const { owner, settings, agent, put, register, log } = await window.start(query);
         await window.until(() => settings.providers().length > 0);
         const option = settings.providers().find((entry) => entry.id === 'local');
         await put({
@@ -371,10 +371,18 @@ for (const release of ['1.28.2', '1.28.1']) {
             (error) => error.message
           );
         const public_ = await attempt('http://example.com/v1');
+        const started = Date.now();
         const refused = await attempt('http://8820.kernel.localhost/v1');
+        const took = Date.now() - started;
+        const { errors } = await log();
         const row = () => settings.accounts().find((entry) => entry.id === 'local');
         if (!fresh) {
-          const result = { public_, refused, status: row()?.status, requests: window.seen };
+          const result = { public_, refused, status: row()?.status, requests: window.seen, errors };
+          await owner.release();
+          return result;
+        }
+        if (refused) {
+          const result = { public_, refused, took, errors, requests: window.seen };
           await owner.release();
           return result;
         }
@@ -383,7 +391,15 @@ for (const release of ['1.28.2', '1.28.1']) {
             row()?.status === 'connected' && settings.models().some((m) => m.id === 'local/chat-1')
         );
         const turn = await window.reply(agent, 'local/chat-1', 'Run the local tool.');
-        const result = { public_, refused, status: row()?.status, turn, requests: window.seen };
+        const result = {
+          public_,
+          refused,
+          took,
+          errors,
+          status: row()?.status,
+          turn,
+          requests: window.seen,
+        };
         await owner.release();
         return result;
       },
@@ -399,7 +415,11 @@ for (const release of ['1.28.2', '1.28.1']) {
       assert.ok(seen.requests.every((entry) => entry.authorization === null));
       return;
     }
-    assert.equal(seen.refused, null);
+    assert.equal(
+      seen.refused,
+      null,
+      JSON.stringify({ took: seen.took, errors: seen.errors, requests: seen.requests })
+    );
     assert.equal(seen.status, 'connected');
     assert.equal(seen.turn.answer, 'From the local server: local-tool');
     const keyed = seen.requests.filter((entry) => entry.authorization !== null);
