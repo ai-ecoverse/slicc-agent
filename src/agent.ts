@@ -14,6 +14,7 @@ import {
   type Storage,
 } from '@earendil-works/pi-durable';
 import { type Agents, openAgents } from './agents.ts';
+import { type OwnerToolGate, ownerToolGate } from './approvals/owner-tools.ts';
 import { type SudoRuns, sudoRuns } from './approvals/run.ts';
 import type { Clock } from './clock.ts';
 import type { Cones } from './cone.ts';
@@ -43,6 +44,7 @@ export interface Agent extends Cones {
   readonly agents: Agents;
   readonly reviews: GuestReviews;
   readonly gate: GuestToolGate;
+  readonly ownerGate: OwnerToolGate;
   readonly scoopReviews: ScoopReviews;
   readonly sudoRuns: SudoRuns;
   readonly reports: Reports;
@@ -90,6 +92,8 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   let opened: Harness | undefined;
   const gate = guestToolGate(() => opened);
   registry.install(gate.extension);
+  const ownerGate = ownerToolGate(() => opened);
+  registry.install(ownerGate.extension);
   const reviews = guestReviews();
   registry.install(reviews.extension);
   const scooped = scoopReviews();
@@ -127,6 +131,7 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
     agents,
     reviews,
     gate,
+    ownerGate,
     scoopReviews: scooped,
     sudoRuns: runs,
     reports,

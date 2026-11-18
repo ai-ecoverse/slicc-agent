@@ -279,13 +279,9 @@ function settledEarly(
 
 const ended = (status: string) => status === 'terminal' || status === 'completing';
 
-export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
-  let resolveHost: (host: GateHost) => void = () => {};
-  const bound = new Promise<GateHost>((resolve) => {
-    resolveHost = resolve;
-  });
+export function taskWatcher(harness: () => Pick<Held, 'waitForTask'> | undefined) {
   const watched = new Set<string>();
-  const watch = (host: GateHost, id: string, task: number) => {
+  return (host: { approvals: Pick<Approvals, 'withdraw'> }, id: string, task: number) => {
     const held = harness();
     if (!held || watched.has(id)) return;
     watched.add(id);
@@ -299,6 +295,14 @@ export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
       .catch(() => undefined)
       .finally(() => watched.delete(id));
   };
+}
+
+export function guestToolGate(harness: () => Held | undefined): GuestToolGate {
+  let resolveHost: (host: GateHost) => void = () => {};
+  const bound = new Promise<GateHost>((resolve) => {
+    resolveHost = resolve;
+  });
+  const watch = taskWatcher(harness);
   const remember = (seat: string, rule: AlwaysTool) =>
     (harness() as Held).commit(async (tx) => {
       const record = (await tx.doc(GuestsDoc)).seats[seat];

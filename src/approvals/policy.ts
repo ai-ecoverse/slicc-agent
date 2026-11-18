@@ -19,14 +19,22 @@ export type RunLatePolicy = { maxAgeMinutes: number };
 
 export type SudoPolicy = { approver: 'user' | 'agent'; runLate: RunLatePolicy };
 
-export type ApprovalPolicy = { guests: GuestPolicy; sudo: SudoPolicy };
+export type OwnerTools = 'off' | 'user' | 'agent';
+
+export type OwnerPolicy = { tools: OwnerTools };
+
+export type ApprovalPolicy = { guests: GuestPolicy; sudo: SudoPolicy; owner: OwnerPolicy };
 
 export type SudoPolicyChange = {
   approver?: SudoPolicy['approver'];
   runLate?: Partial<RunLatePolicy>;
 };
 
-export type ApprovalPolicyChange = { guests?: GuestPolicyChange; sudo?: SudoPolicyChange };
+export type ApprovalPolicyChange = {
+  guests?: GuestPolicyChange;
+  sudo?: SudoPolicyChange;
+  owner?: Partial<OwnerPolicy>;
+};
 
 export type ApprovalPolicySet =
   | { policy: ApprovalPolicy; error: null }
@@ -35,6 +43,7 @@ export type ApprovalPolicySet =
 export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = {
   guests: DEFAULT_GUEST_POLICY,
   sudo: { approver: 'user', runLate: { maxAgeMinutes: 1440 } },
+  owner: { tools: 'off' },
 };
 
 export const MAX_RUN_LATE_MINUTES = 10_080;
@@ -85,17 +94,30 @@ function changedSudo(next: ApprovalPolicy, change: unknown): string | null {
   return null;
 }
 
+function changedOwner(next: ApprovalPolicy, change: unknown): string | null {
+  if (!isObject(change)) return 'The owner policy is an object of policy entries.';
+  for (const [name, value] of Object.entries(change)) {
+    if (name !== 'tools') return `There is no owner policy entry ${name}.`;
+    if (value !== 'off' && value !== 'user' && value !== 'agent')
+      return "The owner's tool calls are reviewed by off, user or agent.";
+    next.owner.tools = value;
+  }
+  return null;
+}
+
+const SECTIONS: Record<string, (next: ApprovalPolicy, change: unknown) => string | null> = {
+  guests: (next, change) => changedGuests(next.guests, change),
+  sudo: changedSudo,
+  owner: changedOwner,
+};
+
 export function changedPolicy(base: ApprovalPolicy, change: unknown): ApprovalPolicySet {
   if (!change || typeof change !== 'object' || Array.isArray(change))
     return { policy: null, error: 'An approval policy change is an object of sections.' };
   const next = copy(base);
   for (const [name, value] of Object.entries(change)) {
-    const error =
-      name === 'guests'
-        ? changedGuests(next.guests, value)
-        : name === 'sudo'
-          ? changedSudo(next, value)
-          : `There is no approval policy section ${name}.`;
+    const section = Object.hasOwn(SECTIONS, name) ? SECTIONS[name] : undefined;
+    const error = section ? section(next, value) : `There is no approval policy section ${name}.`;
     if (error) return { policy: null, error };
   }
   return { policy: next, error: null };
@@ -104,6 +126,7 @@ export function changedPolicy(base: ApprovalPolicy, change: unknown): ApprovalPo
 export function resolvedPolicy(overrides: Overrides): ApprovalPolicy {
   const guests = (overrides.guests ?? {}) as Partial<GuestPolicy>;
   const sudo = (overrides.sudo ?? {}) as Partial<SudoPolicy>;
+  const owner = (overrides.owner ?? {}) as Partial<OwnerPolicy>;
   return copy({
     guests: {
       ...DEFAULT_GUEST_POLICY,
@@ -115,6 +138,7 @@ export function resolvedPolicy(overrides: Overrides): ApprovalPolicy {
       ...sudo,
       runLate: { ...DEFAULT_APPROVAL_POLICY.sudo.runLate, ...sudo.runLate },
     },
+    owner: { ...DEFAULT_APPROVAL_POLICY.owner, ...owner },
   });
 }
 

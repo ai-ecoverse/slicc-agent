@@ -289,7 +289,8 @@ function captureText(detail: CaptureDetail): string {
 
 export function untrustedOf(item: Approval): string {
   if (item.kind === 'guest-message') return item.detail.text;
-  if (item.kind === 'guest-tool') return `${item.detail.tool}: ${item.detail.summary}`;
+  if (item.kind === 'guest-tool' || item.kind === 'owner-tool')
+    return `${item.detail.tool}: ${item.detail.summary}`;
   if (item.kind === 'capture') return captureText(item.detail);
   return sudoText(item.detail);
 }
