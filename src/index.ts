@@ -61,11 +61,19 @@ export {
   type ApprovalPolicyChange,
   type ApprovalPolicySet,
   DEFAULT_APPROVAL_POLICY,
+  type OwnerPolicy,
+  type OwnerTools,
   type RunLatePolicy,
   type SudoPolicy,
   type SudoPolicyChange,
 } from './approvals/policy.ts';
-export type { SudoFile, SudoReplay, SudoRun, SudoRunState } from './approvals/record.ts';
+export type {
+  OwnerToolApproval,
+  SudoFile,
+  SudoReplay,
+  SudoRun,
+  SudoRunState,
+} from './approvals/record.ts';
 export {
   RUN_ERRORS,
   type RunAnswer,

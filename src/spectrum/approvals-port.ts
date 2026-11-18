@@ -26,6 +26,8 @@ const ENDS: Record<string, ApprovalEnd> = {
 
 export const ARGS_LENGTH = 65_536;
 
+export const OWNER_NAME = 'you';
+
 function pretty(text: string): string {
   try {
     return JSON.stringify(JSON.parse(text), null, 2);
@@ -100,9 +102,10 @@ export function shown(item: Item, agentName: string | undefined): Approval {
     ...verdictOf(item),
   };
   if (item.kind === 'capture') return { ...guest, kind: 'capture', detail: { ...item.detail } };
-  if (item.kind === 'guest-tool')
+  if (item.kind === 'guest-tool' || item.kind === 'owner-tool')
     return {
       ...guest,
+      ...(item.kind === 'owner-tool' ? { requester: { ...base.requester, name: OWNER_NAME } } : {}),
       kind: 'guest-tool',
       tool: item.detail.tool,
       summary: item.detail.summary,

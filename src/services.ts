@@ -15,7 +15,7 @@ import type { ChangesView } from './changes/git.ts';
 import type { FrozenCone } from './freezer/index.ts';
 import type { ImportProgress, ImportResult } from './freezer/v6.ts';
 import type { GuestOpened, Proposed, ProposeRequest } from './guests/index.ts';
-import type { GuestDraft, GuestGates, GuestSeat } from './guests/seats.ts';
+import type { GuestDraft, GuestGates, GuestSeat, ShownAlwaysTool } from './guests/seats.ts';
 import type { MemoryEntry, MemoryScope, MemoryTag } from './memory/format.ts';
 import type { EntriesPage, EntriesRequest } from './remote/history.ts';
 import type { AgentRemote } from './remote/host.ts';
@@ -129,6 +129,8 @@ export interface AgentControl {
     approval: string,
     context: Context
   ): Promise<{ removed: boolean }>;
+  ownerAlways(context: Context): Promise<ShownAlwaysTool[]>;
+  ownerAlwaysForget(approval: string, context: Context): Promise<{ removed: boolean }>;
   approvalPolicySet(change: ApprovalPolicyChange, context: Context): Promise<ApprovalPolicySet>;
   decide(
     id: string,
@@ -331,6 +333,8 @@ export const CONTROL_METHODS = keys<AgentControl>({
   guestOpen: true,
   guestRevoke: true,
   guestAlwaysForget: true,
+  ownerAlways: true,
+  ownerAlwaysForget: true,
   approvalPolicySet: true,
   decide: true,
   approvalRun: true,
@@ -346,6 +350,8 @@ export const OWNER_DEVICE_METHODS: readonly (keyof AgentControl & string)[] = [
   'guestOpen',
   'guestRevoke',
   'guestAlwaysForget',
+  'ownerAlways',
+  'ownerAlwaysForget',
   'approvalPolicySet',
 ];
 

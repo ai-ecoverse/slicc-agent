@@ -137,10 +137,12 @@ function mark(item: Approval, how: Settle, at: number) {
   if (how.reason) item.reason = how.reason;
 }
 
-const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean =>
-  guestKind(draft.kind) && draft.kind !== 'capture'
+const offered = (options: ApprovalsAttach, draft: ApprovalDraft): boolean => {
+  if (draft.kind === 'owner-tool') return true;
+  return guestKind(draft.kind) && draft.kind !== 'capture'
     ? options.guestAlways?.(draft.kind) === true
     : false;
+};
 
 const judgedKind = (item: Pick<ApprovalDraft, 'kind' | 'detail'>, tier: string) =>
   !personOnly(item) && (item.kind === 'sudo' || tier === 'agent' || tier === 'user');

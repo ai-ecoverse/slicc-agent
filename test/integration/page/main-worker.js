@@ -265,12 +265,13 @@ const steps = [
   ...params.getAll('step').map((spec) => {
     const { tool, answer, think, error, hold, gate: name } = JSON.parse(spec);
     if (hold) return HOLD;
-    if (name) return { gate: name, message: fauxAssistantMessage(answer) };
-    if (error) return fauxAssistantMessage([], { stopReason: 'error', errorMessage: error });
-    if (think) return fauxAssistantMessage([fauxThinking(think), fauxText(answer)]);
-    return tool
+    const called = tool
       ? fauxAssistantMessage([fauxToolCall(tool.name, tool.args)], { stopReason: 'toolUse' })
       : fauxAssistantMessage(answer);
+    if (name) return { gate: name, message: called };
+    if (error) return fauxAssistantMessage([], { stopReason: 'error', errorMessage: error });
+    if (think) return fauxAssistantMessage([fauxThinking(think), fauxText(answer)]);
+    return called;
   }),
   ...params
     .getAll('code')

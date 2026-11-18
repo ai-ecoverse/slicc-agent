@@ -7,7 +7,7 @@ import { stoppable } from './stoppable.ts';
 
 export { fits, JUDGE_ALLOW, personal, REASONS, stoppable };
 
-export type ApprovalKind = 'guest-message' | 'guest-tool' | 'sudo' | 'capture';
+export type ApprovalKind = 'guest-message' | 'guest-tool' | 'owner-tool' | 'sudo' | 'capture';
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'unanswered' | 'withdrawn';
 
@@ -139,6 +139,7 @@ type Base = {
 
 export type GuestMessageApproval = Base & { kind: 'guest-message'; detail: GuestMessageDetail };
 export type GuestToolApproval = Base & { kind: 'guest-tool'; detail: GuestToolDetail };
+export type OwnerToolApproval = Base & { kind: 'owner-tool'; detail: GuestToolDetail };
 export type SudoApproval = Base & {
   kind: 'sudo';
   detail: SudoDetail;
@@ -147,7 +148,12 @@ export type SudoApproval = Base & {
 };
 export type CaptureApproval = Base & { kind: 'capture'; detail: CaptureDetail };
 
-export type Approval = GuestMessageApproval | GuestToolApproval | SudoApproval | CaptureApproval;
+export type Approval =
+  | GuestMessageApproval
+  | GuestToolApproval
+  | OwnerToolApproval
+  | SudoApproval
+  | CaptureApproval;
 
 type DraftOf<T extends Approval> = Pick<T, 'kind' | 'detail' | 'agentId' | 'requester'> & {
   seat?: string;
@@ -159,6 +165,7 @@ type DraftOf<T extends Approval> = Pick<T, 'kind' | 'detail' | 'agentId' | 'requ
 export type ApprovalDraft =
   | DraftOf<GuestMessageApproval>
   | DraftOf<GuestToolApproval>
+  | DraftOf<OwnerToolApproval>
   | (DraftOf<SudoApproval> & { replay?: SudoReplay })
   | DraftOf<CaptureApproval>;
 
@@ -177,7 +184,7 @@ export const APPROVALS_KEPT = 100;
 export const MAX_DELAY = 2_147_483_647;
 export const REASON_LENGTH = 500;
 
-export const guestKind = (kind: ApprovalKind): boolean => kind !== 'sudo';
+export const guestKind = (kind: ApprovalKind): boolean => kind !== 'sudo' && kind !== 'owner-tool';
 
 export const scoopTier = (tier: unknown): tier is `scoop:${string}` =>
   typeof tier === 'string' && /^scoop:\S+$/.test(tier);

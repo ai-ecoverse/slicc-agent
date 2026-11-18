@@ -20,6 +20,7 @@ import {
   type Decider,
   stoppingAttach,
 } from './approvals/index.ts';
+import { ownerAlways, ownerAlwaysForget } from './approvals/owner-tools.ts';
 import { type ApprovalPolicies, attachApprovalPolicy } from './approvals/policy.ts';
 import { publishedApprovals } from './approvals/published.ts';
 import type { RunKernel, Runner, SudoRunHost } from './approvals/run.ts';
@@ -295,6 +296,7 @@ async function guestsOf(
     context,
   });
   agent.gate.bind({ approvals, policy: () => guests.policy() });
+  agent.ownerGate.bind({ approvals, tools: () => policy.state.value?.owner.tools ?? 'off' });
   return guests;
 }
 
@@ -335,6 +337,8 @@ export type HostOptions = {
   runs?: { kernel: RunKernel & { protocol?: readonly number[] }; boot: string | null } & RunTimes;
 } & ApprovalOptions;
 
+type OwnControls = 'approvalPolicySet' | 'approvalRunNotice' | 'ownerAlways' | 'ownerAlwaysForget';
+
 export type RunTimes = Partial<
   Pick<SudoRunHost, 'pollMs' | 'killMs' | 'adoptMs' | 'outputCap' | 'keepMs'>
 >;
@@ -367,9 +371,11 @@ function runsOf(
     approvalRunStop: (id, using) => agent.sudoRuns.stop(id, runner, using),
   });
   const notices = { harness: agent.harness, agents: agent.agents, licks: options.licks?.licks };
-  const controls: Pick<AgentControl, 'approvalPolicySet' | 'approvalRunNotice'> = {
+  const controls: Pick<AgentControl, OwnControls> = {
     approvalPolicySet: (change, using) => policy.set(change, using),
     approvalRunNotice: (raw) => deliverNotice(notices, raw),
+    ownerAlways: (using) => ownerAlways(agent.harness, using),
+    ownerAlwaysForget: (approval, using) => ownerAlwaysForget(agent.harness, approval, using),
   };
   const runnable: RunnableWatch = watchRunnable(
     sources.approvals.state,
