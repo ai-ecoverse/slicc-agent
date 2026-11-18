@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ApprovalDecided, Decider } from '../approvals/index.ts';
 import { type ApprovalDecision, answerOf, noApproval } from '../approvals/record.ts';
 

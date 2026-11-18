@@ -1,4 +1,4 @@
-import type { Context, ReplicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context';
 import {
   type Conversation,
@@ -16,6 +16,7 @@ import {
 import type { SendAttachment } from '../attachments.ts';
 import { holdText, type VaultState } from '../secrets/vault.ts';
 import type { Delivered, SendMode, SendRequest, SendResponse } from '../services.ts';
+import type { State } from '../state.ts';
 import { watchBusy } from './busy.ts';
 import type { RemoteDecide, RemoteDecided } from './decide.ts';
 import {
@@ -32,7 +33,7 @@ import { historyFrom, historyOf, type RemoteHistory } from './history.ts';
 export const VAULT_BACK = 'the vault is answering again';
 
 export function vaultNotices(
-  vault: ReplicatedState<VaultState> | undefined,
+  vault: State<VaultState> | undefined,
   push: (events: RemoteEvent[]) => void
 ): () => void {
   if (!vault) return () => undefined;
@@ -97,7 +98,7 @@ export interface RemoteHost {
   harness: Harness;
   conversation(agentId: string | null, context: Context): Promise<Conversation>;
   send(request: SendRequest, context: Context): Promise<SendResponse>;
-  vault?: ReplicatedState<VaultState>;
+  vault?: State<VaultState>;
   now?: () => number;
   limit?: number;
   sweepMs?: number;

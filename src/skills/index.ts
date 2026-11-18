@@ -1,4 +1,4 @@
-import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import {
   defineExtension,
   type Extension,
@@ -10,6 +10,7 @@ import { dirname } from '../kernel/paths.ts';
 import type { Licks } from '../licks/licks.ts';
 import { PACKAGE_ROOTS, type PiPackages, piPackages } from '../roles/roles.ts';
 import type { Command, PrivateRevision } from '../services.ts';
+import { createState, type State } from '../state.ts';
 import {
   type Diagnostic,
   expandSkillCommand,
@@ -39,11 +40,11 @@ export const RELOAD_MS = 300;
 const USER_PACKAGES = '/opt/user/node_modules';
 
 export interface SkillsRuntime {
-  readonly commands: ReplicatedState<Command[]>;
+  readonly commands: State<Command[]>;
   skills(): readonly Skill[];
   dirs(): string[];
   templates(): readonly PromptTemplate[];
-  readonly privateRevision: ReplicatedState<PrivateRevision>;
+  readonly privateRevision: State<PrivateRevision>;
   commandsFor(agentId: string): Command[];
   expand(text: string, context: Context, conversationId?: number): Promise<string>;
   reload(context: Context): Promise<void>;
@@ -189,8 +190,8 @@ export function setupSkills(registry: Registry, licks: Licks): SkillsSetup {
         await installBuiltins(env, options.assets, context).catch(() => undefined);
       await env.exec(`mkdir -p ${GLOBAL_DIR} && chmod 755 ${GLOBAL_DIR}`, undefined, context);
       let templates: PromptTemplate[] = [];
-      const commands = replicatedState<Command[]>([]);
-      const privateRevision = replicatedState<PrivateRevision>({ revision: 0 });
+      const commands = createState<Command[]>([]);
+      const privateRevision = createState<PrivateRevision>({ revision: 0 });
       let privateKey = '[]';
       const reported = new Set<string>();
       const reload = async (using: Context) => {

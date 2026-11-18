@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { McpFetch } from '@earendil-works/pi-mcp';
 import type { AccountState, McpEdit, McpRefusals, McpServerState } from '../services.ts';

@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ExecutionEnv, Result } from '@earendil-works/pi-durable/env';
 import { quote } from '../kernel/env.ts';
 import { dirname } from '../kernel/paths.ts';

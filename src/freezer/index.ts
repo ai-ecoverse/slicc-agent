@@ -1,4 +1,4 @@
-import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type {
   Conversation,
@@ -22,6 +22,7 @@ import { resolve } from '../kernel/paths.ts';
 import { type Layout, LEGACY, ROOT_HOME, ROOT_USER } from '../layout.ts';
 import type { LickTarget } from '../licks/lick.ts';
 import { copyAgent, SELECTION, storedAgent } from '../selection.ts';
+import { createState, type State } from '../state.ts';
 import { cleanTitle, TITLE_TURNS, titleDue } from '../titles/extension.ts';
 import { scrubTranscript } from '../titles/generate.ts';
 import {
@@ -75,8 +76,8 @@ export interface FreezerAttach {
 export type Asker = { user: string | null; cwd: string };
 
 export interface FreezerRuntime {
-  readonly frozen: ReplicatedState<FrozenCone[]>;
-  readonly importing: ReplicatedState<ImportProgress>;
+  readonly frozen: State<FrozenCone[]>;
+  readonly importing: State<ImportProgress>;
   readonly swept: Promise<void>;
   importProfile(
     source: ImportSource,
@@ -498,7 +499,7 @@ async function removeScoop(
 }
 
 function listing(harness: Harness, agents: Agents, seen: Seen | undefined) {
-  const frozen = replicatedState<FrozenCone[]>([]);
+  const frozen = createState<FrozenCone[]>([]);
   const cache = new Map<number, Stats>();
   let lock: Promise<readonly FrozenCone[]> = Promise.resolve([]);
   const refresh = () => {
@@ -714,7 +715,7 @@ function importing(
       })
     : undefined;
   return {
-    importing: importer?.progress ?? replicatedState<ImportProgress>(IDLE),
+    importing: importer?.progress ?? createState<ImportProgress>(IDLE),
     swept: importer?.swept ?? Promise.resolve(),
     importProfile: async (source, choices, context) =>
       importer

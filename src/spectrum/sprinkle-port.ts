@@ -1,6 +1,6 @@
 import type { Sprinkle, SprinkleEvents, SprinklePort } from '@ai-ecoverse/slicc-spectrum/ui';
-import type { JsonValue } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { JsonValue } from '@earendil-works/chord/json';
 import type { AgentConnection } from '../client.ts';
 import { attempt, type Report, warn } from './attempt.ts';
 import { Emitter } from './emitter.ts';

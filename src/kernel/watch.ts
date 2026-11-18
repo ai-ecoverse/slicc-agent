@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { FileChange, FileWatcher, WatchTarget } from '@earendil-works/pi-durable/env';
 import type { KernelClient, KernelFs } from './client.ts';
 import { basename, dirname, resolve } from './paths.ts';

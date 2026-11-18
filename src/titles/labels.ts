@@ -1,9 +1,4 @@
-import {
-  type Context,
-  type MutableReplicatedState,
-  type ReplicatedState,
-  replicatedState,
-} from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 import {
@@ -20,6 +15,7 @@ import type { Agents } from '../agents.ts';
 import { boundedDeltas } from '../checkpoints.ts';
 import type { VaultState } from '../secrets/vault.ts';
 import { vaultHold } from '../secrets/view.ts';
+import { createState, type MutableState, type State } from '../state.ts';
 import { callIdsOf, clusterOf, describe, describeStep } from './cluster.ts';
 import { type Labeler, STEP_PROMPT, scrubbed } from './generate.ts';
 import { callIdsOfKey, cleanLabel, labelKey, shownLabel, stepKey } from './shown.ts';
@@ -50,8 +46,8 @@ export const STEP_WATCHERS = 32;
 export const LABEL_WAIT_MS = 30_000;
 
 export function visibleLabels(
-  labels: ReplicatedState<Record<string, string>>,
-  sources: readonly ReplicatedState<unknown>[],
+  labels: State<Record<string, string>>,
+  sources: readonly State<unknown>[],
   views: () => readonly ConversationView[]
 ) {
   const pick = () => {
@@ -62,7 +58,7 @@ export function visibleLabels(
       )
     );
   };
-  const state = replicatedState<Record<string, string>>(pick());
+  const state = createState<Record<string, string>>(pick());
   let queued = false;
   const update = () => {
     if (queued) return;
@@ -88,10 +84,7 @@ export function visibleLabels(
   };
 }
 
-export function watchLabel(
-  labels: ReplicatedState<Record<string, string>>,
-  waitMs = LABEL_WAIT_MS
-) {
+export function watchLabel(labels: State<Record<string, string>>, waitMs = LABEL_WAIT_MS) {
   return (_agentId: string, callIds: readonly string[]): Promise<string | null> => {
     const found = shownLabel(labels.value, callIds);
     if (found !== undefined || !callIds.length) return Promise.resolve(found ?? null);
@@ -114,7 +107,7 @@ export function stepId(callId: unknown): callId is string {
   return typeof callId === 'string' && STEP_ID.test(callId);
 }
 
-export function watchStep(labels: ReplicatedState<Record<string, string>>, waitMs = LABEL_WAIT_MS) {
+export function watchStep(labels: State<Record<string, string>>, waitMs = LABEL_WAIT_MS) {
   const watch = watchLabel(labels, waitMs);
   const watching = new Map<string, Promise<string | null>>();
   return (agentId: string, callId: string): Promise<string | null> => {
@@ -161,7 +154,7 @@ export interface LabelsAttach {
   harness: Pick<Harness, 'commit' | 'snapshot'>;
   agents: Pick<Agents, 'conversation'>;
   label: Labeler;
-  vault?: Pick<ReplicatedState<VaultState>, 'value'>;
+  vault?: Pick<State<VaultState>, 'value'>;
   now?: () => number;
   perMinute?: number;
   stepsPerMinute?: number;
@@ -172,7 +165,7 @@ export interface LabelsAttach {
 }
 
 export interface LabelsRuntime {
-  labels: ReplicatedState<Record<string, string>>;
+  labels: State<Record<string, string>>;
   label(agentId: string, callIds: readonly string[], context: Context): Promise<string | null>;
   step(agentId: string, callId: string, context: Context): Promise<string | null>;
 }
@@ -196,7 +189,7 @@ interface StepsAttach
     LabelsAttach,
     'harness' | 'agents' | 'label' | 'vault' | 'stepsPerMinute' | 'stepWaitMs' | 'intents'
   > {
-  labels: MutableReplicatedState<Kept>;
+  labels: MutableState<Kept>;
   keep(key: string, label: string, id: ConversationId, answer: AssistantMessage): Promise<Kept>;
   now: () => number;
   started: number;
@@ -302,7 +295,7 @@ export async function attachLabels(
     async (tx) => ({ ...(await tx.doc(LabelsDoc)).labels }),
     context
   );
-  const labels = replicatedState<Record<string, string>>(loaded);
+  const labels = createState<Record<string, string>>(loaded);
   const flying = new Map<string, Promise<string | null>>();
   const waiting = new Set<string>();
   const spent = new Map<string, number[]>();

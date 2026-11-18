@@ -1,7 +1,8 @@
-import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { defineDoc, type Harness } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
+import { createState, type State } from '../state.ts';
 import type { VaultRecords } from './records.ts';
 import type { Vault } from './vault.ts';
 
@@ -93,7 +94,7 @@ export async function wipeLegacy(
 export type MovedName = { kind: 'model' | 'mcp'; label: string };
 
 export interface KeysMoved {
-  readonly state: ReplicatedState<MovedName[]>;
+  readonly state: State<MovedName[]>;
   dismiss(context: Context): Promise<void>;
 }
 
@@ -122,7 +123,7 @@ export async function keysMoved(
     read && !saved.dismissed
       ? saved.accounts.filter(missing).map(({ kind, label }) => ({ kind, label }))
       : [];
-  const state = replicatedState<MovedName[]>(pending());
+  const state = createState<MovedName[]>(pending());
   const update = (using: Context) => {
     const next = pending();
     if (JSON.stringify(next) !== JSON.stringify(state.value)) state.replace(using, next);

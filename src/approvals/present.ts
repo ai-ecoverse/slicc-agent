@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { IntentSources } from './intent.ts';
 import type { Approval } from './record.ts';
 

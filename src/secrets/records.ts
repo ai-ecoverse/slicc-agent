@@ -1,12 +1,13 @@
-import { type Context, type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { createState, type MutableState } from '../state.ts';
 import type { Vault } from './vault.ts';
 import type { AgentRecord } from './vault-types.ts';
 
 export type { AgentRecord } from './vault-types.ts';
 
 export interface VaultRecords {
-  readonly state: MutableReplicatedState<AgentRecord[]>;
+  readonly state: MutableState<AgentRecord[]>;
   refresh(context: Context): Promise<void>;
   model(provider: string): AgentRecord | undefined;
   mcp(server: string, name?: string): AgentRecord | undefined;
@@ -28,7 +29,7 @@ const keyOf = (record: AgentRecord) =>
   JSON.stringify([record.kind, record.name, record.placeholder, record.expiresAt ?? null]);
 
 export function vaultRecords(vault: Source, now: () => number = Date.now): VaultRecords {
-  const state = replicatedState<AgentRecord[]>([]);
+  const state = createState<AgentRecord[]>([]);
   let version = vault.state.value.version;
   let port = vault.state.value.port;
   let lock: Promise<unknown> = Promise.resolve();

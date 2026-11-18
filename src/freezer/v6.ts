@@ -1,4 +1,4 @@
-import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { AssistantMessage, Message, ToolCall } from '@earendil-works/pi-ai';
 import { configure, type EntryDraft, type ModelRef, type Tx } from '@earendil-works/pi-durable';
@@ -9,6 +9,7 @@ import { quote } from '../kernel/env.ts';
 import type { KernelUsers } from '../kernel/users.ts';
 import type { Layout } from '../layout.ts';
 import { opfsFile } from '../opfs-pool.ts';
+import { createState, type State } from '../state.ts';
 import { TITLE_TURNS } from '../titles/extension.ts';
 import { IMPORTS_DIR } from './paths.ts';
 import { Journal, sweep, type Undoing } from './v6-journal.ts';
@@ -1035,7 +1036,7 @@ function undoing(deps: ImportDeps): Undoing {
 }
 
 export interface Importer {
-  readonly progress: ReplicatedState<ImportProgress>;
+  readonly progress: State<ImportProgress>;
   readonly swept: Promise<void>;
   run(
     source: ImportSource,
@@ -1048,7 +1049,7 @@ export interface Importer {
 export const IDLE: ImportProgress = { phase: 'idle', done: 0, total: 0, text: '' };
 
 export function createImporter(deps: ImportDeps): Importer {
-  const progress = replicatedState<ImportProgress>(IDLE);
+  const progress = createState<ImportProgress>(IDLE);
   let sweeping = sweep(undoing(deps)).catch(() => [IMPORTS_DIR]);
   const swept = sweeping.then(() => undefined);
   let running: AbortController | undefined;

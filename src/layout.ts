@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { AgentsState } from './agents.ts';
 import { CONE_PREFIX, homeOf, SCOOP_USER, scoopUser } from './kernel/accounts.ts';

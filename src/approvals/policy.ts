@@ -1,10 +1,6 @@
-import {
-  type Context,
-  type JsonValue,
-  type ReplicatedState,
-  replicatedState,
-} from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { JsonValue } from '@earendil-works/chord/json';
 import { defineDoc, type Harness, type JsonObject } from '@earendil-works/pi-durable';
 import { boundedDeltas } from '../checkpoints.ts';
 import {
@@ -13,6 +9,7 @@ import {
   type GuestPolicy,
   type GuestPolicyChange,
 } from '../guests/policy.ts';
+import { createState, type State } from '../state.ts';
 import type { ApprovalKind } from './record.ts';
 
 export type RunLatePolicy = { maxAgeMinutes: number };
@@ -164,7 +161,7 @@ export function overridden(
 }
 
 export interface ApprovalPolicies {
-  readonly state: ReplicatedState<ApprovalPolicy>;
+  readonly state: State<ApprovalPolicy>;
   current(): ApprovalPolicy;
   set(change: unknown, context: Context): Promise<ApprovalPolicySet>;
 }
@@ -184,7 +181,7 @@ export async function attachApprovalPolicy(
     async (tx) => copy((await tx.doc(ApprovalPolicyDoc)).overrides ?? {}),
     context
   );
-  const state = replicatedState<ApprovalPolicy>(resolvedPolicy(overrides));
+  const state = createState<ApprovalPolicy>(resolvedPolicy(overrides));
   let line: Promise<unknown> = Promise.resolve();
   return {
     state,

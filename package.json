@@ -90,23 +90,17 @@
     "monocart-coverage-reports": "3.2.1",
     "playwright-core": "1.65.0",
     "semantic-release": "25.0.9",
-    "slicc-agent-5": "npm:@ai-ecoverse/slicc-agent@5.10.1",
     "typescript": "7.0.2"
-  },
-  "overrides": {
-    "slicc-agent-5": {
-      "@ai-ecoverse/slicc-spectrum": "$@ai-ecoverse/slicc-spectrum"
-    }
   },
   "dependencies": {
     "@aws-sdk/middleware-websocket": "^3.972.54",
-    "@earendil-works/chord": "1.5.0",
-    "@earendil-works/pi-ai": "1.5.0",
-    "@earendil-works/pi-codemode": "1.5.0",
-    "@earendil-works/pi-durable": "1.5.0",
-    "@earendil-works/pi-mcp": "1.5.0",
-    "@earendil-works/pi-schema": "1.5.0",
-    "@earendil-works/pi-telemetry": "1.5.0",
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-codemode": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/pi-mcp": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2",
+    "@earendil-works/pi-telemetry": "1.5.2",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
     "yaml": "2.9.1"
   },

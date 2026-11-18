@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';

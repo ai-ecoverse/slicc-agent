@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { quote } from '../kernel/env.ts';
 import type { McpEdit, McpRefusal, McpRefusalCode } from '../services.ts';

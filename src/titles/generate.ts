@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { Api, AssistantMessage, Message, Model } from '@earendil-works/pi-ai';
 import type { Models } from '@earendil-works/pi-ai/models';
 import type { EntryRecord } from '@earendil-works/pi-durable';

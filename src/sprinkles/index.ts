@@ -1,13 +1,10 @@
-import {
-  type Context,
-  type JsonValue,
-  type ReplicatedState,
-  replicatedState,
-} from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
+import type { JsonValue } from '@earendil-works/chord/json';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { type Agents, live } from '../agents.ts';
 import type { Licks } from '../licks/licks.ts';
+import { createState, type State } from '../state.ts';
 import { cgiBridge, folderOf, NO_OWNER, type SprinkleLick, targetOf } from './bridge.ts';
 import type { CgiKernel } from './cgi-run.ts';
 import {
@@ -36,7 +33,7 @@ export interface SprinklePayload {
 }
 
 export interface SprinklesRuntime {
-  readonly sprinkles: ReplicatedState<Sprinkle[]>;
+  readonly sprinkles: State<Sprinkle[]>;
   send(id: string, payload: SprinklePayload, context: Context): Promise<{ delivered: boolean }>;
   call(id: string, method: string, args: readonly unknown[], context: Context): Promise<JsonValue>;
   lick(id: string, ask: SprinkleLick, context: Context): Promise<string | undefined>;
@@ -120,7 +117,7 @@ function reloader(
   options: SprinklesAttach,
   dir: string,
   builtins: { welcome: string | undefined; suggestions: string | undefined },
-  sprinkles: ReplicatedState<Sprinkle[]> & { replace(context: Context, value: Sprinkle[]): void },
+  sprinkles: State<Sprinkle[]> & { replace(context: Context, value: Sprinkle[]): void },
   owners: (context: Context) => Promise<Record<string, string>>,
   folders: Map<string, string>
 ) {
@@ -200,7 +197,7 @@ export function setupSprinkles() {
     async attach(options: SprinklesAttach, context: Context): Promise<SprinklesRuntime> {
       const { harness, agents, licks, env } = options;
       const dir = options.dir ?? SPRINKLES_DIR;
-      const sprinkles = replicatedState<Sprinkle[]>([]);
+      const sprinkles = createState<Sprinkle[]>([]);
       const builtin = (name: string) =>
         options.assets
           ? options.assets(`packages/vfs-root/sprinkles/${name}.shtml`).catch(() => undefined)

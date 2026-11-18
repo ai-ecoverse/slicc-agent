@@ -1,15 +1,11 @@
-import {
-  type Context,
-  type MutableReplicatedState,
-  type ReplicatedState,
-  replicatedState,
-} from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { awaitWithContext, withCancel } from '@earendil-works/chord/context';
 import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Agents } from '../agents.ts';
 import type { Role } from '../roles/roles.ts';
 import { workspace } from '../scoops/service.ts';
+import { createState, type MutableState, type State } from '../state.ts';
 import { MEMORY_FILE, type MemoryEntry, type MemoryScope, type MemoryTag } from './format.ts';
 import type { Host } from './prompt.ts';
 import { MEMORY_WRITE } from './prompt.ts';
@@ -36,8 +32,8 @@ export interface MemoryDraft {
 }
 
 export interface MemoryRuntime {
-  readonly memories: ReplicatedState<MemoryEntry[]>;
-  readonly scopes: ReplicatedState<MemoryScope[]>;
+  readonly memories: State<MemoryEntry[]>;
+  readonly scopes: State<MemoryScope[]>;
   save(draft: MemoryDraft, context: Context): Promise<MemoryEntry>;
   remove(id: string, context: Context): Promise<boolean>;
   command(argv: readonly string[], caller: string | null, context: Context): Promise<Answer>;
@@ -124,8 +120,8 @@ async function callerPlace(
 type Parts = {
   options: MemoryAttach;
   files: MemoryFiles;
-  memories: MutableReplicatedState<MemoryEntry[]>;
-  scopes: MutableReplicatedState<MemoryScope[]>;
+  memories: MutableState<MemoryEntry[]>;
+  scopes: MutableState<MemoryScope[]>;
   reload: (context: Context) => Promise<void>;
 };
 
@@ -203,8 +199,8 @@ export async function attachMemory(
 ): Promise<MemoryRuntime> {
   const { agents, env, home } = options;
   const files = new MemoryFiles(env);
-  const memories = replicatedState<MemoryEntry[]>([]);
-  const scopes = replicatedState<MemoryScope[]>([]);
+  const memories = createState<MemoryEntry[]>([]);
+  const scopes = createState<MemoryScope[]>([]);
   const load = async (using: Context) => {
     const found = await listPlaces(options, using);
     const entries: MemoryEntry[] = [];

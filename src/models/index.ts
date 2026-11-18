@@ -1,4 +1,4 @@
-import type { Context } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { Models } from '@earendil-works/pi-ai/models';
 import type { AgentChange, Conversation } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';

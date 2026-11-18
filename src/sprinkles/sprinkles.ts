@@ -1,4 +1,5 @@
-import type { Context, JsonValue } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
+import type { JsonValue } from '@earendil-works/chord/json';
 import { defineDoc } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { boundedDeltas } from '../checkpoints.ts';

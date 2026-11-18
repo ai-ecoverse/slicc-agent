@@ -1,6 +1,6 @@
-import { isChordError, type Readable, replicatedState } from '@earendil-works/chord';
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
-import { type AgentConnection, clientHost, final, holding, lasting } from '../client.ts';
+import { type AgentConnection, handshake } from '../client.ts';
 import {
   type AgentControl,
   AgentGuestService,
@@ -10,9 +10,11 @@ import {
   type GuestProposal,
   type GuestShown,
   type SendResponse,
+  type SettingsState,
 } from '../services.ts';
-import { plain, type Remote, replicated } from '../serving.ts';
-import { type PortEndpoint, PortLink } from '../wire.ts';
+import { plain, type Remote } from '../serving.ts';
+import { createState } from '../state.ts';
+import type { PortEndpoint } from '../wire.ts';
 import type { GuestOpened, Proposed, ProposeRequest } from './index.ts';
 
 export const GUEST_ONLY = 'a guest can only watch and send messages';
@@ -37,47 +39,35 @@ export interface GuestConnection extends AgentConnection {
   propose(request: ProposeRequest): Promise<Proposed>;
 }
 
+const seatRefused = (error: unknown): unknown =>
+  (error as { code?: unknown } | null)?.code === 'EVERSION' ? error : refusal(SEAT_REFUSED);
+
 export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnection> {
-  const link = new PortLink(endpoint);
-  let serverId: string;
-  try {
-    serverId = await link.hello;
-  } catch {
-    throw refusal(SEAT_REFUSED);
-  }
-  const host = clientHost(link, 'guest');
-  const [handle] = (await holding(host, link, [AgentGuestService]).catch((error: unknown) => {
-    const code = (error as { code?: unknown } | null)?.code;
-    if (code === 'EVERSION') throw error;
-    throw isChordError(error) && error.code !== 'forbidden' ? final(error) : refusal(SEAT_REFUSED);
-  })) as [Remote];
+  const { client, handles } = await handshake(endpoint, [AgentGuestService], seatRefused);
+  const handle = handles[0] as Remote;
   if (handle.variant !== 'guest') {
-    handle.release();
-    link.close('handshake failed');
-    await host.close();
+    await client.close();
     throw refusal(SEAT_REFUSED);
   }
-  const transcriptMember = handle.transcript as Readable<ConversationView>;
-  const seatMember = handle.seat as Readable<GuestShown>;
-  const proposalsMember = handle.proposals as Readable<GuestProposal[]>;
-  const through =
+  const call =
     <T>(name: (typeof GUEST_METHODS)[number]) =>
     async (...args: unknown[]): Promise<T> => {
-      const call = handle[name] as (args: unknown[], ctx: unknown) => Promise<T>;
+      const method = handle[name] as (args: unknown[], context: Context) => Promise<T>;
       try {
-        return await host.root((ctx) => call(args, ctx), {});
+        return await method(args, BACKGROUND_CONTEXT);
       } catch (error) {
         throw plain(error);
       }
     };
-  const propose = (request: ProposeRequest) => through<Proposed>('propose')(request);
-  const guest = seatMember.value as GuestShown;
+  const propose = (request: ProposeRequest) => call<Proposed>('propose')(request);
+  const seat = client.follow<GuestShown>(handle.seat);
+  const guest = seat.value;
   const refuse = () => Promise.reject(refusal(GUEST_ONLY));
   const control = Object.fromEntries(
     CONTROL_METHODS.map((name) => [name, refuse])
   ) as unknown as AgentControl;
-  control.guestOpen = (draft) => through<GuestOpened>('guestOpen')(draft);
-  control.guestRevoke = (id) => through<{ revoked: boolean }>('guestRevoke')(id);
+  control.guestOpen = (draft) => call<GuestOpened>('guestOpen')(draft);
+  control.guestRevoke = (id) => call<{ revoked: boolean }>('guestRevoke')(id);
   control.send = async (request): Promise<SendResponse> => {
     if (request.attachments?.length)
       return {
@@ -96,22 +86,9 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
       error: { code: 'EACCES', message: proposedSentence(proposed.reason) },
     };
   };
-  const transcript = lasting(replicated(transcriptMember));
-  const proposals = lasting(replicated(proposalsMember));
-  let open = true;
-  const finish = () => {
-    if (!open) return;
-    open = false;
-    transcript.freeze();
-    proposals.freeze();
-    handle.release();
-  };
-  const closed = link.ended.then((reason) => {
-    finish();
-    return reason;
-  });
+  const closed = client.link.ended;
   const settings: AgentSettings = {
-    state: replicatedState({ models: [], accounts: [] }),
+    state: createState<SettingsState>({ models: [], accounts: [] }),
     connect: refuse,
     disconnect: refuse,
     remove: refuse,
@@ -123,13 +100,13 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     refusals: refuse,
   };
   return {
-    serverId,
+    serverId: client.serverId,
     guest,
     control,
-    transcript: transcript.state,
-    proposals: proposals.state,
-    deliveries: replicatedState({}),
-    agents: replicatedState({
+    transcript: client.follow<ConversationView>(handle.transcript),
+    proposals: client.follow<GuestProposal[]>(handle.proposals),
+    deliveries: createState({}),
+    agents: createState({
       active: guest.agentId,
       agents: [
         { id: guest.agentId, name: guest.name, kind: 'cone' as const, parentId: null, role: null },
@@ -142,10 +119,8 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
     webhook: refuse,
     approvalRunNotice: refuse,
     async close() {
-      finish();
-      link.close('closed');
+      await client.close();
       await closed;
-      await host.close();
     },
   };
 }

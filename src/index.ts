@@ -110,7 +110,7 @@ export {
   TOTAL_LIMIT,
   userParts,
 } from './attachments.ts';
-export { type AgentConnection, connectAgent } from './client.ts';
+export { type AgentConnection, connectAgent, type State } from './client.ts';
 export type { Clock } from './clock.ts';
 export { createAgentControl } from './control.ts';
 export type { CaptureAnswer, CaptureDenial, CaptureReply } from './guests/capture.ts';
@@ -234,7 +234,7 @@ export {
 } from './sqlite.ts';
 export { type SystemFacts, systemSection } from './system.ts';
 export { UPLOADS, type Uploads, upload } from './uploads.ts';
-export { type PortEndpoint, PortLink } from './wire.ts';
+export type { PortEndpoint } from './wire.ts';
 export {
   type KernelPorts,
   kernelPort,

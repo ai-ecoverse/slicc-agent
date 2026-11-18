@@ -1,4 +1,4 @@
-import { type Context, type ReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { type Harness, InboxDoc } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
@@ -6,6 +6,7 @@ import type { Approvals } from '../approvals/index.ts';
 import type { ApprovalPolicies } from '../approvals/policy.ts';
 import { scrubText } from '../secrets/scrub.ts';
 import type { GuestPrincipal } from '../serving.ts';
+import { createState, type State } from '../state.ts';
 import {
   ASKED_KIND,
   GUEST_INPUT_KIND,
@@ -51,8 +52,8 @@ export interface ProposeRequest {
 }
 
 export interface Guests {
-  readonly seats: ReplicatedState<GuestSeat[]>;
-  readonly reviews: ReplicatedState<ReviewsState | null>;
+  readonly seats: State<GuestSeat[]>;
+  readonly reviews: State<ReviewsState | null>;
   open(draft: GuestDraft, context: Context): Promise<GuestOpened>;
   revoke(id: string, context: Context): Promise<{ revoked: boolean }>;
   forgetAlways(id: string, approval: string, context: Context): Promise<{ removed: boolean }>;
@@ -326,12 +327,12 @@ export async function createGuests(options: GuestsOptions): Promise<Guests> {
   if (!seatsWatch) throw new Error('guests document is missing');
   const reviewsWatch = await harness.watchDoc(GuestReviewsDoc, context);
   if (!reviewsWatch) throw new Error('guest reviews document is missing');
-  const reviews = replicatedState(copy(reviewsWatch.value));
+  const reviews = createState(copy(reviewsWatch.value));
   const links = new Map<string, number>();
   const ended = new Set<(id: string) => void>();
   const gone = new Map<string, Promise<void>>();
   const shown = () => shownSeats(records, links, now(), pendingIn(options.approvals, reviews));
-  const seats = replicatedState<GuestSeat[]>(shown());
+  const seats = createState<GuestSeat[]>(shown());
   let timer: ReturnType<typeof setTimeout> | undefined;
   const locked = keyedLine();
   const cleanup = (record: SeatRecord, using: Context) =>

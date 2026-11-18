@@ -1,7 +1,8 @@
-import { type Context, type MutableReplicatedState, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import type { Agents } from '../agents.ts';
 import { HOME } from '../kernel/env.ts';
+import { createState, type MutableState } from '../state.ts';
 import {
   BATCH_BYTES,
   type ChangesView,
@@ -30,7 +31,7 @@ import {
 } from './git.ts';
 
 export interface ChangesRuntime {
-  readonly view: MutableReplicatedState<ChangesView>;
+  readonly view: MutableState<ChangesView>;
   open(context: Context): Promise<void>;
   accept(path: string, context: Context): Promise<void>;
   revert(path: string, context: Context): Promise<void>;
@@ -237,7 +238,7 @@ function rediscovers(paths: readonly string[], repos: readonly string[]): boolea
 
 export function attachChanges(options: ChangesOptions): ChangesRuntime {
   const { env } = options;
-  const view = replicatedState<ChangesView>({ unavailable: null, changes: [] });
+  const view = createState<ChangesView>({ unavailable: null, changes: [] });
   let repos: string[] | null = null;
   let opened: Promise<void> | null = null;
   let watcher: FileWatcher | undefined;

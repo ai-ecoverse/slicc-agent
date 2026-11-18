@@ -12,8 +12,6 @@ await build({
     'test/integration/page/clock-main-worker.js',
     'test/integration/page/codemode-worker.js',
     'test/integration/page/adobe-worker.js',
-    'test/integration/page/other-owner.js',
-    'test/integration/page/agent-5.js',
     'test/integration/page/scrub-receipts.js',
   ],
   outdir: 'dist-test',

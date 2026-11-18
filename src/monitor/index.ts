@@ -1,10 +1,6 @@
-import {
-  type Context,
-  type JsonValue,
-  type ReplicatedState,
-  replicatedState,
-} from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { JsonValue } from '@earendil-works/chord/json';
 import type {
   CommitPublication,
   ConversationView,
@@ -27,6 +23,7 @@ import type {
   MonitorProcess,
   MonitorTask,
 } from '../services.ts';
+import { createState, type State } from '../state.ts';
 import type { ModelTiming, Timings } from '../timings.ts';
 import { commandLine, program, redacted } from './redact.ts';
 
@@ -96,7 +93,7 @@ export interface Timers {
 export interface MonitorOptions {
   harness: Pick<Harness, 'watchTaskGraph' | 'usage' | 'observeCommits' | 'inspect'>;
   agents: { state(): Readonly<AgentsState>; onChange(listener: () => void): () => void };
-  views: ReplicatedState<Record<string, ConversationView>>;
+  views: State<Record<string, ConversationView>>;
   reports?: Reports;
   timings?: Timings;
   kernel?: { ps?(): Promise<readonly PsEntry[]> };
@@ -113,8 +110,8 @@ export interface MonitorOptions {
 }
 
 export interface Monitor {
-  readonly state: ReplicatedState<MonitorFeed>;
-  readonly viewState: ReplicatedState<MonitorFeed>;
+  readonly state: State<MonitorFeed>;
+  readonly viewState: State<MonitorFeed>;
   open(lease: string | null, resync: boolean, context: Context): Promise<MonitorLease>;
   close(lease: string, context: Context): Promise<void>;
   active(): boolean;
@@ -631,8 +628,8 @@ export function createMonitor(options: MonitorOptions): Monitor {
   };
   const { now, timers, context } = settings;
   const ttlMs = options.ttlMs ?? TTL_MS;
-  const state = replicatedState<MonitorFeed>(emptyFeed());
-  const viewState = replicatedState<MonitorFeed>(emptyFeed());
+  const state = createState<MonitorFeed>(emptyFeed());
+  const viewState = createState<MonitorFeed>(emptyFeed());
   const leases = new Map<string, number>();
   let session: Session | undefined;
   let sweep: unknown;

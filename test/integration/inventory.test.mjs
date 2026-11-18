@@ -293,7 +293,9 @@ test('a connection asks for the inventory alongside the other services, not afte
     await window.setup('');
     const port = await window.owner.port();
     const text = (data) =>
-      data instanceof Uint8Array ? new TextDecoder().decode(data) : JSON.stringify(data ?? null);
+      data instanceof Uint8Array
+        ? `chord:${new TextDecoder().decode(data)}`
+        : JSON.stringify(data ?? null);
     const order = [];
     const endpoint = {
       postMessage(message, transfer) {
@@ -319,8 +321,9 @@ test('a connection asks for the inventory alongside the other services, not afte
   const asked = order.order.findIndex(
     ([way, body]) => way === 'out' && body.includes('slicc.agent.inventory')
   );
-  const answered = order.order.findIndex(
-    ([way, body]) => way === 'in' && body.includes('"t":"shape"')
+  const answers = order.order.flatMap(([way, body], at) =>
+    way === 'in' && body.startsWith('chord:') ? [at] : []
   );
+  const answered = answers[1] ?? -1;
   assert.ok(asked >= 0 && answered > asked, JSON.stringify([asked, answered]));
 });

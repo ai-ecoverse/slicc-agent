@@ -1,4 +1,4 @@
-import { type Context, replicatedState } from '@earendil-works/chord';
+import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { CredentialStore, ModelsStore, Provider } from '@earendil-works/pi-ai';
 import { createModels, type MutableModels } from '@earendil-works/pi-ai/models';
@@ -43,6 +43,7 @@ import type {
   SettingsState,
 } from './services.ts';
 import { DEVICE_NEEDS_VAULT, DEVICE_SIGN_INS } from './sign-ins.ts';
+import { createState } from './state.ts';
 import { XAI, xaiUsage } from './supergrok.ts';
 
 export { BEDROCK, PREFERRED_MODELS, preferredModel } from './preferred.ts';
@@ -524,7 +525,7 @@ export async function createAgentSettings(
         : {}),
     };
   };
-  const state = replicatedState<SettingsState>(await snapshot());
+  const state = createState<SettingsState>(await snapshot());
   let latest = Promise.resolve();
   const refresh = (context: Context) => {
     const next = latest.then(async () => state.replace(context, await snapshot()));
