@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ApprovalDecision } from '../approvals/record.ts';
 import type { SendAttachment } from '../attachments.ts';
 import type { AgentConnection } from '../client.ts';
+import { NO_APPROVALS, VIEW_ONLY } from '../readonly.ts';
 import type { Delivered, InventorySnapshot, InventoryState, SendMode } from '../services.ts';
 import { type LinkApproval, pendingApprovals } from './approvals.ts';
 import type { RemoteEvent } from './events.ts';
@@ -155,7 +156,7 @@ function following<T>(
 
 export function remoteControl(
   connection: Pick<AgentConnection, 'remote'> &
-    Pick<Partial<AgentConnection>, 'inventory' | 'approvals' | 'agents'>,
+    Pick<Partial<AgentConnection>, 'inventory' | 'approvals' | 'agents' | 'readOnly'>,
   options: RemoteOptions = {}
 ): RemoteControl {
   const remote = connection.remote;
@@ -218,7 +219,7 @@ export function remoteControl(
     },
     async approvals({ watch = false } = {}) {
       const items = connection.approvals;
-      if (!items) throw failure('EOPNOTSUPP', 'this agent has no approvals');
+      if (!items) throw failure('EOPNOTSUPP', NO_APPROVALS);
       const agents = connection.agents;
       const compute = () => pendingApprovals(items.value, agents?.value);
       const approvals = compute();
@@ -228,7 +229,10 @@ export function remoteControl(
     },
     async decide({ id, answer, reason = null }) {
       const request = { id, answer, reason, device: options.device ?? null };
-      const result = await need().decide(request, BACKGROUND_CONTEXT);
+      const service = need();
+      if (connection.readOnly) throw failure('EACCES', VIEW_ONLY);
+      if (typeof service.decide !== 'function') throw failure('EOPNOTSUPP', NO_APPROVALS);
+      const result = await service.decide(request, BACKGROUND_CONTEXT);
       if (!result.ok) throw failure(result.code, result.message);
       return { ok: true };
     },

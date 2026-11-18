@@ -35,8 +35,14 @@ const settingsAnswers: Record<string, Answer> = {
 
 export const settingsAnswer = (name: string): Answer => settingsAnswers[name] ?? refuse;
 
-export const remoteAnswer = (name: string): Answer =>
-  name === 'prompt' ? async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY }) : refuse;
+export const NO_APPROVALS = 'this agent has no approvals';
+
+export const remoteAnswer = (name: string): Answer => {
+  if (name === 'decide')
+    return async () => ({ ok: false, code: 'EOPNOTSUPP', message: NO_APPROVALS });
+  if (name === 'prompt') return async () => ({ ok: false, code: 'EACCES', message: VIEW_ONLY });
+  return refuse;
+};
 
 export function viewPages(): AgentPages {
   return {

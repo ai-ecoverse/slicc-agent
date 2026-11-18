@@ -11,7 +11,7 @@ export interface RemoteDecide {
 
 export type RemoteDecided =
   | { ok: true }
-  | { ok: false; code: 'EINVAL' | 'ENOENT'; message: string };
+  | { ok: false; code: 'EINVAL' | 'ENOENT' | 'EACCES' | 'EOPNOTSUPP'; message: string };
 
 export const BAD_ANSWER = 'An answer is once, always, deny or stop.';
 
@@ -34,7 +34,7 @@ export function linkDecide(
     if (!id) return { ok: false, code: 'EINVAL', message: 'An answer needs the approval id.' };
     const answer = answerOf(request.answer);
     if (!answer) return { ok: false, code: 'EINVAL', message: BAD_ANSWER };
-    const device = named(request.device) ?? linked;
+    const device = linked ?? named(request.device);
     const reason = typeof request.reason === 'string' ? request.reason : null;
     const by: Decider = { by: 'follower', ...(device ? { device } : {}) };
     const decided = await decide(by)(id, answer, reason, context);

@@ -132,6 +132,14 @@ test('a linked device lists pending sudo and guest-tool approvals, answers them 
     const odd = await r.attempt(sudo.id, 'maybe');
     const denied = await r.attempt(sudo.id, 'deny', 'Not from here.');
     const unknown = await r.attempt('apr-missing', 'once');
+    const viewer = await r.owner.connect({ readOnly: true });
+    const viewed = await remoteControl(viewer, { device: 'node-9' })
+      .decide({ id: tool.id, answer: 'deny' })
+      .then(
+        (result) => result,
+        (error) => ({ code: error.code })
+      );
+    await viewer.close();
     const terminalRun = await terminal;
     await r.until(() => r.texts('pi.assistant').includes('Guest ran.'), 'the guest run');
     await r.until(() => r.latest().length === 0, 'an empty snapshot');
@@ -147,6 +155,7 @@ test('a linked device lists pending sudo and guest-tool approvals, answers them 
       odd,
       denied,
       unknown,
+      viewed,
       terminalStatus: terminalRun.status,
       toolRecord: r.record(tool.id),
       sudoRecord: r.record(sudo.id),
@@ -208,6 +217,7 @@ test('a linked device lists pending sudo and guest-tool approvals, answers them 
     code: 'ENOENT',
     message: 'ENOENT: There is no approval apr-missing.',
   });
+  assert.deepEqual(seen.viewed, { code: 'EACCES' });
   assert.notEqual(seen.terminalStatus, 0);
   assert.deepEqual(seen.toolRecord, {
     state: 'approved',
