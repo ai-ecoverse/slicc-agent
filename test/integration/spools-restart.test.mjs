@@ -32,12 +32,15 @@ const helpers = () => {
   window.spools = async () =>
     (
       await window.sh(
-        `stat -c '%n %U:%G %a' ${SPOOLS}/cone-2 ${SPOOLS}/cone-3/out ${SPOOLS}/cone-4/in`
+        `stat -c '%n %U:%G %a' ${SPOOLS}/cone-2 ${SPOOLS}/cone-3/out ${SPOOLS}/cone-4/in ${SPOOLS}/cone-5/out`
       )
     ).stdout;
+  window.ctimes = async () =>
+    (await window.sh(`stat -c '%n %z' ${SPOOLS}/cone-5 ${SPOOLS}/cone-5/in ${SPOOLS}/cone-5/out`))
+      .stdout;
   window.answers = async () => {
     const out = {};
-    for (const user of ['cone-2', 'cone-3', 'cone-4']) {
+    for (const user of ['cone-2', 'cone-3', 'cone-4', 'cone-5']) {
       const { status, stdout, stderr } = await window.sh('agent list --cones', user);
       out[user] =
         status === 0 && stdout.includes(`${user}\t`) ? 'served' : `${status} ${stdout}${stderr}`;
@@ -46,7 +49,7 @@ const helpers = () => {
   };
 };
 
-test('a worker restart puts back the spools that lost their folder or mode, leaves the others, and serves every cone’s agent command again', {
+test('a worker restart puts back the spools that lost their folder or mode, never chowns or chmods the spools in place again, and serves every cone’s agent command', {
   timeout: 240000,
 }, async (t) => {
   const page = await chrome.page(t);
@@ -55,11 +58,12 @@ test('a worker restart puts back the spools that lost their folder or mode, leav
   await page.goto('/');
   await staged(page, 'the agent', () => window.boot());
   const seen = await staged(page, 'the restart', async () => {
-    for (const name of ['second', 'third', 'fourth']) await window.agent.createCone(name);
+    for (const name of ['second', 'third', 'fourth', 'fifth']) await window.agent.createCone(name);
     const placed = [
       `${SPOOLS}/cone-2 cone-2:cone-2 700`,
       `${SPOOLS}/cone-3/out cone-3:cone-3 700`,
       `${SPOOLS}/cone-4/in cone-4:cone-4 700`,
+      `${SPOOLS}/cone-5/out cone-5:cone-5 700`,
       '',
     ].join('\n');
     await when(
@@ -68,6 +72,7 @@ test('a worker restart puts back the spools that lost their folder or mode, leav
       'the new cones’ spools'
     );
     const before = await window.spools();
+    const untouched = await window.ctimes();
     const broken = await window.sh(
       `chmod 755 ${SPOOLS}/cone-2 && rm -rf ${SPOOLS}/cone-3 && chown root:root ${SPOOLS}/cone-4/in`
     );
@@ -78,7 +83,12 @@ test('a worker restart puts back the spools that lost their folder or mode, leav
       async () => (await window.spools()) === before,
       'the spools put back after the restart'
     );
-    return { before, broken: broken.status, answers: await window.answers() };
+    return {
+      before,
+      broken: broken.status,
+      untouched: [untouched, await window.ctimes()],
+      answers: await window.answers(),
+    };
   });
   assert.equal(seen.broken, 0);
   assert.equal(
@@ -87,9 +97,21 @@ test('a worker restart puts back the spools that lost their folder or mode, leav
       `${SPOOLS}/cone-2 cone-2:cone-2 700`,
       `${SPOOLS}/cone-3/out cone-3:cone-3 700`,
       `${SPOOLS}/cone-4/in cone-4:cone-4 700`,
+      `${SPOOLS}/cone-5/out cone-5:cone-5 700`,
       '',
     ].join('\n')
   );
-  assert.deepEqual(seen.answers, { 'cone-2': 'served', 'cone-3': 'served', 'cone-4': 'served' });
+  assert.match(seen.untouched[0], /cone-5\/out /);
+  assert.equal(
+    seen.untouched[1],
+    seen.untouched[0],
+    'the spools in place were not chowned or chmodded again'
+  );
+  assert.deepEqual(seen.answers, {
+    'cone-2': 'served',
+    'cone-3': 'served',
+    'cone-4': 'served',
+    'cone-5': 'served',
+  });
   assert.deepEqual(page.errors, []);
 });
