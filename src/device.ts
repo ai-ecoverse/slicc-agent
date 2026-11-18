@@ -1,5 +1,6 @@
 import type { Context } from '@earendil-works/chord';
 import type { AuthEvent, AuthPrompt, OAuthCredential, Provider } from '@earendil-works/pi-ai';
+import { COPILOT, copilotSettings } from './copilot.ts';
 import { VaultRefusal } from './secrets/vault.ts';
 import {
   CODEX,
@@ -68,6 +69,10 @@ export function tokenResponse(credential: OAuthCredential, now: number): Uint8Ar
 }
 
 function settingsOf(providerId: string, credential: OAuthCredential) {
+  if (providerId === COPILOT) {
+    const settings = copilotSettings(credential);
+    return Object.keys(settings).length ? { settings } : {};
+  }
   const account = credential.accountId;
   return providerId === CODEX && typeof account === 'string' && account
     ? { settings: { [CODEX_ACCOUNT]: account } }
@@ -122,6 +127,7 @@ export function deviceFlows(
       const prompt = async (asked: AuthPrompt) => {
         if (asked.type === 'select' && asked.options.some((option) => option.id === DEVICE_CODE))
           return DEVICE_CODE;
+        if (asked.type === 'text' && provider.id === COPILOT) return '';
         throw new Error(SIGN_IN_UNFINISHED);
       };
       const until = (promise: Promise<void>) =>

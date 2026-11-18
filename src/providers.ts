@@ -34,6 +34,7 @@ import { xiaomiTokenPlanCnProvider } from '@earendil-works/pi-ai/providers/xiaom
 import { xiaomiTokenPlanSgpProvider } from '@earendil-works/pi-ai/providers/xiaomi-token-plan-sgp';
 import { zaiProvider } from '@earendil-works/pi-ai/providers/zai';
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn';
+import { COPILOT } from './copilot.ts';
 import { LOCAL, localContext, localEndpoint, localProvider } from './local.ts';
 import { CODEX } from './sign-ins.ts';
 
@@ -572,6 +573,16 @@ export const LISTINGS: ReadonlyMap<string, Listing> = new Map<string, Listing>([
       auth: 'oauth',
       corsFree: true,
       vaultName: 'OPENAI_CODEX_TOKEN',
+    },
+  ],
+  [
+    COPILOT,
+    {
+      description:
+        'Claude, GPT and Gemini models on your GitHub Copilot plan, with your GitHub account.',
+      auth: 'oauth',
+      corsFree: true,
+      vaultName: 'COPILOT_GITHUB_TOKEN',
     },
   ],
 ]);

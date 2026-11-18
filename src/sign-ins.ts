@@ -1,7 +1,12 @@
 export const CODEX = 'openai-codex';
 export const CODEX_ACCOUNT = 'CHATGPT_ACCOUNT_ID';
 
-export const DEVICE_SIGN_INS: ReadonlySet<string> = new Set(['xai', 'kimi-coding', CODEX]);
+export const DEVICE_SIGN_INS: ReadonlySet<string> = new Set([
+  'xai',
+  'kimi-coding',
+  CODEX,
+  'github-copilot',
+]);
 
 export const SIGN_IN_REFUSED = 'The sign-in was refused.';
 export const SIGN_IN_UNFINISHED = "The sign-in didn't finish. Try again.";
