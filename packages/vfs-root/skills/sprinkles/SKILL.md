@@ -1,6 +1,6 @@
 ---
 name: sprinkles
-description: Build a sprinkle, a small HTML panel next to the chat (a dashboard, form, report or visualization) that the user opens from the rail, or answer a <lick channel="sprinkle"> from one. Covers the .shtml file, the slicc bridge in the frame, its cgi-bin/ scripts, and opening it with panel open sprinkle:<name>.
+description: Build a sprinkle, a small HTML panel next to the chat (a dashboard, form, report or visualization), or answer a sprinkle lick from one.
 ---
 
 # Sprinkles

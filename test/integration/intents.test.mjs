@@ -6,7 +6,7 @@ const chrome = await launch();
 after(() => chrome.close());
 
 const INTENT_DESCRIPTION =
-  'What this call does, as 2–6 words starting with a present participle, in the user\'s language, such as "Backing up the dataset\'s access list". At most 80 characters; a longer one is cut. No credentials, secrets or command output.';
+  "What this call does: 2–6 words in the user's language, starting with a present participle; at most 80 characters, no secrets or command output.";
 
 const bash = (args) => ({ tool: { name: 'bash', args } });
 const code = (args) => ({ tool: { name: 'codemode', args } });

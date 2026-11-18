@@ -12,7 +12,6 @@ import {
   type CodemodeTool,
   loadQuickJSWasm,
   parseCodemodeSource,
-  renderDeclarations,
 } from '@earendil-works/pi-codemode';
 import {
   type Agent,
@@ -66,14 +65,14 @@ export interface CodemodeOptions {
   extra?: (api: ToolExecutionApi, agent: Agent, context: Context) => Promise<CodemodeExtra>;
 }
 
-const INTRO = `Run JavaScript that calls other tools. The input is raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
-- \`await tools.<name>({ ...args })\` resolves to a string, or an object if the tool's declaration says so, and rejects with an Error on failure. Calls still running when the script ends are cancelled.
+const INTRO = `Run JavaScript that calls other tools: raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox, so top-level \`await\` and \`return\` work. No Node, file system, network or timers.
+- \`await tools.<name>({ ...args })\` resolves to a string, or an object if its declaration says so, and rejects with an Error on failure. Calls still running when the script ends are cancelled.
 - Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\``;
 
 const GLOBALS = [
   'Globals:',
-  '- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script. With several text items, each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block.',
-  '- `store(key, value)` and `load(key)` keep JSON values across codemode calls in this conversation.',
+  '- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)` and top-level `return` add output; `exit()` ends the script.',
+  '- `store(key, value)` and `load(key)` keep JSON values across calls in this conversation.',
   '- `ALL_TOOLS` lists every tool scripts can call.',
 ].join('\n');
 
@@ -104,11 +103,12 @@ export function codemodeDescription(
   declared: readonly ToolRegistration[],
   discovery = false
 ): string {
-  const tools = declared
-    .filter((tool) => tool.name !== CODEMODE)
-    .map((tool) => ({ ...scriptTool(tool), execute: () => undefined }));
+  const names = declared.map((tool) => tool.name).filter((name) => name !== CODEMODE);
   const sections = [INTRO, discovery ? `${GLOBALS}\n${DISCOVERY}` : GLOBALS];
-  if (tools.length) sections.push(`Nested tools:\n${renderDeclarations({ tools })}`);
+  if (names.length)
+    sections.push(
+      `Nested tools take the arguments of the tools of the same name: ${names.join(', ')}.${names.includes('bash') ? ' `tools.bash` resolves to `{ output, exit_code, truncated?, full_output_path? }`.' : ''}`
+    );
   return sections.join('\n\n');
 }
 

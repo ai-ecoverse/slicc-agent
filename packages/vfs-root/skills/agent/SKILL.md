@@ -1,6 +1,6 @@
 ---
 name: agent
-description: Hand work to scoops (helper agents in SLICC) with the `agent` command, synchronously for quick bounded answers or asynchronously for long or parallel work, and message other cones with `agent send <cone>`. Scoops can take a role (scout, worker, reviewer, oracle, delegate and any you add); `agent list --agents` lists every role with its description, `agent list --cones` the cones you can message.
+description: Hand work to scoops (helper agents) with the `agent` command: synchronously for quick answers, asynchronously for long or parallel work, in roles that `agent list --agents` lists. Also messages other cones with `agent send`.
 ---
 
 # Agent

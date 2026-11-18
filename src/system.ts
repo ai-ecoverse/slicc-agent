@@ -67,22 +67,23 @@ export async function agentVersion(
 }
 
 export function systemSection(facts: SystemFacts): string {
+  const git = facts.commands.includes('git');
   const missing = RUNTIMES.filter((name) => !facts.commands.includes(name));
   return [
-    `You are SLICC's agent in seven: slicc-agent ${facts.version}, installed in /opt/agent. Your bash runs on the page's shared slicc-kernel, a WebAssembly sandbox in the user's browser, not on a server or the user's machine.`,
-    "Files: / is the browser's private file system (OPFS). Work in /home and /tmp. /os and /opt are the system; change them only when asked.",
-    `Commands on PATH: ${facts.commands.join(' ') || 'none found'}.`,
-    "Install command-line tools with `pnpm add -g <package>`. There is no ipk. Tested packages that aren't preinstalled: `@ai-ecoverse/wasm-git` (git), `@ai-ecoverse/wasi-esbuild` (esbuild), `@ai-ecoverse/wasi-typescript` (tsc, TypeScript 7) and `@ai-ecoverse/wasi-biome` (biome: check, format, lint). PDFs: `@ai-ecoverse/wasm-poppler` (pdftotext, pdfinfo, pdftoppm, pdfimages, pdfunite, pdfseparate) and `@ai-ecoverse/wasm-qpdf` (qpdf: merge, split, rotate, encrypt). Python: `@ai-ecoverse/wasix-python` (python3, pip); `@ai-ecoverse/wasix-uv-shim@0.1.0-1` adds `uv` (a shim over pip and venv, not Astral's uv: venv, pip, run, init, add, remove, sync), and only `uv run` uses the venv for now.",
+    `You run in seven, with slicc-agent ${facts.version} in /opt/agent. Work in /home and /tmp; /os and /opt are the system, so change them only when asked.`,
+    'Install tools with `pnpm add -g <package>` (there is no ipk); /etc/slicc/optional.json lists the tested packages and their commands.',
     `Network: requests go through ${facts.transport}. localhost and 127.0.0.1 are this sandbox's own loopback, not the user's computer.`,
     ...(facts.browser
       ? [
           `Browser: one may be available (SLICC_CDP_URL is set), but nothing has checked that one is attached, so don't tell the user it's connected. ${facts.commands.includes('curlwright') ? 'playwright-cli and curlwright drive' : 'playwright-cli drives'} the user's own browser through the SLICC extension, with their logins. Read the browser skill and run its check before you use it.`,
         ]
       : []),
-    facts.commands.includes('git')
-      ? 'Git: local repositories work (init, add, commit, status, diff, restore, branch, checkout, log). Clone, fetch and push over HTTPS need slicc linked or the SLICC extension connected; through the page alone they fail with a CORS or 502 error.'
-      : 'Git: not installed. When you need it, install it with `pnpm add -g @ai-ecoverse/wasm-git`.',
-    `Not here yet: ${[...missing, ...(facts.browser ? [] : ['a browser or CDP tool']), 'GitHub credentials'].join(', ')}.`,
+    ...(git
+      ? [
+          'Git: local repositories work. Clone, fetch and push over HTTPS need slicc linked or the SLICC extension connected; through the page alone they fail with a CORS or 502 error.',
+        ]
+      : []),
+    `Not here yet: ${[...(git ? [] : ['git']), ...missing, ...(facts.browser ? [] : ['a browser or CDP tool']), 'GitHub credentials'].join(', ')}.`,
   ].join('\n');
 }
 
