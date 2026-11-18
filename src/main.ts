@@ -76,7 +76,7 @@ import { secretNames } from './secrets/names.ts';
 import { type VaultRecords, vaultRecords } from './secrets/records.ts';
 import { scrubWith } from './secrets/scrub.ts';
 import { fileStore, type PlainStore } from './secrets/store.ts';
-import { listenVault, Vault, WAITING_MS } from './secrets/vault.ts';
+import { keysOverHttp, listenVault, Vault, WAITING_MS } from './secrets/vault.ts';
 import { type Choosable, unfreeze, unfreezeCreated } from './selection.ts';
 import {
   BEDROCK,
@@ -305,7 +305,9 @@ export async function modelsOf(
   const fields = await providerFields(store, providers);
   const keyless = keylessOf(records, fields);
   const bare = () => providers.map((provider) => provider.id).filter(keyless);
-  const credentials = vaultCredentials(records, fields.env, readyOf(records, fields), bare);
+  const httpKeys = () => keysOverHttp(vault.release);
+  const ready = readyOf(records, fields, httpKeys);
+  const credentials = vaultCredentials(records, fields.env, ready, bare);
   const models = createSliccModels(
     credentials,
     providers,
@@ -328,7 +330,17 @@ export async function modelsOf(
     await Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, WAITING_MS))]);
     return resolveDefaultModel(credentials, providers, models);
   };
-  return { store, records, providers, fields, models, bases, endpoints, defaultModel };
+  return {
+    store,
+    records,
+    providers,
+    fields,
+    httpKeys,
+    models,
+    bases,
+    endpoints,
+    defaultModel,
+  };
 }
 
 function baseRegistry(facts: Awaited<ReturnType<typeof factsOf>>) {
@@ -402,14 +414,14 @@ function modelsOfAgent(
   return modelsCommand({ agents: agent.agents, settings, catalog, locked });
 }
 
-async function settingsOf(
+export async function settingsOf(
   made: Awaited<ReturnType<typeof modelsOf>> & { reach: Reach },
   mcp: McpAccounts,
   moved: { agent: Agent; vault: Vault; wiped: Wiped; licks: Licks; intents: boolean }
 ) {
-  const { models, records, fields, providers, reach } = made;
+  const { models, records, fields, httpKeys, providers, reach } = made;
   const keys = await keysMoved(moved.agent.harness, { records, vault: moved.vault }, moved.wiped);
-  const settings = await createAgentSettings(models, { records, fields }, providers, {
+  const settings = await createAgentSettings(models, { records, fields, httpKeys }, providers, {
     mcp,
     moved: keys,
     reach,

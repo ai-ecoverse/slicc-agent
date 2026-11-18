@@ -252,6 +252,7 @@ self.addEventListener('message', ({ data }) => {
   data?.served?.postMessage(served);
   data?.upstream?.postMessage({
     upstream,
+    errors: self.fakeVault?.errors ?? [],
     vault:
       self.fakeVault?.log.map(({ op, provider, server, model, oauth }) => ({
         op,
@@ -1135,7 +1136,10 @@ if (params.has('vault')) {
     records,
     models,
     ...(params.has('vault-mcp') ? { mcp: JSON.parse(params.get('vault-mcp')) } : {}),
+    ...(params.has('vault-http') ? { httpModels: true } : {}),
   });
   self.fakeVault = fake;
   self.dispatchEvent(new MessageEvent('message', { data: { vault: fake.port, scrub: fake.pair } }));
+  if (params.has('vault-release'))
+    fake.welcome({ version: params.get('vault-release'), scrub: fake.pair, locked: false });
 }

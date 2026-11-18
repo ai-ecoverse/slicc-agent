@@ -54,11 +54,13 @@ export function serveVault(port, values, version = 1, options = {}) {
   const log = [];
   const queue = [];
   const failures = [];
+  const errors = [];
   const sent = [];
   let paused = false;
   const fixed = (raw) => {
     const found = /^https:\/\/([^/?#]+)/i.exec(raw);
-    const host = found?.[1].toLowerCase();
+    if (!found) return raw;
+    const host = found[1].toLowerCase();
     const own = builtIn.some(
       (entry) => !String(entry.url).includes('{') && URL.parse(entry.url)?.host === host
     );
@@ -120,7 +122,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       message.request,
       (record) => record.kind === 'model' && record.provider === provider,
       reaches,
-      false
+      Boolean(options.httpModels) && reaches
     );
   };
   const mcp = (message) => {
@@ -350,6 +352,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       if (!handler) throw new Refused('ENOTSUP', `this vault has no op ${op}`);
       port.postMessage({ v: 1, id, op, ...(await handler(message)) });
     } catch (error) {
+      errors.push({ op, code: error.code ?? null, message: error.message, stack: error.stack });
       port.postMessage({
         v: 1,
         id,
@@ -368,6 +371,7 @@ export function serveVault(port, values, version = 1, options = {}) {
   port.start?.();
   return {
     log,
+    errors,
     sent,
     records,
     registered,
