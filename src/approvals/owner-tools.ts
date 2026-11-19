@@ -13,6 +13,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { AgentsDoc, type AgentsState } from '../agents.ts';
 import { boundedDeltas } from '../checkpoints.ts';
+import { CODEMODE } from '../codemode/index.ts';
 import {
   argumentsHash,
   canonical,
@@ -117,6 +118,10 @@ export function ownerToolGate(harness: () => Held | undefined): OwnerToolGate {
     resolveHost = resolve;
   });
   const watch = taskWatcher(harness);
+  const covering = new Set<string>();
+  const cover = (call: ToolHookCall, api: HookApi) => {
+    if (call.name === CODEMODE && !call.parent) covering.add(String(api.taskId));
+  };
   const remember = (rule: AlwaysTool) =>
     (harness() as Held).commit(async (tx) => {
       const doc = await tx.doc(OwnerAlwaysDoc);
@@ -137,12 +142,15 @@ export function ownerToolGate(harness: () => Held | undefined): OwnerToolGate {
     const host = await awaitWithContext(bound, context);
     const tier = host.tools();
     if (tier === 'off') return undefined;
+    if (call.parent && covering.has(String(call.parent.taskId))) return undefined;
     const now = host.now ?? Date.now;
     const args = withoutIntent(call.name, call.arguments);
     const hash = await argumentsHash(canonical(args));
     const rules = (await api.snapshot(OwnerAlwaysDoc, context))?.tools ?? [];
-    if (rules.some((rule) => rule.tool === call.name && rule.argumentsHash === hash))
+    if (rules.some((rule) => rule.tool === call.name && rule.argumentsHash === hash)) {
+      cover(call, api);
       return undefined;
+    }
     const id = await api.memo<string>(OWNER_TOOL_MEMO, `apr-${crypto.randomUUID()}`, context);
     const task = Number(api.taskId);
     const shown = await scrubbedArguments(args);
@@ -174,6 +182,7 @@ export function ownerToolGate(harness: () => Held | undefined): OwnerToolGate {
         by: item.decidedBy,
         at: item.decidedAt ?? now(),
       });
+    cover(call, api);
     return undefined;
   };
   return {
@@ -186,6 +195,10 @@ export function ownerToolGate(harness: () => Held | undefined): OwnerToolGate {
             if (tier === 'off') return undefined;
             const block = await review(call, api, context);
             return block ? { block } : undefined;
+          },
+          afterTool(_call, _result, api) {
+            covering.delete(String(api.taskId));
+            return undefined;
           },
         }),
       ],

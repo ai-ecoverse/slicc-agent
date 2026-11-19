@@ -6,6 +6,7 @@ const chrome = await launch();
 after(() => chrome.close());
 
 const bash = (command) => ({ tool: { name: 'bash', args: { command } } });
+const code = (source) => ({ tool: { name: 'codemode', args: { code: source } } });
 const answer = (text) => ({ answer: text });
 const refused = (reason) => `<harness>\n[error] Tool call blocked: ${reason}\n</harness>`;
 
@@ -226,4 +227,69 @@ test('with owner.tools agent and nobody there, the judge allows a level 1 call t
     ),
   ]);
   assert.deepEqual(seen.states, ['approved:judge:1', 'rejected:judge:3']);
+});
+
+test("with owner.tools user an approved codemode script's own calls run unasked while it runs, a later direct call is asked again, Always records only the codemode rule, a denied script runs nothing, and off files nothing", async (t) => {
+  const page = await chrome.page(t);
+  const two = (a, b) =>
+    [
+      `const a = await tools.bash({ command: "echo ${a}" });`,
+      `const b = await tools.bash({ command: "echo ${b}" });`,
+      'text(`${a.output.trim()} ${b.output.trim()}`);',
+    ].join('\n');
+  await boot(page, {
+    steps: [
+      code(two('off-one', 'off-two')),
+      answer('Free.'),
+      code(two('inner-one', 'inner-two')),
+      bash('echo inner-one'),
+      code(two('kept-one', 'kept-two')),
+      code('await tools.bash({ command: "touch /tmp/owner-script-denied" });'),
+      bash('test -e /tmp/owner-script-denied && echo ran || echo never'),
+      answer('Scripted.'),
+    ],
+  });
+  const seen = await staged(page, 'an approved codemode script covers its calls', async () => {
+    const { until, open, policy, prompt, said, results, items, decide } = globalThis.r;
+    const { local } = await open();
+    const out = {};
+    await prompt('Script freely.');
+    await until(() => said().includes('Free.'), 'the ungated script');
+    out.offItems = items().length;
+    await policy('user');
+    await prompt('Script things.');
+    out.asked = [];
+    for (const decision of ['once', 'once', 'always', 'deny', 'once']) {
+      const asked = await decide(decision);
+      out.asked.push(`${asked.tool}: ${asked.summary.split('\n')[0]}`);
+    }
+    await until(() => said().includes('Scripted.'), 'the scripted run');
+    out.items = items().map((item) => `${item.detail.tool}:${item.state}`);
+    out.rules = (await local.control.ownerAlways(BACKGROUND_CONTEXT)).map((rule) => rule.tool);
+    out.results = results();
+    return out;
+  });
+  assert.equal(seen.offItems, 0);
+  assert.deepEqual(seen.asked, [
+    'codemode: const a = await tools.bash({ command: "echo inner-one" });',
+    'bash: echo inner-one',
+    'codemode: const a = await tools.bash({ command: "echo kept-one" });',
+    'codemode: await tools.bash({ command: "touch /tmp/owner-script-denied" });',
+    'bash: test -e /tmp/owner-script-denied && echo ran || echo never',
+  ]);
+  assert.deepEqual(seen.items, [
+    'codemode:approved',
+    'bash:approved',
+    'codemode:approved',
+    'codemode:rejected',
+    'bash:approved',
+  ]);
+  assert.deepEqual(seen.rules, ['codemode']);
+  assert.equal(seen.results.length, 6);
+  assert.match(seen.results[0], /off-one off-two/);
+  assert.match(seen.results[1], /inner-one inner-two/);
+  assert.equal(seen.results[2], 'inner-one');
+  assert.match(seen.results[3], /kept-one kept-two/);
+  assert.equal(seen.results[4], refused('The owner declined this tool call.'));
+  assert.equal(seen.results[5], 'never');
 });
