@@ -79,7 +79,7 @@
     "@ai-ecoverse/slicc-jsh": "0.64.6",
     "@ai-ecoverse/slicc-kernel": "1.191.2",
     "@ai-ecoverse/slicc-scrub": "1.1.1",
-    "@ai-ecoverse/slicc-shared-web": "2.15.0",
+    "@ai-ecoverse/slicc-shared-web": "2.16.0",
     "@ai-ecoverse/slicc-spectrum": "2.19.4",
     "@ai-ecoverse/slicc-vault": "1.29.0",
     "@ai-ecoverse/wasi-fnox": "1.48.0-1",
