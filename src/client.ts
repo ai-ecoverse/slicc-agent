@@ -138,7 +138,7 @@ export interface Client {
 }
 
 export async function openClient(endpoint: PortEndpoint): Promise<Client> {
-  const link = new PortLink(endpoint, helloOf());
+  const link = new PortLink(endpoint, helloOf(), true);
   const hello = await link.peer;
   const stop = new AbortController();
   const context = withAbortSignal(stop.signal, BACKGROUND_CONTEXT);
