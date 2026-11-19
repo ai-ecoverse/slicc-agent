@@ -70,6 +70,7 @@ export class PortLink implements Link {
   readonly ended: Promise<Error | undefined>;
   readonly #endpoint: PortEndpoint;
   readonly #mine: Hello;
+  readonly #answers: boolean;
   readonly #outgoing: Uint8Array[] = [];
   readonly #incoming: Uint8Array[] = [];
   #listener: ((message: Uint8Array) => void) | undefined;
@@ -80,9 +81,10 @@ export class PortLink implements Link {
   #unwelcome!: (error: Error) => void;
   #finish!: (reason: Error | undefined) => void;
 
-  constructor(endpoint: PortEndpoint, mine: Hello) {
+  constructor(endpoint: PortEndpoint, mine: Hello, answers = false) {
     this.#endpoint = endpoint;
     this.#mine = mine;
+    this.#answers = answers;
     this.peer = new Promise((welcome, unwelcome) => {
       this.#welcome = welcome;
       this.#unwelcome = unwelcome;
@@ -97,7 +99,7 @@ export class PortLink implements Link {
     endpoint.addEventListener('error', failed);
     endpoint.addEventListener('close', () => this.#end(undefined));
     endpoint.start?.();
-    endpoint.postMessage({ hello: mine } satisfies Frame);
+    if (!answers) endpoint.postMessage({ hello: mine } satisfies Frame);
   }
 
   get closed(): boolean {
@@ -148,6 +150,7 @@ export class PortLink implements Link {
       return;
     }
     this.#heard = true;
+    if (this.#answers) this.#endpoint.postMessage({ hello: this.#mine } satisfies Frame);
     this.#welcome(hello);
     for (const bytes of this.#outgoing.splice(0))
       this.#endpoint.postMessage(bytes, [bytes.buffer as ArrayBuffer]);

@@ -276,3 +276,62 @@ test('the raw link test client speaks over a byte stream and is refused cleanly 
   assert.deepEqual(seen.aborted, { value: null });
   assert.equal(seen.other, 'version');
 });
+
+test('on a byte stream that loses what is sent before its first message arrives, as a data channel announced by the other side can in Chrome, a follower and a guest still connect, and a raw client whose hello is lost is refused', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, 'answer=Hello.');
+  const seen = await staged(page, 'lossy first send', async () => {
+    const { owner, local, seat } = globalThis.raw;
+    const lost = [];
+    const announced = async (options) => {
+      const port = await owner.port(options);
+      let heard = false;
+      let near;
+      const far = bridgePort(port, {
+        write: (chunk) => setTimeout(() => near.receive(chunk)),
+        close: () => setTimeout(() => near.end()),
+      });
+      const end = linkEndpoint({
+        write: (chunk) => {
+          if (heard) setTimeout(() => far.receive(chunk));
+          else lost.push(chunk.length);
+        },
+        close: () => setTimeout(() => far.end()),
+      });
+      near = {
+        ...end,
+        receive(chunk) {
+          heard = true;
+          end.receive(chunk);
+        },
+      };
+      return near;
+    };
+    const failed = (error) => [error.code ?? null, error.message];
+    const follower = await connectAgent(await announced({ pages: false })).catch(failed);
+    const followed = Array.isArray(follower) ? follower : await follower.prompt('Over the stream?');
+    const guest = await connectGuest(await announced({ guest: await seat('lossy') })).catch(failed);
+    const joined = Array.isArray(guest) ? guest : guest.guest.label;
+    const before = lost.length;
+    const raw = await openRawLink(await announced({ pages: false }))
+      .then((link) => link.hold('control'))
+      .then(
+        () => 'held',
+        (error) => error.reason
+      );
+    if (!Array.isArray(follower)) await follower.close();
+    if (!Array.isArray(guest)) await guest.close();
+    await local.close();
+    await owner.release();
+    return { followed, joined, before, after: lost.length, raw };
+  });
+  assert.equal(seen.followed, 'Hello.');
+  assert.equal(seen.joined, 'Anna');
+  assert.equal(
+    seen.before,
+    0,
+    'connectAgent and connectGuest send nothing before the agent speaks'
+  );
+  assert.equal(seen.after, 1, 'the raw client sends its hello first');
+  assert.equal(seen.raw, 'version', 'a link whose hello never arrives is still refused');
+});

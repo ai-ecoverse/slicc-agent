@@ -278,14 +278,11 @@ test('a follower or guest of an owner on another wire, Chord or contract version
       assert.equal(outcome.code, 'EVERSION', `${name}: ${JSON.stringify(outcome)}`);
       assert.equal(outcome.message, SENTENCE);
       assert.ok(outcome.ms < 2000, `${outcome.ms}`);
-      assert.ok(outcome.heard[0]?.hello, `${name}: the client says hello first`);
-      assert.equal(outcome.heard[0].hello.server, undefined);
-      assert.ok(
-        outcome.heard.every((message) => !('bytes' in message)),
-        `${name}: nothing of Chord crosses before a matching hello`
+      assert.deepEqual(
+        outcome.heard,
+        name === 'refusing' ? [] : [{ close: true, reason: 'version' }],
+        `${name}: the client answers only with its close, no hello and nothing of Chord`
       );
-      if (name !== 'refusing')
-        assert.deepEqual(outcome.heard.at(-1), { close: true, reason: 'version' }, name);
     }
 });
 
