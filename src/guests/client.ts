@@ -47,7 +47,7 @@ export async function connectGuest(endpoint: PortEndpoint): Promise<GuestConnect
   const handle = handles[0] as Remote;
   if (handle.variant !== 'guest') {
     await client.close();
-    throw refusal(SEAT_REFUSED);
+    throw handle.refused ?? refusal(SEAT_REFUSED);
   }
   const call =
     <T>(name: (typeof GUEST_METHODS)[number]) =>

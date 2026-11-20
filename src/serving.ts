@@ -1,7 +1,9 @@
 import {
+  type AcceptsTable,
   arr,
   type Contract,
   type Ctx,
+  evolve,
   type FollowAttach,
   hostKind,
   isChordError,
@@ -15,6 +17,7 @@ import { diffRevisions } from '@earendil-works/chord/delta';
 import type { JsonValue } from '@earendil-works/chord/json';
 import type { WatchHandle } from '@earendil-works/chord/watch';
 import { createState, type MutableState, type State } from './state.ts';
+import { otherService } from './wire.ts';
 
 export const AGENT_HOST = 'slicc-agent';
 
@@ -51,18 +54,72 @@ export interface Members {
 
 export type Variants = Record<string, Members>;
 
+export interface History {
+  since?: number;
+  added?: Readonly<Record<number, readonly string[]>>;
+}
+
 const Args = arr(unknown());
 const Value = unknown();
 
 const shapes = new WeakMap<Contract, Variants>();
+const histories = new WeakMap<Contract, readonly Contract[]>();
 
-export function contract(name: string, variants: Variants): Contract {
-  const made = remote(name, {
-    version: 1,
+interface Editor {
+  addMethod(variant: string, member: string, args: unknown, result: unknown): Editor;
+  addState(variant: string, member: string, schema: unknown): Editor;
+}
+
+const evolved = evolve as unknown as (
+  previous: Contract,
+  edit: (editor: Editor) => Editor
+) => Contract;
+
+const without = (variants: Variants, later: ReadonlySet<string>): Variants =>
+  Object.fromEntries(
+    Object.entries(variants).map(([variant, members]) => [
+      variant,
+      {
+        state: (members.state ?? []).filter((member) => !later.has(member)),
+        methods: (members.methods ?? []).filter((member) => !later.has(member)),
+      },
+    ])
+  );
+
+function steps(name: string, variants: Variants, since: number, history: History) {
+  const added = Object.entries(history.added ?? {})
+    .map(([version, members]) => [Number(version), members] as const)
+    .sort(([one], [other]) => one - other);
+  const known = new Set(
+    Object.values(variants).flatMap((members) => [
+      ...(members.methods ?? []),
+      ...(members.state ?? []),
+    ])
+  );
+  const seen = new Set<string>();
+  added.forEach(([version, members], index) => {
+    if (version !== since + index + 1)
+      throw new Error(`${name}: added versions must follow v${since} one by one`);
+    for (const member of members) {
+      if (!known.has(member) || seen.has(member))
+        throw new Error(`${name} v${version}: ${member} is not a new member of a variant`);
+      seen.add(member);
+    }
+  });
+  return { added, later: seen };
+}
+
+export function contract(name: string, variants: Variants, history: History = {}): Contract {
+  const since = history.since ?? 1;
+  const { added, later } = steps(name, variants, since, history);
+  const pending = new Set(later);
+  const base = without(variants, pending);
+  let made = remote(name, {
+    version: since,
     params: {},
     hostAddress: () => Agent(),
     variants: Object.fromEntries(
-      Object.entries(variants).map(([variant, members]) => [
+      Object.entries(base).map(([variant, members]) => [
         variant,
         {
           state: Object.fromEntries((members.state ?? []).map((member) => [member, Value])),
@@ -73,11 +130,38 @@ export function contract(name: string, variants: Variants): Contract {
       ])
     ),
   } as never) as Contract;
-  shapes.set(made, variants);
+  shapes.set(made, base);
+  const chain = [made];
+  for (const [, members] of added) {
+    made = evolved(made, (editor) => {
+      for (const member of members)
+        for (const [variant, shape] of Object.entries(variants)) {
+          if (shape.methods?.includes(member)) editor.addMethod(variant, member, Args, Value);
+          if (shape.state?.includes(member)) editor.addState(variant, member, Value);
+        }
+      return editor;
+    });
+    for (const member of members) pending.delete(member);
+    shapes.set(made, without(variants, pending));
+    chain.push(made);
+  }
+  histories.set(made, chain);
   return made;
 }
 
 export const variantsOf = (made: Contract): Variants | undefined => shapes.get(made);
+
+export const historyOf = (made: Contract): readonly Contract[] => histories.get(made) ?? [made];
+
+export const acceptsOf = (made: Contract): AcceptsTable<Contract> =>
+  Object.fromEntries(
+    historyOf(made)
+      .slice(0, -1)
+      .map((older) => [older.version, {}])
+  );
+
+export const serviceOf = (made: Contract): string =>
+  made.name.slice(made.name.lastIndexOf('.') + 1);
 
 export const fingerprints = (contracts: readonly Contract[]): string =>
   contracts
@@ -161,14 +245,35 @@ export function following<T>(source: () => State<T>): FollowAttach<T> {
 
 export interface Remote {
   readonly variant: string | undefined;
+  readonly refused?: Error;
   release(): void;
   [member: string]: unknown;
 }
 
-export function offers(contract: Contract, variant: string | undefined, name: string): boolean {
-  const members = variant === undefined ? undefined : shapes.get(contract)?.[variant];
-  return members?.methods?.includes(name) ?? false;
-}
+const boundAt = new WeakMap<Remote, Contract>();
+
+export const bindAt = (handle: Remote, made: Contract): Remote => {
+  boundAt.set(handle, made);
+  return handle;
+};
+
+const membersOf = (made: Contract | undefined, variant: string | undefined): readonly string[] => {
+  const shape = made && variant !== undefined ? shapes.get(made)?.[variant] : undefined;
+  return [...(shape?.methods ?? []), ...(shape?.state ?? [])];
+};
+
+export const offers = (handle: Remote, name: string): boolean =>
+  membersOf(boundAt.get(handle), handle.variant).includes(name);
+
+const lacking = (handle: Remote, name: string): Error | undefined => {
+  if (handle.refused) return handle.refused;
+  const made = boundAt.get(handle);
+  if (!made) return undefined;
+  const variants = Object.keys(shapes.get(made) ?? {});
+  return variants.some((variant) => membersOf(made, variant).includes(name))
+    ? undefined
+    : otherService(serviceOf(made));
+};
 
 export interface Replica<T> {
   readonly state: State<T>;
@@ -233,14 +338,15 @@ const isContext = (value: unknown): value is Context =>
   typeof (value as Context).value === 'function';
 
 export function bound<T extends object>(
-  contract: Contract,
   handle: Remote,
   names: readonly string[],
   absent: (name: string) => Callable
 ): T {
   return Object.fromEntries(
     names.map((name) => {
-      if (!offers(contract, handle.variant, name)) return [name, absent(name)];
+      const refused = lacking(handle, name);
+      if (refused) return [name, () => Promise.reject(refused)];
+      if (!offers(handle, name)) return [name, absent(name)];
       const call = handle[name] as (args: unknown[], context: Context) => Promise<unknown>;
       return [
         name,

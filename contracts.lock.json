@@ -1,0 +1,26 @@
+{
+  "slicc.agent.control": {
+    "1": "49e0d5ccf51d6e87"
+  },
+  "slicc.agent.guest": {
+    "1": "8759dd4c78f70a51"
+  },
+  "slicc.agent.inventory": {
+    "1": "92d17b02ed7b3b71"
+  },
+  "slicc.agent.pages": {
+    "1": "2aaab61a6c945d09"
+  },
+  "slicc.agent.remote": {
+    "1": "300d4ce69614dd17"
+  },
+  "slicc.agent.settings": {
+    "1": "87a68854a13e903b"
+  },
+  "slicc.agent.sudo": {
+    "1": "03333a7c24a5aca1"
+  },
+  "slicc.agent.transcript": {
+    "1": "80bbd2a8502bdfc7"
+  }
+}

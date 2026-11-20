@@ -1,8 +1,9 @@
 import { copyFile, rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { build } from 'esbuild';
 
 await rm('dist-test', { recursive: true, force: true });
-await build({
+const page = {
   entryPoints: [
     'test/integration/page/agent-worker.js',
     'test/integration/page/storage-worker.js',
@@ -42,6 +43,26 @@ await build({
     },
   ],
   logLevel: 'warning',
+};
+await build(page);
+const next = resolve('test/integration/page/services-next.js');
+await build({
+  ...page,
+  entryPoints: {
+    'next-page': 'test/integration/page/page.js',
+    'next-agent-worker': 'test/integration/page/agent-worker.js',
+  },
+  plugins: [
+    ...page.plugins,
+    {
+      name: 'next-contracts',
+      setup(build) {
+        build.onResolve({ filter: /(^|\/)services\.ts$/ }, (args) =>
+          args.importer === next ? undefined : { path: next }
+        );
+      },
+    },
+  ],
 });
 await build({
   entryPoints: [

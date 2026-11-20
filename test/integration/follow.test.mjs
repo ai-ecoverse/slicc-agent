@@ -233,7 +233,7 @@ test('a follower over loopback WebRTC watches, sends a max-size message, steers 
 const SENTENCE =
   "That SLICC runs another version of the agent, so this tab can't follow it. Update both SLICCs, then reload this page.";
 
-test('a follower or guest of an owner on another wire, Chord or contract version, or of a 7.x owner, is refused once with EVERSION, and both ends close', async (t) => {
+test('a follower or guest of an owner on another wire or Chord version, or of a 7.x owner, is refused once with EVERSION, and both ends close', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await page.evaluate(async () => {
@@ -250,7 +250,6 @@ test('a follower or guest of an owner on another wire, Chord or contract version
     const hellos = {
       wire: { hello: { ...ours, wire: 3 } },
       chord: { hello: { ...ours, chord: 2 } },
-      contracts: { hello: ours },
       seven: { hello: 'a-7.x-server-id' },
       refusing: { close: true, reason: 'version' },
     };

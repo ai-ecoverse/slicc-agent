@@ -1,6 +1,6 @@
 import { binaryCodec, type Message } from '@earendil-works/chord';
 import { CONTRACTS, helloOf } from './services.ts';
-import { AGENT_HOST, type Variants, variantsOf } from './serving.ts';
+import { AGENT_HOST, historyOf, type Variants, variantsOf } from './serving.ts';
 import { CHORD_PROTOCOL, type Frame, type Hello, type PortEndpoint } from './wire.ts';
 
 export type { Hello, PortEndpoint } from './wire.ts';
@@ -37,7 +37,10 @@ export interface RawLink {
   ack(): void;
   post(frame: unknown): void;
   next(match: (message: RawMessage) => boolean, ms?: number): Promise<RawMessage>;
-  hold(service: RawService, options?: { principal?: { kind: string } }): Promise<RawHold>;
+  hold(
+    service: RawService,
+    options?: { principal?: { kind: string }; version?: number }
+  ): Promise<RawHold>;
   close(): void;
 }
 
@@ -62,10 +65,12 @@ const decoder = new TextDecoder();
 export const partText = (part: unknown): string =>
   part instanceof Uint8Array ? decoder.decode(part) : typeof part === 'string' ? part : 'null';
 
-const contractOf = (service: RawService) => {
+const contractOf = (service: RawService, version?: number) => {
   const found = CONTRACTS.find((made) => made.name === `slicc.agent.${service}`);
   if (!found) throw new Error(`no service ${service}`);
-  return found;
+  const held = historyOf(found).find((made) => made.version === (version ?? found.version));
+  if (!held) throw new Error(`no version ${version} of ${service}`);
+  return held;
 };
 
 type WireError =
@@ -173,7 +178,7 @@ export async function openRawLink(
     post: (frame) => endpoint.postMessage(frame),
     next,
     async hold(service, holding = {}) {
-      const contract = contractOf(service);
+      const contract = contractOf(service, holding.version);
       const hold = holds++;
       send({
         kind: 'hold',

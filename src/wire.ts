@@ -18,7 +18,7 @@ export const CHORD_PROTOCOL = 1;
 export interface Hello {
   wire: number;
   chord: number;
-  contracts: string;
+  contracts?: string;
   server?: string;
 }
 
@@ -36,6 +36,15 @@ export const otherVersion = (cause?: unknown): Error =>
     code: 'EVERSION',
   });
 
+export const otherService = (service: string, cause?: unknown): Error =>
+  Object.assign(
+    new Error(
+      `That SLICC runs another version of the agent's ${service} service, so this tab can't use it. Update both SLICCs, then reload this page.`,
+      cause === undefined ? undefined : { cause }
+    ),
+    { code: 'EVERSION', service }
+  );
+
 export class Refused extends Error {
   readonly reason: string;
 
@@ -52,7 +61,6 @@ const matches = (mine: Hello, theirs: unknown): theirs is Hello => {
     hello !== null &&
     hello.wire === mine.wire &&
     hello.chord === mine.chord &&
-    hello.contracts === mine.contracts &&
     (hello.server === undefined || typeof hello.server === 'string')
   );
 };
