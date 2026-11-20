@@ -144,14 +144,12 @@ function github(request) {
   }
   if (url.pathname === '/models')
     return reply(200, {
-      data: [
-        {
-          id: 'gemini-4-argon',
-          model_picker_enabled: true,
-          policy: { state: 'enabled' },
-          capabilities: { supports: { tool_calls: true } },
-        },
-      ],
+      data: JSON.parse(params.get('copilot-models') ?? '["gemini-4-argon"]').map((id) => ({
+        id,
+        model_picker_enabled: true,
+        policy: { state: 'enabled' },
+        capabilities: { supports: { tool_calls: true } },
+      })),
     });
   return reply(404, { message: 'Not Found' });
 }
@@ -1176,7 +1174,7 @@ const running = runAgentWorker(self, {
   ...(params.has('redirect')
     ? { mcpRedirect: new URL(params.get('redirect'), self.location.origin).href }
     : {}),
-  model: { provider: 'faux', modelId: 'faux-1' },
+  ...(params.has('boot-default') ? {} : { model: { provider: 'faux', modelId: 'faux-1' } }),
   ...(params.has('ttl') ? { approvalMs: Number(params.get('ttl')) } : {}),
   ...(params.has('staged-ms') ? { stagedMs: Number(params.get('staged-ms')) } : {}),
   ...(params.has('run-times') ? { runTimes: JSON.parse(params.get('run-times')) } : {}),

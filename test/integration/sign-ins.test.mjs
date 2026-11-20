@@ -818,6 +818,7 @@ test('a GitHub Copilot sign-in exchanges in the worker, seals its plan as a sett
         shown: shown.signIn,
         failure,
         preferred,
+        offeredModels: copilot().map((entry) => entry.id),
         reply,
         calls: github.map((entry) => `${entry.method ?? 'POST'} ${entry.url}`),
         agents: github.filter((entry) => entry.names.includes('user-agent')).length,
@@ -839,7 +840,8 @@ test('a GitHub Copilot sign-in exchanges in the worker, seals its plan as a sett
   assert.equal(seen.secret, null);
   assert.deepEqual(seen.shown, { url: 'https://github.com/login/device', code: 'CODE-0001' });
   assert.equal(seen.failure, null);
-  assert.deepEqual(seen.preferred, ['github-copilot/claude-sonnet-5.5']);
+  assert.deepEqual(seen.preferred, ['github-copilot/gemini-4-argon']);
+  assert.deepEqual(seen.offeredModels, ['github-copilot/gemini-4-argon']);
   assert.equal(seen.reply, 'From api.business.githubcopilot.com.');
   assert.deepEqual(seen.calls.slice(0, 2), [
     'POST https://github.com/login/device/code',
@@ -853,9 +855,134 @@ test('a GitHub Copilot sign-in exchanges in the worker, seals its plan as a sett
     seen.authorization,
     /^Bearer tid=e2e;proxy-ep=proxy\.business\.githubcopilot\.com;sig=SECRET\d+VALUE$/
   );
-  assert.deepEqual(seen.settings, { COPILOT_ENDPOINT: 'business' });
+  assert.deepEqual(seen.settings, {
+    COPILOT_ENDPOINT: 'business',
+    COPILOT_MODELS_1: 'gemini-4-argon',
+  });
   assert.equal(seen.resigned, null);
   assert.deepEqual(seen.leaks, []);
+});
+
+const copilotSignIn = async (query) => {
+  const it = await window.openSignIns(query);
+  const started = await it.signIn('github-copilot');
+  await it.shown('github-copilot');
+  await it.device('approve');
+  const failure = await started.done;
+  await window.until(() => it.account('github-copilot')?.status === 'connected');
+  const copilot = () =>
+    it.settings.models().filter((entry) => entry.id.startsWith('github-copilot/'));
+  await window.until(() => copilot().length > 0);
+  const sealed = (await it.records()).find((entry) => entry.name === 'COPILOT_GITHUB_TOKEN');
+  const result = {
+    failure,
+    models: copilot().map((entry) => entry.id),
+    preferred: copilot()
+      .filter((entry) => entry.default)
+      .map((entry) => entry.id),
+    settings: sealed?.settings,
+    leaks: await it.leaks(),
+  };
+  await it.owner.release();
+  return result;
+};
+
+const copilotBoot = async (query) => {
+  const it = await window.openSignIns(query);
+  await window.until(() => it.account('github-copilot')?.status === 'connected');
+  const copilot = () =>
+    it.settings.models().filter((entry) => entry.id.startsWith('github-copilot/'));
+  await window.until(() => copilot().length > 0);
+  const result = {
+    cone: it.agent.list().find((row) => row.id === it.agent.active())?.model,
+    models: copilot().map((entry) => entry.id),
+    preferred: copilot()
+      .filter((entry) => entry.default)
+      .map((entry) => entry.id),
+    leaks: await it.leaks(),
+  };
+  await it.owner.release();
+  return result;
+};
+
+const copilotRecord = (settings) =>
+  record({
+    kind: 'model',
+    name: 'COPILOT_GITHUB_TOKEN',
+    provider: 'github-copilot',
+    placeholder: 'fnox_proxy_github_copilot_signin',
+    value: 'tid=e2e;proxy-ep=proxy.business.githubcopilot.com;sig=SECRET7VALUE',
+    source: 'oauth:github-copilot',
+    settings,
+  });
+
+test('a GitHub Copilot sign-in keeps the models its account offers, and Settings offers and prefers only those', async (t) => {
+  const page = await opened(t);
+  const offers = JSON.stringify(['gpt-6.1-sol', 'gemini-4-argon', 'not-in-the-catalog']);
+  const seen = await staged(
+    page,
+    'a GitHub Copilot sign-in with some models',
+    copilotSignIn,
+    `${QUERY}&copilot-models=${encodeURIComponent(offers)}`
+  );
+  assert.equal(seen.failure, null);
+  assert.deepEqual(seen.models, ['github-copilot/gemini-4-argon', 'github-copilot/gpt-6.1-sol']);
+  assert.deepEqual(seen.preferred, ['github-copilot/gemini-4-argon']);
+  assert.deepEqual(seen.settings, {
+    COPILOT_ENDPOINT: 'business',
+    COPILOT_MODELS_1: 'gpt-6.1-sol,gemini-4-argon,not-in-the-catalog',
+  });
+  assert.deepEqual(seen.leaks, []);
+});
+
+test('after a reload, a GitHub Copilot account’s kept models limit its choices and the default model', async (t) => {
+  const page = await opened(t);
+  const settings = {
+    COPILOT_ENDPOINT: 'business',
+    COPILOT_MODELS_1: 'gpt-6.1-sol,gemini-4-argon',
+  };
+  const seen = await staged(
+    page,
+    'a GitHub Copilot account with kept models',
+    copilotBoot,
+    `${QUERY}&boot-default&${copilotRecord(settings)}`
+  );
+  assert.equal(seen.cone, 'github-copilot/gemini-4-argon');
+  assert.deepEqual(seen.models, ['github-copilot/gemini-4-argon', 'github-copilot/gpt-6.1-sol']);
+  assert.deepEqual(seen.preferred, ['github-copilot/gemini-4-argon']);
+  assert.deepEqual(seen.leaks, []);
+});
+
+test('a GitHub Copilot account without known models keeps the whole catalog and its preferred default', async (t) => {
+  const page = await opened(t);
+  const booted = await staged(
+    page,
+    'a GitHub Copilot account without kept models',
+    copilotBoot,
+    `${QUERY}&boot-default&${copilotRecord({ COPILOT_ENDPOINT: 'business' })}`
+  );
+  assert.equal(booted.cone, 'github-copilot/claude-sonnet-5.5');
+  assert.ok(booted.models.length > 2);
+  assert.ok(booted.models.includes('github-copilot/gemini-4-argon'));
+  assert.deepEqual(booted.preferred, ['github-copilot/claude-sonnet-5.5']);
+  assert.deepEqual(booted.leaks, []);
+});
+
+test('a GitHub Copilot sign-in whose account names no models keeps the whole catalog and its preferred default', async (t) => {
+  const page = await opened(t);
+  const signed = await staged(
+    page,
+    'a GitHub Copilot sign-in without picker models',
+    copilotSignIn,
+    `${QUERY}&copilot-models=${encodeURIComponent('[]')}`
+  );
+  assert.equal(signed.failure, null);
+  assert.ok(signed.models.length > 2);
+  assert.ok(signed.models.includes('github-copilot/gemini-4-argon'));
+  assert.ok(signed.models.includes('github-copilot/gpt-6.1-sol'));
+  assert.deepEqual(signed.preferred, ['github-copilot/claude-sonnet-5.5']);
+  assert.deepEqual(signed.settings, { COPILOT_ENDPOINT: 'business' });
+  assert.deepEqual(signed.leaks, []);
 });
 
 test('Settings shows an xAI sign-in’s code and its page link while the account is signing in', async (t) => {

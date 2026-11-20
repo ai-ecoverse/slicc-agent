@@ -1,6 +1,6 @@
 import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { CredentialStore, ModelsStore, Provider } from '@earendil-works/pi-ai';
+import type { Credential, CredentialStore, ModelsStore, Provider } from '@earendil-works/pi-ai';
 import { createModels, type MutableModels } from '@earendil-works/pi-ai/models';
 import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
 import {
@@ -68,6 +68,15 @@ const NO_SERVERS = {
 export const SIGN_IN_NEEDS_VAULT = "Adobe sign-in needs seven's vault: update seven";
 export const KEY_NEEDS_VAULT = "API keys are kept in seven's vault: update seven";
 
+function offeredModels(
+  models: MutableModels,
+  provider: Provider,
+  credential: Credential | undefined
+) {
+  const all = models.getModels(provider.id);
+  return provider.filterModels?.(all, credential) ?? all;
+}
+
 export async function resolveDefaultModel(
   credentials: CredentialStore,
   providers: Provider[],
@@ -79,7 +88,8 @@ export async function resolveDefaultModel(
     if (!models.getModels(provider.id).length && provider.refreshModels) {
       await models.refresh({ providers: [provider.id] }).catch(() => undefined);
     }
-    const chosen = preferredModel(provider.id, models.getModels(provider.id));
+    const credential = await credentials.read(provider.id);
+    const chosen = preferredModel(provider.id, offeredModels(models, provider, credential));
     if (chosen) return { provider: provider.id, modelId: chosen.id };
   }
   return DEFAULT_MODEL;
@@ -162,12 +172,13 @@ function labels(
 function choices(
   models: MutableModels,
   providers: Provider[],
-  stored: ReadonlySet<string>
+  stored: ReadonlySet<string>,
+  records: Pick<VaultRecords, 'model'>
 ): ModelChoice[] {
   return providers
     .filter((provider) => stored.has(provider.id))
     .flatMap((provider) =>
-      models.getModels(provider.id).map((model) => ({
+      offeredModels(models, provider, recordCredential(records, provider.id)).map((model) => ({
         id: `${provider.id}/${model.id}`,
         label: model.name,
         provider: provider.name ?? provider.id,
@@ -177,6 +188,14 @@ function choices(
         contextWindow: model.contextWindow,
       }))
     );
+}
+
+function recordCredential(
+  records: Pick<VaultRecords, 'model'>,
+  providerId: string
+): Credential | undefined {
+  const settings = records.model(providerId)?.settings;
+  return settings ? { type: 'api_key', env: { ...settings } } : undefined;
 }
 
 function listed(
@@ -531,7 +550,7 @@ export async function createAgentSettings(
     const open = (list: Provider[]) => list.filter((provider) => !blocked(provider.id));
     const held = await budgets();
     return {
-      models: choices(models, open(providers), stored),
+      models: choices(models, open(providers), stored, records),
       labels: labels(models, open(shown), stored),
       accounts: [
         ...accounts(records, shown, fields, blocked, models, ready),

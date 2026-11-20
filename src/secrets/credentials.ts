@@ -1,9 +1,9 @@
 import type { Credential, CredentialInfo, CredentialStore } from '@earendil-works/pi-ai';
-import { COPILOT_ENDPOINT } from '../copilot.ts';
+import { COPILOT_ENDPOINT, COPILOT_MODELS } from '../copilot.ts';
 import { CODEX_ACCOUNT } from '../sign-ins.ts';
 import type { VaultRecords } from './records.ts';
 
-const RECORD_ENV: readonly string[] = [CODEX_ACCOUNT, COPILOT_ENDPOINT];
+const RECORD_ENV: readonly string[] = [CODEX_ACCOUNT, COPILOT_ENDPOINT, ...COPILOT_MODELS];
 
 export const KEYS_IN_VAULT =
   "model keys are kept in seven's vault: enter them in Settings › Accounts";
