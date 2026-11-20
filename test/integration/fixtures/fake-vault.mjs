@@ -422,7 +422,22 @@ export function fakeVault(values, version = 1, options = {}) {
   });
 }
 
-export function fakeSealed(secrets, log = [], typed = {}) {
+export function configRules(text, { name, placeholder }) {
+  const entry = new RegExp(`^${name}\\s*=\\s*\\{[^}\\n]*value\\s*=\\s*"${placeholder}"`, 'm');
+  if (!text || !entry.test(text)) return [];
+  const field = (block, key) => new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm').exec(block)?.[1];
+  return text
+    .split('[[proxy.rules]]')
+    .slice(1)
+    .filter((block) => field(block, 'secret') === name)
+    .map((block) => ({
+      secret: name,
+      domain: field(block, 'domain'),
+      ...(field(block, 'header') ? { header: field(block, 'header').toLowerCase() } : {}),
+    }));
+}
+
+export function fakeSealed(secrets, log = [], typed = {}, config = undefined) {
   const tickets = new Map();
   const hex = (bytes = 12) =>
     Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (byte) =>
@@ -430,9 +445,16 @@ export function fakeSealed(secrets, log = [], typed = {}) {
     ).join('');
   const find = (name) => secrets.find((item) => item.name === name);
   const ops = {
-    list: () => ({
-      secrets: secrets.map(({ value: _value, ...shown }) => ({ state: 'active', ...shown })),
-    }),
+    list: async () => {
+      const text = config ? await config() : undefined;
+      return {
+        secrets: secrets.map(({ value: _value, ...shown }) => ({
+          state: 'active',
+          ...shown,
+          ...(config ? { rules: configRules(text, shown) } : {}),
+        })),
+      };
+    },
     placeholder: (req) => {
       const found = find(req.name);
       if (!found) throw new Refused('ENOENT', `no record ${req.name}`);
@@ -487,7 +509,7 @@ export function fakeSealed(secrets, log = [], typed = {}) {
     try {
       const op = ops[req.op];
       if (!op) throw new Refused('ENOTSUP', `this vault has no sealed op ${req.op}`);
-      return { v: 1, ...op(req) };
+      return { v: 1, ...(await op(req)) };
     } catch (error) {
       return { v: 1, error: { code: error.code ?? 'EIO', message: error.message } };
     }

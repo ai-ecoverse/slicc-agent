@@ -20,7 +20,7 @@ export const SECRETS_COMMAND = '/secrets';
 export const SHELL_GRANTS = ['fnox', 'exec', '--shell-grants', '--'] as const;
 
 export const MODEL_LINE =
-  'Credentials are env vars (`$NAME`) holding placeholders, listed below with where each works (`fnox list` shows the fnox config). The vault fills in the real value only in the listed header, for the listed domain, method and path, over HTTPS (curl, git, fetch). Adding a rule means editing `/etc/fnox/config.toml` with sudo: the user approving that sudo is the only acceptance there is, and the vault uses the rules in it as soon as it is written (`sealed list --json` shows the rules it uses now; the list below is read at start and can lag behind). It uses the rules of a secret only while the file is root-owned and not writable by others, and its `[secrets]` entry holds the placeholder of that secret: `NAME = { provider = "seven", value = "<placeholder>" }` (`sealed placeholder NAME` prints it); without the `value` the vault ignores the entry and every rule naming it, though `fnox check` passes. `fnox exec` gives real values only for secrets the user enabled for exec, and the secrets listed as \'in every bash\' already hold real values in your commands. Prefer an argv grant in `/etc/slicc/secrets-policy.toml` (`NAME = { argv = [["/absolute/program"]] }`) for a secret one program needs; `{ shell = true }` hands it to every bash. Everything is logged, and stored values are replaced by their placeholder in everything you see; edit around placeholders, since files show them too. Never ask the user to paste a credential into the chat.';
+  'Credentials are env vars (`$NAME`) holding placeholders, listed below with where each works (`fnox list` shows the fnox config). The vault fills in the real value only in the listed header, for the listed domain, method and path, over HTTPS (curl, git, fetch). Adding a rule means editing `/etc/fnox/config.toml` with sudo: the user approving that sudo is the only acceptance there is, and the vault uses the rules in it as soon as it is written (`sealed list --json` shows the rules it uses now; the list below is read again when the file changes and can lag behind it). It uses the rules of a secret only while the file is root-owned and not writable by others, and its `[secrets]` entry holds the placeholder of that secret: `NAME = { provider = "seven", value = "<placeholder>" }` (`sealed placeholder NAME` prints it); without the `value` the vault ignores the entry and every rule naming it, though `fnox check` passes. `fnox exec` gives real values only for secrets the user enabled for exec, and the secrets listed as \'in every bash\' already hold real values in your commands. Prefer an argv grant in `/etc/slicc/secrets-policy.toml` (`NAME = { argv = [["/absolute/program"]] }`) for a secret one program needs; `{ shell = true }` hands it to every bash. Everything is logged, and stored values are replaced by their placeholder in everything you see; edit around placeholders, since files show them too. Never ask the user to paste a credential into the chat.';
 
 export const ASK_LINE =
   "When a secret you need is missing, ask the user for it with `sealed ask NAME` (kept in the vault only) or `fnox set NAME --ask` (also writes its entry to `fnox.toml` in the current directory, which the vault doesn't read: copy it into `/etc/fnox/config.toml` with sudo before adding rules there); `--prompt TEXT` says why. The user types the value in a dialog, and you get only its placeholder. `fnox set` replaces an existing value, so use it only for a missing secret. Add `--reveal` to `sealed ask` only when a tool needs the plaintext itself, not a header the vault fills, and pipe it straight into that tool (`sealed ask NAME --reveal | tool --password-stdin`): the user must allow every reveal. A non-zero exit means the user declined or the request ended; don't ask again unless the user wants you to.";
@@ -160,12 +160,17 @@ export function shellGrants(names: Pick<Names, 'state'>) {
 }
 
 export function secretsExtension(deps: {
-  names: Pick<Names, 'state'>;
+  names: Pick<Names, 'state' | 'settled'>;
   vault: Pick<Vault, 'ready' | 'texts'>;
 }): Extension {
   return defineExtension({
     name: SECRETS,
-    sections: [section('secrets', () => renderSecrets(deps.names.state.value))],
+    sections: [
+      section('secrets', async () => {
+        await deps.names.settled();
+        return renderSecrets(deps.names.state.value);
+      }),
+    ],
     hooks: [
       hook(ToolTask, { afterTool: (_call, result) => scrubResult(result, deps.vault) }),
       hook(GenerationTask, {

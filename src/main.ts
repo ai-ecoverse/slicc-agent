@@ -247,6 +247,7 @@ async function secretsFor(home: SliccKernelEnv, vault: Vault) {
   scrubWith(vault);
   const names = secretNames(home, vault);
   await names.refresh(BACKGROUND_CONTEXT);
+  await names.watch(BACKGROUND_CONTEXT);
   return names;
 }
 

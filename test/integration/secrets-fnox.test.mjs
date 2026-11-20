@@ -45,11 +45,11 @@ const SEALED = [
   },
 ];
 
-async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {} }) {
+async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {}, sudo = false }) {
   const page = await chrome.page(t);
   await page.goto('/');
   return page.evaluate(
-    async ({ config, extra, sealed, steps, query, typed }) => {
+    async ({ config, extra, sealed, steps, query, typed, sudo }) => {
       if (config !== null) {
         let dir = await navigator.storage.getDirectory();
         for (const part of ['etc', 'fnox'])
@@ -62,10 +62,25 @@ async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {
       }
       const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
-      const hook = fakeSealed(sealed, [], typed);
+      const readConfig = async () => {
+        let dir = await navigator.storage.getDirectory();
+        for (const part of ['etc', 'fnox']) dir = await dir.getDirectoryHandle(part);
+        return (await (await dir.getFileHandle('config.toml')).getFile()).text();
+      };
+      const hook = fakeSealed(sealed, [], typed, sudo ? readConfig : undefined);
+      const asked = [];
       const kernel = await bootKernel(extra, {
         env: { FNOX_CONFIG_DIR: '/etc/fnox' },
         sealed: hook,
+        ...(sudo
+          ? {
+              users: 'enforce',
+              approve: (req) => {
+                asked.push({ user: req.user, argv: req.argv });
+                return 'once';
+              },
+            }
+          : {}),
       });
       const params = new URLSearchParams([
         ...steps.map((step) => ['step', JSON.stringify(step)]),
@@ -75,7 +90,13 @@ async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {
       const owner = await startAgent({
         worker: () =>
           (worker = new Worker(`/dist-test/main-worker.js?${params}`, { type: 'module' })),
-        kernel: { connect: () => kernel.connect() },
+        kernel: sudo
+          ? {
+              connect: (options) =>
+                kernel.connect(options?.user ? { user: options.user } : undefined),
+              users: kernel.users,
+            }
+          : { connect: () => kernel.connect() },
       });
       const connection = await owner.connect();
       const answer = await connection.prompt('Go.');
@@ -96,6 +117,7 @@ async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {
         answer,
         listed: listedEntry()?.model[0].content,
         requests: await requests,
+        asked,
         entries: JSON.stringify(connection.transcript.value.entries),
         sealed: hook.log.map(({ op, shellGrants, argv, name, reveal, requester }) => ({
           op,
@@ -109,7 +131,7 @@ async function agentWith(t, { config, fnox, sealed, steps, query = [], typed = {
       await owner.release();
       return result;
     },
-    { config, extra: fnox ? FNOX : {}, sealed, steps, query, typed }
+    { config, extra: fnox ? FNOX : {}, sealed, steps, query, typed, sudo }
   );
 }
 
@@ -188,6 +210,83 @@ paths = ["/repos/cpilsworth/skills", "/repos/cpilsworth/skills/**"]
     system
   );
   assert.ok(seen.entries.includes('local-has\\netc-lacks'), seen.entries);
+});
+
+const secretsSent = (request) =>
+  JSON.parse(request)
+    .messages.filter((message) => message.role === 'system' && message.sections?.secrets)
+    .map((message) => message.sections.secrets);
+
+const sudoWrite = (config) =>
+  `cat > /tmp/fnox-next.toml <<'EOF'\n${config}EOF\nsudo cp /tmp/fnox-next.toml /etc/fnox/config.toml && echo copied`;
+
+test('fnox secrets: a sudo-approved edit of the fnox config reaches the next request, an entry the vault ignores reads not in effect, and an unchanged file changes nothing', async (t) => {
+  const gh = proxyId(75);
+  const head = `default_provider = "seven"
+
+[providers.seven]
+type = "sealed"
+
+[secrets]
+`;
+  const api = `
+[[proxy.rules]]
+secret = "GH_TOKEN"
+domain = "api.github.com"
+header = "Authorization"
+`;
+  const uploads = `
+[[proxy.rules]]
+secret = "GH_TOKEN"
+domain = "uploads.github.com"
+header = "Authorization"
+`;
+  const sealedEntry = `GH_TOKEN = { provider = "seven", value = "${gh}" }\n`;
+  const first = `${head}${sealedEntry}${api}`;
+  const second = `${first}${uploads}`;
+  const third = `${head}GH_TOKEN = { provider = "seven" }\n${api}${uploads}`;
+  const seen = await agentWith(t, {
+    config: first,
+    fnox: true,
+    sudo: true,
+    sealed: [{ name: 'GH_TOKEN', placeholder: gh, value: 'gh-real-value-000075', exec: false }],
+    steps: [
+      { tool: { name: 'bash', args: { command: sudoWrite(second) } } },
+      { tool: { name: 'bash', args: { command: sudoWrite(third) } } },
+      { tool: { name: 'bash', args: { command: sudoWrite(third) } } },
+      { answer: 'Done.' },
+    ],
+  });
+  assert.equal(seen.answer, 'Done.');
+  assert.deepEqual(
+    seen.asked.map(({ argv }) => argv.join(' ')),
+    Array(3).fill('cp /tmp/fnox-next.toml /etc/fnox/config.toml')
+  );
+  assert.equal((seen.entries.match(/"text":"copied\\n"/g) ?? []).length, 3, seen.entries);
+  const sent = seen.requests.map(secretsSent);
+  assert.equal(sent.length, 4);
+  const at = sent.map((each) => each.at(-1));
+  assert.ok(at[0].includes(`- GH_TOKEN = ${gh}: api.github.com, header authorization\n`), at[0]);
+  assert.ok(!at[0].includes('uploads.github.com'), at[0]);
+  assert.ok(
+    at[1].includes(
+      `- GH_TOKEN = ${gh}: api.github.com, header authorization; uploads.github.com, header authorization\n`
+    ),
+    at[1]
+  );
+  assert.ok(!at[1].includes('not in effect'), at[1]);
+  assert.ok(
+    at[2].includes(
+      `- GH_TOKEN = ${gh}: api.github.com, header Authorization, in the fnox config but not in effect; uploads.github.com, header Authorization, in the fnox config but not in effect; the vault uses none of these rules yet`
+    ),
+    at[2]
+  );
+  assert.deepEqual(
+    sent.map((each) => each.length),
+    [1, 2, 3, 3]
+  );
+  assert.equal(at[3], at[2]);
+  assert.ok(!seen.requests.some((request) => request.includes('gh-real-value-000075')));
 });
 
 test('fnox secrets: a shell-granted secret wraps bash in fnox exec --shell-grants, and the command sees its value', async (t) => {
