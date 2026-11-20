@@ -3,7 +3,13 @@ import type { EntryRecord, Harness, ModelRef } from '@earendil-works/pi-durable'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { AgentsState } from '../agents.ts';
 import type { MemoryEntry } from '../memory/format.ts';
-import { InputOriginDoc, type InputOriginState, ownerTexts } from '../memory/origin.ts';
+import {
+  InputOriginDoc,
+  type InputOriginState,
+  ownerTexts,
+  type Placed,
+  placedBy,
+} from '../memory/origin.ts';
 import { GLOBAL } from '../memory/store.ts';
 import type { OwnerIntent } from './judge.ts';
 import type { Approval } from './record.ts';
@@ -49,9 +55,11 @@ const clip = (text: string, limit: number) =>
 export async function ownerMessages(
   entries: readonly EntryRecord[],
   inputs: Readonly<InputOriginState> | null | undefined,
+  placed: Placed,
+  context: Context,
   limit = OWNER_MESSAGES
 ): Promise<string[]> {
-  return [...(await ownerTexts(entries, inputs, limit)).values()]
+  return [...(await ownerTexts(entries, inputs, placed, context, limit)).values()]
     .filter(Boolean)
     .map((text) => clip(text, MESSAGE_LIMIT));
 }
@@ -90,7 +98,7 @@ export interface IntentSources {
     >;
   };
   memories?: () => readonly MemoryEntry[] | undefined;
-  harness: Pick<Harness, 'snapshot'>;
+  harness: Pick<Harness, 'snapshot' | 'submission'>;
 }
 
 export function ownerIntent(sources: IntentSources) {
@@ -107,7 +115,9 @@ export function ownerIntent(sources: IntentSources) {
       policy: clip(read.value, POLICY_LIMIT),
       messages: await ownerMessages(
         entries,
-        await sources.harness.snapshot(InputOriginDoc, context)
+        await sources.harness.snapshot(InputOriginDoc, context),
+        placedBy(sources.harness),
+        context
       ),
       memory: ownerMemory(sources.memories?.() ?? [], cone),
       ...(model ? { model } : {}),

@@ -125,44 +125,76 @@ export async function submitTyped(
   }, context);
 }
 
-type Sent = ReadonlyMap<string, ReadonlySet<string | null>>;
+export type Placed = (id: number, context: Context) => Promise<number | undefined>;
+
+export const placedBy =
+  (harness: Pick<Harness, 'submission'>): Placed =>
+  async (id, context) =>
+    (await (await harness.submission(id as SubmissionId, context))?.status(context))?.entry;
+
+type Sent = ReadonlyMap<string, readonly string[]>;
 
 function sentOf(state: Readonly<InputOriginState>): Sent {
-  const sent = new Map<string, Set<string | null>>();
-  for (const record of Object.values(state.inputs)) {
-    const key = `${record.conversation}:${record.hash}`;
-    const typed = sent.get(key) ?? new Set();
-    typed.add(record.typed ?? null);
-    sent.set(key, typed);
+  const sent = new Map<string, string[]>();
+  for (const [key, record] of Object.entries(state.inputs)) {
+    const at = `${record.conversation}:${record.hash}`;
+    sent.set(at, [...(sent.get(at) ?? []), key]);
   }
   return sent;
 }
 
-async function typedText(
-  entry: Turn,
-  state: Readonly<InputOriginState> | null | undefined,
-  sent: Sent
-): Promise<string> {
+type Reading = {
+  state: Readonly<InputOriginState> | null | undefined;
+  sent: Sent;
+  placed: Placed;
+  entries: Map<string, Promise<number | undefined>>;
+  context: Context;
+};
+
+async function typedText(entry: Turn, reading: Reading): Promise<string> {
+  const { state, sent, placed, entries, context } = reading;
   const said = saidText((entry.model?.[0] as { content?: unknown } | undefined)?.content);
   if (!state || state.since === null || entry.id <= state.since) return legacyText(said).trim();
-  const typed = sent.get(`${entry.conversationId}:${await textHash(said)}`);
-  if (typed?.size !== 1) return '';
+  const typed = new Set<string | null>();
+  for (const key of sent.get(`${entry.conversationId}:${await textHash(said)}`) ?? []) {
+    if (!entries.has(key)) entries.set(key, placed(Number(key), context));
+    if ((await entries.get(key)) === entry.id) typed.add(state.inputs[key]?.typed ?? null);
+  }
+  if (typed.size !== 1) return '';
   return ([...typed][0] ?? said).trim();
 }
 
 export async function ownerTexts(
   entries: readonly Turn[],
   state: Readonly<InputOriginState> | null | undefined,
+  placed: Placed,
+  context: Context,
   limit = Number.POSITIVE_INFINITY
 ): Promise<Map<number, string>> {
   const owned = ownerTurns(entries);
-  const sent = state ? sentOf(state) : new Map();
+  const reading = {
+    state,
+    sent: state ? sentOf(state) : new Map(),
+    placed,
+    entries: new Map(),
+    context,
+  };
   const found: [number, string][] = [];
   for (let at = entries.length - 1; at >= 0 && found.length < limit; at--) {
     const entry = entries[at] as Turn;
-    if (owned.has(entry.id)) found.push([entry.id, await typedText(entry, state, sent)]);
+    if (owned.has(entry.id)) found.push([entry.id, await typedText(entry, reading)]);
   }
   return new Map(found.reverse());
+}
+
+export async function markInputs(
+  harness: Pick<Harness, 'commit'>,
+  context: Context
+): Promise<void> {
+  await harness.commit(async (tx) => {
+    const doc = await tx.doc(InputOriginDoc);
+    if (doc.since === null) doc.since = await newestEntry(tx);
+  }, context);
 }
 
 type Hashed = Pick<MemoryEntry, 'section' | 'title' | 'tag' | 'body'>;

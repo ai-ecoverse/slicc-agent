@@ -22,6 +22,7 @@ import {
   ownedDoc,
   ownerTexts,
   ownerTurns,
+  placedBy,
   turnOrigin,
 } from './origin.ts';
 import { type Host, whoIs } from './prompt.ts';
@@ -262,7 +263,12 @@ export function extractTask(
           fresh.push(...page.items);
           cursor = page.next;
         } while (cursor);
-        const typed = await ownerTexts(fresh, await runtime.snapshot(InputOriginDoc, context));
+        const typed = await ownerTexts(
+          fresh,
+          await runtime.snapshot(InputOriginDoc, context),
+          placedBy(host.harness),
+          context
+        );
         const passes = passesOf(linesOf(fresh, tail, typed));
         if (!place || !passes.length) return done({ saved: 0, skipped: 'nothing new' });
         const ref = task.input.model ?? (await runtime.agent(context)).model;
