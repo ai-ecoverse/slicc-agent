@@ -115,6 +115,7 @@ test("the agent's fetch sends the page origin's cookies only to a caller that as
     ['answer', 'Done.'],
   ]).toString();
   await staged(page, 'the agent', (q) => window.start(q), query);
+  await sent.ready();
   await page.evaluate(() => window.agent.send(window.agent.active(), 'Read the catalog.'));
   await page.within(60000, async () => (await window.asked('own')).length >= 2);
   const answers = await page.evaluate(
@@ -126,15 +127,16 @@ test("the agent's fetch sends the page origin's cookies only to a caller that as
     origin
   );
   assert.deepEqual(answers, [{ status: 404 }, { status: 404 }, { status: 404 }]);
-  const cookies = (path) => sent.to(`${origin}${path}`).map((headers) => headers.cookie ?? null);
+  const cookies = async (path) =>
+    (await sent.to(`${origin}${path}`)).map((headers) => headers.cookie ?? null);
   for (const path of [
     '/own/catalog/catalog.json',
     '/own/catalog/use-cases.json',
     '/own/plain',
     '/own/same-origin',
   ])
-    assert.deepEqual(cookies(path), [null], path);
-  assert.deepEqual(cookies('/own/include'), ['slicc_session=dummy-session-0001']);
+    assert.deepEqual(await cookies(path), [null], path);
+  assert.deepEqual(await cookies('/own/include'), ['slicc_session=dummy-session-0001']);
   const own = await page.evaluate(() => window.asked('own'));
   assert.deepEqual(own.map(({ url, credentials }) => [new URL(url).pathname, credentials]).sort(), [
     ['/own/catalog/catalog.json', 'omit'],

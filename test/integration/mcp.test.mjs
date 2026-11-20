@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, test } from 'node:test';
-import { setTimeout as delay } from 'node:timers/promises';
 import { launch, staged } from './chrome.mjs';
 import { createMcpServer } from './fixtures/mcp-server.mjs';
 import { sentHeaders } from './fixtures/sent-headers.mjs';
@@ -1263,10 +1262,6 @@ const refusal = async (page) => {
   );
 };
 
-const settled = async (check) => {
-  for (const deadline = Date.now() + 10000; !check() && Date.now() < deadline; ) await delay(25);
-};
-
 for (const [what, chain] of [
   ['302', (own) => ({ '/mcp': { status: 302, location: `${own}/own/found` } })],
   ['307', (own) => ({ '/mcp': { status: 307, location: `${own}/own/temporary` } })],
@@ -1379,8 +1374,7 @@ test("through the page's fetch, an MCP server redirecting to the page's own orig
   assert.match(JSON.stringify(await refusal(page)), REFUSED);
   assert.ok(heard.some((item) => item.method === 'POST' && item.path === '/mcp'));
   assert.ok(answered.length > 0);
-  await settled(() => sent.to(hidden).length > 0);
-  const hops = sent.to(hidden);
+  const hops = await sent.to(hidden);
   assert.ok(hops.length > 0);
   for (const headers of hops) assert.equal(headers.cookie, undefined);
 });
