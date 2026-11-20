@@ -931,11 +931,17 @@ const bools = (values) =>
 const owned = [];
 const remembers = (state, marker) =>
   (state.owner?.memory ?? []).some((line) => line.includes(marker));
+const hears = (state, marker) =>
+  (state.owner?.messages ?? []).some((line) => line.includes(marker));
 const ownerTable = (state) => {
   const marker = state.owner.policy.trim().split('\n').at(-1);
   const base = judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
   return Object.entries(judgeTable)
-    .filter(([key]) => key.startsWith('memory:') && remembers(state, key.slice(7)))
+    .filter(
+      ([key]) =>
+        (key.startsWith('memory:') && remembers(state, key.slice(7))) ||
+        (key.startsWith('message:') && hears(state, key.slice(8)))
+    )
     .reduce((table, [, more]) => ({ ...table, ...more }), base);
 };
 const forbiddenOf = (state) => {
@@ -1007,7 +1013,8 @@ async function classify(model, context, options) {
   const told = inner(context.state.request.untrusted);
   const listed = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? judgeSteps.shift() ?? {};
   const step =
-    listed.remembered === undefined || remembers(context.state, listed.remembered)
+    (listed.remembered === undefined || remembers(context.state, listed.remembered)) &&
+    (listed.heard === undefined || hears(context.state, listed.heard))
       ? listed
       : { ...listed, aligned: 0.05 };
   if (step.hold) {

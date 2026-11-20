@@ -1,4 +1,5 @@
 import { defineDoc } from '@earendil-works/pi-durable';
+import { splitUser } from '../attachments.ts';
 import { boundedDeltas } from '../checkpoints.ts';
 import { GUEST_INPUT_KIND } from '../guests/attribution.ts';
 import { entryLick } from '../licks/state.ts';
@@ -15,6 +16,16 @@ export const MemoryOriginDoc = defineDoc<OriginState>({
   version: 1,
   scope: 'session',
   initial: () => ({ scopes: {} }),
+});
+
+export type InputOriginState = { typed: Record<string, string> };
+
+export const InputOriginDoc = defineDoc<InputOriginState>({
+  kind: 'slicc.input-origin',
+  checkpointWhen: boundedDeltas,
+  version: 1,
+  scope: 'session',
+  initial: () => ({ typed: {} }),
 });
 
 type Turn = { id: number; kind: string; data?: unknown; model?: readonly unknown[] };
@@ -40,15 +51,55 @@ export function combined(origins: readonly MemoryOrigin[]): MemoryOrigin {
   return kinds.size === 1 ? (origins[0] as MemoryOrigin) : 'mixed';
 }
 
+export async function textHash(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export const saidText = (content: unknown) => splitUser(content).text;
+
+const SKILL_BLOCK = /^<skill name="([^"]*)" location="[^"]*">\n/;
+const SKILL_END = '\n</skill>';
+
+export function typedSkill(text: string): string {
+  const skill = SKILL_BLOCK.exec(text);
+  const end = text.lastIndexOf(SKILL_END);
+  if (!skill || end < 0) return text;
+  const args = text.slice(end + SKILL_END.length).trim();
+  return args ? `/skill:${skill[1]} ${args}` : `/skill:${skill[1]}`;
+}
+
+async function typedText(content: unknown, state: Readonly<InputOriginState> | null | undefined) {
+  const said = saidText(content);
+  const typed = state ? state.typed[await textHash(said)] : undefined;
+  return (typed ?? typedSkill(said)).trim();
+}
+
+export async function ownerTexts(
+  entries: readonly Turn[],
+  state: Readonly<InputOriginState> | null | undefined,
+  limit = Number.POSITIVE_INFINITY
+): Promise<Map<number, string>> {
+  const owned = ownerTurns(entries);
+  const found: [number, string][] = [];
+  let kept = 0;
+  for (let at = entries.length - 1; at >= 0 && kept < limit; at--) {
+    const entry = entries[at] as Turn;
+    if (!owned.has(entry.id)) continue;
+    const text = await typedText((entry.model?.[0] as { content?: unknown })?.content, state);
+    found.push([entry.id, text]);
+    if (text) kept++;
+  }
+  return new Map(found.reverse());
+}
+
 type Hashed = Pick<MemoryEntry, 'section' | 'title' | 'tag' | 'body'>;
 
 export const originKey = (entry: Pick<MemoryEntry, 'section' | 'title'>) =>
   `${entry.section.toLowerCase()}\n${entry.title.toLowerCase()}`;
 
 export async function entryHash(entry: Hashed): Promise<string> {
-  const text = JSON.stringify([entry.section, entry.title, entry.tag, entry.body]);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return textHash(JSON.stringify([entry.section, entry.title, entry.tag, entry.body]));
 }
 
 export async function originOf(

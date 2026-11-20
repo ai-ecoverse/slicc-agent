@@ -1,10 +1,9 @@
 import type { Context } from '@earendil-works/chord/context';
-import type { EntryRecord, ModelRef } from '@earendil-works/pi-durable';
+import type { EntryRecord, Harness, ModelRef } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
-import { answerText } from '../agent.ts';
 import type { AgentsState } from '../agents.ts';
 import type { MemoryEntry } from '../memory/format.ts';
-import { ownerTurns } from '../memory/origin.ts';
+import { InputOriginDoc, type InputOriginState, ownerTexts } from '../memory/origin.ts';
 import { GLOBAL } from '../memory/store.ts';
 import type { OwnerIntent } from './judge.ts';
 import type { Approval } from './record.ts';
@@ -47,13 +46,13 @@ export async function seedPolicy(env: PolicyEnv, context: Context): Promise<bool
 const clip = (text: string, limit: number) =>
   text.length > limit ? `${text.slice(0, limit)}…` : text;
 
-export function ownerMessages(entries: readonly EntryRecord[], limit = OWNER_MESSAGES): string[] {
-  const owned = ownerTurns(entries);
-  return entries
-    .filter((entry) => owned.has(entry.id))
-    .map((entry) => answerText(entry.model?.[0]?.content).trim())
+export async function ownerMessages(
+  entries: readonly EntryRecord[],
+  inputs: Readonly<InputOriginState> | null | undefined,
+  limit = OWNER_MESSAGES
+): Promise<string[]> {
+  return [...(await ownerTexts(entries, inputs, limit)).values()]
     .filter(Boolean)
-    .slice(-limit)
     .map((text) => clip(text, MESSAGE_LIMIT));
 }
 
@@ -91,6 +90,7 @@ export interface IntentSources {
     >;
   };
   memories?: () => readonly MemoryEntry[] | undefined;
+  harness?: Pick<Harness, 'snapshot'>;
 }
 
 export function ownerIntent(sources: IntentSources) {
@@ -105,7 +105,10 @@ export function ownerIntent(sources: IntentSources) {
     const model = (await talking?.agent?.(context).catch(() => undefined))?.model;
     return {
       policy: clip(read.value, POLICY_LIMIT),
-      messages: ownerMessages(entries),
+      messages: await ownerMessages(
+        entries,
+        await sources.harness?.snapshot(InputOriginDoc, context)
+      ),
       memory: ownerMemory(sources.memories?.() ?? [], cone),
       ...(model ? { model } : {}),
     };

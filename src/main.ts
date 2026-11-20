@@ -444,7 +444,7 @@ async function setupApprovals(
   const { approvalMs } = options;
   await seedPolicy(home, BACKGROUND_CONTEXT).catch(() => false);
   const settings = settingsText(home, HOME, at.agentDir);
-  const intent = ownerIntent({ env: home, agents: agent.agents, memories });
+  const intent = ownerIntent({ env: home, agents: agent.agents, memories, harness: agent.harness });
   const judge: ApprovalJudge = {
     judge: approvalJudge({
       models,

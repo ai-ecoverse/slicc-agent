@@ -21,6 +21,7 @@ import type { Guests } from './guests/index.ts';
 import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
+import { InputOriginDoc, saidText, textHash } from './memory/origin.ts';
 import type { Monitor } from './monitor/index.ts';
 import { type EntriesPage, type EntriesRequest, entriesPage } from './remote/history.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
@@ -384,6 +385,26 @@ async function contentOf(
   return scrubItems(await userParts(text, request.attachments, saver));
 }
 
+async function sent(
+  harness: Harness,
+  request: SendRequest,
+  conversation: Conversation,
+  using: { skills: Pick<SkillsRuntime, 'expand'> | undefined; uploads: Uploads | undefined },
+  context: Context
+): Promise<UserInput> {
+  const expanded = using.skills
+    ? await using.skills.expand(request.text, context, conversation.id)
+    : request.text;
+  const content = await contentOf(expanded, request, conversation, using.uploads, context);
+  if (expanded === request.text) return content;
+  const key = await textHash(saidText(content));
+  const typed = await scrubText(request.text);
+  await harness.commit(async (tx) => {
+    (await tx.doc(InputOriginDoc)).typed[key] = typed;
+  }, context);
+  return content;
+}
+
 const pager =
   (conversationFor: (agentId: string | null, context: Context) => Promise<Conversation>) =>
   async (request: EntriesRequest, context: Context): Promise<EntriesPage> =>
@@ -492,13 +513,11 @@ export function createAgentControl(
           );
         const response = await accepted(async () => {
           const conversation = await conversationFor(request.agentId, context);
-          const expanded = skills
-            ? await skills.expand(request.text, context, conversation.id)
-            : request.text;
+          const content = await sent(harness, request, conversation, { skills, uploads }, context);
           return conversation.submit(
             {
               type: 'input',
-              content: await contentOf(expanded, request, conversation, uploads, context),
+              content,
               whenBusy: request.whenBusy,
               ...(request.requestId ? { requestId: request.requestId } : {}),
             },
