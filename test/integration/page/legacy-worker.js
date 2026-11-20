@@ -8,7 +8,10 @@ const params = new URL(self.location.href).searchParams;
 const faux = fauxProvider();
 const models = createModels();
 models.setProvider(faux.provider);
-faux.setResponses(Array.from({ length: 4 }, (_, n) => fauxAssistantMessage(`Seeded ${n + 1}.`)));
+const said = params.getAll('said');
+faux.setResponses(
+  Array.from({ length: 4 + said.length }, (_, n) => fauxAssistantMessage(`Seeded ${n + 1}.`))
+);
 const model = { provider: 'faux', modelId: 'faux-1' };
 const named = (names) => names.map((name) => ({ name }));
 const ALL = named([
@@ -33,6 +36,7 @@ async function seed() {
   await agent.cone().configure({ extensions: COPIED, tools: TOOLS }, ctx);
   await agent.prompt('First.');
   await agent.prompt('Second.');
+  for (const text of said) await agent.prompt(text);
   const kept = await agent.agents.createCone('kept', ctx);
   const conversation = await agent.agents.conversation(kept, ctx);
   await conversation.configure(

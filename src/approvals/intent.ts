@@ -90,7 +90,7 @@ export interface IntentSources {
     >;
   };
   memories?: () => readonly MemoryEntry[] | undefined;
-  harness?: Pick<Harness, 'snapshot'>;
+  harness: Pick<Harness, 'snapshot'>;
 }
 
 export function ownerIntent(sources: IntentSources) {
@@ -107,7 +107,7 @@ export function ownerIntent(sources: IntentSources) {
       policy: clip(read.value, POLICY_LIMIT),
       messages: await ownerMessages(
         entries,
-        await sources.harness?.snapshot(InputOriginDoc, context)
+        await sources.harness.snapshot(InputOriginDoc, context)
       ),
       memory: ownerMemory(sources.memories?.() ?? [], cone),
       ...(model ? { model } : {}),

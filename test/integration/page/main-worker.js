@@ -279,8 +279,13 @@ self.addEventListener('message', ({ data }) => {
   }
 });
 const HOLD = Symbol('hold');
+let holding = 0;
+self.addEventListener('message', ({ data }) => {
+  data?.holding?.postMessage(holding);
+});
 const held = (_context, options) =>
   new Promise((resolve) => {
+    holding += 1;
     const done = () => {
       requests.push(JSON.stringify({ held: 'aborted' }));
       resolve(fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' }));
@@ -1094,6 +1099,13 @@ self.addEventListener('message', ({ data }) => {
   data?.owned?.postMessage(owned);
   if (data?.items) void running.then((host) => data.items.postMessage(host.approvals.state.value));
   if (data?.judgeTable) judgeTable = data.judgeTable;
+  if (data?.prompted)
+    running
+      .then((host) => host.agent.prompt(data.text))
+      .then(
+        (text) => data.prompted.postMessage(text),
+        (error) => data.prompted.postMessage(error.message)
+      );
   if (data?.abort) aborts.get(data.abort)?.abort();
   if (data?.close)
     running

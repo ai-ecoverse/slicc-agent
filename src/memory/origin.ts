@@ -1,4 +1,13 @@
-import { defineDoc } from '@earendil-works/pi-durable';
+import type { Context } from '@earendil-works/chord/context';
+import {
+  type Conversation,
+  type Cursor,
+  defineDoc,
+  type Harness,
+  type InputSubmissionDraft,
+  type SubmissionId,
+  type Tx,
+} from '@earendil-works/pi-durable';
 import { splitUser } from '../attachments.ts';
 import { boundedDeltas } from '../checkpoints.ts';
 import { GUEST_INPUT_KIND } from '../guests/attribution.ts';
@@ -18,17 +27,27 @@ export const MemoryOriginDoc = defineDoc<OriginState>({
   initial: () => ({ scopes: {} }),
 });
 
-export type InputOriginState = { typed: Record<string, string> };
+export const INPUT_RECORDS = 500;
+
+export type InputRecord = { conversation: number; hash: string; typed?: string };
+
+export type InputOriginState = { since: number | null; inputs: Record<string, InputRecord> };
 
 export const InputOriginDoc = defineDoc<InputOriginState>({
   kind: 'slicc.input-origin',
   checkpointWhen: boundedDeltas,
   version: 1,
   scope: 'session',
-  initial: () => ({ typed: {} }),
+  initial: () => ({ since: null, inputs: {} }),
 });
 
-type Turn = { id: number; kind: string; data?: unknown; model?: readonly unknown[] };
+type Turn = {
+  id: number;
+  conversationId?: number;
+  kind: string;
+  data?: unknown;
+  model?: readonly unknown[];
+};
 
 export function ownerTurns(entries: readonly Turn[]): Set<number> {
   const noted = new Set<number>();
@@ -58,21 +77,77 @@ export async function textHash(text: string): Promise<string> {
 
 export const saidText = (content: unknown) => splitUser(content).text;
 
-const SKILL_BLOCK = /^<skill name="([^"]*)" location="[^"]*">\n/;
+const LEGACY_SKILL =
+  /^<skill name="([a-z0-9-]{1,64})" location="[^"\n]*">\nReferences are relative to [^\n]*\.\n\n/;
 const SKILL_END = '\n</skill>';
 
-export function typedSkill(text: string): string {
-  const skill = SKILL_BLOCK.exec(text);
-  const end = text.lastIndexOf(SKILL_END);
-  if (!skill || end < 0) return text;
-  const args = text.slice(end + SKILL_END.length).trim();
-  return args ? `/skill:${skill[1]} ${args}` : `/skill:${skill[1]}`;
+export function legacyText(said: string): string {
+  if (!said.trimStart().startsWith('<skill')) return said;
+  const skill = LEGACY_SKILL.exec(said);
+  const end = said.lastIndexOf(SKILL_END);
+  const after = said.slice(end + SKILL_END.length);
+  return skill && end > 0 && (!after || after.startsWith('\n\n')) ? `/skill:${skill[1]}` : '';
 }
 
-async function typedText(content: unknown, state: Readonly<InputOriginState> | null | undefined) {
-  const said = saidText(content);
-  const typed = state ? state.typed[await textHash(said)] : undefined;
-  return (typed ?? typedSkill(said)).trim();
+async function newestEntry(tx: Tx): Promise<number> {
+  let newest = 0;
+  let cursor: Cursor | undefined;
+  do {
+    const page = await tx.scanConversations({}, 100, cursor);
+    for (const conversation of page.items)
+      newest = Math.max(newest, (await tx.latestEntryId(conversation.id)) ?? 0);
+    cursor = page.next;
+  } while (cursor);
+  return newest;
+}
+
+export async function submitTyped(
+  harness: Pick<Harness, 'commit'>,
+  conversation: Pick<Conversation, 'id' | 'submit'>,
+  draft: InputSubmissionDraft,
+  typed: string | undefined,
+  context: Context
+): Promise<SubmissionId> {
+  const hash = await textHash(saidText(draft.content));
+  return harness.commit(async (tx) => {
+    const doc = await tx.doc(InputOriginDoc);
+    if (doc.since === null) doc.since = await newestEntry(tx);
+    const id = await conversation.submit(tx, draft);
+    doc.inputs[String(id)] ??= {
+      conversation: conversation.id,
+      hash,
+      ...(typed === undefined ? {} : { typed }),
+    };
+    const keys = Object.keys(doc.inputs).sort((a, b) => Number(a) - Number(b));
+    for (const key of keys.slice(0, Math.max(0, keys.length - INPUT_RECORDS)))
+      delete doc.inputs[key];
+    return id;
+  }, context);
+}
+
+type Sent = ReadonlyMap<string, ReadonlySet<string | null>>;
+
+function sentOf(state: Readonly<InputOriginState>): Sent {
+  const sent = new Map<string, Set<string | null>>();
+  for (const record of Object.values(state.inputs)) {
+    const key = `${record.conversation}:${record.hash}`;
+    const typed = sent.get(key) ?? new Set();
+    typed.add(record.typed ?? null);
+    sent.set(key, typed);
+  }
+  return sent;
+}
+
+async function typedText(
+  entry: Turn,
+  state: Readonly<InputOriginState> | null | undefined,
+  sent: Sent
+): Promise<string> {
+  const said = saidText((entry.model?.[0] as { content?: unknown } | undefined)?.content);
+  if (!state || state.since === null || entry.id <= state.since) return legacyText(said).trim();
+  const typed = sent.get(`${entry.conversationId}:${await textHash(said)}`);
+  if (typed?.size !== 1) return '';
+  return ([...typed][0] ?? said).trim();
 }
 
 export async function ownerTexts(
@@ -81,14 +156,11 @@ export async function ownerTexts(
   limit = Number.POSITIVE_INFINITY
 ): Promise<Map<number, string>> {
   const owned = ownerTurns(entries);
+  const sent = state ? sentOf(state) : new Map();
   const found: [number, string][] = [];
-  let kept = 0;
-  for (let at = entries.length - 1; at >= 0 && kept < limit; at--) {
+  for (let at = entries.length - 1; at >= 0 && found.length < limit; at--) {
     const entry = entries[at] as Turn;
-    if (!owned.has(entry.id)) continue;
-    const text = await typedText((entry.model?.[0] as { content?: unknown })?.content, state);
-    found.push([entry.id, text]);
-    if (text) kept++;
+    if (owned.has(entry.id)) found.push([entry.id, await typedText(entry, state, sent)]);
   }
   return new Map(found.reverse());
 }
