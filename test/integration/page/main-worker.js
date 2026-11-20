@@ -277,18 +277,21 @@ self.addEventListener('message', ({ data }) => {
   }
 });
 const HOLD = Symbol('hold');
-let holding = 0;
+const holding = { count: 0, ports: [] };
 self.addEventListener('message', ({ data }) => {
-  data?.holding?.postMessage(holding);
+  data?.holding?.postMessage(holding.count);
 });
 const held = (_context, options) =>
   new Promise((resolve) => {
-    holding += 1;
     const done = () => {
       requests.push(JSON.stringify({ held: 'aborted' }));
       resolve(fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' }));
     };
     if (options?.signal?.aborted) done();
+    else {
+      holding.count += 1;
+      for (const port of holding.ports) port.postMessage(holding.count);
+    }
     options?.signal?.addEventListener('abort', done, { once: true });
   });
 const gates = new Map();
@@ -298,6 +301,10 @@ const gate = (name) => {
 };
 self.addEventListener('message', ({ data }) => {
   if (data?.gate) gate(data.gate).resolve();
+  if (data?.holds) {
+    holding.ports.push(data.holds);
+    data.holds.postMessage(holding.count);
+  }
 });
 const gated = (name, message) => async (context, options, state, model) => {
   await gate(name).promise;
