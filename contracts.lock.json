@@ -1,0 +1,201 @@
+{
+  "slicc.agent.control": {
+    "1": {
+      "fingerprint": "49e0d5ccf51d6e87",
+      "variants": {
+        "control": {
+          "methods": [
+            "abort",
+            "agentCommands",
+            "approvalPolicySet",
+            "approvalRun",
+            "approvalRunNotice",
+            "approvalRunStop",
+            "changeAccept",
+            "changeRevert",
+            "changesOpen",
+            "compact",
+            "compactAgent",
+            "configure",
+            "createCone",
+            "createScoop",
+            "decide",
+            "discard",
+            "drop",
+            "entries",
+            "freeze",
+            "guestAlwaysForget",
+            "guestOpen",
+            "guestRevoke",
+            "image",
+            "importCancel",
+            "importProfile",
+            "memoryRemove",
+            "memorySave",
+            "monitorClose",
+            "monitorOpen",
+            "newChat",
+            "ownerAlways",
+            "ownerAlwaysForget",
+            "reset",
+            "resolveAgentLick",
+            "resolveLick",
+            "rewind",
+            "rewindAgent",
+            "selectCone",
+            "send",
+            "sprinkleCall",
+            "sprinkleSend",
+            "stepLabel",
+            "stopAgent",
+            "thaw",
+            "toolLabel",
+            "unqueue",
+            "wait",
+            "webhook",
+            "withdraw"
+          ]
+        },
+        "view": {
+          "methods": [
+            "approvalPolicySet",
+            "approvalRun",
+            "approvalRunNotice",
+            "approvalRunStop",
+            "changesOpen",
+            "decide",
+            "entries",
+            "guestAlwaysForget",
+            "guestOpen",
+            "guestRevoke",
+            "image",
+            "monitorClose",
+            "monitorOpen",
+            "ownerAlways",
+            "ownerAlwaysForget",
+            "stepLabel",
+            "toolLabel",
+            "wait"
+          ]
+        }
+      }
+    }
+  },
+  "slicc.agent.guest": {
+    "1": {
+      "fingerprint": "8759dd4c78f70a51",
+      "variants": {
+        "guest": {
+          "methods": ["guestOpen", "guestRevoke", "propose"],
+          "state": ["proposals", "seat", "transcript"]
+        },
+        "none": {}
+      }
+    }
+  },
+  "slicc.agent.inventory": {
+    "1": {
+      "fingerprint": "92d17b02ed7b3b71",
+      "variants": {
+        "none": {},
+        "owner": {
+          "state": ["inventory"]
+        }
+      }
+    }
+  },
+  "slicc.agent.pages": {
+    "1": {
+      "fingerprint": "2aaab61a6c945d09",
+      "variants": {
+        "none": {},
+        "pages": {
+          "methods": ["answer", "close", "next", "open", "report"]
+        }
+      }
+    }
+  },
+  "slicc.agent.remote": {
+    "1": {
+      "fingerprint": "300d4ce69614dd17",
+      "variants": {
+        "remote": {
+          "methods": ["abort", "close", "decide", "history", "next", "prompt", "watch"]
+        },
+        "watch": {
+          "methods": ["close", "history", "next", "watch"]
+        }
+      }
+    }
+  },
+  "slicc.agent.settings": {
+    "1": {
+      "fingerprint": "87a68854a13e903b",
+      "variants": {
+        "owner": {
+          "methods": [
+            "addServer",
+            "connect",
+            "disconnect",
+            "dismissMoved",
+            "refusals",
+            "remove",
+            "removeServer",
+            "serverUrl",
+            "signIn"
+          ],
+          "state": ["settings"]
+        },
+        "settings": {
+          "methods": ["connect", "disconnect", "dismissMoved", "remove", "serverUrl", "signIn"],
+          "state": ["settings"]
+        },
+        "view": {
+          "state": ["settings"]
+        }
+      }
+    }
+  },
+  "slicc.agent.sudo": {
+    "1": {
+      "fingerprint": "03333a7c24a5aca1",
+      "variants": {
+        "none": {},
+        "sudo": {
+          "methods": ["capture", "request", "withdraw"],
+          "state": ["approvals"]
+        }
+      }
+    }
+  },
+  "slicc.agent.transcript": {
+    "1": {
+      "fingerprint": "80bbd2a8502bdfc7",
+      "variants": {
+        "transcript": {
+          "state": [
+            "agents",
+            "approvalPolicy",
+            "approvalRunnable",
+            "approvals",
+            "changes",
+            "commands",
+            "deliveries",
+            "frozen",
+            "guests",
+            "importing",
+            "labels",
+            "memories",
+            "memoryScopes",
+            "monitor",
+            "privateRevision",
+            "sprinkles",
+            "transcript",
+            "vault",
+            "views"
+          ]
+        }
+      }
+    }
+  }
+}

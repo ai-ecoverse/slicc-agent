@@ -1,6 +1,13 @@
-import { type Contract, createHost, type Host } from '@earendil-works/chord';
+import {
+  type ChordError,
+  type Contract,
+  createHost,
+  type Host,
+  type RefState,
+} from '@earendil-works/chord';
 import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
+import type { NativeWatchable } from '@earendil-works/chord/watch';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { ApprovalPolicy } from './approvals/policy.ts';
 import type { Approval } from './approvals/record.ts';
@@ -43,16 +50,20 @@ import {
 } from './services.ts';
 import {
   type AgentPrincipal,
+  bindAt,
   bound,
+  CLOSED,
+  historyOf,
   offers,
   type Remote,
   type Replica,
   replica,
   SELF,
+  serviceOf,
 } from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
-import type { State } from './state.ts';
-import { type PortEndpoint, PortLink } from './wire.ts';
+import { createState, type State } from './state.ts';
+import { otherService, type PortEndpoint, PortLink } from './wire.ts';
 
 export type { State } from './state.ts';
 
@@ -127,6 +138,74 @@ export const reportClient = (error: unknown): void => {
   console.warn('slicc-agent client:', error);
 };
 
+export const READY_MS = 60_000;
+
+const REFUSALS = new Set(['contract_mismatch', 'unavailable']);
+
+type Binding =
+  | { kind: 'live' }
+  | { kind: 'refused'; error: ChordError }
+  | { kind: 'failed'; error: unknown };
+
+function settled(state: RefState): Binding | undefined {
+  if (state.kind === 'live') return { kind: 'live' };
+  if (state.kind === 'ended') return { kind: 'failed', error: state.error };
+  if (state.kind !== 'failed') return undefined;
+  const { cause } = state;
+  if (cause.kind === 'broken') return { kind: 'failed', error: cause.error };
+  if (cause.kind === 'waiting' && REFUSALS.has(cause.error.code))
+    return { kind: 'refused', error: cause.error };
+  return undefined;
+}
+
+async function binding(ref: Remote, context: Context, ms: number): Promise<Binding> {
+  const watch = await (ref.state as NativeWatchable<RefState>).watch(context);
+  let last: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outcome = await new Promise<Binding>((resolve) => {
+    const look = (state: RefState) => {
+      if (state.kind === 'failed') last = state.cause.error;
+      const found = settled(state);
+      if (found) resolve(found);
+    };
+    timer = setTimeout(
+      () => resolve({ kind: 'failed', error: last ?? new Error(`not live within ${ms} ms`) }),
+      ms
+    );
+    void watch.closed.then(() => resolve({ kind: 'failed', error: last ?? new Error(CLOSED) }));
+    look(watch.value);
+    watch.start(async (call) => {
+      if (call.kind === 'value') look(call.value);
+    });
+  });
+  clearTimeout(timer);
+  void watch.stop();
+  return outcome;
+}
+
+export async function negotiate(
+  host: Host<AgentPrincipal>,
+  made: Contract,
+  context: Context,
+  ms = READY_MS
+): Promise<Remote> {
+  let refusal: ChordError | undefined;
+  for (const version of [...historyOf(made)].reverse()) {
+    const ref = host.hold(version, {} as never, context) as unknown as Remote;
+    const outcome = await binding(ref, context, ms);
+    if (outcome.kind === 'live') return bindAt(ref, version);
+    ref.release();
+    if (outcome.kind === 'failed') throw outcome.error;
+    refusal = outcome.error;
+    if (refusal.code !== 'contract_mismatch') break;
+  }
+  return {
+    variant: undefined,
+    refused: otherService(serviceOf(made), refusal),
+    release: () => undefined,
+  };
+}
+
 export interface Client {
   readonly host: Host<AgentPrincipal>;
   readonly link: PortLink;
@@ -161,9 +240,7 @@ export async function openClient(endpoint: PortEndpoint): Promise<Client> {
     serverId: hello.server ?? '',
     context,
     async hold(contracts) {
-      const getting = contracts.map(
-        (made) => host.get(made, {} as never, context) as Promise<unknown> as Promise<Remote>
-      );
+      const getting = contracts.map((made) => negotiate(host, made, context));
       return Promise.race([Promise.all(getting), ended(link)]);
     },
     follow<T extends object>(member: unknown) {
@@ -179,6 +256,12 @@ export async function openClient(endpoint: PortEndpoint): Promise<Client> {
     },
   };
 }
+
+export const followed = <T extends object>(
+  client: Client,
+  handle: Remote,
+  member: string
+): State<T> | undefined => (offers(handle, member) ? client.follow<T>(handle[member]) : undefined);
 
 export async function handshake(
   endpoint: PortEndpoint,
@@ -217,22 +300,28 @@ export async function connectAgent(
     pagesHandle,
     inventoryHandle,
   ] = handles as [Remote, Remote, Remote, Remote, Remote, Remote];
-  const control = bound<AgentControl>(AgentControl, controlHandle, CONTROL_METHODS, controlAnswer);
+  const essential = [controlHandle, transcriptHandle].find((handle) => handle.refused);
+  if (essential) {
+    await client.close();
+    throw essential.refused;
+  }
+  const control = bound<AgentControl>(controlHandle, CONTROL_METHODS, controlAnswer);
   const settings = lastingSettings(
-    bound<AgentSettings>(AgentSettings, settingsHandle, OWNER_SETTINGS_METHODS, settingsAnswer),
-    client.follow<SettingsState>(settingsHandle[SETTINGS_MEMBER])
+    bound<AgentSettings>(settingsHandle, OWNER_SETTINGS_METHODS, settingsAnswer),
+    followed<SettingsState>(client, settingsHandle, SETTINGS_MEMBER) ??
+      createState<SettingsState>({ models: [], accounts: [] })
   );
-  const remote = bound<AgentRemote>(AgentRemoteService, remoteHandle, REMOTE_METHODS, remoteAnswer);
-  const pages = bound<AgentPages>(AgentPagesService, pagesHandle, PAGE_METHODS, pageAnswer);
-  const state = <T extends object>(name: (typeof TRANSCRIPT_STATES)[number]): State<T> =>
-    client.follow<T>(transcriptHandle[transcriptMember(name)]);
+  const remote = bound<AgentRemote>(remoteHandle, REMOTE_METHODS, remoteAnswer);
+  const pages = bound<AgentPages>(pagesHandle, PAGE_METHODS, pageAnswer);
+  const state = <T extends object>(name: (typeof TRANSCRIPT_STATES)[number]) =>
+    followed<T>(client, transcriptHandle, transcriptMember(name));
   const closed = client.link.ended;
   return {
     serverId: client.serverId,
     readOnly: controlHandle.variant === 'view',
     control,
-    transcript: state<ConversationView>('state'),
-    deliveries: state<Record<string, Delivered>>('deliveries'),
+    transcript: state<ConversationView>('state') as State<ConversationView>,
+    deliveries: state<Record<string, Delivered>>('deliveries') as State<Record<string, Delivered>>,
     agents: state<AgentsSummary>('agents'),
     views: state<Record<string, ConversationView>>('views'),
     commands: state<Command[]>('commands'),
@@ -254,7 +343,7 @@ export async function connectAgent(
     approvalRunnable: state<Record<string, Runnable>>('approvalRunnable'),
     settings,
     remote,
-    history: offers(AgentControl, controlHandle.variant, 'entries'),
+    history: offers(controlHandle, 'entries'),
     pages,
     ...(inventoryHandle.variant === 'owner'
       ? { inventory: client.follow<InventoryState>(inventoryHandle.inventory) }

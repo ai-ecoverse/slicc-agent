@@ -13,6 +13,7 @@ const { scripts } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 
 const callers = [
   ['lint:chord', 'check-chord', scripts['lint:chord']],
+  ['lint:contracts', 'check-contracts', scripts['lint:contracts']],
   ['lint:patches', 'check-patches', scripts['lint:patches']],
   ['lint:vault-pi', 'check-vault-pi', scripts['lint:vault-pi']],
   ['reach', 'reach', scripts.reach],

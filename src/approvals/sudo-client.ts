@@ -68,12 +68,7 @@ async function open(endpoint: PortEndpoint, stop: AbortSignal | undefined) {
     const made = await Promise.race([opening, stopped]);
     const [handle] = (await Promise.race([made.hold([AgentSudoService]), stopped])) as [Remote];
     if (handle.variant !== 'sudo') throw unavailable();
-    const sudo = bound<Omit<AgentSudo, 'approvals'>>(
-      AgentSudoService,
-      handle,
-      SUDO_METHODS,
-      missing
-    );
+    const sudo = bound<Omit<AgentSudo, 'approvals'>>(handle, SUDO_METHODS, missing);
     const ended = made.link.ended.then((reason) => {
       throw reason ?? new Error('the agent closed the link');
     });

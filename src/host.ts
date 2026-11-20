@@ -91,6 +91,7 @@ import {
 import {
   Agent as AgentAddress,
   type AgentPrincipal,
+  acceptsOf,
   following,
   type GuestPrincipal,
   principalKey,
@@ -621,7 +622,8 @@ export function closedToGuests(host: FacetHost<AgentPrincipal>) {
         : (params: unknown, principal: AgentPrincipal, self: Self<AgentPrincipal>) => {
             if (principal.kind === 'guest') throw forbidden(CLOSED_TO_GUESTS);
             return factory(params, principal, self);
-          }) as never
+          }) as never,
+      { accepts: acceptsOf(type) }
     );
 }
 
