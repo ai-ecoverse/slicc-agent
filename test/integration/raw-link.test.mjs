@@ -388,3 +388,43 @@ test('the four-call guest limit belongs to the link: holds of the guest service 
   assert.deepEqual(seen.ownOver, busy);
   assert.equal(seen.open, 'pending', 'the busy link stays open');
 });
+
+test('a guest link that releases its hold with four calls still running and holds the guest service again keeps those four calls in its budget: the next call is answered as unavailable and the link stays open', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, `answer=Hello.&directory=/raw-rehold-${Date.now()}&crash=before`);
+  const seen = await staged(page, 'a held again guest service', async () => {
+    const { owner, local, seat } = globalThis.raw;
+    const guest = await seat('raw-rehold');
+    const link = await openRawLink(await owner.port({ guest }), { ms: 90_000 });
+    const wait = (ms) => new Promise((resolve) => setTimeout(() => resolve('pending'), ms));
+    const answered = (call) =>
+      Promise.race([
+        call.then(
+          (reply) => ('error' in reply ? [reply.error.code, reply.error.message] : 'answered'),
+          () => 'ended'
+        ),
+        wait(300),
+      ]);
+    let n = 0;
+    const propose = (hold) => {
+      n += 1;
+      return hold.call('propose', [{ text: `Message ${n}`, requestId: `raw-rehold-${n}` }]);
+    };
+    const first = await link.hold('guest');
+    const flying = [propose(first), propose(first), propose(first), propose(first)];
+    const inFlight = await answered(Promise.any(flying));
+    first.release();
+    const again = await link.hold('guest');
+    const over = await answered(propose(again));
+    const open = await Promise.race([link.closed.then(() => 'closed'), wait(300)]);
+    link.close();
+    await local.close();
+    await owner.release();
+    return { variants: [first.variant, again.variant], inFlight, over, open };
+  });
+  const busy = ['unavailable', 'Too many calls in progress on this connection (4)'];
+  assert.deepEqual(seen.variants, ['guest', 'guest']);
+  assert.equal(seen.inFlight, 'pending', 'four calls are still running');
+  assert.deepEqual(seen.over, busy, 'the guest service held again shares the four');
+  assert.equal(seen.open, 'pending', 'the busy link stays open');
+});
