@@ -1,5 +1,5 @@
-import type { Context } from '@earendil-works/chord/context';
-import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context';
+import type { ExecutionEnv, FileWatcher } from '@earendil-works/pi-durable/env';
 import { createState, type MutableState } from '../state.ts';
 import type { Vault } from './vault.ts';
 
@@ -28,6 +28,9 @@ export interface SecretListing {
 export const DESCRIBE = 'fnox env --json --describe';
 export const RULES = 'fnox proxy rules --json';
 export const SEALED_LIST = `exec 3<>/dev/sealed && printf '%s' '{"v":1,"op":"list"}' >&3 && cat <&3`;
+export const FNOX_CONFIG = '/etc/fnox/config.toml';
+export const QUIET_MS = 250;
+export const SETTLE_MS = 5000;
 export const NO_PROXY = 'No [proxy] configuration found';
 export const MISSING = "fnox isn't installed";
 export const EXPOSED =
@@ -255,14 +258,26 @@ export async function listNames(env: ExecutionEnv, context: Context): Promise<Li
 export interface Names {
   readonly state: MutableState<SecretListing>;
   refresh(context: Context): Promise<void>;
+  watch(context: Context): Promise<void>;
+  settled(): Promise<void>;
   close(): void;
 }
+
+export interface NamesTiming {
+  quietMs?: number;
+  settleMs?: number;
+}
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function secretNames(
   env: ExecutionEnv,
   vault: Pick<Vault, 'state' | 'texts'>,
-  warn: (message: string) => void = (message) => console.warn(message)
+  warn: (message: string) => void = (message) => console.warn(message),
+  timing: NamesTiming = {}
 ): Names {
+  const quietMs = timing.quietMs ?? QUIET_MS;
+  const settleMs = timing.settleMs ?? SETTLE_MS;
   const state = createState<SecretListing>({ names: [], error: null, exposed: [] });
   let version = vault.state.value.version;
   let warned: string | null = null;
@@ -298,5 +313,42 @@ export function secretNames(
     version = value.version;
     void refresh(context).catch(() => undefined);
   });
-  return { state, refresh, close: off };
+  let watcher: FileWatcher | undefined;
+  let closed = false;
+  let dirty = false;
+  let draining: Promise<void> | undefined;
+  const drain = async (context: Context) => {
+    while (dirty) {
+      await pause(quietMs);
+      dirty = false;
+      if (closed) return;
+      await refresh(context).catch(() => undefined);
+    }
+  };
+  const heard = (context: Context) => {
+    if (closed) return;
+    dirty = true;
+    draining ??= drain(context).finally(() => {
+      draining = undefined;
+    });
+  };
+  const watch = async (context: Context) => {
+    const watched = await env.watch([{ path: FNOX_CONFIG }], () => heard(context), context);
+    watcher = watched.ok ? watched.value : undefined;
+  };
+  const settled = async () => {
+    if (!draining) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, settleMs);
+    });
+    await Promise.race([draining, bound]);
+    clearTimeout(timer);
+  };
+  const close = () => {
+    closed = true;
+    off();
+    void watcher?.stop(BACKGROUND_CONTEXT).catch(() => undefined);
+  };
+  return { state, refresh, watch, settled, close };
 }
