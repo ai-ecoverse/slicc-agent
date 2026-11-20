@@ -13,7 +13,6 @@ import {
   type McpConfig,
   type McpConfigProblem,
   type McpServerEntry,
-  ownOrigin,
   parseMcpConfig,
   sameConfig,
   usesOAuth,
@@ -22,6 +21,7 @@ import { McpServerConnection } from './connection.ts';
 import { type McpRecords, resolveHeaders, secretNames } from './credentials.ts';
 import { mcpFile } from './file.ts';
 import { authProvider as oauthAuth, StoredOAuth } from './oauth.ts';
+import { offPage } from './off-page.ts';
 import { configPath, logPath, shown } from './paths.ts';
 import { patchSse } from './sse.ts';
 
@@ -55,6 +55,7 @@ export interface McpAttach {
   cors: boolean;
   redirect: string;
   origin: string;
+  redirects: () => boolean;
 }
 
 export interface ServerStatus {
@@ -190,11 +191,7 @@ export async function attachMcp(
   let listed: McpConfig = { servers: [], problems: [], refused: [] };
   const log = serverLog(options, context);
   const { vault } = options;
-  const base = async (input: string | URL | Request, init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    if (url.origin === options.origin) throw new TypeError(ownOrigin(url.origin));
-    return options.fetch(input, { ...init, credentials: 'omit' });
-  };
+  const base = offPage(options.fetch, options.origin, options.redirects);
   const fetcher = (server: string) => vault.fetch(server, base);
   const oauth = (entry: McpServerEntry) => new StoredOAuth(entry, options.store, options.redirect);
   const transport = async (entry: McpServerEntry) => {

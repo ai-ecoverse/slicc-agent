@@ -1215,3 +1215,98 @@ test("an MCP server whose sign-in points at the page's own origin is refused the
     docs.close();
   }
 });
+
+const moving = async (t, moved, more = []) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.init(fakePopups);
+  await page.goto('/');
+  await page.evaluate(() =>
+    window.write(
+      '/home/.pi/agent/mcp.json',
+      JSON.stringify({ mcpServers: { docs: { url: 'https://mcp.test/mcp', exposure: 'direct' } } })
+    )
+  );
+  const query = [
+    'relay=mcp.test',
+    'follows',
+    `moved=${encodeURIComponent(JSON.stringify(moved))}`,
+    ...more,
+  ].join('&');
+  await staged(page, 'the agent', (q) => window.start(q), query);
+  return page;
+};
+
+const upstream = (page) =>
+  page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = ({ data }) => resolve(data.upstream);
+        window.worker.postMessage({ upstream: port2 }, [port2]);
+      })
+  );
+
+for (const [what, chain] of [
+  ['302', (own) => ({ '/mcp': { status: 302, location: `${own}/own/found` } })],
+  ['307', (own) => ({ '/mcp': { status: 307, location: `${own}/own/temporary` } })],
+  [
+    'two-hop',
+    (own) => ({
+      '/mcp': { status: 302, location: 'https://other.test/hop' },
+      '/hop': { status: 307, location: `${own}/own/second` },
+    }),
+  ],
+]) {
+  test(`a ${what} redirect from an MCP server to the page's own origin is refused before anything is sent there`, async (t) => {
+    const origin = new URL(chrome.url).origin;
+    const page = await moving(t, chain(origin));
+    await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
+    const seen = await page.evaluate(async () => ({
+      own: await window.own(),
+      licks: window.licks().map(({ title, text }) => ({ title, text })),
+    }));
+    assert.deepEqual(seen.own, []);
+    assert.match(JSON.stringify(seen.licks), /MCP never reaches this page's own origin/);
+    const sent = (await upstream(page)).map(({ url, redirect }) => ({ url, redirect }));
+    assert.ok(sent.every((item) => item.redirect === 'manual'));
+    assert.ok(sent.every((item) => new URL(item.url).origin !== origin));
+  });
+}
+
+test('an MCP server that redirects within its own origin still connects, its POST kept as a POST', async (t) => {
+  const page = await moving(t, { '/mcp': { status: 307, location: '/mcp/v2' } });
+  await page.within(60000, () => window.account('mcp:docs')?.state === 'connected');
+  const [first, second] = await upstream(page);
+  assert.deepEqual(
+    [first, second].map(({ url, method, redirect }) => ({ url, method, redirect })),
+    [
+      { url: 'https://mcp.test/mcp', method: 'POST', redirect: 'manual' },
+      { url: 'https://mcp.test/mcp/v2', method: 'POST', redirect: 'manual' },
+    ]
+  );
+  assert.equal(second.body, first.body);
+  assert.deepEqual(await page.evaluate(() => window.own()), []);
+});
+
+test('a redirected discovery document is still followed and the sign-in opens', async (t) => {
+  const page = await moving(
+    t,
+    {
+      '/.well-known/oauth-authorization-server': {
+        status: 302,
+        location: '/.well-known/oauth-authorization-server/moved',
+      },
+    },
+    ['vault', `oauth=${encodeURIComponent(JSON.stringify({}))}`]
+  );
+  await page.within(60000, () => window.account('mcp:docs')?.auth === 'oauth');
+  await page.evaluate(() => {
+    window.signing = window.model.settings.connect('mcp:docs').catch((error) => error.message);
+  });
+  await page.within(30000, () => window.opens.at(-1)?.location.href.includes('/authorize'));
+  const urls = (await upstream(page)).map(({ url }) => url);
+  assert.ok(urls.includes('https://mcp.test/.well-known/oauth-authorization-server'));
+  assert.ok(urls.includes('https://mcp.test/.well-known/oauth-authorization-server/moved'));
+  assert.deepEqual(await page.evaluate(() => window.own()), []);
+});

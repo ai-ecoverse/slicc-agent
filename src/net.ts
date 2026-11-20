@@ -102,6 +102,10 @@ function honorsManual(traits: Transport['traits']): boolean {
   return traits?.manualRedirects === true && (hops === undefined || hops === false);
 }
 
+export function showsRedirects(transport: Transport): boolean {
+  return honorsManual(transport.traits) && transport.traits?.crossOrigin !== 'cors';
+}
+
 function refused(): Response {
   return new Response(UNPROVEN, {
     status: 403,
@@ -179,11 +183,17 @@ async function carried(
     await dropped(response);
     return opaque();
   }
-  return new Response(empty.has(response.status) ? null : stream(response.body), {
+  const answer = new Response(empty.has(response.status) ? null : stream(response.body), {
     status: response.status,
     statusText: response.statusText ?? '',
     headers: response.headers,
   });
+  if (followed && response.url)
+    Object.defineProperties(answer, {
+      url: { value: response.url },
+      redirected: { value: true },
+    });
+  return answer;
 }
 
 export function transportFetch(

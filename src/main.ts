@@ -55,7 +55,14 @@ import { type McpAccounts, setupMcp } from './mcp/index.ts';
 import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
 import { modelsCommand } from './models/index.ts';
-import { pageOnly, type Reach, type Transport, transportFetch, transportReach } from './net.ts';
+import {
+  pageOnly,
+  type Reach,
+  showsRedirects,
+  type Transport,
+  transportFetch,
+  transportReach,
+} from './net.ts';
 import { sliccPrompt } from './prompt.ts';
 import { AZURE, azureBase } from './providers.ts';
 import { ranExtension } from './ran/index.ts';
@@ -536,6 +543,14 @@ function kernelParts(client: KernelClient) {
   return [createActivity(), processGroups(client), backgroundJobs(client)] as const;
 }
 
+function mcpReach(scope: AgentWorkerScope, transport: Transport) {
+  return {
+    cors: pageOnly(transport),
+    origin: scope.location.origin,
+    redirects: () => showsRedirects(transport),
+  };
+}
+
 export async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
@@ -613,9 +628,8 @@ export async function start(
       reloadMs: RELOAD_MS,
       codemode: codemode.length > 0,
       toolSearch: chosen.toolSearch,
-      cors: pageOnly(client.transport),
       redirect: options.mcpRedirect ?? mcpRedirect(scope.location),
-      origin: scope.location.origin,
+      ...mcpReach(scope, client.transport),
     },
     BACKGROUND_CONTEXT
   );

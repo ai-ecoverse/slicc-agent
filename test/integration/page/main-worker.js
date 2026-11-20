@@ -722,14 +722,35 @@ const moved = (request) => {
       }
     : undefined;
 };
+const own = [];
+const follows = params.has('follows');
+const followed = (request, answer) => {
+  const url = new URL(answer.headers[0][1], request.url).href;
+  const method =
+    answer.status === 303 || (answer.status < 303 && request.method === 'POST')
+      ? 'GET'
+      : request.method;
+  const { body, ...rest } = request;
+  return relay.fetch({
+    ...rest,
+    url,
+    method,
+    ...(method === request.method && body ? { body } : {}),
+  });
+};
 const proven =
-  params.has('vault') && !params.has('unproven')
+  (params.has('vault') || follows) && !params.has('unproven')
     ? { redirectPolicy: true }
     : JSON.parse(params.get('unproven') || '{}');
 const relay = {
   traits: { crossOrigin: 'any', ...proven },
   async fetch(request) {
+    if (new URL(request.url).origin === self.location.origin) {
+      own.push({ url: request.url, method: request.method, credentials: 'omit' });
+      return { status: 404, headers: [], body: (async function* () {})() };
+    }
     const answer = params.has('moved') ? moved(request) : undefined;
+    if (answer && follows && !request.redirect && answer.status) return followed(request, answer);
     if (answer) return answer;
     if (AUTH_HOSTS.has(new URL(request.url).host)) return signIn(request);
     const { host, pathname } = new URL(request.url);
@@ -1085,7 +1106,6 @@ if (version) {
       ? Promise.resolve(Response.json({ version }))
       : fetched(input, init);
 }
-const own = [];
 self.addEventListener('message', ({ data }) => data?.own?.postMessage(own));
 if (params.has('own')) {
   const fetched = self.fetch.bind(self);
