@@ -309,7 +309,7 @@ export function serveVault(port, values, version = 1, options = {}) {
       return { texts, hits, version: current };
     },
     redactStream: (message) => {
-      streams.set(message.stream, scrubber.stream());
+      streams.set(message.stream, { scrub: scrubber.stream(), version: current });
       return { stream: message.stream, idleMs: scrubber.idleMs, version: current };
     },
     push: (message) => ({ chunk: stream(message).push(message.chunk) }),
@@ -336,7 +336,14 @@ export function serveVault(port, values, version = 1, options = {}) {
   const stream = (message) => {
     const found = streams.get(message.stream);
     if (!found) throw new Refused('ENOENT', `no stream ${message.stream}`);
-    return found;
+    if (found.version !== current) {
+      streams.delete(message.stream);
+      throw new Refused(
+        'EAGAIN',
+        "the vault's values changed; open the stream again and push from its start"
+      );
+    }
+    return found.scrub;
   };
   let chain = Promise.resolve();
   const answerOne = async (message) => {
@@ -365,7 +372,7 @@ export function serveVault(port, values, version = 1, options = {}) {
   };
   port.onmessage = ({ data }) => {
     log.push(data);
-    if (paused) queue.push(data);
+    if (paused === true || paused?.has?.(data.op)) queue.push(data);
     else answer(data);
   };
   port.start?.();
@@ -379,8 +386,8 @@ export function serveVault(port, values, version = 1, options = {}) {
     get version() {
       return current;
     },
-    pause() {
-      paused = true;
+    pause(ops) {
+      paused = ops ? new Set(ops) : true;
     },
     resume() {
       paused = false;

@@ -81,6 +81,23 @@ const LOCKS: readonly unknown[] = ['no', 'scrubbing', 'passkey'];
 
 const EMPTY = new Uint8Array();
 
+export const REPLAY_LIMIT = 32 * 1024 * 1024;
+export const REOPENS = 3;
+export const UNREPLAYABLE =
+  "the vault's values changed and the output is too long to scrub again from its start";
+
+function joined(chunks: readonly Uint8Array[]): Uint8Array {
+  const all = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+  let at = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, at);
+    at += chunk.length;
+  }
+  return all;
+}
+
+const changed = (error: unknown) => error instanceof VaultRefusal && error.code === 'EAGAIN';
+
 function isVersion(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -227,34 +244,101 @@ export class Vault implements Scrub {
 
   stream(): ScrubStream {
     let stream: string | undefined;
+    let opening = false;
+    let dropped = false;
+    let broken: unknown;
+    let kept: Uint8Array[] | undefined = [];
+    let size = 0;
+    let produced = 0;
+    let emitted = 0;
+    let queue: Promise<unknown> = Promise.resolve();
+    const open = (): Promise<unknown> => {
+      if (stream !== undefined) this.#streams.delete(stream);
+      stream = `${this.#tag}-${++this.#streamSerial}`;
+      produced = 0;
+      this.#streams.add(stream);
+      return this.#call('redactStream', { stream });
+    };
+    const keep = (chunk: Uint8Array) => {
+      if (!kept) return;
+      size += chunk.length;
+      if (size > REPLAY_LIMIT) kept = undefined;
+      else kept.push(chunk);
+    };
+    const shown = (chunk: Uint8Array): Uint8Array => {
+      const from = produced;
+      produced += chunk.length;
+      if (dropped || produced <= emitted) return EMPTY;
+      const out = chunk.subarray(Math.max(0, emitted - from));
+      emitted = produced;
+      return out;
+    };
+    const ask = async (op: 'push' | 'end', id: string, chunk?: Uint8Array) => {
+      const fields = op === 'push' ? { stream: id, chunk } : { stream: id };
+      return ((await this.#call(op, fields)) as { chunk: Uint8Array }).chunk;
+    };
+    const replay = async (op: 'push' | 'end', all: Uint8Array) => {
+      const opened = open();
+      const id = stream as string;
+      await opened;
+      const head = await ask('push', id, all);
+      if (op === 'push' || dropped) return shown(head);
+      return shown(joined([head, await ask('end', id)]));
+    };
+    const attempt = async (op: 'push' | 'end', chunk?: Uint8Array): Promise<Uint8Array> => {
+      let run = async () => shown(await ask(op, stream as string, chunk));
+      for (let tries = 0; ; tries++) {
+        try {
+          return await run();
+        } catch (error) {
+          if (dropped) return EMPTY;
+          if (!changed(error) || tries >= REOPENS || !kept) {
+            this.#streams.delete(stream as string);
+            broken = changed(error) && !kept ? new Error(UNREPLAYABLE) : error;
+            throw broken;
+          }
+          const all = joined(kept);
+          run = () => replay(op, all);
+        }
+      }
+    };
+    const queued = (task: () => Promise<Uint8Array>): Promise<Uint8Array> => {
+      const run = queue.then(() => {
+        if (broken !== undefined) throw broken;
+        return task();
+      });
+      queue = run.catch(() => undefined);
+      return run;
+    };
     return {
       push: (chunk) => {
-        if (stream === undefined && !this.needed) return Promise.resolve(chunk);
-        if (stream === undefined) {
-          stream = `${this.#tag}-${++this.#streamSerial}`;
-          this.#streams.add(stream);
-          void this.#call('redactStream', { stream });
-        }
-        return this.#call('push', { stream, chunk }).then(
-          (answer) => (answer as { chunk: Uint8Array }).chunk
-        );
+        if (!opening && !this.needed) return Promise.resolve(chunk);
+        opening = true;
+        return queued(async () => {
+          if (dropped) return EMPTY;
+          if (stream === undefined) open().catch(() => undefined);
+          keep(chunk);
+          return attempt('push', chunk);
+        });
       },
-      end: async () => {
-        if (stream === undefined) return EMPTY;
-        const { chunk: tail } = (await this.#call('end', { stream })) as { chunk: Uint8Array };
-        this.#streams.delete(stream);
-        return tail;
-      },
+      end: () =>
+        queued(async () => {
+          if (stream === undefined || dropped) return EMPTY;
+          const tail = await attempt('end');
+          this.#streams.delete(stream);
+          return tail;
+        }),
       drop: () => {
+        dropped = true;
         if (stream === undefined) return;
-        const dropped = stream;
-        this.#streams.delete(dropped);
+        const gone = stream;
+        this.#streams.delete(gone);
         for (const [id, item] of this.#pending)
-          if (item.message.stream === dropped && item.message.op !== 'redactStream') {
+          if (item.message.stream === gone && item.message.op !== 'redactStream') {
             this.#pending.delete(id);
             item.resolve({ chunk: EMPTY });
           }
-        void this.#call('drop', { stream: dropped });
+        void this.#call('drop', { stream: gone });
       },
     };
   }
