@@ -32,12 +32,12 @@ export function tokenName(server: string): string {
   return `MCP_${server.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_TOKEN`;
 }
 
-function entryOf(name: string, given: unknown): McpServerConfig | McpRefusal {
+function entryOf(name: string, given: unknown, origin?: string): McpServerConfig | McpRefusal {
   if (!isRecord(given)) return refusal('not-object', 'must be an object');
   const { token, ...entry } = given;
   if (token !== undefined && typeof token !== 'boolean')
     return refusal('bad-token', 'token must be true or false');
-  const checked = validateServer(name, entry);
+  const checked = validateServer(name, entry, origin);
   if ('message' in checked) return refusal(checked.code, checked.message);
   if (!token) return checked;
   if (!usesOAuth(checked))
@@ -73,7 +73,13 @@ async function replace(
   return false;
 }
 
-export function mcpFile(env: ExecutionEnv, path: string, home: string, context: Context): McpFile {
+export function mcpFile(
+  env: ExecutionEnv,
+  path: string,
+  home: string,
+  context: Context,
+  origin?: string
+): McpFile {
   const named = shown(path, home);
   const unwritten = refusal('file-unwritable', `Couldn't write ${named}, so it is unchanged.`);
   let queue: Promise<unknown> = Promise.resolve();
@@ -110,7 +116,7 @@ export function mcpFile(env: ExecutionEnv, path: string, home: string, context: 
           return refused(
             refusal('duplicate', `${named} already has a server called "${name}". Remove it first.`)
           );
-        const config = entryOf(name, entry);
+        const config = entryOf(name, entry, origin);
         if ('reason' in config) return refused(config);
         const text = rendered(file.root, { ...file.servers, [name]: config });
         const clash = parseMcpConfig(text).refused.find((server) => server.name === name);

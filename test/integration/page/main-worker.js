@@ -1085,6 +1085,18 @@ if (version) {
       ? Promise.resolve(Response.json({ version }))
       : fetched(input, init);
 }
+const own = [];
+self.addEventListener('message', ({ data }) => data?.own?.postMessage(own));
+if (params.has('own')) {
+  const fetched = self.fetch.bind(self);
+  self.fetch = (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.origin === self.location.origin && /^\/(own|\.well-known)\//.test(url.pathname))
+      own.push({ url: request.url, method: request.method, credentials: request.credentials });
+    return fetched(request);
+  };
+}
 if (params.has('at')) Object.defineProperty(self, 'location', { value: new URL(params.get('at')) });
 if (params.has('abandon-abort')) globalThis.sliccAbandonOnAbort = true;
 const running = runAgentWorker(self, {

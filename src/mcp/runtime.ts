@@ -13,6 +13,7 @@ import {
   type McpConfig,
   type McpConfigProblem,
   type McpServerEntry,
+  ownOrigin,
   parseMcpConfig,
   sameConfig,
   usesOAuth,
@@ -53,6 +54,7 @@ export interface McpAttach {
   toolSearch: boolean;
   cors: boolean;
   redirect: string;
+  origin: string;
 }
 
 export interface ServerStatus {
@@ -188,7 +190,11 @@ export async function attachMcp(
   let listed: McpConfig = { servers: [], problems: [], refused: [] };
   const log = serverLog(options, context);
   const { vault } = options;
-  const base = (input: string | URL | Request, init?: RequestInit) => options.fetch(input, init);
+  const base = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === options.origin) throw new TypeError(ownOrigin(url.origin));
+    return options.fetch(input, { ...init, credentials: 'omit' });
+  };
   const fetcher = (server: string) => vault.fetch(server, base);
   const oauth = (entry: McpServerEntry) => new StoredOAuth(entry, options.store, options.redirect);
   const transport = async (entry: McpServerEntry) => {
@@ -235,7 +241,7 @@ export async function attachMcp(
   };
   const reload = async (using: Context) => {
     const read = await env.readTextFile(configPath(home, options.agentDir), using);
-    const parsed = parseMcpConfig(read.ok ? read.value : undefined);
+    const parsed = parseMcpConfig(read.ok ? read.value : undefined, options.origin);
     for (const problem of parsed.problems)
       await report(problemLick(problem, home, options.agentDir), using);
     listed = parsed;
@@ -291,7 +297,7 @@ export async function attachMcp(
         grant: (server) => vault.grant(server, fetcher(server)),
         register: (server, url) => vault.token(server, url),
         listed: () => listed,
-        file: mcpFile(env, configPath(home, options.agentDir), home, context),
+        file: mcpFile(env, configPath(home, options.agentDir), home, context, options.origin),
       },
       restart,
       listeners

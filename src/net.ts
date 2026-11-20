@@ -204,7 +204,9 @@ export function transportFetch(
         transport.traits?.unavailable ||
         request.credentials === 'include')
     ) {
-      return native(request);
+      return native(
+        request.credentials === 'include' ? request : new Request(request, { credentials: 'omit' })
+      );
     }
     return carried(transport, request, headers);
   };

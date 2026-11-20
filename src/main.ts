@@ -615,6 +615,7 @@ export async function start(
       toolSearch: chosen.toolSearch,
       cors: pageOnly(client.transport),
       redirect: options.mcpRedirect ?? mcpRedirect(scope.location),
+      origin: scope.location.origin,
     },
     BACKGROUND_CONTEXT
   );

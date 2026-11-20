@@ -73,6 +73,13 @@ const helpers = () => {
       .filter((part) => part.type === 'tool')
       .map((part) => part.tool);
   window.licks = () => window.agent.messages().filter((message) => message.role === 'lick');
+  window.own = () =>
+    new Promise((resolve) => {
+      const { port1, port2 } = new MessageChannel();
+      port1.onmessage = ({ data }) => resolve(data);
+      window.worker.postMessage({ own: port2 }, [port2]);
+    });
+  window.account = (id) => window.model.settings.accounts().find((account) => account.id === id);
 };
 
 async function serve(cors, extra = {}) {
@@ -1142,4 +1149,69 @@ test('the MCP callback page hands a sign-in SLICC started back, strips its addre
     }
   );
   assert.doesNotMatch(seen.body, /secret-code-123/);
+});
+
+test("an MCP server on the page's own origin is refused clearly, in the file and in Settings, and no request goes there", async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const origin = new URL(chrome.url).origin;
+  await page.evaluate(async (origin) => {
+    await cookieStore.set('slicc_session', 'dummy-session-0001');
+    return window.write(
+      '/home/.pi/agent/mcp.json',
+      JSON.stringify({
+        mcpServers: {
+          own: { url: `${origin}/own/mcp`, exposure: 'direct' },
+          docs: { url: 'https://mcp.test/mcp', exposure: 'direct' },
+        },
+      })
+    );
+  }, origin);
+  await staged(page, 'the agent', () => window.start('relay=mcp.test&own'));
+  await page.within(60000, () => window.account('mcp:docs')?.state === 'connected');
+  await page.within(60000, () => window.licks().some((lick) => /"own"/.test(lick.title ?? '')));
+  const seen = await page.evaluate(async (origin) => {
+    const added = await window.model.settings.addServer('again', { url: `${origin}/own/again` });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return {
+      state: window.account('mcp:own')?.state,
+      refusals: await window.model.settings.refusals(),
+      licks: window
+        .licks()
+        .filter((lick) => /"own"/.test(lick.title ?? ''))
+        .map(({ title, text }) => ({ title, text })),
+      added,
+      own: await window.own(),
+    };
+  }, origin);
+  const reason = `url is refused. MCP never reaches this page's own origin, ${origin}: a request there would reach SLICC itself`;
+  assert.deepEqual(seen.own, []);
+  assert.equal(seen.state, 'refused');
+  assert.deepEqual(seen.refusals, { own: { code: 'bad-url', reason } });
+  assert.deepEqual(seen.licks, [
+    { title: 'MCP config problem: server "own", field url', text: reason },
+  ]);
+  assert.deepEqual(seen.added, { ok: false, code: 'bad-url', reason });
+});
+
+test("an MCP server whose sign-in points at the page's own origin is refused there, and no request goes there", async (t) => {
+  const origin = new URL(chrome.url).origin;
+  const docs = await serve(true, { oauth: { issuer: origin } });
+  try {
+    const page = await mcpPage(t, docs, { query: 'answer=Noted.&own' });
+    const seen = await page.evaluate(async () => {
+      await cookieStore.set('slicc_session', 'dummy-session-0001');
+      const result = await window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.message
+      );
+      return { result, own: await window.own() };
+    });
+    assert.deepEqual(seen.own, []);
+    assert.match(seen.result, /MCP never reaches this page's own origin/);
+    assert.deepEqual(docs.fake.state.oauth.authorizations, []);
+  } finally {
+    docs.close();
+  }
 });
