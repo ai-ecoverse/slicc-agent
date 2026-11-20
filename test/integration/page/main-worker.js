@@ -901,7 +901,35 @@ const tracelessKernel = async (port) => {
     },
   });
 };
-const attach = params.has('older-kernel') ? tracelessKernel : relayedAttach;
+const chosen = params.has('older-kernel') ? tracelessKernel : relayedAttach;
+const runs = new BroadcastChannel('slicc-test-sudo-runs');
+const runner = crypto.randomUUID();
+const heldRun = params.get('hold-sudo-run');
+const never = () => new Promise(() => undefined);
+const seenRuns = (client) =>
+  new Proxy(client, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (typeof value !== 'function') return value;
+      if (key === 'trace')
+        return async (tag, ...rest) => {
+          const made = await value.call(target, tag, ...rest);
+          runs.postMessage({ runner, traced: tag });
+          return made;
+        };
+      if (key !== 'sudoRun') return value.bind(target);
+      return async (replay, options) => {
+        runs.postMessage({ runner, called: options?.tag });
+        if (heldRun === 'unsent') return never();
+        const started = await value.call(target, replay, options);
+        runs.postMessage({ runner, accepted: options?.tag, pid: started.pid });
+        return heldRun === 'sent' ? never() : started;
+      };
+    },
+  });
+const attach = params.has('runs-seen')
+  ? async (port) => seenRuns(await (chosen ?? attachKernel)(port))
+  : chosen;
 const e2e = params.has('e2e')
   ? [adobeProvider({ endpoint: `https://${MODEL_HOST}`, session: 'e2e' })]
   : [];

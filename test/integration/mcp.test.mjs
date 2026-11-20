@@ -1248,6 +1248,20 @@ const upstream = (page) =>
       })
   );
 
+const REFUSED = /MCP never reaches this page's own origin/;
+
+const refusal = async (page) => {
+  await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
+  return page.within(
+    60000,
+    (refused) => {
+      const licks = window.licks().map(({ title, text }) => ({ title, text }));
+      return new RegExp(refused).test(JSON.stringify(licks)) && licks;
+    },
+    REFUSED.source
+  );
+};
+
 for (const [what, chain] of [
   ['302', (own) => ({ '/mcp': { status: 302, location: `${own}/own/found` } })],
   ['307', (own) => ({ '/mcp': { status: 307, location: `${own}/own/temporary` } })],
@@ -1262,20 +1276,13 @@ for (const [what, chain] of [
   test(`a ${what} redirect from an MCP server to the page's own origin is refused before anything is sent there`, async (t) => {
     const origin = new URL(chrome.url).origin;
     const page = await moving(t, chain(origin));
-    await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
-    const seen = await page.evaluate(async () => ({
-      own: await window.own(),
-      licks: window.licks().map(({ title, text }) => ({ title, text })),
-    }));
-    assert.deepEqual(seen.own, []);
-    assert.match(JSON.stringify(seen.licks), /MCP never reaches this page's own origin/);
+    assert.match(JSON.stringify(await refusal(page)), REFUSED);
+    assert.deepEqual(await page.evaluate(() => window.own()), []);
     const sent = (await upstream(page)).map(({ url, redirect }) => ({ url, redirect }));
     assert.ok(sent.every((item) => item.redirect === 'manual'));
     assert.ok(sent.every((item) => new URL(item.url).origin !== origin));
   });
 }
-
-const REFUSED = /MCP never reaches this page's own origin/;
 
 for (const [what, traits, move, asked] of [
   [
@@ -1296,22 +1303,18 @@ for (const [what, traits, move, asked] of [
     const page = await moving(t, { '/mcp': move(origin) }, [
       `unproven=${encodeURIComponent(JSON.stringify(traits))}`,
     ]);
-    await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
-    const seen = await page.evaluate(async () => ({
-      own: await window.own(),
-      licks: window.licks().map(({ title, text }) => ({ title, text })),
-    }));
-    assert.match(JSON.stringify(seen.licks), REFUSED);
-    assert.ok(seen.own.length > 0);
-    for (const item of seen.own)
+    assert.match(JSON.stringify(await refusal(page)), REFUSED);
+    const own = await page.evaluate(() => window.own());
+    assert.ok(own.length > 0);
+    for (const item of own)
       assert.deepEqual(item, { url: `${origin}/own/hidden`, method: 'GET', credentials: 'omit' });
     const sent = await upstream(page);
     assert.ok(sent.every((item) => item.url === 'https://mcp.test/mcp'));
     const redirects = sent.map(({ redirect }) => redirect);
-    assert.equal(redirects.length, seen.own.length * asked.length);
+    assert.equal(redirects.length, own.length * asked.length);
     assert.deepEqual(
       redirects,
-      seen.own.flatMap(() => asked)
+      own.flatMap(() => asked)
     );
   });
 }
@@ -1368,11 +1371,7 @@ test("through the page's fetch, an MCP server redirecting to the page's own orig
     JSON.stringify({ mcpServers: { docs: { url, exposure: 'direct' } } })
   );
   await staged(page, 'the agent', (q) => window.start(q, true), 'own');
-  await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
-  const licks = await page.evaluate(() =>
-    window.licks().map(({ title, text }) => ({ title, text }))
-  );
-  assert.match(JSON.stringify(licks), REFUSED);
+  assert.match(JSON.stringify(await refusal(page)), REFUSED);
   assert.ok(heard.some((item) => item.method === 'POST' && item.path === '/mcp'));
   assert.ok(answered.length > 0);
   const hops = await sent.to(hidden);
