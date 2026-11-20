@@ -21,6 +21,7 @@ import type { Guests } from './guests/index.ts';
 import type { LickSources, Licks } from './licks/index.ts';
 import { LICK_STATE_KIND } from './licks/state.ts';
 import type { MemoryRuntime } from './memory/index.ts';
+import { submitTyped } from './memory/origin.ts';
 import type { Monitor } from './monitor/index.ts';
 import { type EntriesPage, type EntriesRequest, entriesPage } from './remote/history.ts';
 import type { Scoops, ScoopsRuntime } from './scoops/index.ts';
@@ -384,6 +385,30 @@ async function contentOf(
   return scrubItems(await userParts(text, request.attachments, saver));
 }
 
+async function submitted(
+  harness: Harness,
+  request: SendRequest,
+  conversation: Conversation,
+  using: { skills: Pick<SkillsRuntime, 'expand'> | undefined; uploads: Uploads | undefined },
+  context: Context
+): Promise<number> {
+  const expanded = using.skills
+    ? await using.skills.expand(request.text, context, conversation.id)
+    : request.text;
+  return submitTyped(
+    harness,
+    conversation,
+    {
+      type: 'input',
+      content: await contentOf(expanded, request, conversation, using.uploads, context),
+      whenBusy: request.whenBusy,
+      ...(request.requestId ? { requestId: request.requestId } : {}),
+    },
+    expanded === request.text ? undefined : await scrubText(request.text),
+    context
+  );
+}
+
 const pager =
   (conversationFor: (agentId: string | null, context: Context) => Promise<Conversation>) =>
   async (request: EntriesRequest, context: Context): Promise<EntriesPage> =>
@@ -492,18 +517,7 @@ export function createAgentControl(
           );
         const response = await accepted(async () => {
           const conversation = await conversationFor(request.agentId, context);
-          const expanded = skills
-            ? await skills.expand(request.text, context, conversation.id)
-            : request.text;
-          return conversation.submit(
-            {
-              type: 'input',
-              content: await contentOf(expanded, request, conversation, uploads, context),
-              whenBusy: request.whenBusy,
-              ...(request.requestId ? { requestId: request.requestId } : {}),
-            },
-            context
-          );
+          return submitted(harness, request, conversation, { skills, uploads }, context);
         });
         const id = response.submissionId === null ? undefined : submissionId(response.submissionId);
         if (id !== undefined) deliveries?.expect(id, request.whenBusy);
