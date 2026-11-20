@@ -335,3 +335,56 @@ test('on a byte stream that loses what is sent before its first message arrives,
   assert.equal(seen.after, 1, 'the raw client sends its hello first');
   assert.equal(seen.raw, 'version', 'a link whose hello never arrives is still refused');
 });
+
+test('the four-call guest limit belongs to the link: holds of the guest service on one link share four calls in flight, the fifth is answered as unavailable and the link stays open, and another link of the same seat has its own four', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, `answer=Hello.&directory=/raw-calls-${Date.now()}&crash=before`);
+  const seen = await staged(page, 'link call budget', async () => {
+    const { owner, local, seat } = globalThis.raw;
+    const guest = await seat('raw-busy');
+    const first = await openRawLink(await owner.port({ guest }));
+    const second = await openRawLink(await owner.port({ guest }));
+    const wait = (ms) => new Promise((resolve) => setTimeout(() => resolve('pending'), ms));
+    const answered = (call) =>
+      Promise.race([
+        call.then(
+          (reply) => ('error' in reply ? [reply.error.code, reply.error.message] : 'answered'),
+          () => 'ended'
+        ),
+        wait(300),
+      ]);
+    let n = 0;
+    const propose = (hold) => {
+      n += 1;
+      return hold.call('propose', [{ text: `Message ${n}`, requestId: `raw-call-${n}` }]);
+    };
+    const one = await first.hold('guest');
+    const two = await first.hold('guest');
+    const flying = [propose(one), propose(two), propose(one), propose(two)];
+    const inFlight = await answered(Promise.any(flying));
+    const over = [await answered(propose(one)), await answered(propose(two))];
+    const three = await first.hold('guest');
+    const later = await answered(three.call('guestOpen', [{}]));
+    const other = await second.hold('guest');
+    const fresh = await answered(other.call('guestOpen', [{}]));
+    const own = [propose(other), propose(other), propose(other), propose(other)];
+    const ownInFlight = await answered(Promise.any(own));
+    const ownOver = await answered(propose(other));
+    const open = await Promise.race([first.closed.then(() => 'closed'), wait(300)]);
+    const variants = [one.variant, two.variant, three.variant, other.variant];
+    first.close();
+    second.close();
+    await local.close();
+    await owner.release();
+    return { variants, inFlight, over, later, fresh, ownInFlight, ownOver, open };
+  });
+  const busy = ['unavailable', 'Too many calls in progress on this connection (4)'];
+  assert.deepEqual(seen.variants, ['guest', 'guest', 'guest', 'guest']);
+  assert.equal(seen.inFlight, 'pending', 'four calls across two holds are still in flight');
+  assert.deepEqual(seen.over, [busy, busy]);
+  assert.deepEqual(seen.later, busy, 'a hold made later on the same link shares its four');
+  assert.equal(seen.fresh[0], 'forbidden', 'another link of the seat is not busy');
+  assert.equal(seen.ownInFlight, 'pending');
+  assert.deepEqual(seen.ownOver, busy);
+  assert.equal(seen.open, 'pending', 'the busy link stays open');
+});

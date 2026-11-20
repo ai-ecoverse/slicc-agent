@@ -46,7 +46,7 @@ import { IDLE, type ImportProgress } from './freezer/v6.ts';
 import { captureGate } from './guests/capture.ts';
 import { createGuests, type Guests } from './guests/index.ts';
 import type { ScoopReviewHost } from './guests/scoop.ts';
-import { admitGuest, GUEST_CALLS, guestOpener, limited } from './guests/serve.ts';
+import { admitGuest, guestOpener, limited } from './guests/serve.ts';
 import { createInventory } from './inventory.ts';
 import type { UserClients } from './kernel/users.ts';
 import { MAX_FRAME } from './link.ts';
@@ -743,7 +743,7 @@ function facetOf(serving: Served) {
             proposals: later('proposals'),
             ...limited(
               served(() => seat.value.value, GUEST_METHODS),
-              GUEST_CALLS
+              principal.calls
             ),
           },
         };

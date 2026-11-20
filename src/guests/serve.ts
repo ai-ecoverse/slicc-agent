@@ -5,7 +5,7 @@ import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
 import { MAX_FRAME } from '../link.ts';
 import { type AgentGuest, type GuestProposal, type GuestShown, helloOf } from '../services.ts';
-import type { AgentPrincipal, GuestPrincipal, Served } from '../serving.ts';
+import type { AgentPrincipal, GuestPrincipal, LinkCalls, Served } from '../serving.ts';
 import { createState, type State } from '../state.ts';
 import { type PortEndpoint, PortLink, refuse, SEAT } from '../wire.ts';
 import type { Guests } from './index.ts';
@@ -86,19 +86,18 @@ export function guestOpener(
 
 export const TOO_MANY_CALLS = `Too many calls in progress on this connection (${GUEST_CALLS})`;
 
-export function limited(methods: Served, max: number): Served {
-  let running = 0;
+export function limited(methods: Served, calls: LinkCalls): Served {
   return Object.fromEntries(
     Object.entries(methods).map(([name, call]) => [
       name,
       async (args: unknown[], ctx: Ctx) => {
-        if (running >= max)
+        if (calls.running >= calls.max)
           throw new ChordError({ code: 'unavailable', reason: 'busy', message: TOO_MANY_CALLS });
-        running += 1;
+        calls.running += 1;
         try {
           return await call(args, ctx);
         } finally {
-          running -= 1;
+          calls.running -= 1;
         }
       },
     ])
@@ -121,9 +120,13 @@ export function admitGuest(
   }
   const port = new PortLink(endpoint, helloOf(serverId));
   void port.ended.then(guests.joined(guest.id));
+  const calls: LinkCalls = { running: 0, max: GUEST_CALLS };
   host.accept(
     port,
-    { principal: { kind: 'guest', link, guest }, limits: { part: MAX_FRAME, decoded: MAX_FRAME } },
+    {
+      principal: { kind: 'guest', link, guest, calls },
+      limits: { part: MAX_FRAME, decoded: MAX_FRAME },
+    },
     context
   );
 }
