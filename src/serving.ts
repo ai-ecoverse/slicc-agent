@@ -31,9 +31,11 @@ export type GuestPrincipal = {
   epoch: number;
 };
 
+export type LinkCalls = { running: number; readonly max: number };
+
 export type AgentPrincipal =
   | { kind: 'owner' | 'control' | 'view'; link: number; device?: string }
-  | { kind: 'guest'; link: number; guest: GuestPrincipal }
+  | { kind: 'guest'; link: number; guest: GuestPrincipal; calls: LinkCalls }
   | { kind: 'host' };
 
 export const SELF: AgentPrincipal = { kind: 'host' };
