@@ -5,12 +5,15 @@ import { launch, staged } from './chrome.mjs';
 const chrome = await launch();
 after(() => chrome.close());
 
-async function boot(page, { worker = 'agent-worker.js', query = '', files = {} } = {}) {
+async function boot(
+  page,
+  { worker = 'agent-worker.js', query = '', files = {}, kernelWorker = null } = {}
+) {
   await page.goto('/');
   await staged(
     page,
     'the sudo agent',
-    async (worker, query, files) => {
+    async (worker, query, files, kernelWorker) => {
       for (const [path, text] of Object.entries(files)) {
         const parts = path.split('/').filter(Boolean);
         const name = parts.pop();
@@ -26,9 +29,13 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
       const asked = [];
       const replies = [];
       const held = {};
+      const runs = [];
+      for (const name of ['slicc-test-sudo-runs', 'held-sudo-run'])
+        new BroadcastChannel(name).onmessage = ({ data }) => runs.push(data);
       const kernel = await bootKernel(
         {},
         {
+          ...(kernelWorker ? { worker: new URL(kernelWorker, location.href) } : {}),
           users: 'enforce',
           approve: (req, options) => {
             if (held.late) return held.late(req);
@@ -122,6 +129,13 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         '/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js'
       );
       const client = async (tag) => attachKernel(await kernel.connect({ user: 'cone', tag }));
+      let root;
+      const tagged = async (tag) => {
+        root ??= kernel.connect().then(attachKernel);
+        return (await (await root).ps()).filter(
+          (row) => row.state !== 'Z' && [row.tags ?? row.tag ?? []].flat().includes(tag)
+        );
+      };
       const call = (message) =>
         new Promise((resolve) => {
           const { port1, port2 } = new MessageChannel();
@@ -168,11 +182,14 @@ async function boot(page, { worker = 'agent-worker.js', query = '', files = {} }
         sudo,
         tags,
         client,
+        runs,
+        tagged,
       };
     },
     worker,
     query,
-    files
+    files,
+    kernelWorker
   );
 }
 
@@ -1138,19 +1155,24 @@ test('a replay whose script changed since the request is refused by the kernel, 
   assert.equal(seen.licks, 0);
 });
 
+const GATED = (end) => ['bash', '-c', `while [ ! -e "$0" ]; do sleep 0.1; done; ${end}`];
+
 async function lateRun(
   t,
   { argv, swap, stop, restart, secret, survive, extra = '', after = null }
 ) {
   const page = await chrome.page(t);
-  const persist = restart ? `&persist=/.slicc/late-run-${Date.now()}` : '';
+  const at = Date.now();
+  const persist = restart ? `&persist=/.slicc/late-run-${at}&runs-seen` : '';
   const query = `?answer=Noted.&answer=Noted.&answer=Noted.${persist}`;
+  const gate = `/tmp/late-run-gate-${at}`;
+  const ran = restart ? [...argv, gate] : argv;
   await boot(page, { worker: 'main-worker.js', query: `${query}${extra}` });
   return staged(
     page,
     'a late sudo run',
-    async ({ argv, swap, stop, restart, secret, survive, query, after }) => {
-      const { owner, until, kernel, timeOut } = globalThis.t;
+    async ({ argv, swap, stop, restart, secret, survive, query, after, gate }) => {
+      const { owner, until, kernel, timeOut, runs, tagged } = globalThis.t;
       const sh = (script, user) => kernel.run(['bash', '-c', script], user ? { user } : {});
       if (secret)
         await sh(
@@ -1184,16 +1206,32 @@ async function lateRun(
         await model.approvals.stopRun(id);
       }
       if (restart) {
+        const tag = `sudo-run:${id}`;
+        const first = runs.find((seen) => seen.called === tag)?.runner;
+        const open = async () => {
+          await sh(`mkdir -p /tmp && touch ${gate}`);
+        };
         await local.close();
         if (restart === 'gone') {
           await owner.release();
-          await new Promise((resolve) => setTimeout(resolve, 4000));
+          await open();
+          await until(
+            async () => (await tagged(tag)).length === 0,
+            'the run to end while no worker runs'
+          );
         }
         if (after !== null) globalThis.t.setQuery(`${query}${after}`);
         const restarted = owner.restart();
         await restarted;
         local = await owner.connect();
         model = createAgentModel(local);
+        if (restart === 'exit') {
+          await until(
+            () => runs.some((seen) => seen.traced === tag && seen.runner !== first),
+            'the restarted worker to watch the run'
+          );
+          await open();
+        }
       }
       await until(() => record()?.run?.endedAt, 'the run to end');
       const took = Date.now() - at;
@@ -1234,7 +1272,7 @@ async function lateRun(
       await owner.release();
       return result;
     },
-    { argv, swap, stop, restart, secret, survive, query, after }
+    { argv: ran, swap, stop, restart, secret, survive, query, after, gate }
   );
 }
 
@@ -1301,14 +1339,14 @@ test('Stop sends SIGKILL 5 s later to a late run that ignores SIGTERM', async (t
 });
 
 test('a late run that exits after a worker restart is picked up with its status', async (t) => {
-  const seen = await lateRun(t, { argv: ['bash', '-c', 'sleep 4; exit 7'], restart: 'exit' });
+  const seen = await lateRun(t, { argv: GATED('exit 7'), restart: 'exit' });
   assert.equal(seen.run.state, 'done');
   assert.equal(seen.run.status, 7);
   assert.match(seen.end, /exited with status 7/);
 });
 
 test('a late run that ends while the worker restarts is done with its status unknown', async (t) => {
-  const seen = await lateRun(t, { argv: ['sleep', '2'], restart: 'gone' });
+  const seen = await lateRun(t, { argv: GATED('true'), restart: 'gone' });
   assert.equal(seen.run.state, 'done');
   assert.equal(seen.run.status, undefined);
   assert.match(seen.end, /status unknown/);
@@ -1320,7 +1358,7 @@ for (const [name, after] of [
 ]) {
   test(`a late run that outlives a worker restart with ${name} is still watched and ends with its real status`, async (t) => {
     const seen = await lateRun(t, {
-      argv: ['bash', '-c', 'sleep 4; exit 7'],
+      argv: GATED('exit 7'),
       restart: 'exit',
       extra: '&btime=100',
       after,
@@ -1331,6 +1369,137 @@ for (const [name, after] of [
     assert.match(seen.end, /exited with status 7/);
   });
 }
+
+async function interruptedCall(t, how) {
+  const page = await chrome.page(t);
+  const at = Date.now();
+  const query = `?answer=Noted.&answer=Noted.&answer=Noted.&persist=/.slicc/run-call-${at}&runs-seen`;
+  const gate = `/tmp/run-call-gate-${at}`;
+  const argv = [
+    'bash',
+    '-c',
+    'echo ran >> "$0.runs"; set -m; sleep 300 </dev/null >/dev/null 2>&1 & set +m; while [ ! -e "$0" ]; do sleep 0.1; done; exit 7',
+    gate,
+  ];
+  const kernelHeld = how === 'received';
+  await boot(page, {
+    worker: 'main-worker.js',
+    query: kernelHeld ? query : `${query}&hold-sudo-run=${how}`,
+    ...(kernelHeld ? { kernelWorker: '/held-sudo-run-kernel-worker.js' } : {}),
+  });
+  return staged(
+    page,
+    'a late run whose call a restart interrupts',
+    async ({ how, query, gate, argv }) => {
+      const { owner, until, kernel, timeOut, runs, tagged, setQuery } = globalThis.t;
+      const sh = (script) => kernel.run(['bash', '-c', script]);
+      let local = await owner.connect();
+      let model = createAgentModel(local);
+      const { id } = await timeOut(local, argv);
+      const tag = `sudo-run:${id}`;
+      const record = () => model.approvals.history().find((entry) => entry.approval.id === id);
+      await until(() => record()?.runnable === true, 'Run now to be offered');
+      await model.approvals.run(id);
+      const mark = { sent: 'accepted', unsent: 'called', received: 'held' }[how];
+      await until(() => runs.some((seen) => seen[mark] === tag), 'the call to reach its hold');
+      const before = record().run;
+      const first = runs.find((seen) => seen.called === tag)?.runner;
+      await local.close();
+      setQuery(query);
+      if (how === 'received') {
+        await owner.release();
+        new BroadcastChannel('held-sudo-run').postMessage('go');
+        await until(async () => (await tagged(tag)).length > 0, 'the kernel to take the call');
+      }
+      const lead =
+        how === 'sent'
+          ? runs.find((seen) => seen.accepted === tag).pid
+          : Math.min(...(await tagged(tag)).map((row) => row.pid));
+      await owner.restart();
+      local = await owner.connect();
+      model = createAgentModel(local);
+      if (how !== 'unsent') {
+        await until(
+          () => runs.some((seen) => seen.traced === tag && seen.runner !== first),
+          'the restarted worker to watch the run'
+        );
+        await sh(`mkdir -p /tmp && touch ${gate}`);
+      }
+      await until(() => record()?.run?.endedAt, 'the run to end');
+      const licks = () =>
+        (local.transcript.value?.entries ?? [])
+          .filter((entry) => entry.kind === 'pi.user')
+          .map((entry) => JSON.stringify(entry.model?.[0]?.content ?? ''))
+          .filter((text) => text.includes('channel=\\"sudo-run\\"'));
+      const ended = () => licks().filter((text) => text.includes('late sudo run ended'));
+      if (how !== 'unsent') await until(() => ended().length, 'the end lick');
+      const run = record().run;
+      let stopped = null;
+      if (run.survivors?.length) {
+        stopped = await model.approvals.stopRun(id).then(
+          () => null,
+          (error) => error.message
+        );
+        await until(() => !record()?.run?.survivors, 'the survivors to end');
+      }
+      const result = {
+        before,
+        run,
+        lead: Number.isFinite(lead) ? lead : null,
+        calls: runs.filter((seen) => seen.called === tag).map((seen) => seen.runner === first),
+        accepted: runs.filter((seen) => seen.accepted === tag).length,
+        ran: (await sh(`cat ${gate}.runs 2>/dev/null`)).stdout,
+        left: (await tagged(tag)).length,
+        starts: licks().filter((text) => text.includes('sudo runs now')).length,
+        ends: ended(),
+        stopped,
+      };
+      await local.close();
+      await owner.release();
+      return result;
+    },
+    { how, query, gate, argv }
+  );
+}
+
+for (const [name, how, accepted] of [
+  ['after the kernel started it, before the task recorded its pid', 'sent', 1],
+  ['after the kernel got the call, which it takes once the worker is gone', 'received', 0],
+]) {
+  test(`a late run whose call a worker restart interrupts ${name} is adopted by its tag, runs once and reports once`, async (t) => {
+    const seen = await interruptedCall(t, how);
+    assert.equal(seen.before.state, 'starting');
+    assert.equal(seen.before.pid, undefined);
+    assert.deepEqual(seen.calls, [true]);
+    assert.equal(seen.accepted, accepted);
+    assert.equal(seen.ran, 'ran\n');
+    assert.equal(seen.run.pid, seen.lead);
+    assert.equal(seen.run.state, 'done');
+    assert.equal(seen.run.status, 7);
+    assert.equal(seen.run.error, undefined);
+    assert.equal(seen.run.survivors.length, 1);
+    assert.equal(seen.stopped, null);
+    assert.equal(seen.left, 0);
+    assert.equal(seen.starts, 1);
+    assert.equal(seen.ends.length, 1);
+    assert.match(seen.ends[0], /exited with status 7/);
+    assert.match(seen.ends[0], new RegExp(`Still running: pid ${seen.run.survivors[0]}\\.`));
+  });
+}
+
+test('a late run whose call a worker restart interrupts before it reached the kernel never runs, ends interrupted and tells nobody', async (t) => {
+  const seen = await interruptedCall(t, 'unsent');
+  assert.equal(seen.before.state, 'starting');
+  assert.deepEqual(seen.calls, [true]);
+  assert.equal(seen.accepted, 0);
+  assert.equal(seen.ran, '');
+  assert.equal(seen.left, 0);
+  assert.equal(seen.run.state, 'failed');
+  assert.equal(seen.run.error, 'interrupted before it started');
+  assert.equal(seen.run.pid, undefined);
+  assert.equal(seen.starts, 0);
+  assert.deepEqual(seen.ends, []);
+});
 
 const RUN_TIMES = (times) => `&run-times=${encodeURIComponent(JSON.stringify(times))}`;
 
