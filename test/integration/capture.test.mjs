@@ -27,12 +27,15 @@ printf '%s\n' "$line" >&3
 if [ -n "$2" ]; then timeout "$2" cat <&3; else cat <&3; fi
 echo`;
 
-async function boot(page, { steps, judge = null, files = {}, users = 'enforce' }) {
+async function boot(
+  page,
+  { steps, later = [], persist = null, judge = null, files = {}, users = 'enforce' }
+) {
   await page.goto('/');
   await staged(
     page,
     'the capture agent',
-    async ({ steps, judge, files, users, requests, script }) => {
+    async ({ steps, later, persist, judge, files, users, requests, script }) => {
       for (const [path, text] of Object.entries(files)) {
         const parts = path.split('/').filter(Boolean);
         const name = parts.pop();
@@ -72,15 +75,21 @@ async function boot(page, { steps, judge = null, files = {}, users = 'enforce' }
       };
       const kernel = await bootKernel({}, { users });
       let worker;
+      let lives = 0;
       const owner = await startTracked({
         worker: () => {
+          lives += 1;
           worker = new Worker(
             `/dist-test/main-worker.js?${new URLSearchParams([
               ['scoop-say', ''],
+              ...(persist ? [['persist', persist]] : []),
               ...(judge
                 ? [['judge', ''], ...judge.map((step) => ['judge-step', JSON.stringify(step)])]
                 : []),
-              ...steps.map((step) => ['step', JSON.stringify(step)]),
+              ...(lives === 1 ? steps : (later[lives - 2] ?? [])).map((step) => [
+                'step',
+                JSON.stringify(step),
+              ]),
             ])}`,
             { type: 'module' }
           );
@@ -104,13 +113,18 @@ async function boot(page, { steps, judge = null, files = {}, users = 'enforce' }
       await r.sh(`cat > /tmp/embed <<'EOF'\n${script}\nEOF`);
       for (const [name, request] of Object.entries(requests))
         await r.sh(`printf '%s\\n' '${JSON.stringify(request)}' > /tmp/req-${name}.json`);
+      r.restart = async () => {
+        await r.local.close();
+        await owner.restart();
+        await r.open();
+      };
       r.open = async () => {
         r.local = await owner.connect();
         r.model = createAgentModel(r.local, { guests: hub });
         await r.model.agent.ready();
       };
-      r.mint = async (tools, label = 'Anna') => {
-        const minted = await r.model.guests.mint('cone', {
+      r.mint = async (tools, label = 'Anna', agentId = 'cone') => {
+        const minted = await r.model.guests.mint(agentId, {
           label,
           expiresAt: null,
           gates: { messages: 'off', tools },
@@ -153,6 +167,21 @@ async function boot(page, { steps, judge = null, files = {}, users = 'enforce' }
         await r.model.approvals.decide(first.id, 'once');
         return first.summary;
       };
+      r.file = async (path) =>
+        until(
+          async () => (await r.sh(`cat ${path} 2>/dev/null`)).stdout.trim(),
+          `the program to write ${path}`
+        );
+      r.refused = (id) =>
+        r.model.approvals.decide(id, 'once').then(
+          () => 'decided',
+          (error) => error.message
+        );
+      r.ended = (id) =>
+        until(
+          () => r.captures().find((item) => item.id === id && item.state !== 'pending'),
+          'the capture item to end'
+        );
       r.decide = (id, decision) => r.local.control.decide(id, decision, null, BACKGROUND_CONTEXT);
       r.answered = (count) =>
         until(
@@ -167,7 +196,7 @@ async function boot(page, { steps, judge = null, files = {}, users = 'enforce' }
         });
       globalThis.r = r;
     },
-    { steps, judge, files, users, requests: REQUESTS, script: SCRIPT }
+    { steps, later, persist, judge, files, users, requests: REQUESTS, script: SCRIPT }
   );
 }
 
@@ -633,4 +662,205 @@ test("a guest's capture on a seat whose tools gate is off goes back to the page 
   assert.deepEqual(seen.answers, ['error:EAGAIN', 'once']);
   assert.equal(seen.items, 0);
   assert.equal(seen.judged, 0);
+});
+
+test("a worker restart withdraws a guest's pending capture: the program gets deny, the old item can't be answered, and the next capture asks again", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    persist: `/.slicc/capture-restart-${Date.now()}`,
+    steps: [bash(`${embed('screen')} > /tmp/first.out`)],
+    later: [[answer('Resumed.'), bash(embed('still')), answer('Asked again.')]],
+  });
+  const seen = await staged(page, 'a worker restart withdraws', async () => {
+    const r = globalThis.r;
+    const { until, pause, open, mint, join, send, said, seen, pending, allowTool } = r;
+    await open();
+    const seat = await mint('user');
+    const guest = await join(seat);
+    await send(guest, 'Record the screen.');
+    await allowTool();
+    const item = await pending();
+    await guest.close();
+    await r.restart();
+    const gone = await r.ended(item.id);
+    const out = { gone: `${gone.state}:${gone.reason}`, program: await r.file('/tmp/first.out') };
+    out.listed = r.model.approvals.list().map(({ id }) => id);
+    out.refused = await r.refused(item.id);
+    out.control = (await r.decide(item.id, 'always')).error;
+    await until(() => said().includes('Resumed.'), 'the resumed run');
+    await pause(500);
+    out.before = seen.map(({ answer }) => answer);
+    const again = await join(seat);
+    await send(again, 'Take a still.');
+    await allowTool();
+    const next = await pending();
+    out.next = { fresh: next.id !== item.id, mode: next.detail.mode, seat: next.seat };
+    await r.decide(next.id, 'once');
+    await until(() => said().includes('Asked again.'), 'the run after the restart');
+    out.answers = seen.map(({ answer }) => answer);
+    out.states = r.captures().map((entry) => `${entry.state}:${entry.reason ?? entry.decidedBy}`);
+    await again.close();
+    return out;
+  });
+  assert.deepEqual(seen, {
+    gone: 'withdrawn:restart',
+    program: 'answer: deny',
+    listed: [],
+    refused: 'This request was withdrawn.',
+    control: 'This request was withdrawn.',
+    before: ['deny'],
+    next: { fresh: true, mode: 'still', seat: 'seat-1' },
+    answers: ['deny', 'once'],
+    states: ['withdrawn:restart', 'approved:owner'],
+  });
+});
+
+test("a worker restart withdraws a capture that a program the guest's run left in the background asks for, which gets deny, and its next capture asks again", async (t) => {
+  const page = await chrome.page(t);
+  const job = (name, out) => bash(`(${embed(name)} > ${out}) > /dev/null 2>&1 &`);
+  await boot(page, {
+    persist: `/.slicc/capture-left-${Date.now()}`,
+    steps: [job('camera', '/tmp/left.out'), answer('Left.')],
+    later: [[job('audio', '/tmp/again.out'), answer('Left again.')]],
+  });
+  const seen = await staged(
+    page,
+    'a worker restart withdraws a capture that a program',
+    async () => {
+      const r = globalThis.r;
+      const { until, pause, open, mint, join, send, said, seen, pending, allowTool } = r;
+      await open();
+      const seat = await mint('user');
+      const guest = await join(seat);
+      await send(guest, 'Take a photo in the background.');
+      await allowTool();
+      await until(() => said().includes('Left.'), 'the run that leaves the job');
+      const item = await pending();
+      const out = { asked: { what: item.detail.what, seat: item.seat } };
+      await guest.close();
+      await r.restart();
+      const gone = await r.ended(item.id);
+      out.gone = `${gone.state}:${gone.reason}`;
+      out.program = await r.file('/tmp/left.out');
+      out.refused = await r.refused(item.id);
+      await pause(500);
+      out.before = seen.map(({ answer }) => answer);
+      const again = await join(seat);
+      await send(again, 'Record audio in the background.');
+      await allowTool();
+      await until(() => said().includes('Left again.'), 'the second job');
+      const next = await pending();
+      out.next = { fresh: next.id !== item.id, what: next.detail.what, seat: next.seat };
+      await r.decide(next.id, 'once');
+      out.again = await r.file('/tmp/again.out');
+      out.answers = seen.map(({ answer }) => answer);
+      out.states = r.captures().map((entry) => `${entry.state}:${entry.reason ?? entry.decidedBy}`);
+      await again.close();
+      return out;
+    }
+  );
+  assert.deepEqual(seen, {
+    asked: { what: 'camera', seat: 'seat-1' },
+    gone: 'withdrawn:restart',
+    program: 'answer: deny',
+    refused: 'This request was withdrawn.',
+    before: ['deny'],
+    next: { fresh: true, what: 'microphone', seat: 'seat-1' },
+    again: 'answer: once',
+    answers: ['deny', 'once'],
+    states: ['withdrawn:restart', 'approved:owner'],
+  });
+});
+
+test("a guest's capture pending on a cone that is frozen is withdrawn and denied, stays unanswerable over a restart and the thaw, and on the thawed cone a restart withdraws the next one too", async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, {
+    persist: `/.slicc/capture-frozen-${Date.now()}`,
+    steps: [bash(`${embed('screen')} > /tmp/frozen.out`)],
+    later: [
+      [bash(`${embed('still')} > /tmp/thawed.out`)],
+      [answer('Resumed.'), bash(embed('camera')), answer('Asked again.')],
+    ],
+  });
+  const seen = await staged(
+    page,
+    "a guest's capture pending on a cone that is frozen",
+    async () => {
+      const r = globalThis.r;
+      const { until, pause, open, mint, join, send, said, seen, pending, allowTool } = r;
+      await open();
+      const cone = (await r.local.control.createCone('second', BACKGROUND_CONTEXT)).id;
+      const seat = await mint('user', 'Anna', cone);
+      const guest = await join(seat);
+      await send(guest, 'Record the screen.');
+      await allowTool();
+      const first = await pending();
+      const frozen = await r.local.control.freeze(cone, BACKGROUND_CONTEXT);
+      const gone = await r.ended(first.id);
+      await until(() => seen[0].answer !== null, 'the hook to answer the frozen capture');
+      const out = {
+        gone: `${gone.state}:${gone.reason}`,
+        hook: `${seen[0].answer}:${seen[0].aborted}`,
+        program: (await r.sh('cat /tmp/frozen.out')).stdout,
+      };
+      await guest.close();
+      await r.restart();
+      await pause(500);
+      const kept = r.captures().find((entry) => entry.id === first.id);
+      out.kept = `${kept.state}:${kept.reason}`;
+      out.refused = await r.refused(first.id);
+      out.thawed = (await r.local.control.thaw(frozen.id, BACKGROUND_CONTEXT)).id === cone;
+      out.afterThaw = await r.refused(first.id);
+      const thawed = await join(seat);
+      await send(thawed, 'Take a still.');
+      await allowTool();
+      const second = await pending();
+      out.second = {
+        fresh: second.id !== first.id,
+        agentId: second.agentId,
+        mode: second.detail.mode,
+      };
+      await thawed.close();
+      await r.restart();
+      const withdrawn = await r.ended(second.id);
+      out.withdrawn = `${withdrawn.state}:${withdrawn.reason}`;
+      out.denied = await r.file('/tmp/thawed.out');
+      out.refusedAgain = await r.refused(second.id);
+      await until(() => said(cone).includes('Resumed.'), 'the resumed run on the thawed cone');
+      await pause(500);
+      out.before = seen.map(({ answer, aborted }) => `${answer}:${aborted}`);
+      const last = await join(seat);
+      await send(last, 'Take a photo.');
+      await allowTool();
+      const third = await pending();
+      out.third = {
+        fresh: third.id !== second.id,
+        agentId: third.agentId,
+        what: third.detail.what,
+      };
+      await r.decide(third.id, 'once');
+      await until(() => said(cone).includes('Asked again.'), 'the run after the second restart');
+      out.answers = seen.map(({ answer }) => answer);
+      out.states = r.captures().map((entry) => `${entry.state}:${entry.reason ?? entry.decidedBy}`);
+      await last.close();
+      return out;
+    }
+  );
+  assert.deepEqual(seen, {
+    gone: 'withdrawn:aborted',
+    hook: 'deny:true',
+    program: '',
+    kept: 'withdrawn:aborted',
+    refused: 'This request was withdrawn.',
+    thawed: true,
+    afterThaw: 'This request was withdrawn.',
+    second: { fresh: true, agentId: 'cone-2', mode: 'still' },
+    withdrawn: 'withdrawn:restart',
+    denied: 'answer: deny',
+    refusedAgain: 'This request was withdrawn.',
+    before: ['deny:true', 'deny:false'],
+    third: { fresh: true, agentId: 'cone-2', what: 'camera' },
+    answers: ['deny', 'deny', 'once'],
+    states: ['withdrawn:aborted', 'withdrawn:restart', 'approved:owner'],
+  });
 });
