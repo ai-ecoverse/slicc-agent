@@ -739,7 +739,7 @@ const moved = (request) => {
     body: request.body ? new TextDecoder().decode(request.body) : null,
   });
   const move = moves[url.pathname];
-  if (move?.opaque)
+  if (move?.opaque && (request.redirect === 'manual' || !move.location))
     return { status: 0, headers: [], opaqueRedirect: true, body: (async function* () {})() };
   return move
     ? {
@@ -749,14 +749,44 @@ const moved = (request) => {
       }
     : undefined;
 };
+const own = [];
+const follows = params.has('follows');
+const followed = async (request, answer) => {
+  const url = new URL(answer.headers[0][1], request.url).href;
+  const method =
+    answer.status === 303 || (answer.status < 303 && request.method === 'POST')
+      ? 'GET'
+      : request.method;
+  const { body, ...rest } = request;
+  const next = await relay.fetch({
+    ...rest,
+    url,
+    method,
+    ...(method === request.method && body ? { body } : {}),
+  });
+  return { ...next, url: next.url ?? url, redirected: true };
+};
 const proven =
-  params.has('vault') && !params.has('unproven')
+  (params.has('vault') || follows) && !params.has('unproven')
     ? { redirectPolicy: true }
     : JSON.parse(params.get('unproven') || '{}');
 const relay = {
   traits: { crossOrigin: 'any', ...proven },
   async fetch(request) {
+    if (new URL(request.url).origin === self.location.origin) {
+      const entry = { url: request.url, method: request.method, credentials: 'omit' };
+      own.push(entry);
+      return {
+        status: 404,
+        headers: [],
+        body: (async function* () {
+          yield new TextEncoder().encode('not found');
+          entry.read = true;
+        })(),
+      };
+    }
     const answer = params.has('moved') ? moved(request) : undefined;
+    if (answer && follows && !request.redirect && answer.status) return followed(request, answer);
     if (answer) return answer;
     if (AUTH_HOSTS.has(new URL(request.url).host)) return signIn(request);
     const { host, pathname } = new URL(request.url);
@@ -1120,6 +1150,24 @@ if (version) {
     '/package.json'
       ? Promise.resolve(Response.json({ version }))
       : fetched(input, init);
+}
+self.addEventListener('message', ({ data }) => data?.own?.postMessage(own));
+self.addEventListener('message', ({ data }) => {
+  if (!data?.fetched) return;
+  self.fetch(data.url, data.init).then(
+    (response) => data.fetched.postMessage({ status: response.status }),
+    (error) => data.fetched.postMessage({ error: error.message })
+  );
+});
+if (params.has('own')) {
+  const fetched = self.fetch.bind(self);
+  self.fetch = (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.origin === self.location.origin && /^\/(own|\.well-known)\//.test(url.pathname))
+      own.push({ url: request.url, method: request.method, credentials: request.credentials });
+    return fetched(request);
+  };
 }
 if (params.has('at')) Object.defineProperty(self, 'location', { value: new URL(params.get('at')) });
 if (params.has('abandon-abort')) globalThis.sliccAbandonOnAbort = true;

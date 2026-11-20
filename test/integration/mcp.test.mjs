@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { after, test } from 'node:test';
 import { launch, staged } from './chrome.mjs';
 import { createMcpServer } from './fixtures/mcp-server.mjs';
+import { sentHeaders } from './fixtures/sent-headers.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -73,6 +74,13 @@ const helpers = () => {
       .filter((part) => part.type === 'tool')
       .map((part) => part.tool);
   window.licks = () => window.agent.messages().filter((message) => message.role === 'lick');
+  window.own = () =>
+    new Promise((resolve) => {
+      const { port1, port2 } = new MessageChannel();
+      port1.onmessage = ({ data }) => resolve(data);
+      window.worker.postMessage({ own: port2 }, [port2]);
+    });
+  window.account = (id) => window.model.settings.accounts().find((account) => account.id === id);
 };
 
 async function serve(cors, extra = {}) {
@@ -1142,4 +1150,269 @@ test('the MCP callback page hands a sign-in SLICC started back, strips its addre
     }
   );
   assert.doesNotMatch(seen.body, /secret-code-123/);
+});
+
+test("an MCP server on the page's own origin is refused clearly, in the file and in Settings, and no request goes there", async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const origin = new URL(chrome.url).origin;
+  await page.evaluate(async (origin) => {
+    await cookieStore.set('slicc_session', 'dummy-session-0001');
+    return window.write(
+      '/home/.pi/agent/mcp.json',
+      JSON.stringify({
+        mcpServers: {
+          own: { url: `${origin}/own/mcp`, exposure: 'direct' },
+          docs: { url: 'https://mcp.test/mcp', exposure: 'direct' },
+        },
+      })
+    );
+  }, origin);
+  await staged(page, 'the agent', () => window.start('relay=mcp.test&own'));
+  await page.within(60000, () => window.account('mcp:docs')?.state === 'connected');
+  await page.within(60000, () => window.licks().some((lick) => /"own"/.test(lick.title ?? '')));
+  const seen = await page.evaluate(async (origin) => {
+    const added = await window.model.settings.addServer('again', { url: `${origin}/own/again` });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return {
+      state: window.account('mcp:own')?.state,
+      refusals: await window.model.settings.refusals(),
+      licks: window
+        .licks()
+        .filter((lick) => /"own"/.test(lick.title ?? ''))
+        .map(({ title, text }) => ({ title, text })),
+      added,
+      own: await window.own(),
+    };
+  }, origin);
+  const reason = `url is refused. MCP never reaches this page's own origin, ${origin}: a request there would reach SLICC itself`;
+  assert.deepEqual(seen.own, []);
+  assert.equal(seen.state, 'refused');
+  assert.deepEqual(seen.refusals, { own: { code: 'bad-url', reason } });
+  assert.deepEqual(seen.licks, [
+    { title: 'MCP config problem: server "own", field url', text: reason },
+  ]);
+  assert.deepEqual(seen.added, { ok: false, code: 'bad-url', reason });
+});
+
+test("an MCP server whose sign-in points at the page's own origin is refused there, and no request goes there", async (t) => {
+  const origin = new URL(chrome.url).origin;
+  const docs = await serve(true, { oauth: { issuer: origin } });
+  try {
+    const page = await mcpPage(t, docs, { query: 'answer=Noted.&own' });
+    const seen = await page.evaluate(async () => {
+      await cookieStore.set('slicc_session', 'dummy-session-0001');
+      const result = await window.model.settings.connect('mcp:docs').then(
+        () => 'ok',
+        (error) => error.message
+      );
+      return { result, own: await window.own() };
+    });
+    assert.deepEqual(seen.own, []);
+    assert.match(seen.result, /MCP never reaches this page's own origin/);
+    assert.deepEqual(docs.fake.state.oauth.authorizations, []);
+  } finally {
+    docs.close();
+  }
+});
+
+const moving = async (t, moved, more = []) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.init(fakePopups);
+  await page.goto('/');
+  await page.evaluate(() =>
+    window.write(
+      '/home/.pi/agent/mcp.json',
+      JSON.stringify({ mcpServers: { docs: { url: 'https://mcp.test/mcp', exposure: 'direct' } } })
+    )
+  );
+  const query = [
+    'relay=mcp.test',
+    'follows',
+    `moved=${encodeURIComponent(JSON.stringify(moved))}`,
+    ...more,
+  ].join('&');
+  await staged(page, 'the agent', (q) => window.start(q), query);
+  return page;
+};
+
+const upstream = (page) =>
+  page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = ({ data }) => resolve(data.upstream);
+        window.worker.postMessage({ upstream: port2 }, [port2]);
+      })
+  );
+
+for (const [what, chain] of [
+  ['302', (own) => ({ '/mcp': { status: 302, location: `${own}/own/found` } })],
+  ['307', (own) => ({ '/mcp': { status: 307, location: `${own}/own/temporary` } })],
+  [
+    'two-hop',
+    (own) => ({
+      '/mcp': { status: 302, location: 'https://other.test/hop' },
+      '/hop': { status: 307, location: `${own}/own/second` },
+    }),
+  ],
+]) {
+  test(`a ${what} redirect from an MCP server to the page's own origin is refused before anything is sent there`, async (t) => {
+    const origin = new URL(chrome.url).origin;
+    const page = await moving(t, chain(origin));
+    await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
+    const seen = await page.evaluate(async () => ({
+      own: await window.own(),
+      licks: window.licks().map(({ title, text }) => ({ title, text })),
+    }));
+    assert.deepEqual(seen.own, []);
+    assert.match(JSON.stringify(seen.licks), /MCP never reaches this page's own origin/);
+    const sent = (await upstream(page)).map(({ url, redirect }) => ({ url, redirect }));
+    assert.ok(sent.every((item) => item.redirect === 'manual'));
+    assert.ok(sent.every((item) => new URL(item.url).origin !== origin));
+  });
+}
+
+const REFUSED = /MCP never reaches this page's own origin/;
+
+for (const [what, traits, move, asked] of [
+  [
+    'a hop-reporting extension route',
+    { manualRedirects: true, redirectHops: true },
+    (own) => ({ status: 302, location: `${own}/own/hidden` }),
+    [null],
+  ],
+  [
+    'a route that answers a manual request with an opaque redirect',
+    { redirectPolicy: true },
+    (own) => ({ opaque: true, status: 302, location: `${own}/own/hidden` }),
+    ['manual', null],
+  ],
+]) {
+  test(`on ${what}, an answer that ends on the page's own origin is refused before MCP reads it`, async (t) => {
+    const origin = new URL(chrome.url).origin;
+    const page = await moving(t, { '/mcp': move(origin) }, [
+      `unproven=${encodeURIComponent(JSON.stringify(traits))}`,
+    ]);
+    await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
+    const seen = await page.evaluate(async () => ({
+      own: await window.own(),
+      licks: window.licks().map(({ title, text }) => ({ title, text })),
+    }));
+    assert.match(JSON.stringify(seen.licks), REFUSED);
+    assert.ok(seen.own.length > 0);
+    for (const item of seen.own)
+      assert.deepEqual(item, { url: `${origin}/own/hidden`, method: 'GET', credentials: 'omit' });
+    const sent = await upstream(page);
+    assert.ok(sent.every((item) => item.url === 'https://mcp.test/mcp'));
+    const redirects = sent.map(({ redirect }) => redirect);
+    assert.equal(redirects.length, seen.own.length * asked.length);
+    assert.deepEqual(
+      redirects,
+      seen.own.flatMap(() => asked)
+    );
+  });
+}
+
+test("through the page's fetch, an MCP server redirecting to the page's own origin gets no cookie sent there, and the answer is refused", async (t) => {
+  const origin = new URL(chrome.url).origin;
+  const hidden = `${origin}/own/page-fetch`;
+  const heard = [];
+  const server = createServer(async (request, response) => {
+    const cors = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+      'access-control-allow-headers': request.headers['access-control-request-headers'] ?? '*',
+      'access-control-expose-headers': '*',
+    };
+    if (request.method === 'OPTIONS') return response.writeHead(204, cors).end();
+    for await (const _ of request);
+    heard.push({ method: request.method, path: request.url });
+    response.writeHead(302, { ...cors, location: hidden }).end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/mcp`;
+  const sent = sentHeaders(chrome.cdp);
+  t.after(sent.off);
+  const answered = [];
+  const page = await chrome.page(t);
+  const paused = chrome.cdp.on(({ method, params }) => {
+    if (method !== 'Fetch.requestPaused' || params.request.url !== hidden) return;
+    answered.push(params.request.method);
+    page
+      .send('Fetch.fulfillRequest', {
+        requestId: params.requestId,
+        responseCode: 200,
+        responseHeaders: [
+          { name: 'access-control-allow-origin', value: '*' },
+          { name: 'content-type', value: 'application/json' },
+        ],
+        body: Buffer.from('{"jsonrpc":"2.0","id":0,"result":{}}').toString('base64'),
+      })
+      .catch(() => undefined);
+  });
+  t.after(paused);
+  await page.send('Fetch.enable', {
+    patterns: [{ urlPattern: `${origin}/own/*`, requestStage: 'Response' }],
+  });
+  await page.init(helpers);
+  await page.goto('/');
+  await page.evaluate(
+    async (text) => {
+      await cookieStore.set('slicc_session', 'dummy-session-0001');
+      await window.write('/home/.pi/agent/mcp.json', text);
+    },
+    JSON.stringify({ mcpServers: { docs: { url, exposure: 'direct' } } })
+  );
+  await staged(page, 'the agent', (q) => window.start(q, true), 'own');
+  await page.within(60000, () => window.account('mcp:docs')?.state === 'failed');
+  const licks = await page.evaluate(() =>
+    window.licks().map(({ title, text }) => ({ title, text }))
+  );
+  assert.match(JSON.stringify(licks), REFUSED);
+  assert.ok(heard.some((item) => item.method === 'POST' && item.path === '/mcp'));
+  assert.ok(answered.length > 0);
+  const hops = sent.to(hidden);
+  assert.ok(hops.length > 0);
+  for (const headers of hops) assert.equal(headers.cookie, undefined);
+});
+
+test('an MCP server that redirects within its own origin still connects, its POST kept as a POST', async (t) => {
+  const page = await moving(t, { '/mcp': { status: 307, location: '/mcp/v2' } });
+  await page.within(60000, () => window.account('mcp:docs')?.state === 'connected');
+  const [first, second] = await upstream(page);
+  assert.deepEqual(
+    [first, second].map(({ url, method, redirect }) => ({ url, method, redirect })),
+    [
+      { url: 'https://mcp.test/mcp', method: 'POST', redirect: 'manual' },
+      { url: 'https://mcp.test/mcp/v2', method: 'POST', redirect: 'manual' },
+    ]
+  );
+  assert.equal(second.body, first.body);
+  assert.deepEqual(await page.evaluate(() => window.own()), []);
+});
+
+test('a redirected discovery document is still followed and the sign-in opens', async (t) => {
+  const page = await moving(
+    t,
+    {
+      '/.well-known/oauth-authorization-server': {
+        status: 302,
+        location: '/.well-known/oauth-authorization-server/moved',
+      },
+    },
+    ['vault', `oauth=${encodeURIComponent(JSON.stringify({}))}`]
+  );
+  await page.within(60000, () => window.account('mcp:docs')?.auth === 'oauth');
+  await page.evaluate(() => {
+    window.signing = window.model.settings.connect('mcp:docs').catch((error) => error.message);
+  });
+  await page.within(30000, () => window.opens.at(-1)?.location.href.includes('/authorize'));
+  const urls = (await upstream(page)).map(({ url }) => url);
+  assert.ok(urls.includes('https://mcp.test/.well-known/oauth-authorization-server'));
+  assert.ok(urls.includes('https://mcp.test/.well-known/oauth-authorization-server/moved'));
+  assert.deepEqual(await page.evaluate(() => window.own()), []);
 });

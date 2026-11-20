@@ -133,7 +133,20 @@ function checkHeaders(name: string, headers: unknown): Failed | undefined {
   return undefined;
 }
 
-function checkOAuth(name: string, value: Record<string, unknown>): Failed | undefined {
+export function ownOrigin(origin: string): string {
+  return `MCP never reaches this page's own origin, ${origin}: a request there would reach SLICC itself`;
+}
+
+function onPage(name: string, field: string, url: string, origin?: string): Failed | undefined {
+  if (origin === undefined || new URL(url).origin !== origin) return undefined;
+  return fail(name, 'bad-url', `${field} is refused. ${ownOrigin(origin)}`, field);
+}
+
+function checkOAuth(
+  name: string,
+  value: Record<string, unknown>,
+  origin?: string
+): Failed | undefined {
   const { oauth } = value;
   if (oauth === undefined) return undefined;
   if (!isRecord(oauth)) return fail(name, 'invalid', 'oauth must be an object', 'oauth');
@@ -159,7 +172,9 @@ function checkOAuth(name: string, value: Record<string, unknown>): Failed | unde
       'oauth.authServerMetadataUrl must be an https URL',
       'oauth.authServerMetadataUrl'
     );
-  return undefined;
+  return metadata === undefined
+    ? undefined
+    : onPage(name, 'oauth.authServerMetadataUrl', metadata, origin);
 }
 
 export function usesOAuth(config: McpServerConfig): boolean {
@@ -196,7 +211,11 @@ function checkFields(name: string, value: Record<string, unknown>): Failed | und
   return undefined;
 }
 
-function checkTransport(name: string, value: Record<string, unknown>): Failed | undefined {
+function checkTransport(
+  name: string,
+  value: Record<string, unknown>,
+  origin?: string
+): Failed | undefined {
   if (value.command !== undefined || value.type === 'stdio')
     return fail(
       name,
@@ -225,10 +244,10 @@ function checkTransport(name: string, value: Record<string, unknown>): Failed | 
       `${secret} holds a literal secret. Put it in a header as \${NAME} and add the value in Settings › MCP servers`,
       'url'
     );
-  return undefined;
+  return onPage(name, 'url', value.url, origin);
 }
 
-export function validateServer(name: string, raw: unknown): Checked {
+export function validateServer(name: string, raw: unknown, origin?: string): Checked {
   if (!SERVER_NAME.test(name))
     return fail(
       name,
@@ -245,9 +264,9 @@ export function validateServer(name: string, raw: unknown): Checked {
   if (value.auth !== undefined)
     return fail(name, 'invalid', 'auth is not supported in SLICC yet', 'auth');
   const problem =
-    checkTransport(name, value) ??
+    checkTransport(name, value, origin) ??
     checkHeaders(name, value.headers) ??
-    checkOAuth(name, value) ??
+    checkOAuth(name, value, origin) ??
     checkExposures(name, value) ??
     checkFields(name, value);
   if (problem) return problem;
@@ -266,7 +285,7 @@ function hostOf(raw: unknown): string {
   return typeof url === 'string' && URL.canParse(url) ? new URL(url).host : '';
 }
 
-export function parseMcpConfig(text: string | undefined): McpConfig {
+export function parseMcpConfig(text: string | undefined, origin?: string): McpConfig {
   if (text === undefined || text.trim() === '') return { servers: [], problems: [], refused: [] };
   let parsed: unknown;
   try {
@@ -289,7 +308,7 @@ export function parseMcpConfig(text: string | undefined): McpConfig {
     refused.push({ name, host: hostOf(raw), code: problem.code, reason: problem.message });
   };
   for (const [name, raw] of Object.entries((parsed.mcpServers ?? {}) as Record<string, unknown>)) {
-    const checked = validateServer(name, raw);
+    const checked = validateServer(name, raw, origin);
     if ('message' in checked) {
       refuse(name, raw, checked);
       continue;

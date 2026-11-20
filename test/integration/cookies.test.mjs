@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { launch, staged } from './chrome.mjs';
+import { sentHeaders } from './fixtures/sent-headers.mjs';
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -47,6 +48,12 @@ const helpers = () => {
     window.worker.postMessage({ [key]: port2 }, [port2]);
     return answer;
   };
+  window.fetched = (url, init) =>
+    new Promise((resolve) => {
+      const { port1, port2 } = new MessageChannel();
+      port1.onmessage = ({ data }) => resolve(data);
+      window.worker.postMessage({ fetched: port2, url, init }, [port2]);
+    });
 };
 
 for (const [what, cookie, sent] of [
@@ -91,3 +98,49 @@ for (const [what, cookie, sent] of [
     for (const item of posts) assert.equal(item.headers.cookie, sent);
   });
 }
+
+test("the agent's fetch sends the page origin's cookies only to a caller that asks for them", async (t) => {
+  const sent = sentHeaders(chrome.cdp);
+  t.after(sent.off);
+  const page = await chrome.page(t);
+  chrome.overrides.set('/own/catalog/catalog.json', JSON.stringify({ total: 0, data: [] }));
+  await page.init(helpers);
+  await page.goto('/');
+  const origin = new URL(chrome.url).origin;
+  await page.evaluate(() => cookieStore.set('slicc_session', 'dummy-session-0001'));
+  const query = new URLSearchParams([
+    ['own', ''],
+    ['catalog', '/own/catalog/'],
+    ['tool', JSON.stringify({ name: 'bash', args: { command: 'gelatiere catalog --json' } })],
+    ['answer', 'Done.'],
+  ]).toString();
+  await staged(page, 'the agent', (q) => window.start(q), query);
+  await page.evaluate(() => window.agent.send(window.agent.active(), 'Read the catalog.'));
+  await page.within(60000, async () => (await window.asked('own')).length >= 2);
+  const answers = await page.evaluate(
+    async (origin) => [
+      await window.fetched(`${origin}/own/plain`),
+      await window.fetched(`${origin}/own/same-origin`, { credentials: 'same-origin' }),
+      await window.fetched(`${origin}/own/include`, { credentials: 'include' }),
+    ],
+    origin
+  );
+  assert.deepEqual(answers, [{ status: 404 }, { status: 404 }, { status: 404 }]);
+  const cookies = (path) => sent.to(`${origin}${path}`).map((headers) => headers.cookie ?? null);
+  for (const path of [
+    '/own/catalog/catalog.json',
+    '/own/catalog/use-cases.json',
+    '/own/plain',
+    '/own/same-origin',
+  ])
+    assert.deepEqual(cookies(path), [null], path);
+  assert.deepEqual(cookies('/own/include'), ['slicc_session=dummy-session-0001']);
+  const own = await page.evaluate(() => window.asked('own'));
+  assert.deepEqual(own.map(({ url, credentials }) => [new URL(url).pathname, credentials]).sort(), [
+    ['/own/catalog/catalog.json', 'omit'],
+    ['/own/catalog/use-cases.json', 'omit'],
+    ['/own/include', 'include'],
+    ['/own/plain', 'omit'],
+    ['/own/same-origin', 'omit'],
+  ]);
+});

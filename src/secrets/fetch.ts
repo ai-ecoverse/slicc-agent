@@ -15,8 +15,8 @@ interface Op {
 
 const BODYLESS = new Set(['GET', 'HEAD']);
 const MIN_PART = 8;
-const HOPS = 5;
-const MOVED = new Set([301, 302, 303, 307, 308]);
+export const HOPS = 5;
+export const MOVED = new Set([301, 302, 303, 307, 308]);
 const BODY_HEADERS = new Set([
   'content-encoding',
   'content-language',
@@ -28,7 +28,7 @@ export function absent(vault: Pick<Vault, 'connected' | 'needed'>): boolean {
   return !vault.connected && !vault.needed;
 }
 
-async function outgoing(request: Request, headers: HeaderList): Promise<OutgoingRequest> {
+export async function outgoing(request: Request, headers: HeaderList): Promise<OutgoingRequest> {
   const body = BODYLESS.has(request.method)
     ? undefined
     : new Uint8Array(await request.arrayBuffer());
@@ -114,19 +114,27 @@ function moved(response: Response): boolean {
   );
 }
 
-function followed(current: OutgoingRequest, response: Response): OutgoingRequest | undefined {
-  if (response.type === 'opaqueredirect') return undefined;
+export function nextHop(current: OutgoingRequest, response: Response): OutgoingRequest | undefined {
   const target = URL.parse(response.headers.get('location') as string, current.url);
-  if (target?.origin !== new URL(current.url).origin || target.username || target.password)
-    return undefined;
+  if (!target || target.username || target.password) return undefined;
+  const across = target.origin !== new URL(current.url).origin;
+  const kept = current.headers.filter(
+    ([name]) => !across || name.toLowerCase() !== 'authorization'
+  );
   const { body, ...head } = current;
   const toGet =
     response.status === 303
       ? !BODYLESS.has(current.method)
       : response.status < 303 && current.method === 'POST';
-  if (!toGet) return { ...current, url: target.href };
-  const headers = current.headers.filter(([name]) => !BODY_HEADERS.has(name.toLowerCase()));
+  if (!toGet) return { ...current, url: target.href, headers: kept };
+  const headers = kept.filter(([name]) => !BODY_HEADERS.has(name.toLowerCase()));
   return { ...head, method: 'GET', url: target.href, headers };
+}
+
+function followed(current: OutgoingRequest, response: Response): OutgoingRequest | undefined {
+  if (response.type === 'opaqueredirect') return undefined;
+  const next = nextHop(current, response);
+  return next && new URL(next.url).origin === new URL(current.url).origin ? next : undefined;
 }
 
 function unfollowed(url: string): Response {
