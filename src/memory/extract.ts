@@ -15,7 +15,16 @@ import {
 import { boundedDeltas } from '../checkpoints.ts';
 import type { MemoryOrigin, MemoryTag } from './format.ts';
 import { byteLength, MAX_BYTES, parseMemory, redactSecrets, serializeMemory } from './format.ts';
-import { combined, MemoryOriginDoc, ownedDoc, ownerTurns, turnOrigin } from './origin.ts';
+import {
+  combined,
+  InputOriginDoc,
+  MemoryOriginDoc,
+  ownedDoc,
+  ownerTexts,
+  ownerTurns,
+  placedBy,
+  turnOrigin,
+} from './origin.ts';
 import { type Host, whoIs } from './prompt.ts';
 import { type Place, placeOf } from './store.ts';
 
@@ -83,7 +92,11 @@ const LABELS: Record<MemoryOrigin, string> = {
   mixed: 'Event',
 };
 
-export function linesOf(entries: readonly EntryRecord[], tail: number): Line[] {
+export function linesOf(
+  entries: readonly EntryRecord[],
+  tail: number,
+  typed: ReadonlyMap<number, string>
+): Line[] {
   const owned = ownerTurns(entries);
   const lines: Line[] = [];
   for (const entry of entries) {
@@ -91,7 +104,11 @@ export function linesOf(entries: readonly EntryRecord[], tail: number): Line[] {
     for (const message of entry.model ?? []) {
       if (message.role !== 'user' && message.role !== 'assistant') continue;
       const text = textOf(message).trim();
-      if (text) lines.push({ origin: turnOrigin(entry, message.role, owned), text });
+      if (!text) continue;
+      const origin = turnOrigin(entry, message.role, owned);
+      const own = origin === 'owner' ? (typed.get(entry.id) ?? '') : text;
+      if (own) lines.push({ origin, text: own });
+      if (own !== text) lines.push({ origin: 'mixed', text });
     }
   }
   return lines;
@@ -246,7 +263,13 @@ export function extractTask(
           fresh.push(...page.items);
           cursor = page.next;
         } while (cursor);
-        const passes = passesOf(linesOf(fresh, tail));
+        const typed = await ownerTexts(
+          fresh,
+          await runtime.snapshot(InputOriginDoc, context),
+          placedBy(host.harness),
+          context
+        );
+        const passes = passesOf(linesOf(fresh, tail, typed));
         if (!place || !passes.length) return done({ saved: 0, skipped: 'nothing new' });
         const ref = task.input.model ?? (await runtime.agent(context)).model;
         const model = ref ? runtime.models.getModel(ref.provider, ref.modelId) : undefined;

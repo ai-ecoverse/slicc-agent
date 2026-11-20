@@ -54,6 +54,7 @@ import { LOCAL, LOCAL_BASE } from './local.ts';
 import { type McpAccounts, setupMcp } from './mcp/index.ts';
 import type { MemoryEntry } from './memory/format.ts';
 import { setupMemory } from './memory/index.ts';
+import { markInputs } from './memory/origin.ts';
 import { modelsCommand } from './models/index.ts';
 import {
   pageOnly,
@@ -235,7 +236,10 @@ async function openUnfrozen(
     ...base,
     storage,
     conversationCreated: unfreezeCreated(chosen),
-    beforeResume: (harness, using) => unfreeze(harness, storage, chosen, using),
+    beforeResume: async (harness, using) => {
+      await markInputs(harness, using);
+      return unfreeze(harness, storage, chosen, using);
+    },
   });
 }
 
@@ -451,7 +455,7 @@ async function setupApprovals(
   const { approvalMs } = options;
   await seedPolicy(home, BACKGROUND_CONTEXT).catch(() => false);
   const settings = settingsText(home, HOME, at.agentDir);
-  const intent = ownerIntent({ env: home, agents: agent.agents, memories });
+  const intent = ownerIntent({ env: home, agents: agent.agents, memories, harness: agent.harness });
   const judge: ApprovalJudge = {
     judge: approvalJudge({
       models,

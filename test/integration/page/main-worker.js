@@ -279,8 +279,13 @@ self.addEventListener('message', ({ data }) => {
   }
 });
 const HOLD = Symbol('hold');
+let holding = 0;
+self.addEventListener('message', ({ data }) => {
+  data?.holding?.postMessage(holding);
+});
 const held = (_context, options) =>
   new Promise((resolve) => {
+    holding += 1;
     const done = () => {
       requests.push(JSON.stringify({ held: 'aborted' }));
       resolve(fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' }));
@@ -961,11 +966,17 @@ const bools = (values) =>
 const owned = [];
 const remembers = (state, marker) =>
   (state.owner?.memory ?? []).some((line) => line.includes(marker));
+const hears = (state, marker) =>
+  (state.owner?.messages ?? []).some((line) => line.includes(marker));
 const ownerTable = (state) => {
   const marker = state.owner.policy.trim().split('\n').at(-1);
   const base = judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
   return Object.entries(judgeTable)
-    .filter(([key]) => key.startsWith('memory:') && remembers(state, key.slice(7)))
+    .filter(
+      ([key]) =>
+        (key.startsWith('memory:') && remembers(state, key.slice(7))) ||
+        (key.startsWith('message:') && hears(state, key.slice(8)))
+    )
     .reduce((table, [, more]) => ({ ...table, ...more }), base);
 };
 const forbiddenOf = (state) => {
@@ -1037,7 +1048,8 @@ async function classify(model, context, options) {
   const told = inner(context.state.request.untrusted);
   const listed = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? judgeSteps.shift() ?? {};
   const step =
-    listed.remembered === undefined || remembers(context.state, listed.remembered)
+    (listed.remembered === undefined || remembers(context.state, listed.remembered)) &&
+    (listed.heard === undefined || hears(context.state, listed.heard))
       ? listed
       : { ...listed, aligned: 0.05 };
   if (step.hold) {
@@ -1117,6 +1129,13 @@ self.addEventListener('message', ({ data }) => {
   data?.owned?.postMessage(owned);
   if (data?.items) void running.then((host) => data.items.postMessage(host.approvals.state.value));
   if (data?.judgeTable) judgeTable = data.judgeTable;
+  if (data?.prompted)
+    running
+      .then((host) => host.agent.prompt(data.text))
+      .then(
+        (text) => data.prompted.postMessage(text),
+        (error) => data.prompted.postMessage(error.message)
+      );
   if (data?.abort) aborts.get(data.abort)?.abort();
   if (data?.close)
     running

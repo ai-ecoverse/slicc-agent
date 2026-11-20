@@ -1,4 +1,14 @@
-import { defineDoc } from '@earendil-works/pi-durable';
+import type { Context } from '@earendil-works/chord/context';
+import {
+  type Conversation,
+  type Cursor,
+  defineDoc,
+  type Harness,
+  type InputSubmissionDraft,
+  type SubmissionId,
+  type Tx,
+} from '@earendil-works/pi-durable';
+import { splitUser } from '../attachments.ts';
 import { boundedDeltas } from '../checkpoints.ts';
 import { GUEST_INPUT_KIND } from '../guests/attribution.ts';
 import { entryLick } from '../licks/state.ts';
@@ -17,7 +27,27 @@ export const MemoryOriginDoc = defineDoc<OriginState>({
   initial: () => ({ scopes: {} }),
 });
 
-type Turn = { id: number; kind: string; data?: unknown; model?: readonly unknown[] };
+export const INPUT_RECORDS = 500;
+
+export type InputRecord = { conversation: number; hash: string; typed?: string };
+
+export type InputOriginState = { since: number | null; inputs: Record<string, InputRecord> };
+
+export const InputOriginDoc = defineDoc<InputOriginState>({
+  kind: 'slicc.input-origin',
+  checkpointWhen: boundedDeltas,
+  version: 1,
+  scope: 'session',
+  initial: () => ({ since: null, inputs: {} }),
+});
+
+type Turn = {
+  id: number;
+  conversationId?: number;
+  kind: string;
+  data?: unknown;
+  model?: readonly unknown[];
+};
 
 export function ownerTurns(entries: readonly Turn[]): Set<number> {
   const noted = new Set<number>();
@@ -40,15 +70,140 @@ export function combined(origins: readonly MemoryOrigin[]): MemoryOrigin {
   return kinds.size === 1 ? (origins[0] as MemoryOrigin) : 'mixed';
 }
 
+export async function textHash(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export const saidText = (content: unknown) => splitUser(content).text;
+
+const LEGACY_SKILL =
+  /^<skill name="([a-z0-9-]{1,64})" location="[^"\n]*">\nReferences are relative to [^\n]*\.\n\n/;
+const SKILL_END = '\n</skill>';
+
+export function legacyText(said: string): string {
+  if (!said.trimStart().startsWith('<skill')) return said;
+  const skill = LEGACY_SKILL.exec(said);
+  const end = said.lastIndexOf(SKILL_END);
+  const after = said.slice(end + SKILL_END.length);
+  return skill && end > 0 && (!after || after.startsWith('\n\n')) ? `/skill:${skill[1]}` : '';
+}
+
+async function newestEntry(tx: Tx): Promise<number> {
+  let newest = 0;
+  let cursor: Cursor | undefined;
+  do {
+    const page = await tx.scanConversations({}, 100, cursor);
+    for (const conversation of page.items)
+      newest = Math.max(newest, (await tx.latestEntryId(conversation.id)) ?? 0);
+    cursor = page.next;
+  } while (cursor);
+  return newest;
+}
+
+export async function submitTyped(
+  harness: Pick<Harness, 'commit'>,
+  conversation: Pick<Conversation, 'id' | 'submit'>,
+  draft: InputSubmissionDraft,
+  typed: string | undefined,
+  context: Context
+): Promise<SubmissionId> {
+  const hash = await textHash(saidText(draft.content));
+  return harness.commit(async (tx) => {
+    const doc = await tx.doc(InputOriginDoc);
+    if (doc.since === null) doc.since = await newestEntry(tx);
+    const id = await conversation.submit(tx, draft);
+    doc.inputs[String(id)] ??= {
+      conversation: conversation.id,
+      hash,
+      ...(typed === undefined ? {} : { typed }),
+    };
+    const keys = Object.keys(doc.inputs).sort((a, b) => Number(a) - Number(b));
+    for (const key of keys.slice(0, Math.max(0, keys.length - INPUT_RECORDS)))
+      delete doc.inputs[key];
+    return id;
+  }, context);
+}
+
+export type Placed = (id: number, context: Context) => Promise<number | undefined>;
+
+export const placedBy =
+  (harness: Pick<Harness, 'submission'>): Placed =>
+  async (id, context) =>
+    (await (await harness.submission(id as SubmissionId, context))?.status(context))?.entry;
+
+type Sent = ReadonlyMap<string, readonly string[]>;
+
+function sentOf(state: Readonly<InputOriginState>): Sent {
+  const sent = new Map<string, string[]>();
+  for (const [key, record] of Object.entries(state.inputs)) {
+    const at = `${record.conversation}:${record.hash}`;
+    sent.set(at, [...(sent.get(at) ?? []), key]);
+  }
+  return sent;
+}
+
+type Reading = {
+  state: Readonly<InputOriginState> | null | undefined;
+  sent: Sent;
+  placed: Placed;
+  entries: Map<string, Promise<number | undefined>>;
+  context: Context;
+};
+
+async function typedText(entry: Turn, reading: Reading): Promise<string> {
+  const { state, sent, placed, entries, context } = reading;
+  const said = saidText((entry.model?.[0] as { content?: unknown } | undefined)?.content);
+  if (!state || state.since === null || entry.id <= state.since) return legacyText(said).trim();
+  const typed = new Set<string | null>();
+  for (const key of sent.get(`${entry.conversationId}:${await textHash(said)}`) ?? []) {
+    if (!entries.has(key)) entries.set(key, placed(Number(key), context));
+    if ((await entries.get(key)) === entry.id) typed.add(state.inputs[key]?.typed ?? null);
+  }
+  if (typed.size !== 1) return '';
+  return ([...typed][0] ?? said).trim();
+}
+
+export async function ownerTexts(
+  entries: readonly Turn[],
+  state: Readonly<InputOriginState> | null | undefined,
+  placed: Placed,
+  context: Context,
+  limit = Number.POSITIVE_INFINITY
+): Promise<Map<number, string>> {
+  const owned = ownerTurns(entries);
+  const reading = {
+    state,
+    sent: state ? sentOf(state) : new Map(),
+    placed,
+    entries: new Map(),
+    context,
+  };
+  const found: [number, string][] = [];
+  for (let at = entries.length - 1; at >= 0 && found.length < limit; at--) {
+    const entry = entries[at] as Turn;
+    if (owned.has(entry.id)) found.push([entry.id, await typedText(entry, reading)]);
+  }
+  return new Map(found.reverse());
+}
+
+export async function markInputs(
+  harness: Pick<Harness, 'commit'>,
+  context: Context
+): Promise<void> {
+  await harness.commit(async (tx) => {
+    const doc = await tx.doc(InputOriginDoc);
+    if (doc.since === null) doc.since = await newestEntry(tx);
+  }, context);
+}
+
 type Hashed = Pick<MemoryEntry, 'section' | 'title' | 'tag' | 'body'>;
 
 export const originKey = (entry: Pick<MemoryEntry, 'section' | 'title'>) =>
   `${entry.section.toLowerCase()}\n${entry.title.toLowerCase()}`;
 
 export async function entryHash(entry: Hashed): Promise<string> {
-  const text = JSON.stringify([entry.section, entry.title, entry.tag, entry.body]);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return textHash(JSON.stringify([entry.section, entry.title, entry.tag, entry.body]));
 }
 
 export async function originOf(
