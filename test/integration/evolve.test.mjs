@@ -161,7 +161,7 @@ test('a follower with newer contracts than the owner binds the older versions th
   assert.deepEqual(seen.aborted, { value: null });
 });
 
-test('a hello is matched on wire and Chord only: other or absent contracts are accepted, another wire or Chord is still refused with version', async (t) => {
+test('a hello is matched on wire and Chord only: other or absent contracts are accepted, another wire or Chord is still refused with version, and contracts or a server that is not a string of at most 4096 characters is refused with version', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const seen = await staged(page, 'hellos', async () => {
@@ -172,8 +172,18 @@ test('a hello is matched on wire and Chord only: other or absent contracts are a
     const hellos = {
       other: { contracts: 'slicc.agent.control@0000000000000000' },
       absent: { contracts: undefined },
+      longest: { contracts: 'x'.repeat(4096), server: 's'.repeat(4096) },
+      extra: { padding: 'x'.repeat(100000) },
       wire: { wire: 3 },
       chord: { chord: 2 },
+      oversize: { contracts: 'x'.repeat(4097) },
+      huge: { contracts: 'x'.repeat(1000000) },
+      number: { contracts: 1 },
+      object: { contracts: { 'slicc.agent.control': 'x' } },
+      array: { contracts: Array.from({ length: 100000 }, () => 'x') },
+      empty: { contracts: null },
+      server: { server: 's'.repeat(4097) },
+      named: { server: 7 },
     };
     const result = {};
     for (const [name, hello] of Object.entries(hellos)) {
@@ -192,7 +202,17 @@ test('a hello is matched on wire and Chord only: other or absent contracts are a
   assert.deepEqual(seen, {
     other: 'control',
     absent: 'control',
+    longest: 'control',
+    extra: 'control',
     wire: 'version',
     chord: 'version',
+    oversize: 'version',
+    huge: 'version',
+    number: 'version',
+    object: 'version',
+    array: 'version',
+    empty: 'version',
+    server: 'version',
+    named: 'version',
   });
 });

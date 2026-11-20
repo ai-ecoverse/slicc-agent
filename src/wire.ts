@@ -54,15 +54,17 @@ export class Refused extends Error {
   }
 }
 
-const matches = (mine: Hello, theirs: unknown): theirs is Hello => {
-  const hello = theirs as Partial<Hello> | null;
-  return (
-    typeof hello === 'object' &&
-    hello !== null &&
-    hello.wire === mine.wire &&
-    hello.chord === mine.chord &&
-    (hello.server === undefined || typeof hello.server === 'string')
-  );
+const HELLO_TEXT = 4096;
+
+const bounded = (value: unknown): value is string | undefined =>
+  value === undefined || (typeof value === 'string' && value.length <= HELLO_TEXT);
+
+const greeting = (mine: Hello, theirs: unknown): Hello | undefined => {
+  if (typeof theirs !== 'object' || theirs === null) return undefined;
+  const { wire, chord, contracts, server } = theirs as Record<string, unknown>;
+  if (wire !== mine.wire || chord !== mine.chord || !bounded(contracts) || !bounded(server))
+    return undefined;
+  return { wire: mine.wire, chord: mine.chord, ...(server === undefined ? {} : { server }) };
 };
 
 const owned = (bytes: Uint8Array): Uint8Array =>
@@ -152,8 +154,9 @@ export class PortLink implements Link {
     else this.#incoming.push(message);
   }
 
-  #hello(hello: unknown): void {
-    if (this.#heard || !matches(this.#mine, hello)) {
+  #hello(frame: unknown): void {
+    const hello = this.#heard ? undefined : greeting(this.#mine, frame);
+    if (!hello) {
       this.#mismatch();
       return;
     }
