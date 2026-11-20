@@ -93,7 +93,7 @@
     "fake-indexeddb": "6.2.8",
     "lefthook": "2.2.2",
     "monocart-coverage-reports": "3.2.1",
-    "playwright-core": "1.65.0",
+    "playwright-core": "1.65.1",
     "semantic-release": "25.0.9",
     "typescript": "7.0.2"
   },
