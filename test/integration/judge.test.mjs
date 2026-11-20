@@ -143,8 +143,6 @@ test("the judge approves a routine request that serves the owner's intent and, w
     query: 'answer=Noted.&answer=Noted.',
     files: {
       [SETTINGS]: judgeSettings('judge/j-1'),
-      '/home/.pi/agent/memory/MEMORY.md':
-        '## About the owner\n\n### Release\ntag: user\n\nThe docs ship with 2.0.\n',
       '/home/.slicc/crontab': '61 * * * * broken\n',
     },
   });
@@ -156,6 +154,20 @@ test("the judge approves a routine request that serves the owner's intent and, w
     await until(() => model.agent.messages().some((m) => m.role === 'lick'), 'the crontab lick');
     await until(() => !model.agent.busy(model.agent.active()), 'the lick turn to end');
     await local.prompt('Only fix typos in the docs today.');
+    await local.control.memorySave(
+      {
+        scope: 'global',
+        section: 'About the owner',
+        title: 'Release',
+        body: 'The docs ship with 2.0.',
+        tag: 'user',
+      },
+      BACKGROUND_CONTEXT
+    );
+    await until(
+      () => local.memories.value.some((entry) => entry.origin === 'owner'),
+      'the memory the owner saved'
+    );
     await until(
       () => local.transcript.value.entries.filter((entry) => entry.kind === 'pi.user').length,
       'the owner message'

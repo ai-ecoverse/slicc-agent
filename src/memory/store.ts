@@ -1,4 +1,5 @@
 import type { Context } from '@earendil-works/chord/context';
+import type { Harness } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { scrubTexts } from '../secrets/scrub.ts';
 import { trusted } from './context.ts';
@@ -15,6 +16,7 @@ import {
   redactSecrets,
   serializeMemory,
 } from './format.ts';
+import { entryHash, MemoryOriginDoc, originKey, recorded } from './origin.ts';
 
 export const GLOBAL = 'global';
 export const ROLE_PREFIX = 'role:';
@@ -114,16 +116,27 @@ type Files = Pick<
   'readTextFile' | 'writeFile' | 'createDir' | 'canonicalPath' | 'fileInfo'
 >;
 
+async function savedOrigin(present: readonly MemoryEntry[], change: Change & { kind: 'save' }) {
+  const stored = present.find(
+    (item) => item.source === 'entry' && originKey(item) === originKey(change)
+  );
+  return stored
+    ? { key: originKey(stored), hash: await entryHash(stored), origin: change.origin }
+    : null;
+}
+
 function dirOf(file: string): string {
   return file.slice(0, file.lastIndexOf('/')) || '/';
 }
 
 export class MemoryFiles {
   readonly #env: Files;
+  readonly #origins: Pick<Harness, 'commit'>;
   readonly #chains = new Map<string, Promise<unknown>>();
 
-  constructor(env: Files) {
+  constructor(env: Files, origins: Pick<Harness, 'commit'>) {
     this.#env = env;
+    this.#origins = origins;
   }
 
   async #safe(file: string, context: Context): Promise<boolean> {
@@ -193,6 +206,7 @@ export class MemoryFiles {
     await this.#env.createDir(dirOf(place.file), { recursive: true }, context);
     const written = await this.#env.writeFile(place.file, after, context);
     if (!written.ok) throw new Error(written.error.message);
+    await this.#record(place, after, safe, context);
     const entry =
       safe.kind === 'save'
         ? (memoryEntries(doc, place.scope, Date.now()).find(
@@ -203,5 +217,16 @@ export class MemoryFiles {
           ) as MemoryEntry)
         : null;
     return { entry, found, bytes, redacted, file: place.file };
+  }
+
+  async #record(place: Place, after: string, change: Change, context: Context): Promise<void> {
+    const present = memoryEntries(parseMemory(after), place.scope, 0);
+    const saved = change.kind === 'save' ? await savedOrigin(present, change) : null;
+    await this.#origins.commit(async (tx) => {
+      const doc = await tx.doc(MemoryOriginDoc);
+      const next = recorded(doc.scopes[place.scope], present, saved);
+      if (Object.keys(next).length) doc.scopes[place.scope] = next;
+      else delete doc.scopes[place.scope];
+    }, context);
   }
 }

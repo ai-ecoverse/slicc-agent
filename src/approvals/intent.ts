@@ -3,10 +3,9 @@ import type { EntryRecord, ModelRef } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { answerText } from '../agent.ts';
 import type { AgentsState } from '../agents.ts';
-import { entryLick } from '../licks/state.ts';
 import type { MemoryEntry } from '../memory/format.ts';
+import { ownerTurns } from '../memory/origin.ts';
 import { GLOBAL } from '../memory/store.ts';
-import { FROM_KIND, type From } from '../scoops/from.ts';
 import type { OwnerIntent } from './judge.ts';
 import type { Approval } from './record.ts';
 
@@ -49,10 +48,9 @@ const clip = (text: string, limit: number) =>
   text.length > limit ? `${text.slice(0, limit)}…` : text;
 
 export function ownerMessages(entries: readonly EntryRecord[], limit = OWNER_MESSAGES): string[] {
-  const noted = new Set<number>();
-  for (const entry of entries) if (entry.kind === FROM_KIND) noted.add((entry.data as From).entry);
+  const owned = ownerTurns(entries);
   return entries
-    .filter((entry) => entry.kind === 'pi.user' && !noted.has(entry.id) && !entryLick(entry))
+    .filter((entry) => owned.has(entry.id))
     .map((entry) => answerText(entry.model?.[0]?.content).trim())
     .filter(Boolean)
     .slice(-limit)
@@ -69,7 +67,7 @@ export function ownerMemory(memories: readonly MemoryEntry[], cone: string | und
   let left = MEMORY_LIMIT;
   for (const entry of memories) {
     if (left <= 0) break;
-    if (entry.scope !== GLOBAL && entry.scope !== cone) continue;
+    if (entry.origin !== 'owner' || (entry.scope !== GLOBAL && entry.scope !== cone)) continue;
     const line = clip(`${entry.title}: ${entry.body}`.trim(), left);
     kept.push(line);
     left -= line.length;

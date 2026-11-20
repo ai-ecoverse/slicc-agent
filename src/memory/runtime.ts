@@ -7,6 +7,7 @@ import type { Role } from '../roles/roles.ts';
 import { workspace } from '../scoops/service.ts';
 import { createState, type MutableState, type State } from '../state.ts';
 import { MEMORY_FILE, type MemoryEntry, type MemoryScope, type MemoryTag } from './format.ts';
+import { MemoryOriginDoc, withOrigins } from './origin.ts';
 import type { Host } from './prompt.ts';
 import { MEMORY_WRITE } from './prompt.ts';
 import {
@@ -146,6 +147,7 @@ async function save(parts: Parts, draft: MemoryDraft, context: Context): Promise
         title: draft.title,
         body: draft.body,
         tag: draft.tag,
+        origin: 'owner',
       },
       context
     );
@@ -198,13 +200,15 @@ export async function attachMemory(
   context: Context
 ): Promise<MemoryRuntime> {
   const { agents, env, home } = options;
-  const files = new MemoryFiles(env);
+  const files = new MemoryFiles(env, options.harness);
   const memories = createState<MemoryEntry[]>([]);
   const scopes = createState<MemoryScope[]>([]);
   const load = async (using: Context) => {
     const found = await listPlaces(options, using);
     const entries: MemoryEntry[] = [];
     for (const place of found) entries.push(...(await files.entries(place, using)));
+    const origins = await options.harness.snapshot(MemoryOriginDoc, using);
+    const known = await withOrigins(entries, origins);
     if (using.abortSignal?.aborted) return;
     scopes.replace(
       using,
@@ -214,7 +218,7 @@ export async function attachMemory(
         ...(place.group ? { group: place.group } : {}),
       }))
     );
-    memories.replace(using, entries);
+    memories.replace(using, known);
   };
   const life = withCancel(context);
   let latest: Promise<void> = Promise.resolve();
