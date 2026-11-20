@@ -1375,7 +1375,7 @@ test("through the page's fetch, an MCP server redirecting to the page's own orig
   assert.match(JSON.stringify(licks), REFUSED);
   assert.ok(heard.some((item) => item.method === 'POST' && item.path === '/mcp'));
   assert.ok(answered.length > 0);
-  const hops = sent.to(hidden);
+  const hops = await sent.to(hidden);
   assert.ok(hops.length > 0);
   for (const headers of hops) assert.equal(headers.cookie, undefined);
 });
