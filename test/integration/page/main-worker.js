@@ -777,7 +777,7 @@ const followed = async (request, answer) => {
   return { ...next, url: next.url ?? url, redirected: true };
 };
 const proven =
-  (params.has('vault') || follows) && !params.has('unproven')
+  (params.has('vault') || follows || params.has('gateway')) && !params.has('unproven')
     ? { redirectPolicy: true }
     : JSON.parse(params.get('unproven') || '{}');
 const relay = {

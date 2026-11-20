@@ -276,10 +276,13 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
   ]);
 });
 
-test('an ntfy attachment on the gateway is fetched into the webhook lick, within its limits, and triage reads it', async (t) => {
+async function gatewayed(t, query) {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
+  await page.evaluate((query) => {
+    window.query = query;
+  }, query);
   await staged(page, 'the webhook agent', async () => {
     await window.write('/home/.slicc/webhooks/gh.json', '{"message":"GitHub event"}');
     await window.write(
@@ -294,7 +297,7 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
     const answers = Array.from({ length: 10 }, () => 'answer=Noted.').join('&');
     const owner = await startAgent({
       worker: () => {
-        window.worker = new Worker(`/dist-test/main-worker.js?gateway&triage=ignore&${answers}`, {
+        window.worker = new Worker(`/dist-test/main-worker.js?gateway&${window.query}&${answers}`, {
           type: 'module',
         });
         return window.worker;
@@ -319,6 +322,11 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
     };
   });
   await staged(page, 'the control directory', () => window.controlDir());
+  return page;
+}
+
+test('an ntfy attachment on the gateway is fetched into the webhook lick, within its limits, and triage reads it', async (t) => {
+  const page = await gatewayed(t, 'triage=ignore');
   const gw = 'https://ntfy.sliccy.ai/file';
   const release = '{"action":"released","tag":"v1.2.0"}';
   const sends = [
@@ -381,6 +389,44 @@ test('an ntfy attachment on the gateway is fetched into the webhook lick, within
     `${gw}/silent.txt`,
   ]);
 });
+
+for (const [what, traits, body] of [
+  [
+    'hands back the 3xx',
+    { manualRedirects: true },
+    'attachment release.json, 36 bytes:\n{"action":"released","tag":"v1.2.0"}',
+  ],
+  [
+    'follows redirects itself',
+    { manualRedirects: false },
+    "attachment release.json, 36 bytes, not fetched: the request failed: this route can't show it won't follow a redirect, so a request that refuses redirects isn't sent: https://ntfy.sliccy.ai/file/release.json",
+  ],
+  [
+    'reports the hops it followed',
+    { manualRedirects: true, redirectHops: true },
+    "attachment release.json, 36 bytes, not fetched: the request failed: this route can't show it won't follow a redirect, so a request that refuses redirects isn't sent: https://ntfy.sliccy.ai/file/release.json",
+  ],
+]) {
+  test(`an ntfy attachment on a route that ${what} is ${body.includes('not fetched') ? 'not fetched, and the lick says why' : 'fetched into the lick'}`, async (t) => {
+    const page = await gatewayed(t, `unproven=${encodeURIComponent(JSON.stringify(traits))}`);
+    const url = 'https://ntfy.sliccy.ai/file/release.json';
+    const raw = JSON.stringify({
+      id: 'r1',
+      topic: 'github',
+      message: 'You received a file',
+      attachment: { name: 'release.json', size: 36, url },
+    });
+    const sent = await staged(page, 'the send', (raw) => window.send('gh', raw), raw);
+    assert.deepEqual(sent, { status: 0, stderr: '' });
+    await staged(page, 'the lick', () =>
+      window.agentWait(() => window.licks().length === 1, 'the lick')
+    );
+    const bodies = await page.evaluate(() => window.licks().map(({ body }) => body));
+    assert.deepEqual(bodies, [`You received a file\n\n${body}`]);
+    const fetched = await page.evaluate(() => window.gatewayLog());
+    assert.deepEqual(fetched, body.includes('not fetched') ? [] : [url]);
+  });
+}
 
 test('after a page reload, the session-reload lick lists the background jobs that were still running and no finished command that mentions nohup', async (t) => {
   const page = await chrome.page(t);
