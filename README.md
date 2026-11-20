@@ -969,6 +969,16 @@ Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.js
 
 **pi-ai in lockstep with the vault.** `@ai-ecoverse/slicc-vault` is a devDependency for this check only (Renovate bumps it as `chore(deps)` with no release; seven's install never gets it). The vault fills a model key only under the endpoints of its built-in table, which it generates from its own pi-ai pin and publishes as `"piAi"` in its package.json (slicc-vault 1.12.2 and later). `npm run lint:vault-pi` (part of `npm run lint`) fails when the installed `@ai-ecoverse/slicc-vault`'s `piAi` has another minor than our `@earendil-works/pi-ai`, or when it has none (an older vault). Renovate's `patched dependencies` group carries the `pi-ai-lockstep` label, as the vault's pi-ai updates do, so the two are found and bumped together.
 
+**pi's gaps and our workarounds.** By standing rule nothing is filed upstream, so this list, with `patches/patches.json`, is the local record. Check it against each pi update; the approvals work does these by hand:
+
+1. A durable task can only wait on other tasks, so the tool gate awaits a document inside `beforeTool`. It would need a wait on a document predicate or a signal.
+2. `HookApi` types neither `watchDoc` nor commits, so the hook casts to create its pending item. It would need a document observer on `HookApi` and a commit that is safe from a hook.
+3. Submissions carry no origin, so we keep our own map from submission to seat. It would need `origin` or `metadata` on `SubmissionDraft` and its record.
+4. pi-durable has no prompt-admission hook (the classic `input` event has no durable counterpart), so the prompt gate sits at the service layer.
+5. pi has no safety classifier: we pick the model, write the questions and calibrate the thresholds ourselves.
+
+The AWS SDK `WebSocketFetchHandler` drops its abort signal; that is patched locally as `aws-websocket-abort-signal`.
+
 ## Develop
 
 ```sh
