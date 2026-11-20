@@ -292,10 +292,28 @@ test('a turn cut off by repeated restarts ends, the monitor alerts, and agent re
       ['persist', '/.slicc/test-parked'],
       ['step', JSON.stringify({ hold: true })],
     ]);
+    const looks = new Set();
+    let latest;
     const owner = await startAgent({
-      worker: () => new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' }),
+      worker: () => {
+        const worker = new Worker(`/dist-test/main-worker.js?${query}`, { type: 'module' });
+        const seen = { holds: 0 };
+        latest = seen;
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = ({ data }) => {
+          seen.holds = data;
+          for (const look of [...looks]) look();
+        };
+        worker.postMessage({ holds: port2 }, [port2]);
+        return worker;
+      },
       kernel: { connect: () => kernel.connect() },
     });
+    const holds = (look) => {
+      looks.add(look);
+      return () => looks.delete(look);
+    };
+    const holding = () => latest.holds > 0;
     const watched = async () => {
       const connection = await owner.connect();
       const model = createAgentModel(connection);
@@ -306,11 +324,7 @@ test('a turn cut off by repeated restarts ends, the monitor alerts, and agent re
     stage('the held turn');
     let current = await watched();
     void current.connection.prompt('Work on it.').catch(() => undefined);
-    const running = () =>
-      current.connection.monitor.value?.tasks?.find(
-        (task) => task.kind === 'pi.generation' && task.status === 'running'
-      );
-    await when(current.sources, running, 'the running generation');
+    await when([...current.sources, holds], holding, 'the held model request');
     const ended = () =>
       current.connection.monitor.value?.problems?.find(
         (problem) =>
@@ -324,7 +338,11 @@ test('a turn cut off by repeated restarts ends, the monitor alerts, and agent re
       current.off();
       await owner.restart();
       current = await watched();
-      const next = await when(current.sources, () => ended() || running(), `restart ${restarts}`);
+      const next = await when(
+        [...current.sources, holds],
+        () => ended() || holding(),
+        `restart ${restarts}`
+      );
       if (next.report) {
         cut = next;
         break;
@@ -365,8 +383,9 @@ test('a turn cut off by repeated restarts ends, the monitor alerts, and agent re
     await owner.release();
     return { problem, alert, restarts, retried, live };
   });
-  assert.ok(seen.restarts >= 5 && seen.restarts <= 6, `ended after ${seen.restarts} restarts`);
+  assert.equal(seen.restarts, 4);
   assert.equal(seen.problem.report.type, 'task_interrupted');
+  assert.match(seen.problem.message, /on attempt 4$/);
   assert.equal(seen.alert.severity, 'error');
   assert.equal(seen.alert.command, undefined);
   assert.equal(seen.retried.code, 1);
