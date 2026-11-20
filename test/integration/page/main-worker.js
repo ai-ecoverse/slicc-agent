@@ -712,7 +712,7 @@ const moved = (request) => {
     body: request.body ? new TextDecoder().decode(request.body) : null,
   });
   const move = moves[url.pathname];
-  if (move?.opaque)
+  if (move?.opaque && (request.redirect === 'manual' || !move.location))
     return { status: 0, headers: [], opaqueRedirect: true, body: (async function* () {})() };
   return move
     ? {
@@ -724,19 +724,20 @@ const moved = (request) => {
 };
 const own = [];
 const follows = params.has('follows');
-const followed = (request, answer) => {
+const followed = async (request, answer) => {
   const url = new URL(answer.headers[0][1], request.url).href;
   const method =
     answer.status === 303 || (answer.status < 303 && request.method === 'POST')
       ? 'GET'
       : request.method;
   const { body, ...rest } = request;
-  return relay.fetch({
+  const next = await relay.fetch({
     ...rest,
     url,
     method,
     ...(method === request.method && body ? { body } : {}),
   });
+  return { ...next, url: next.url ?? url, redirected: true };
 };
 const proven =
   (params.has('vault') || follows) && !params.has('unproven')
@@ -746,8 +747,16 @@ const relay = {
   traits: { crossOrigin: 'any', ...proven },
   async fetch(request) {
     if (new URL(request.url).origin === self.location.origin) {
-      own.push({ url: request.url, method: request.method, credentials: 'omit' });
-      return { status: 404, headers: [], body: (async function* () {})() };
+      const entry = { url: request.url, method: request.method, credentials: 'omit' };
+      own.push(entry);
+      return {
+        status: 404,
+        headers: [],
+        body: (async function* () {
+          yield new TextEncoder().encode('not found');
+          entry.read = true;
+        })(),
+      };
     }
     const answer = params.has('moved') ? moved(request) : undefined;
     if (answer && follows && !request.redirect && answer.status) return followed(request, answer);
@@ -1107,6 +1116,13 @@ if (version) {
       : fetched(input, init);
 }
 self.addEventListener('message', ({ data }) => data?.own?.postMessage(own));
+self.addEventListener('message', ({ data }) => {
+  if (!data?.fetched) return;
+  self.fetch(data.url, data.init).then(
+    (response) => data.fetched.postMessage({ status: response.status }),
+    (error) => data.fetched.postMessage({ error: error.message })
+  );
+});
 if (params.has('own')) {
   const fetched = self.fetch.bind(self);
   self.fetch = (input, init) => {
