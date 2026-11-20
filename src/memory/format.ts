@@ -1,5 +1,7 @@
 export type MemoryTag = 'user' | 'feedback' | 'project';
 
+export type MemoryOrigin = 'owner' | 'guest' | 'agent' | 'mixed';
+
 export interface MemoryEntry {
   id: string;
   scope: string;
@@ -9,6 +11,7 @@ export interface MemoryEntry {
   tag: MemoryTag | null;
   updatedAt: number;
   source: 'entry' | 'notes';
+  origin?: MemoryOrigin;
 }
 
 export interface MemoryScope {
@@ -194,6 +197,7 @@ export type Change =
       title: string;
       body: string;
       tag: MemoryTag | null;
+      origin: MemoryOrigin;
     }
   | { kind: 'remove'; id?: string; section?: string; title?: string };
 

@@ -213,6 +213,7 @@ export function memoryWriteTool(ready: Promise<Host>): ToolRegistration {
                 title: args.title,
                 body: args.body ?? '',
                 tag: args.tag ?? null,
+                origin: 'agent',
               },
           context
         );

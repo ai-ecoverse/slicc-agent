@@ -474,8 +474,35 @@ self.addEventListener('message', ({ data }) => {
     spoken.map(({ key, whole, text, model }) => ({ key, whole, text, model }))
   );
 });
+const extractions = [];
+self.addEventListener('message', ({ data }) => {
+  data?.extractions?.postMessage(extractions);
+});
+const extracting = (context) =>
+  params.has('recall') &&
+  typeof context.messages[0]?.content === 'string' &&
+  context.messages[0].content.startsWith('You keep the long-term memory');
+const recall = (context) => {
+  const text = context.messages[1].content[0].text;
+  const between = (open, close) => {
+    const start = text.indexOf('>', text.indexOf(open)) + 1;
+    return text.slice(start, text.indexOf(close, start)).trim();
+  };
+  const conversation = between('<conversation', '</conversation>');
+  extractions.push({ memory: between('<memory_file', '</memory_file>'), conversation });
+  const found = new Map();
+  for (const [, section, title, body] of conversation.matchAll(
+    /^(?:\w+: )?remember (.+?) \/ (.+?): (.+)$/gm
+  )) {
+    const key = `${section}\n${title}`;
+    const known = found.get(key);
+    found.set(key, { section, title, body: known ? `${known.body} ${body}` : body, tag: 'user' });
+  }
+  return fauxAssistantMessage(JSON.stringify([...found.values()]));
+};
 const dispatch = (context, ...rest) => {
   if (judging(context)) return judgeSay(context, rest[0], rest[2]);
+  if (extracting(context)) return recall(context);
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
   if (labelling(context) || stepping(context)) labelInputs.push(stepInput(context));
   if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
@@ -902,9 +929,14 @@ const bools = (values) =>
     Object.entries(values).map(([name, probability]) => [name, { type: 'bool', probability }])
   );
 const owned = [];
+const remembers = (state, marker) =>
+  (state.owner?.memory ?? []).some((line) => line.includes(marker));
 const ownerTable = (state) => {
   const marker = state.owner.policy.trim().split('\n').at(-1);
-  return judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
+  const base = judgeTable[`owner:${marker}`] ?? judgeTable.owner ?? {};
+  return Object.entries(judgeTable)
+    .filter(([key]) => key.startsWith('memory:') && remembers(state, key.slice(7)))
+    .reduce((table, [, more]) => ({ ...table, ...more }), base);
 };
 const forbiddenOf = (state) => {
   const told = inner(state.request.untrusted);
@@ -973,7 +1005,11 @@ async function classify(model, context, options) {
   judged.push(seen);
   for (const wake of judgedWakes.splice(0)) wake();
   const told = inner(context.state.request.untrusted);
-  const step = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? judgeSteps.shift() ?? {};
+  const listed = judgeTable[told] ?? judgeTable[told.split('\n')[0]] ?? judgeSteps.shift() ?? {};
+  const step =
+    listed.remembered === undefined || remembers(context.state, listed.remembered)
+      ? listed
+      : { ...listed, aligned: 0.05 };
   if (step.hold) {
     await new Promise((resolve) => {
       if (options?.signal?.aborted) resolve();
