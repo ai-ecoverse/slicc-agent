@@ -532,7 +532,7 @@ test('only a person approving a kernel that asks for timestamps answers with one
   const page = await chrome.page(t);
   await boot(page, { query: '?judge-level=1' });
   const seen = await staged(page, 'timestamp answers', async () => {
-    const { owner, follow, until, newest, pending, decideAs, sudo, tags, replies } = globalThis.t;
+    const { owner, follow, until, decideAs, sudo, tags, replies } = globalThis.t;
     const local = await owner.connect();
     const phone = await follow('phone-1');
     const mine = createAgentModel(local);
@@ -552,11 +552,21 @@ test('only a person approving a kernel that asks for timestamps answers with one
     });
     const offered = (model, id) =>
       until(() => model.approvals.list().find((a) => a.id === id)?.always, 'Always offered');
+    const handled = new Set();
+    const next = async () => {
+      const item = await until(
+        () =>
+          local.approvals.value.find(
+            (entry) => entry.kind === 'sudo' && entry.state === 'pending' && !handled.has(entry.id)
+          ),
+        'the request'
+      );
+      handled.add(item.id);
+      return item.id;
+    };
     const answered = async (req, answer) => {
       const asked = owner.approve(req);
-      await until(() => newest(local)?.state === 'pending', 'the request');
-      const id = newest(local).id;
-      await answer(id);
+      await answer(await next());
       return asked;
     };
     const once = await answered(request('sudo-a'), (id) => mine.approvals.decide(id, 'once'));
@@ -570,9 +580,7 @@ test('only a person approving a kernel that asks for timestamps answers with one
     );
     const byHost = await answered(request('sudo-e'), (id) => decideAs(id, 'once', 'host'));
     const running = sudo(['ls', '/root'], tags.terminal);
-    await pending(local, 1);
-    const kernelReq = newest(local);
-    await mine.approvals.decide(kernelReq.id, 'once');
+    await mine.approvals.decide(await next(), 'once');
     const ran = await running;
     await phone.close();
     await local.close();
