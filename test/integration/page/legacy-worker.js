@@ -47,6 +47,29 @@ async function seed() {
     await agent.harness.commit(async (tx) => {
       (await tx.doc(GuestsDoc)).seats[seat.id] = seat;
     }, ctx);
+  if (params.has('bug'))
+    await agent.agents.update((_tx, doc) => {
+      const conversation = doc.cones.cone.conversation;
+      if (params.get('bug') === 'twin') {
+        doc.cones[`cone-${doc.next}`] = { name: 'twin', conversation };
+        doc.next += 1;
+        return;
+      }
+      delete doc.cones[kept];
+      doc.frozenNext = 2;
+      doc.frozen = {
+        'frozen-1': {
+          cone: 'cone',
+          name: 'sliccy',
+          conversation,
+          title: 'First.',
+          model: 'faux/faux-1',
+          messages: 4,
+          frozenAt: Date.now(),
+          scoops: [],
+        },
+      };
+    }, ctx);
   await agent.close();
   return { kept };
 }

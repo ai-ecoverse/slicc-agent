@@ -238,7 +238,7 @@ export function setupSprinkles() {
       await reload(context);
       const state = await harness.snapshot(SprinklesDoc, context);
       if (welcome !== undefined && !state?.welcomed) {
-        await post(WELCOME, 'cone', context);
+        await post(WELCOME, agents.activeCone(), context);
         await harness.commit(async (tx) => {
           (await tx.doc(SprinklesDoc)).welcomed = true;
         }, context);

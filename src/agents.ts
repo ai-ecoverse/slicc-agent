@@ -116,25 +116,156 @@ export interface Agents {
   onCone(listener: (conversation: Conversation) => void | Promise<void>): () => void;
 }
 
-async function initial(harness: Harness, root: Conversation, context: Context) {
-  return harness.commit(async (tx) => {
-    const doc = await tx.doc(AgentsDoc);
-    if (!doc.cones[FIRST_CONE]) {
-      const legacy = (await tx.doc(ConeDoc)).conversation;
-      doc.cones[FIRST_CONE] = { name: 'sliccy', conversation: legacy ?? root.id };
+export type Repaired = { message: string; conversation: number };
+
+function rank(id: string): number {
+  if (id === FIRST_CONE) return 0;
+  const numbered = /^cone-(\d+)$/.exec(id);
+  return numbered ? Number(numbered[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+export function ranked(state: Pick<AgentsState, 'cones'>): string[] {
+  return Object.keys(state.cones).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+export function holder(
+  state: Pick<AgentsState, 'cones'>,
+  conversation: number,
+  except?: string
+): string | undefined {
+  return ranked(state).find(
+    (id) => id !== except && state.cones[id]?.conversation === conversation
+  );
+}
+
+export function claim(
+  state: Pick<AgentsState, 'cones'>,
+  coneId: string,
+  name: string,
+  conversation: number
+): void {
+  const other = holder(state, conversation, coneId);
+  if (other === undefined) return;
+  const held = (state.cones[other] as ConeRecord).name;
+  throw new Error(
+    `${held} (${other}) already has this conversation live, so ${name} can’t have it too; open ${other} instead.`
+  );
+}
+
+function freezeWith(doc: AgentsState, coneId: string, frozenId: string): string[] {
+  const owned = Object.entries(doc.scoops)
+    .filter(([, scoop]) => scoop.cone === coneId && live(scoop))
+    .map(([id]) => id);
+  for (const id of owned) (doc.scoops[id] as ScoopRecord).frozen = frozenId;
+  delete doc.cones[coneId];
+  return owned;
+}
+
+function refreeze(doc: AgentsState): Repaired[] {
+  const notes: Repaired[] = [];
+  for (const id of ranked(doc)) {
+    const cone = doc.cones[id] as ConeRecord;
+    const found = Object.entries(doc.frozen ?? {}).find(
+      ([, record]) => record.cone === id && record.conversation === cone.conversation
+    );
+    if (!found) continue;
+    const [frozenId, record] = found;
+    record.scoops.push(...freezeWith(doc, id, frozenId));
+    notes.push({
+      conversation: cone.conversation,
+      message: `${cone.name} (${id}) was live again on the conversation it was frozen with as ${frozenId}, so it is frozen again; thaw ${frozenId} to continue it.`,
+    });
+  }
+  return notes;
+}
+
+function unshare(doc: AgentsState, now: number): Repaired[] {
+  const notes: Repaired[] = [];
+  const first = new Map<number, string>();
+  for (const id of ranked(doc)) {
+    const cone = doc.cones[id] as ConeRecord;
+    const keeper = first.get(cone.conversation);
+    if (keeper === undefined) {
+      first.set(cone.conversation, id);
+      continue;
     }
-    if (!doc.cones[doc.active]) doc.active = FIRST_CONE;
-    return JSON.parse(JSON.stringify(doc)) as AgentsState;
-  }, context);
+    const frozenId = `frozen-${doc.frozenNext ?? 1}`;
+    doc.frozenNext = (doc.frozenNext ?? 1) + 1;
+    doc.frozen ??= {};
+    doc.frozen[frozenId] = {
+      cone: id,
+      name: cone.name,
+      conversation: cone.conversation,
+      title: cone.title ?? '',
+      model: '',
+      messages: 0,
+      frozenAt: now,
+      scoops: freezeWith(doc, id, frozenId),
+    };
+    const kept = (doc.cones[keeper] as ConeRecord).name;
+    notes.push({
+      conversation: cone.conversation,
+      message: `${cone.name} (${id}) shared its conversation with ${kept} (${keeper}), so it moved to the Freezer as ${frozenId}; the conversation stays live in ${keeper}.`,
+    });
+  }
+  return notes;
+}
+
+function settle(
+  doc: AgentsState,
+  legacy: number,
+  fresh: number | undefined,
+  now: number
+): Repaired[] | null {
+  const notes = [...refreeze(doc), ...unshare(doc, now)];
+  if (!ranked(doc).length) {
+    if (doc.frozenNext === undefined)
+      doc.cones[FIRST_CONE] = { name: 'sliccy', conversation: legacy };
+    else if (fresh === undefined) return null;
+    else {
+      doc.cones[`cone-${doc.next}`] = { name: 'sliccy', conversation: fresh };
+      doc.next += 1;
+    }
+  }
+  if (!doc.cones[doc.active]) doc.active = ranked(doc)[0] as string;
+  return notes;
+}
+
+const copied = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+type Settled = { state: AgentsState; notes: Repaired[] };
+
+async function initial(harness: Harness, root: Conversation, context: Context) {
+  const now = Date.now();
+  const once = (fresh?: Conversation) =>
+    harness.commit(async (tx) => {
+      const doc = await tx.doc(AgentsDoc);
+      const legacy = (await tx.doc(ConeDoc)).conversation ?? root.id;
+      if (!fresh && settle(copied(doc as AgentsState), legacy, undefined, now) === null)
+        return undefined;
+      const notes = settle(doc as AgentsState, legacy, fresh?.id, now) as Repaired[];
+      return { state: copied(doc as AgentsState), notes };
+    }, context);
+  const settled = await once();
+  if (settled) return { ...settled, fresh: undefined };
+  const fresh = await harness.createConversation(
+    { ownership: { kind: 'ownerless' }, agent: { model: (await root.agent(context)).model } },
+    context
+  );
+  return { ...((await once(fresh)) as Settled), fresh };
 }
 
 export async function openAgents(
   harness: Harness,
   root: Conversation,
-  context: Context
+  context: Context,
+  report: (note: Repaired) => void = () => undefined
 ): Promise<Agents> {
-  let state = await initial(harness, root, context);
+  const settled = await initial(harness, root, context);
+  let state = settled.state;
+  for (const note of settled.notes) report(note);
   const handles = new Map<number, Conversation>([[root.id, root]]);
+  if (settled.fresh) handles.set(settled.fresh.id, settled.fresh);
   const handle = async (id: number, using: Context) => {
     const known = handles.get(id);
     if (known) return known;
@@ -194,6 +325,7 @@ export async function openAgents(
       handles.set(conversation.id, conversation);
       return update((_tx, doc) => {
         const id = `cone-${doc.next}`;
+        claim(doc, id, wanted, conversation.id);
         doc.next += 1;
         doc.cones[id] = { name: wanted, conversation: conversation.id };
         return id;
@@ -206,6 +338,7 @@ export async function openAgents(
       handles.set(conversation.id, conversation);
       await update(async (tx, doc) => {
         const cone = doc.cones[coneId] as ConeRecord;
+        claim(doc, coneId, cone.name, conversation.id);
         cone.conversation = conversation.id;
         delete cone.title;
         delete cone.titled;
