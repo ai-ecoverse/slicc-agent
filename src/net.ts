@@ -94,6 +94,8 @@ function stream(body: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
 
 const UNPROVEN =
   "this route can't show it won't follow a redirect, so a request that holds a credential isn't sent";
+const UNSENT =
+  "this route can't show it won't follow a redirect, so a request that refuses redirects isn't sent";
 
 function honorsManual(traits: Transport['traits']): boolean {
   if (traits?.unavailable) return false;
@@ -158,9 +160,11 @@ async function carried(
   headers: HeaderList
 ): Promise<Response> {
   const manual = request.redirect === 'manual';
-  if (manual && !honorsManual(transport.traits)) return refused();
-  const told =
-    manual || (request.redirect === 'error' && transport.traits?.redirectPolicy === true);
+  const error = request.redirect === 'error';
+  const honored = honorsManual(transport.traits);
+  if (manual && !honored) return refused();
+  if (error && !honored) throw new TypeError(UNSENT);
+  const told = manual || (error && transport.traits?.redirectPolicy === true);
   const body = ['GET', 'HEAD'].includes(request.method)
     ? undefined
     : new Uint8Array(await request.arrayBuffer());
@@ -173,9 +177,8 @@ async function carried(
     ...(told ? { redirect: request.redirect } : {}),
   });
   const followed = followedBy(response, request.url);
-  const redirected =
-    followed || (transport.traits?.manualRedirects && redirects.has(response.status));
-  if ((request.redirect === 'error' && redirected) || (manual && followed)) {
+  const redirected = followed || redirects.has(response.status) || !!response.opaqueRedirect;
+  if ((error && redirected) || (manual && followed)) {
     await dropped(response);
     throw new TypeError('unexpected redirect');
   }
@@ -196,6 +199,12 @@ async function carried(
   return answer;
 }
 
+async function unredirected(request: Request, response: Response): Promise<Response> {
+  if (request.redirect !== 'error' || !redirects.has(response.status)) return response;
+  await response.body?.cancel().catch(() => undefined);
+  throw new TypeError('unexpected redirect');
+}
+
 export function transportFetch(
   transport: Transport,
   origin: string,
@@ -207,7 +216,8 @@ export function transportFetch(
     const headers = untracked(headerList(given, input, init));
     const request = new Request(given, { headers });
     const port = kernelPort(request.url);
-    if (loopback && port) return loopback(request, { port, signal: request.signal });
+    if (loopback && port)
+      return unredirected(request, await loopback(request, { port, signal: request.signal }));
     if (
       request.redirect !== 'manual' &&
       (new URL(request.url).origin === origin ||
