@@ -12,7 +12,9 @@ import {
   type Agents,
   type AgentsState,
   type ConeRecord,
+  claim,
   type FrozenRecord,
+  holder,
   live,
   type ScoopRecord,
 } from '../agents.ts';
@@ -251,10 +253,14 @@ async function rows(
     out.push({
       id,
       name: record.name,
-      title: record.title,
-      model: record.model,
-      messages: record.messages,
-      frozenAt: record.frozenAt,
+      ...(holder(state, record.conversation) === undefined
+        ? {
+            title: record.title,
+            model: record.model,
+            messages: record.messages,
+            frozenAt: record.frozenAt,
+          }
+        : await running(record)),
       kind: 'cone',
       live: false,
       thawedAs: null,
@@ -376,7 +382,10 @@ async function command(
   if (!item) return { code: 1, out: `freezer: there is no conversation ${id}\n` };
   if (verb === 'thaw') {
     if (item.live) return { code: 1, out: `freezer: ${item.name} is live; it needs no thawing\n` };
-    return { code: 0, out: `thawed ${id} as ${await runtime.thaw(id, context)}\n` };
+    return runtime.thaw(id, context).then(
+      (cone) => ({ code: 0, out: `thawed ${id} as ${cone}\n` }),
+      (error: Error) => ({ code: 1, out: `freezer: ${error.message}\n` })
+    );
   }
   const state = options.agents.state();
   const conversationId =
@@ -461,6 +470,7 @@ async function thawScoop(
   );
   const coneId = await agents.update((_tx, doc) => {
     const target = `cone-${doc.next}`;
+    claim(doc, target, scoop.name, fork.id);
     doc.next += 1;
     doc.cones[target] = {
       name: scoop.name,
@@ -619,10 +629,12 @@ async function thawFrozen(
     if (!record) throw new Error(`There is no frozen chat ${id}.`);
     const reuse = !doc.cones[record.cone];
     const target = reuse ? record.cone : `cone-${doc.next}`;
+    const conversation = fork?.id ?? record.conversation;
+    claim(doc, target, record.name, conversation);
     if (!reuse) doc.next += 1;
     doc.cones[target] = {
       name: record.name,
-      conversation: fork?.id ?? record.conversation,
+      conversation,
       title: record.title,
       titled: TITLE_TURNS.at(-1) as number,
     };
@@ -821,6 +833,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
         delete doc.cones[agentId];
         for (const scoop of owned) (doc.scoops[scoop] as { frozen?: string }).frozen = frozenId;
         if (next?.conversation) {
+          claim(doc, next.id, record.name, next.conversation.id);
           doc.cones[next.id] = { name: record.name, conversation: next.conversation.id };
           doc.next += 1;
         }

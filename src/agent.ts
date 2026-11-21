@@ -4,6 +4,7 @@ import type { Models } from '@earendil-works/pi-ai/models';
 import {
   AssistantEntry,
   type Conversation,
+  type ConversationId,
   createRegistry,
   type EntryId,
   Harness,
@@ -121,7 +122,14 @@ export async function openAgent(options: AgentOptions): Promise<Agent> {
   );
   opened = harness;
   const root = await harness.root(context, { agent: { model: options.model } });
-  const agents = await openAgents(harness, root, context);
+  const agents = await openAgents(harness, root, context, (note) =>
+    reports.record({
+      kind: 'extension_error',
+      extension: 'slicc.agents',
+      conversationId: note.conversation as ConversationId,
+      error: new Error(note.message),
+    })
+  );
   await options.beforeResume?.(harness, context);
   harness.resume();
   return {

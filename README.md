@@ -561,12 +561,18 @@ pi durable keeps every conversation and entry in the session database, and has n
   - its run and its scoops' runs stop;
   - it moves from `cones` to `frozen` with its live scoops marked frozen, keeping their transcripts and workspaces;
   - if it was active, another cone is selected, and if it was the last one, a fresh cone takes its name.
+  - it stays frozen across a restart: startup makes the first cone, `cone` (named sliccy, on the root conversation), only in a new session, never again once it is frozen or gone. When every cone is frozen, startup starts a fresh `cone-<n>` named sliccy on a new conversation, never on a frozen cone's (#1033).
   - 14b's memory extraction runs first, and one background call (with `memory.extractModel` or the cone's model) gives it a short title.
 - **Thaw:**
-  - **A frozen cone** comes back under its old id when that's free (otherwise a new `cone-<n>`), keeping its name, with its scoops unfrozen.
+  - **A frozen cone** comes back under its old id when that's free (otherwise a new `cone-<n>`), keeping its name and its conversation, with its scoops unfrozen. A guest seat bound to it is refused while it's frozen, also across a restart ("The cone this seat shares is gone."), and works again once it's thawed.
   - **A live row** just opens: it's selected.
   - **A stopped scoop or `agent` run comes back as a cone, as a fork:** a conversation's task ownership can't change, so `Conversation.fork` at its last entry gives an ownerless conversation with the cone's tools and instructions, cwd `/home`, and the scoop's model and thinking level. It becomes `cone-<n>` with the scoop's name, and the scoop's row records `thawedAs`.
   - The thawed cone's first entry is a `slicc.thawed` line the model sees and spectrum shows as a notice: whose conversation it was, and whether its workspace is still there or was deleted when it stopped.
+- **One live cone per conversation.** Creating a cone, thawing a frozen cone or a stopped scoop, the replacement a freeze starts, New conversation and rewinding all check it in the same commit, and refuse with "<name> (<id>) already has this conversation live, so <other> can't have it too; open <id> instead." (`freezer thaw` prints it with exit 1, `AgentControl.thaw` returns it as `error`). Sessions from before #1033 can hold a cone that a restart brought back live on the conversation it was frozen with, or two live cones on one conversation. Startup repairs them before anything runs, without dropping a conversation or a record:
+  - a cone that is live on the conversation of its own frozen record is frozen again into that record, with the live scoops it has since;
+  - of live cones that share a conversation, the lowest id stays live (`cone`, then `cone-<n>` by number, then the rest by name), and each other one moves to the Freezer as a new frozen record with its live scoops. Its row shows the conversation's current numbers, and thawing it is refused while the conversation is live in the kept cone; Remove works as for any frozen cone;
+  - an active cone that moved is replaced by the lowest live one;
+  - each repair is a monitor problem (`extension_error` from `slicc.agents`) that names both ids and the frozen record, reported once, at the startup that repaired it.
 - **Remove** (the Freezer's delete, `discard`):
   - on a frozen cone, it removes the record, marks its scoops gone and deletes their folders;
   - on a stopped scoop or `agent` run, it sets `removed` (a tombstone in the registry, so the row never returns) and deletes its folder.
@@ -759,7 +765,7 @@ A sprinkle is a small HTML panel next to the chat. pi has nothing for this; it's
 **There's no `sprinkle` command.** An agent opens a sprinkle with `panel open sprinkle:<name>` and lists them with `panel list` (see Panels). An agent version that installed `sprinkle` leaves a copy in `/usr/local/bin` or `$PNPM_HOME/bin`; the worker removes it when that copy is slicc-agent's.
 
 **Shipped sprinkles.** Only `welcome` and `suggestions`, with slicc-spectrum's reviewed copy.
-- **Welcome.** The worker posts it inline in the first cone's chat once per session, as a `slicc.sprinkle` entry that the adapter shows as an inline sprinkle. It's the only inline sprinkle. Its `onboarding-complete` send writes `/home/.welcomed`, which the card checks, and the profile to `/home/.welcome.json` for the gelatiere's catalog ranking, and the built-in `welcome` skill answers the lick.
+- **Welcome.** The worker posts it inline in the active cone's chat (the first cone in a new session) once per session, as a `slicc.sprinkle` entry that the adapter shows as an inline sprinkle. It's the only inline sprinkle. Its `onboarding-complete` send writes `/home/.welcomed`, which the card checks, and the profile to `/home/.welcome.json` for the gelatiere's catalog ranking, and the built-in `welcome` skill answers the lick.
 - **Suggestions.** It's listed once the gelatiere's store `/home/.gelatiere/suggestions.json` exists, and owned by the active cone. Its `gelatiere-dismiss` send marks the suggestion in the store and never reaches an agent; `gelatiere-install` and `gelatiere-try` mark it taken and go to the owner as licks. Its `exec` for use cases is refused, so it shows its static empty state.
 
 The built-in `sprinkles` skill teaches the files, the bridge, `cgi-bin/` and `panel open sprinkle:<name>`.
