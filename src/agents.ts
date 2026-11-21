@@ -8,6 +8,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { boundedDeltas } from './checkpoints.ts';
 import { ConeDoc } from './cone.ts';
+import { GuestsDoc } from './guests/seats.ts';
 import type { RoleMemory } from './memory/store.ts';
 
 export const FIRST_CONE = 'cone';
@@ -50,6 +51,7 @@ export type FrozenRecord = {
   frozenAt: number;
   scoops: string[];
   v6?: { origin: string; key: string; suffix?: string };
+  repaired?: true;
 };
 
 export type V6Import = {
@@ -161,7 +163,7 @@ function freezeWith(doc: AgentsState, coneId: string, frozenId: string): string[
   return owned;
 }
 
-function refreeze(doc: AgentsState): Repaired[] {
+function refreeze(doc: AgentsState, now: number): Repaired[] {
   const notes: Repaired[] = [];
   for (const id of ranked(doc)) {
     const cone = doc.cones[id] as ConeRecord;
@@ -171,6 +173,8 @@ function refreeze(doc: AgentsState): Repaired[] {
     if (!found) continue;
     const [frozenId, record] = found;
     record.scoops.push(...freezeWith(doc, id, frozenId));
+    record.frozenAt = now;
+    record.repaired = true;
     notes.push({
       conversation: cone.conversation,
       message: `${cone.name} (${id}) was live again on the conversation it was frozen with as ${frozenId}, so it is frozen again; thaw ${frozenId} to continue it.`,
@@ -182,7 +186,8 @@ function refreeze(doc: AgentsState): Repaired[] {
 function unshare(doc: AgentsState, now: number): Repaired[] {
   const notes: Repaired[] = [];
   const first = new Map<number, string>();
-  for (const id of ranked(doc)) {
+  const order = ranked(doc).sort((a, b) => Number(b === doc.active) - Number(a === doc.active));
+  for (const id of order) {
     const cone = doc.cones[id] as ConeRecord;
     const keeper = first.get(cone.conversation);
     if (keeper === undefined) {
@@ -201,6 +206,7 @@ function unshare(doc: AgentsState, now: number): Repaired[] {
       messages: 0,
       frozenAt: now,
       scoops: freezeWith(doc, id, frozenId),
+      repaired: true,
     };
     const kept = (doc.cones[keeper] as ConeRecord).name;
     notes.push({
@@ -211,20 +217,24 @@ function unshare(doc: AgentsState, now: number): Repaired[] {
   return notes;
 }
 
-function settle(
-  doc: AgentsState,
-  legacy: number,
-  fresh: number | undefined,
-  now: number
-): Repaired[] | null {
-  const notes = [...refreeze(doc), ...unshare(doc, now)];
+type Found = { legacy: number; seated: boolean; now: number };
+
+function settle(doc: AgentsState, found: Found, fresh: number | undefined): Repaired[] | null {
+  const notes = [...refreeze(doc, found.now), ...unshare(doc, found.now)];
   if (!ranked(doc).length) {
-    if (doc.frozenNext === undefined)
-      doc.cones[FIRST_CONE] = { name: 'sliccy', conversation: legacy };
+    const leftover = found.seated || Object.keys(doc.scoops).length > 0;
+    if (doc.frozenNext === undefined && !leftover)
+      doc.cones[FIRST_CONE] = { name: 'sliccy', conversation: found.legacy };
     else if (fresh === undefined) return null;
     else {
-      doc.cones[`cone-${doc.next}`] = { name: 'sliccy', conversation: fresh };
+      const id = `cone-${doc.next}`;
+      doc.cones[id] = { name: 'sliccy', conversation: fresh };
       doc.next += 1;
+      if (doc.frozenNext === undefined)
+        notes.push({
+          conversation: fresh,
+          message: `No cone was left but scoops or guest seats were, so sliccy (${id}) started on a new conversation instead of the first cone’s.`,
+        });
     }
   }
   if (!doc.cones[doc.active]) doc.active = ranked(doc)[0] as string;
@@ -237,22 +247,31 @@ type Settled = { state: AgentsState; notes: Repaired[] };
 
 async function initial(harness: Harness, root: Conversation, context: Context) {
   const now = Date.now();
-  const once = (fresh?: Conversation) =>
-    harness.commit(async (tx) => {
-      const doc = await tx.doc(AgentsDoc);
-      const legacy = (await tx.doc(ConeDoc)).conversation ?? root.id;
-      if (!fresh && settle(copied(doc as AgentsState), legacy, undefined, now) === null)
-        return undefined;
-      const notes = settle(doc as AgentsState, legacy, fresh?.id, now) as Repaired[];
-      return { state: copied(doc as AgentsState), notes };
-    }, context);
-  const settled = await once();
+  const attempt = async (tx: Tx, fresh?: number): Promise<Settled | undefined> => {
+    const doc = (await tx.doc(AgentsDoc)) as AgentsState;
+    const found = {
+      legacy: (await tx.doc(ConeDoc)).conversation ?? root.id,
+      seated: Object.keys((await tx.doc(GuestsDoc)).seats).length > 0,
+      now,
+    };
+    if (settle(copied(doc), found, fresh) === null) return undefined;
+    const notes = settle(doc, found, fresh) as Repaired[];
+    return { state: copied(doc), notes };
+  };
+  const settled = await harness.commit((tx) => attempt(tx), context);
   if (settled) return { ...settled, fresh: undefined };
+  let made: Settled | undefined;
   const fresh = await harness.createConversation(
-    { ownership: { kind: 'ownerless' }, agent: { model: (await root.agent(context)).model } },
+    {
+      ownership: { kind: 'ownerless' },
+      agent: { model: (await root.agent(context)).model },
+      init: async (tx, id) => {
+        made = await attempt(tx, id);
+      },
+    },
     context
   );
-  return { ...((await once(fresh)) as Settled), fresh };
+  return { ...(made as Settled), fresh };
 }
 
 export async function openAgents(

@@ -487,6 +487,16 @@ self.addEventListener('message', ({ data }) => {
 const extractions = [];
 self.addEventListener('message', ({ data }) => {
   data?.extractions?.postMessage(extractions);
+  if (data?.conversations)
+    void running
+      .then(async (host) => ({
+        items: await host.agent.harness.commit(
+          async (tx) => (await tx.scanConversations({}, 1000)).items,
+          BACKGROUND_CONTEXT
+        ),
+        agents: host.agent.agents.state(),
+      }))
+      .then((seen) => data.conversations.postMessage(JSON.parse(JSON.stringify(seen))));
 });
 const extracting = (context) =>
   params.has('recall') &&
