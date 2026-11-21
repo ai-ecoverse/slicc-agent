@@ -29,13 +29,13 @@ echo`;
 
 async function boot(
   page,
-  { steps, later = [], persist = null, judge = null, files = {}, users = 'enforce' }
+  { steps, later = [], persist = null, judge = null, files = {}, users = 'enforce', extra = [] }
 ) {
   await page.goto('/');
   await staged(
     page,
     'the capture agent',
-    async ({ steps, later, persist, judge, files, users, requests, script }) => {
+    async ({ steps, later, persist, judge, files, users, requests, script, extra }) => {
       for (const [path, text] of Object.entries(files)) {
         const parts = path.split('/').filter(Boolean);
         const name = parts.pop();
@@ -82,6 +82,7 @@ async function boot(
           worker = new Worker(
             `/dist-test/main-worker.js?${new URLSearchParams([
               ['scoop-say', ''],
+              ...extra,
               ...(persist ? [['persist', persist]] : []),
               ...(judge
                 ? [['judge', ''], ...judge.map((step) => ['judge-step', JSON.stringify(step)])]
@@ -196,7 +197,7 @@ async function boot(
         });
       globalThis.r = r;
     },
-    { steps, later, persist, judge, files, users, requests: REQUESTS, script: SCRIPT }
+    { steps, later, persist, judge, files, users, requests: REQUESTS, script: SCRIPT, extra }
   );
 }
 
@@ -776,6 +777,7 @@ test("a guest's capture pending on a cone that is frozen is withdrawn and denied
   const page = await chrome.page(t);
   await boot(page, {
     persist: `/.slicc/capture-frozen-${Date.now()}`,
+    extra: [['recall', '']],
     steps: [bash(`${embed('screen')} > /tmp/frozen.out`)],
     later: [
       [bash(`${embed('still')} > /tmp/thawed.out`)],

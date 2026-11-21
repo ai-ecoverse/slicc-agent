@@ -865,6 +865,7 @@ test('the gate reaches a conversation stored before it existed, also forked and 
       ['directory', directory],
       ['without', 'slicc-guest-guard'],
     ]).toString(),
+    extra: [['recall', '']],
     steps: [
       bash('echo old'),
       answer('Old.'),

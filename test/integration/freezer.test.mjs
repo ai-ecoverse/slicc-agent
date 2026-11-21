@@ -81,12 +81,15 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
 
 const GONE = 'The cone this seat shares is gone.';
 
-async function restartable(page, { persist, seed = null, crash = null, extra = [] }) {
+async function restartable(
+  page,
+  { persist, seed = null, crash = null, extra = [], answers = null, worker = 'main-worker' }
+) {
   await page.goto('/');
   await staged(
     page,
     'the restartable freezer agent',
-    async ({ persist, seed, crash, extra }) => {
+    async ({ persist, seed, crash, extra, answers: said, worker }) => {
       const legacy = (query) =>
         new Promise((resolve) => {
           const worker = new Worker(`/dist-test/legacy-worker.js?${query}`, { type: 'module' });
@@ -103,12 +106,14 @@ async function restartable(page, { persist, seed = null, crash = null, extra = [
       const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
       const kernel = await bootKernel();
-      const answers = Array.from({ length: 6 }, (_, n) => ['answer', `Answer ${n + 1}.`]);
+      const answers = (said ?? Array.from({ length: 6 }, (_, n) => `Answer ${n + 1}.`)).map(
+        (answer) => ['answer', answer]
+      );
       const f = {};
       const owner = await startTracked({
         worker: () => {
           f.worker = new Worker(
-            `/dist-test/main-worker.js?${new URLSearchParams([['persist', persist], ...answers, ...extra])}`,
+            `/dist-test/${worker}.js?${new URLSearchParams([['persist', persist], ...answers, ...extra])}`,
             { type: 'module' }
           );
           return f.worker;
@@ -131,6 +136,13 @@ async function restartable(page, { persist, seed = null, crash = null, extra = [
           channel.port1.onmessage = ({ data }) => resolve(data);
           f.worker.postMessage({ [key]: channel.port2 }, [channel.port2]);
         });
+      f.tell = (message) => f.worker.postMessage(message);
+      f.memory = (scope) =>
+        Object.fromEntries(
+          (f.local.memories.value ?? [])
+            .filter((entry) => entry.id.startsWith(`${scope}/`))
+            .map((entry) => [entry.id, `${entry.origin ?? null}: ${entry.body}`])
+        );
       f.unattached = async () => {
         const { items, agents } = await f.ask('conversations');
         const used = new Set(
@@ -222,7 +234,7 @@ async function restartable(page, { persist, seed = null, crash = null, extra = [
       };
       globalThis.f = f;
     },
-    { persist, seed, crash, extra }
+    { persist, seed, crash, extra, answers, worker }
   );
 }
 
@@ -522,4 +534,209 @@ test('a session left with no cone and no frozen record but with a guest seat sta
   assert.equal(seen.guest, GONE);
   assert.deepEqual(seen.afterRestart, ['cone-3']);
   assert.equal(seen.reportedAgain, 0);
+});
+
+const SAID = ['remember pets / cat: Tom', 'remember drinks / tea: green', 'Fine.', 'Fine.'];
+
+test('Delete cone and New conversation each extract the conversation’s memory in the background, the owner’s lines as owner and the rest as mixed, and neither waits for the extraction', async (t) => {
+  const page = await chrome.page(t);
+  await restartable(page, {
+    persist: `/.slicc/freezer-extract-${Date.now()}`,
+    answers: SAID,
+    extra: [['recall', '1']],
+  });
+  const seen = await staged(page, 'Delete cone and New conversation extract', async () => {
+    const { until, open, ask, tell, memory } = globalThis.f;
+    const local = await open();
+    await local.prompt('remember colors / door: blue');
+    tell({ recallHold: true });
+    stage('the freeze');
+    const out = { frozen: await local.control.freeze('cone', BACKGROUND_CONTEXT) };
+    stage('the held extraction');
+    out.held = await until(async () => {
+      const found = await ask('extractions');
+      return found.length && found.map((item) => item.conversation);
+    }, 'the held extraction');
+    out.memoryWhileHeld = memory('cone');
+    tell({ recallHold: false, recallRelease: true });
+    stage('the frozen cone’s entries');
+    out.cone = await until(() => {
+      const found = memory('cone');
+      return Object.keys(found).length === 2 && found;
+    }, 'the frozen cone’s entries');
+    stage('the new conversation');
+    out.active = local.agents.value.active;
+    await local.prompt('remember tools / editor: vim');
+    tell({ recallHold: true });
+    out.cleared = await local.control.newChat(out.active, BACKGROUND_CONTEXT);
+    await until(async () => (await ask('extractions')).length > 2, 'the second held extraction');
+    tell({ recallHold: false, recallRelease: true });
+    stage('the new conversation’s entries');
+    out.next = await until(() => {
+      const found = memory(out.active);
+      return Object.keys(found).length === 2 && found;
+    }, 'the new conversation’s entries');
+    out.extractions = (await ask('extractions')).map((item) => item.conversation);
+    return out;
+  });
+  assert.deepEqual(seen.frozen, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.held, ['User: remember colors / door: blue']);
+  assert.deepEqual(seen.memoryWhileHeld, {});
+  assert.deepEqual(seen.cone, {
+    'cone/colors/door': 'owner: blue',
+    'cone/pets/cat': 'mixed: Tom',
+  });
+  assert.equal(seen.active, 'cone-2');
+  assert.deepEqual(seen.cleared, { id: 'frozen-2', error: null });
+  assert.deepEqual(seen.next, {
+    'cone-2/tools/editor': 'owner: vim',
+    'cone-2/drinks/tea': 'mixed: green',
+  });
+  assert.deepEqual(seen.extractions, [
+    'User: remember colors / door: blue',
+    'User: remember colors / door: blue\n\nAgent: remember pets / cat: Tom',
+    'User: remember tools / editor: vim',
+    'User: remember tools / editor: vim\n\nAgent: remember drinks / tea: green',
+  ]);
+});
+
+test('a restart while a freeze’s extraction is still running extracts the frozen conversation exactly once', async (t) => {
+  const page = await chrome.page(t);
+  await restartable(page, {
+    persist: `/.slicc/freezer-extract-restart-${Date.now()}`,
+    answers: SAID,
+    extra: [['recall', '1']],
+  });
+  const seen = await staged(page, 'a restart while a freeze’s extraction', async () => {
+    const { until, open, ask, tell } = globalThis.f;
+    const local = await open();
+    await local.prompt('remember colors / door: blue');
+    tell({ recallHold: true });
+    const out = { frozen: await local.control.freeze('cone', BACKGROUND_CONTEXT) };
+    await until(async () => (await ask('extractions')).length, 'the held extraction');
+    stage('the restart');
+    await globalThis.f.restart();
+    stage('the entries');
+    out.cone = await until(() => {
+      const found = globalThis.f.memory('cone');
+      return Object.keys(found).length === 2 && found;
+    }, 'the entries after the restart');
+    out.afterRestart = (await globalThis.f.ask('extractions')).map((item) => item.conversation);
+    stage('the second restart');
+    const again = await globalThis.f.restart();
+    await again.prompt('Anything new?');
+    out.afterSecondRestart = (await globalThis.f.ask('extractions')).length;
+    out.coneAfter = globalThis.f.memory('cone');
+    return out;
+  });
+  assert.deepEqual(seen.frozen, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.cone, {
+    'cone/colors/door': 'owner: blue',
+    'cone/pets/cat': 'mixed: Tom',
+  });
+  assert.deepEqual(seen.afterRestart, [
+    'User: remember colors / door: blue',
+    'User: remember colors / door: blue\n\nAgent: remember pets / cat: Tom',
+  ]);
+  assert.equal(seen.afterSecondRestart, 0);
+  assert.deepEqual(seen.coneAfter, seen.cone);
+});
+
+test('a freeze’s extraction that gets a model error keeps its cursor and runs again at the next start, without duplicating the entries it saved', async (t) => {
+  const page = await chrome.page(t);
+  await restartable(page, {
+    persist: `/.slicc/freezer-extract-retry-${Date.now()}`,
+    answers: SAID,
+    extra: [['recall', '1']],
+  });
+  const seen = await staged(page, 'a freeze’s extraction that gets a model error', async () => {
+    const { until, open, ask, tell, memory } = globalThis.f;
+    const local = await open();
+    await local.prompt('remember colors / door: blue');
+    tell({ recallFail: [2] });
+    const out = { frozen: await local.control.freeze('cone', BACKGROUND_CONTEXT) };
+    stage('the failed extraction');
+    await until(async () => (await ask('extractions')).length === 2, 'the failed extraction');
+    out.saved = await until(() => {
+      const found = memory('cone');
+      return Object.keys(found).length && found;
+    }, 'the entry saved before the error');
+    stage('the restart');
+    await globalThis.f.restart();
+    out.cone = await until(() => {
+      const found = globalThis.f.memory('cone');
+      return Object.keys(found).length === 2 && found;
+    }, 'the entries after the retry');
+    out.retried = (await globalThis.f.ask('extractions')).map((item) => item.memory);
+    out.titles = (globalThis.f.local.memories.value ?? [])
+      .filter((entry) => entry.scope === 'cone')
+      .map((entry) => entry.title)
+      .sort();
+    return out;
+  });
+  assert.deepEqual(seen.frozen, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.saved, { 'cone/colors/door': 'owner: blue' });
+  assert.deepEqual(seen.cone, {
+    'cone/colors/door': 'owner: blue',
+    'cone/pets/cat': 'mixed: Tom',
+  });
+  assert.equal(seen.retried.length, 2);
+  assert.ok(seen.retried.every((memory) => /### door\n[\s\S]*blue/.test(memory)));
+  assert.deepEqual(seen.titles, ['cat', 'door']);
+});
+
+test('New conversation while an earlier extraction of the cone is still running also extracts the turns that came after it', async (t) => {
+  const page = await chrome.page(t);
+  await restartable(page, {
+    persist: `/.slicc/freezer-extract-chain-${Date.now()}`,
+    answers: SAID,
+    extra: [['recall', '1']],
+    worker: 'clock-main-worker',
+  });
+  const seen = await staged(page, 'New conversation while an earlier extraction', async () => {
+    const MINUTE = 60_000;
+    const { until, open, ask, tell, memory } = globalThis.f;
+    const local = await open();
+    const off = globalThis.f.model.monitor.on('snapshot', () => {});
+    await until(
+      () =>
+        local.monitor.value?.tasks?.some(
+          (row) => row.kind === 'slicc.memory-idle' && row.status === 'sleeping'
+        ),
+      'the idle watch'
+    );
+    off();
+    const base = Date.now();
+    const clock = new BroadcastChannel('slicc-test-clock');
+    clock.postMessage({ now: base + 2 * MINUTE });
+    await local.prompt('remember colors / door: blue');
+    tell({ recallHold: true });
+    stage('the idle extraction');
+    clock.postMessage({ now: base + 33 * MINUTE });
+    await until(async () => (await ask('extractions')).length, 'the idle extraction');
+    await local.prompt('remember tools / editor: vim');
+    stage('the new conversation');
+    const out = { cleared: await local.control.newChat('cone', BACKGROUND_CONTEXT) };
+    tell({ recallHold: false, recallRelease: true });
+    stage('the entries');
+    out.cone = await until(() => {
+      const found = memory('cone');
+      return Object.keys(found).length === 4 && found;
+    }, 'the entries of both turns');
+    out.extractions = (await ask('extractions')).map((item) => item.conversation);
+    return out;
+  });
+  assert.deepEqual(seen.cleared, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.cone, {
+    'cone/colors/door': 'owner: blue',
+    'cone/pets/cat': 'mixed: Tom',
+    'cone/tools/editor': 'owner: vim',
+    'cone/drinks/tea': 'mixed: green',
+  });
+  assert.deepEqual(seen.extractions, [
+    'User: remember colors / door: blue',
+    'User: remember colors / door: blue\n\nAgent: remember pets / cat: Tom',
+    'User: remember tools / editor: vim',
+    'User: remember tools / editor: vim\n\nAgent: remember drinks / tea: green',
+  ]);
 });

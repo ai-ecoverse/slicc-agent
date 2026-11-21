@@ -10,6 +10,7 @@ import {
   extractTask,
   idleTask,
   idleWatch,
+  retryOwed,
   scheduler,
   settingsReader,
 } from './extract.ts';
@@ -51,7 +52,9 @@ export function setupMemory(registry: Registry): MemorySetup {
     extract: schedule,
     async attach(options, context) {
       const runtime = await attachMemory(options, connect, context);
-      const stop = idleWatch(await ready, idle, context);
+      const host = await ready;
+      const stop = idleWatch(host, idle, context);
+      void retryOwed(host, schedule, context).catch(() => undefined);
       return {
         ...runtime,
         async close(using) {

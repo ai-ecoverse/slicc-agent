@@ -10,8 +10,10 @@ import {
   type EntryRecord,
   hook,
   type ModelRef,
+  type Task,
   type TaskId,
 } from '@earendil-works/pi-durable';
+import type { AgentsState } from '../agents.ts';
 import { boundedDeltas } from '../checkpoints.ts';
 import type { MemoryOrigin, MemoryTag } from './format.ts';
 import { byteLength, MAX_BYTES, parseMemory, redactSecrets, serializeMemory } from './format.ts';
@@ -32,10 +34,26 @@ export const EXTRACT_TASK = 'slicc.memory-extract';
 export const TRANSCRIPT_CHARS = 60_000;
 export const DEFAULT_IDLE_MINUTES = 30;
 
+export type Owed = { cone: string; tail: number };
+
 export type ExtractState = {
   cursors: Record<string, number>;
   pending: Record<string, number>;
+  owed?: Record<string, Owed>;
 };
+
+function owe(doc: ExtractState, key: string, cone: string, tail: number) {
+  doc.owed ??= {};
+  doc.owed[key] = { cone, tail: Math.max(doc.owed[key]?.tail ?? 0, tail) };
+}
+
+const RETRIED = new Set(['model error', 'no model']);
+
+const background = (conversation: number) => ({
+  ownership: { kind: 'conversation' as const },
+  conversationId: conversation as ConversationId,
+  background: true,
+});
 
 export const ExtractDoc = defineDoc<ExtractState>({
   kind: 'slicc.memory-extract',
@@ -233,7 +251,11 @@ export function extractTask(
   ready: Promise<Host>,
   settings: (context: Context) => Promise<ExtractSettings>
 ) {
-  return defineTask<Input, State, ExtractResult>({
+  const extraction: Task<Input, State, ExtractResult, object> = defineTask<
+    Input,
+    State,
+    ExtractResult
+  >({
     name: EXTRACT_TASK,
     version: 1,
     initial: () => ({ phase: 'extract' }),
@@ -244,8 +266,20 @@ export function extractTask(
         const done = (result: ExtractResult) =>
           runtime.commit(async (tx) => {
             const doc = await tx.doc(ExtractDoc);
-            doc.cursors[key] = Math.max(doc.cursors[key] ?? 0, tail);
             delete doc.pending[key];
+            if (RETRIED.has(result.skipped as string)) owe(doc, key, cone, tail);
+            else {
+              const cursor = Math.max(doc.cursors[key] ?? 0, tail);
+              doc.cursors[key] = cursor;
+              const owed = doc.owed?.[key];
+              if (owed && owed.tail > cursor)
+                doc.pending[key] = (await tx.createTask(
+                  extraction,
+                  { cone: owed.cone, after: cursor, tail: owed.tail, model: task.input.model },
+                  background(runtime.conversationId)
+                )) as number;
+              else delete doc.owed?.[key];
+            }
             return { status: 'terminal', outcome: { status: 'completed', result } };
           }, context);
         if (!(await settings(context)).extract) return done({ saved: 0, skipped: 'turned off' });
@@ -301,12 +335,16 @@ export function extractTask(
         return done(await extracted(host, place, passes, ask, context));
       },
     },
-    abort: (_task, runtime, context) =>
+    abort: (task, runtime, context) =>
       runtime.commit(async (tx) => {
-        delete (await tx.doc(ExtractDoc)).pending[String(runtime.conversationId)];
+        const doc = await tx.doc(ExtractDoc);
+        const key = String(runtime.conversationId);
+        delete doc.pending[key];
+        owe(doc, key, task.input.cone, task.input.tail);
         return { status: 'terminal', outcome: { status: 'aborted' } };
       }, context),
   });
+  return extraction;
 }
 
 export type Schedule = (
@@ -342,19 +380,45 @@ export function scheduler(
       const doc = await tx.doc(ExtractDoc);
       const key = String(conversation);
       const after = doc.cursors[key] ?? 0;
-      if (doc.pending[key] !== undefined || tail <= after) return false;
+      if ((doc.owed?.[key]?.tail ?? Number.POSITIVE_INFINITY) <= after) delete doc.owed?.[key];
+      if (tail <= after) return false;
+      const known = doc.pending[key];
+      const running = known === undefined ? undefined : await tx.task(known as TaskId);
+      if (running && running.state.status !== 'terminal') {
+        owe(doc, key, who.id, tail);
+        return false;
+      }
       doc.pending[key] = (await tx.createTask(
         task,
         { cone: who.id, after, tail, model: chosen.model },
-        {
-          ownership: { kind: 'conversation' },
-          conversationId: conversation as ConversationId,
-          background: true,
-        }
+        background(conversation)
       )) as number;
       return true;
     }, context);
   };
+}
+
+function coneOf(state: Readonly<AgentsState>, conversation: number): string | undefined {
+  const live = whoIs(state, conversation);
+  if (live.kind === 'cone') return live.id;
+  return Object.values(state.frozen ?? {}).find((record) => record.conversation === conversation)
+    ?.cone;
+}
+
+export async function retryOwed(
+  host: Pick<Host, 'agents' | 'harness'>,
+  schedule: Schedule,
+  context: Context
+): Promise<void> {
+  const owed = (await host.harness.snapshot(ExtractDoc, context))?.owed ?? {};
+  for (const [key, { tail }] of Object.entries(owed)) {
+    const cone = coneOf(host.agents.state(), Number(key));
+    if (cone) await schedule(Number(key), tail, context, cone);
+    else
+      await host.harness.commit(async (tx) => {
+        delete (await tx.doc(ExtractDoc)).owed?.[key];
+      }, context);
+  }
 }
 
 export function settingsReader(ready: Promise<Host>) {
