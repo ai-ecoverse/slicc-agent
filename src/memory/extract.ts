@@ -19,8 +19,10 @@ import type { MemoryOrigin, MemoryTag } from './format.ts';
 import { byteLength, MAX_BYTES, parseMemory, redactSecrets, serializeMemory } from './format.ts';
 import {
   combined,
+  entryHash,
   InputOriginDoc,
   MemoryOriginDoc,
+  originKey,
   ownedDoc,
   ownerTexts,
   ownerTurns,
@@ -34,17 +36,28 @@ export const EXTRACT_TASK = 'slicc.memory-extract';
 export const TRANSCRIPT_CHARS = 60_000;
 export const DEFAULT_IDLE_MINUTES = 30;
 
-export type Owed = { cone: string; tail: number };
+export const ATTEMPTS = 3;
+export const RETRIES_PER_START = 5;
+export const RETRY_STAGGER_MS = 5_000;
+
+export type Owed = { cone: string; tail: number; attempts?: number };
 
 export type ExtractState = {
   cursors: Record<string, number>;
   pending: Record<string, number>;
   owed?: Record<string, Owed>;
+  wrote?: Record<string, Record<string, string>>;
 };
 
-function owe(doc: ExtractState, key: string, cone: string, tail: number) {
+function owe(doc: ExtractState, key: string, cone: string, tail: number, attempts?: number) {
   doc.owed ??= {};
-  doc.owed[key] = { cone, tail: Math.max(doc.owed[key]?.tail ?? 0, tail) };
+  const known = doc.owed[key];
+  doc.owed[key] = {
+    ...known,
+    cone,
+    tail: Math.max(known?.tail ?? 0, tail),
+    ...(attempts ? { attempts } : {}),
+  };
 }
 
 const RETRIED = new Set(['model error', 'no model']);
@@ -191,22 +204,51 @@ export function proposals(text: string): Proposal[] {
   return out.slice(0, 20);
 }
 
-type Input = { cone: string; after: number; tail: number; model: ModelRef | null };
-type State = { phase: 'extract' };
-export type ExtractResult = { saved: number; skipped: string | null };
+type Input = {
+  cone: string;
+  after: number;
+  tail: number;
+  model: ModelRef | null;
+  delay?: number;
+};
+type State = { phase: 'extract'; slept?: boolean };
+export type ExtractResult = { saved: number; skipped: string | null; kept?: number };
+
+type Run = { key: string; guard: Record<string, string> | undefined; kept: number };
 
 async function save(
   host: Host,
   place: Place,
   found: Proposal[],
   origin: MemoryOrigin,
+  run: Run,
   context: Context
 ) {
   let saved = 0;
+  const guard = run.guard;
   for (const proposal of found) {
     try {
-      await host.files.change(place, { kind: 'save', ...proposal, origin }, context);
-      saved++;
+      const written = await host.files.change(
+        place,
+        { kind: 'save', ...proposal, origin },
+        context,
+        {
+          ...(guard
+            ? {
+                keeps: async (existing) =>
+                  guard[originKey(existing)] !== (await entryHash(existing)),
+              }
+            : {}),
+          recorded: async (tx, wrote) => {
+            const doc = await tx.doc(ExtractDoc);
+            doc.wrote ??= {};
+            doc.wrote[run.key] = { ...doc.wrote[run.key], [wrote.key]: wrote.hash };
+            if (guard) guard[wrote.key] = wrote.hash;
+          },
+        }
+      );
+      if (written.kept) run.kept++;
+      else saved++;
     } catch {
       break;
     }
@@ -230,6 +272,7 @@ async function extracted(
   place: Place,
   passes: readonly Pass[],
   ask: Ask,
+  run: Run,
   context: Context
 ): Promise<ExtractResult> {
   let saved = 0;
@@ -241,10 +284,10 @@ async function extracted(
       skipped = 'model error';
       break;
     }
-    saved += await save(host, place, proposals(answer), pass.origin, context);
+    saved += await save(host, place, proposals(answer), pass.origin, run, context);
   }
   if (saved) await host.changed(context).catch(() => undefined);
-  return { saved, skipped };
+  return { saved, skipped, ...(run.kept ? { kept: run.kept } : {}) };
 }
 
 export function extractTask(
@@ -261,29 +304,58 @@ export function extractTask(
     initial: () => ({ phase: 'extract' }),
     phases: {
       async extract(task, runtime, context) {
-        const { cone, after, tail } = task.input;
-        const key = String(runtime.conversationId);
-        const done = (result: ExtractResult) =>
-          runtime.commit(async (tx) => {
+        const { after, tail } = task.input;
+        if (task.input.delay && !task.state.checkpoint.slept)
+          return runtime.sleepUntil(
+            runtime.now() + task.input.delay,
+            { phase: 'extract', slept: true },
+            context
+          );
+        const host = await ready;
+        const conversation = Number(runtime.conversationId);
+        const key = String(conversation);
+        const cone = coneOf(host.agents.state(), conversation) ?? task.input.cone;
+        const wrote = (await host.harness.snapshot(ExtractDoc, context))?.wrote?.[key];
+        const run: Run = { key, guard: wrote ? { ...wrote } : undefined, kept: 0 };
+        const done = async (result: ExtractResult) => {
+          let gaveUp = false;
+          const ended = await runtime.commit(async (tx) => {
             const doc = await tx.doc(ExtractDoc);
             delete doc.pending[key];
-            if (RETRIED.has(result.skipped as string)) owe(doc, key, cone, tail);
-            else {
+            const attempts = (doc.owed?.[key]?.attempts ?? 0) + 1;
+            gaveUp = RETRIED.has(result.skipped as string) && attempts >= ATTEMPTS;
+            if (gaveUp) delete doc.owed?.[key];
+            if (RETRIED.has(result.skipped as string)) {
+              doc.wrote ??= {};
+              doc.wrote[key] ??= {};
+              if (!gaveUp) owe(doc, key, cone, tail, attempts);
+            } else {
               const cursor = Math.max(doc.cursors[key] ?? 0, tail);
               doc.cursors[key] = cursor;
+              delete doc.wrote?.[key];
               const owed = doc.owed?.[key];
-              if (owed && owed.tail > cursor)
+              if (owed && owed.tail > cursor) {
+                const next = coneOf(host.agents.state(), conversation) ?? owed.cone;
+                owed.cone = next;
+                delete owed.attempts;
                 doc.pending[key] = (await tx.createTask(
                   extraction,
-                  { cone: owed.cone, after: cursor, tail: owed.tail, model: task.input.model },
-                  background(runtime.conversationId)
+                  { cone: next, after: cursor, tail: owed.tail, model: task.input.model },
+                  background(conversation)
                 )) as number;
-              else delete doc.owed?.[key];
+              } else delete doc.owed?.[key];
             }
             return { status: 'terminal', outcome: { status: 'completed', result } };
           }, context);
+          if (gaveUp)
+            runtime.report(
+              new Error(
+                `Memory extraction of conversation ${key} (cone ${cone}) stopped after ${ATTEMPTS} failed attempts (${result.skipped}); entries ${after + 1} to ${tail} stay unextracted.`
+              )
+            );
+          return ended;
+        };
         if (!(await settings(context)).extract) return done({ saved: 0, skipped: 'turned off' });
-        const host = await ready;
         const place = placeOf(host.home, cone);
         const fresh: EntryRecord[] = [];
         let cursor: Cursor | undefined;
@@ -332,7 +404,7 @@ export function extractTask(
           runtime.signal.throwIfAborted();
           return message.stopReason === 'error' ? null : textOf(message as Message);
         };
-        return done(await extracted(host, place, passes, ask, context));
+        return done(await extracted(host, place, passes, ask, run, context));
       },
     },
     abort: (task, runtime, context) =>
@@ -351,7 +423,8 @@ export type Schedule = (
   conversation: number,
   tail: number,
   context: Context,
-  cone?: string
+  cone?: string,
+  delay?: number
 ) => Promise<boolean>;
 
 export function compactionHook(schedule: Schedule) {
@@ -369,7 +442,7 @@ export function scheduler(
   task: ReturnType<typeof extractTask>,
   settings: (context: Context) => Promise<ExtractSettings>
 ): Schedule {
-  return async (conversation, tail, context, cone) => {
+  return async (conversation, tail, context, cone, delay) => {
     const host = await ready;
     const chosen = await settings(context);
     const who = cone
@@ -390,7 +463,7 @@ export function scheduler(
       }
       doc.pending[key] = (await tx.createTask(
         task,
-        { cone: who.id, after, tail, model: chosen.model },
+        { cone: who.id, after, tail, model: chosen.model, ...(delay ? { delay } : {}) },
         background(conversation)
       )) as number;
       return true;
@@ -410,14 +483,25 @@ export async function retryOwed(
   schedule: Schedule,
   context: Context
 ): Promise<void> {
-  const owed = (await host.harness.snapshot(ExtractDoc, context))?.owed ?? {};
+  const stored = await host.harness.snapshot(ExtractDoc, context);
+  const owed = stored?.owed ?? {};
+  const gone = Object.keys({ ...stored?.wrote, ...owed }).filter(
+    (key) => !coneOf(host.agents.state(), Number(key))
+  );
+  if (gone.length)
+    await host.harness.commit(async (tx) => {
+      const doc = await tx.doc(ExtractDoc);
+      for (const key of gone) {
+        delete doc.owed?.[key];
+        delete doc.wrote?.[key];
+      }
+    }, context);
+  let started = 0;
   for (const [key, { tail }] of Object.entries(owed)) {
+    if (started >= RETRIES_PER_START) return;
     const cone = coneOf(host.agents.state(), Number(key));
-    if (cone) await schedule(Number(key), tail, context, cone);
-    else
-      await host.harness.commit(async (tx) => {
-        delete (await tx.doc(ExtractDoc)).owed?.[key];
-      }, context);
+    if (cone && (await schedule(Number(key), tail, context, cone, started * RETRY_STAGGER_MS)))
+      started += 1;
   }
 }
 

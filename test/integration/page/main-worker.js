@@ -501,6 +501,22 @@ self.addEventListener('message', ({ data }) => {
         agents: host.agent.agents.state(),
       }))
       .then((seen) => data.conversations.postMessage(JSON.parse(JSON.stringify(seen))));
+  if (data?.extractTasks)
+    void running
+      .then((host) =>
+        host.agent.harness.commit(
+          async (tx) =>
+            (await tx.scanTasks({ kind: 'slicc.memory-extract' }, 1000)).items.map((task) => ({
+              id: Number(task.id),
+              conversation: Number(task.conversationId),
+              input: task.input,
+              status: task.state.status,
+              outcome: task.state.outcome?.status ?? null,
+            })),
+          BACKGROUND_CONTEXT
+        )
+      )
+      .then((seen) => data.extractTasks.postMessage(JSON.parse(JSON.stringify(seen))));
 });
 const extracting = (context) =>
   params.has('recall') &&
@@ -515,7 +531,7 @@ const recall = (context, options) => {
   const conversation = between('<conversation', '</conversation>');
   extractions.push({ memory: between('<memory_file', '</memory_file>'), conversation });
   recalling.calls += 1;
-  if (recalling.fail.includes(recalling.calls))
+  if (params.has('recall-fail') || recalling.fail.includes(recalling.calls))
     return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'recall failed' });
   const found = new Map();
   for (const [, section, title, body] of conversation.matchAll(

@@ -685,7 +685,7 @@ test('a freeze’s extraction that gets a model error keeps its cursor and runs 
   assert.deepEqual(seen.titles, ['cat', 'door']);
 });
 
-test('New conversation while an earlier extraction of the cone is still running also extracts the turns that came after it', async (t) => {
+test('New conversation while an earlier extraction of the cone is still running lets that extraction finish and also extracts the turns that came after it', async (t) => {
   const page = await chrome.page(t);
   await restartable(page, {
     persist: `/.slicc/freezer-extract-chain-${Date.now()}`,
@@ -724,9 +724,11 @@ test('New conversation while an earlier extraction of the cone is still running 
       return Object.keys(found).length === 4 && found;
     }, 'the entries of both turns');
     out.extractions = (await ask('extractions')).map((item) => item.conversation);
+    out.outcomes = (await ask('extractTasks')).map((task) => task.outcome);
     return out;
   });
   assert.deepEqual(seen.cleared, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.outcomes, ['completed', 'completed']);
   assert.deepEqual(seen.cone, {
     'cone/colors/door': 'owner: blue',
     'cone/pets/cat': 'mixed: Tom',
@@ -738,5 +740,222 @@ test('New conversation while an earlier extraction of the cone is still running 
     'User: remember colors / door: blue\n\nAgent: remember pets / cat: Tom',
     'User: remember tools / editor: vim',
     'User: remember tools / editor: vim\n\nAgent: remember drinks / tea: green',
+  ]);
+});
+
+test('a retry of a failed extraction leaves an entry the owner edited since the failed try as the owner wrote it, and a later extraction still updates an entry an extraction wrote', async (t) => {
+  const page = await chrome.page(t);
+  await restartable(page, {
+    persist: `/.slicc/freezer-extract-edited-${Date.now()}`,
+    answers: SAID,
+    extra: [['recall', '1']],
+  });
+  const seen = await staged(page, 'a retry of a failed extraction leaves', async () => {
+    const { until, open, ask, tell, memory } = globalThis.f;
+    const local = await open();
+    await local.prompt('remember colors / door: blue');
+    tell({ recallFail: [2] });
+    const out = { frozen: await local.control.freeze('cone', BACKGROUND_CONTEXT) };
+    stage('the failed extraction');
+    await until(async () => (await ask('extractions')).length === 2, 'the failed extraction');
+    out.saved = await until(() => {
+      const found = memory('cone');
+      return Object.keys(found).length && found;
+    }, 'the entry saved before the error');
+    stage('the owner’s edit');
+    globalThis.f.model.memory.save({
+      id: 'cone/colors/door',
+      scope: 'cone',
+      section: 'colors',
+      title: 'door',
+      body: 'navy',
+      tag: 'user',
+    });
+    out.edited = await until(() => {
+      const found = memory('cone');
+      return found['cone/colors/door'] === 'owner: navy' && found;
+    }, 'the owner’s edit');
+    stage('the retry');
+    await globalThis.f.restart();
+    out.retried = await until(() => {
+      const found = globalThis.f.memory('cone');
+      return Object.keys(found).length === 2 && found;
+    }, 'the entries after the retry');
+    out.retryCalls = (await globalThis.f.ask('extractions')).map((item) => item.conversation);
+    stage('the later extraction');
+    await globalThis.f.local.prompt('Hello');
+    out.thawed = await globalThis.f.local.control.thaw('frozen-1', BACKGROUND_CONTEXT);
+    await until(() => globalThis.f.local.agents.value.active === 'cone', 'the thawed cone');
+    await globalThis.f.local.prompt('remember pets / cat: Felix');
+    out.cleared = await globalThis.f.local.control.newChat('cone', BACKGROUND_CONTEXT);
+    out.later = await until(() => {
+      const found = globalThis.f.memory('cone');
+      return Object.keys(found).length === 3 && found['cone/pets/cat'] !== 'mixed: Tom' && found;
+    }, 'the later extraction');
+    return out;
+  });
+  assert.deepEqual(seen.frozen, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.saved, { 'cone/colors/door': 'owner: blue' });
+  assert.deepEqual(seen.edited, { 'cone/colors/door': 'owner: navy' });
+  assert.deepEqual(seen.retried, {
+    'cone/colors/door': 'owner: navy',
+    'cone/pets/cat': 'mixed: Tom',
+  });
+  assert.deepEqual(seen.retryCalls, [
+    'User: remember colors / door: blue',
+    'User: remember colors / door: blue\n\nAgent: remember pets / cat: Tom',
+  ]);
+  assert.deepEqual(seen.thawed, { id: 'cone', error: null });
+  assert.deepEqual(seen.cleared, { id: 'frozen-2', error: null });
+  assert.deepEqual(seen.later, {
+    'cone/colors/door': 'owner: navy',
+    'cone/pets/cat': 'owner: Felix',
+    'cone/drinks/tea': 'mixed: green',
+  });
+});
+
+test('an extraction that keeps failing stops after three attempts with one monitor report, and a start schedules at most five owed extractions, one after another', async (t) => {
+  const page = await chrome.page(t);
+  await restartable(page, {
+    persist: `/.slicc/freezer-extract-bounded-${Date.now()}`,
+    answers: Array.from({ length: 8 }, () => 'Fine.'),
+    extra: [
+      ['recall', '1'],
+      ['recall-fail', '1'],
+    ],
+  });
+  const seen = await staged(page, 'an extraction that keeps failing', async () => {
+    const { until, open, ask } = globalThis.f;
+    const reports = async (wait) => {
+      const off = globalThis.f.model.monitor.on('snapshot', () => {});
+      const read = () =>
+        (globalThis.f.local.monitor.value?.problems ?? [])
+          .filter((problem) => problem.message.startsWith('Memory extraction'))
+          .map((problem) => problem.message);
+      const found = wait ? await until(() => read().length && read(), 'the report') : read();
+      off();
+      return found;
+    };
+    const attempted = (calls, what) =>
+      until(async () => {
+        const tasks = await globalThis.f.ask('extractTasks');
+        return (
+          (await globalThis.f.ask('extractions')).length === calls &&
+          tasks.every((task) => task.status === 'terminal')
+        );
+      }, what);
+    const local = await open();
+    const out = {};
+    await local.prompt('remember colors / door: blue');
+    out.frozen = await local.control.freeze('cone', BACKGROUND_CONTEXT);
+    await attempted(1, 'the first attempt');
+    stage('the second attempt');
+    await globalThis.f.restart();
+    await attempted(1, 'the second attempt');
+    out.reportedEarly = await reports(false);
+    stage('the third attempt');
+    await globalThis.f.restart();
+    await attempted(1, 'the third attempt');
+    out.reported = await reports(true);
+    stage('the start after giving up');
+    const again = await globalThis.f.restart();
+    await again.prompt('Anything new?');
+    out.callsAfter = (await globalThis.f.ask('extractions')).length;
+    out.reportedAfter = await reports(false);
+    stage('six owed extractions');
+    const before = new Set((await globalThis.f.ask('extractTasks')).map((task) => task.id));
+    for (let n = 1; n <= 6; n++) {
+      await again.prompt(`remember numbers / n${n}: ${n}`);
+      await again.control.newChat(again.agents.value.active, BACKGROUND_CONTEXT);
+      await attempted(n, `the failed extraction ${n}`);
+    }
+    const failed = (await globalThis.f.ask('extractTasks')).filter((task) => !before.has(task.id));
+    out.owed = failed.map((task) => task.conversation);
+    for (const task of failed) before.add(task.id);
+    stage('the capped start');
+    await globalThis.f.restart();
+    const retries = async () =>
+      (await globalThis.f.ask('extractTasks')).filter((task) => !before.has(task.id));
+    await until(
+      async () => (await retries()).length >= 5 && (await ask('extractions')).length,
+      'the retries'
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    out.scheduled = await retries();
+    return out;
+  });
+  assert.deepEqual(seen.frozen, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.reportedEarly, []);
+  assert.equal(seen.reported.length, 1);
+  assert.match(
+    seen.reported[0],
+    /^Memory extraction of conversation \d+ \(cone cone\) stopped after 3 failed attempts \(model error\); entries 1 to \d+ stay unextracted\.$/
+  );
+  assert.equal(seen.callsAfter, 0);
+  assert.deepEqual(seen.reportedAfter, []);
+  assert.equal(seen.owed.length, 6);
+  assert.deepEqual(
+    seen.scheduled.map((task) => task.conversation),
+    seen.owed.slice(0, 5)
+  );
+  assert.deepEqual(
+    seen.scheduled.map((task) => task.input.delay ?? 0),
+    [0, 5000, 10000, 15000, 20000]
+  );
+});
+
+test('the rest of a conversation extracted after a running extraction goes to the cone that has the conversation by then, also when it was thawed under another id', async (t) => {
+  const page = await chrome.page(t);
+  await restartable(page, {
+    persist: `/.slicc/freezer-extract-moved-${Date.now()}`,
+    answers: SAID,
+    extra: [['recall', '1']],
+    worker: 'clock-main-worker',
+  });
+  const seen = await staged(page, 'the rest of a conversation extracted after', async () => {
+    const MINUTE = 60_000;
+    const { until, open, ask, tell, memory } = globalThis.f;
+    const local = await open();
+    const off = globalThis.f.model.monitor.on('snapshot', () => {});
+    await until(
+      () =>
+        local.monitor.value?.tasks?.some(
+          (row) => row.kind === 'slicc.memory-idle' && row.status === 'sleeping'
+        ),
+      'the idle watch'
+    );
+    off();
+    const base = Date.now();
+    const clock = new BroadcastChannel('slicc-test-clock');
+    clock.postMessage({ now: base + 2 * MINUTE });
+    await local.prompt('remember colors / door: blue');
+    tell({ recallHold: true });
+    stage('the idle extraction');
+    clock.postMessage({ now: base + 33 * MINUTE });
+    await until(async () => (await ask('extractions')).length, 'the idle extraction');
+    await local.prompt('remember tools / editor: vim');
+    stage('the new conversation and the thaw');
+    const out = { cleared: await local.control.newChat('cone', BACKGROUND_CONTEXT) };
+    out.thawed = await local.control.thaw('frozen-1', BACKGROUND_CONTEXT);
+    tell({ recallHold: false, recallRelease: true });
+    stage('the entries');
+    out.memory = await until(() => {
+      const found = { ...memory('cone'), ...memory(out.thawed.id) };
+      return Object.keys(found).length === 4 && found;
+    }, 'the entries of both turns');
+    out.tasks = (await ask('extractTasks')).map((task) => [task.input.cone, task.outcome]);
+    return out;
+  });
+  assert.deepEqual(seen.cleared, { id: 'frozen-1', error: null });
+  assert.deepEqual(seen.thawed, { id: 'cone-2', error: null });
+  assert.deepEqual(seen.memory, {
+    'cone/colors/door': 'owner: blue',
+    'cone/pets/cat': 'mixed: Tom',
+    'cone-2/tools/editor': 'owner: vim',
+    'cone-2/drinks/tea': 'mixed: green',
+  });
+  assert.deepEqual(seen.tasks, [
+    ['cone', 'completed'],
+    ['cone-2', 'completed'],
   ]);
 });
