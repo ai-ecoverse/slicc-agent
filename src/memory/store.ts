@@ -1,5 +1,5 @@
 import type { Context } from '@earendil-works/chord/context';
-import type { Harness } from '@earendil-works/pi-durable';
+import type { Harness, Tx } from '@earendil-works/pi-durable';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { scrubTexts } from '../secrets/scrub.ts';
 import { trusted } from './context.ts';
@@ -31,6 +31,14 @@ export type Written = {
   bytes: number;
   redacted: number;
   file: string;
+  kept?: boolean;
+};
+
+export type Saved = { key: string; hash: string };
+
+export type ChangeOptions = {
+  keeps?: (existing: MemoryEntry) => Promise<boolean>;
+  recorded?: (tx: Tx, saved: Saved) => Promise<void>;
 };
 
 export function memoryRoot(home: string): string {
@@ -160,9 +168,16 @@ export class MemoryFiles {
     return read ? memoryEntries(parseMemory(read.text), place.scope, read.updatedAt) : [];
   }
 
-  change(place: Place, change: Change, context: Context): Promise<Written> {
+  change(
+    place: Place,
+    change: Change,
+    context: Context,
+    options: ChangeOptions = {}
+  ): Promise<Written> {
     const previous = this.#chains.get(place.file) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(() => this.#apply(place, change, context));
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.#apply(place, change, context, options));
     this.#chains.set(place.file, next);
     void next
       .finally(() => {
@@ -172,7 +187,12 @@ export class MemoryFiles {
     return next;
   }
 
-  async #apply(place: Place, change: Change, context: Context): Promise<Written> {
+  async #apply(
+    place: Place,
+    change: Change,
+    context: Context,
+    options: ChangeOptions
+  ): Promise<Written> {
     if (!(await this.#safe(place.file, context)))
       throw new Error(`${place.file} is a symbolic link or under one; memory is not written there`);
     const read = await this.#env.readTextFile(place.file, context);
@@ -194,6 +214,21 @@ export class MemoryFiles {
             body: clean(body),
           }
         : change;
+    const existing =
+      safe.kind === 'save' && options.keeps
+        ? memoryEntries(parseMemory(before), place.scope, 0).find(
+            (item) => item.source === 'entry' && originKey(item) === originKey(safe)
+          )
+        : undefined;
+    if (existing && (await options.keeps?.(existing)))
+      return {
+        entry: existing,
+        found: true,
+        bytes: byteLength(before),
+        redacted,
+        file: place.file,
+        kept: true,
+      };
     const { doc, found } = applyChange(parseMemory(before), place.scope, safe);
     const after = serializeMemory(doc);
     const bytes = byteLength(after);
@@ -206,7 +241,7 @@ export class MemoryFiles {
     await this.#env.createDir(dirOf(place.file), { recursive: true }, context);
     const written = await this.#env.writeFile(place.file, after, context);
     if (!written.ok) throw new Error(written.error.message);
-    await this.#record(place, after, safe, context);
+    await this.#record(place, after, safe, context, options.recorded);
     const entry =
       safe.kind === 'save'
         ? (memoryEntries(doc, place.scope, Date.now()).find(
@@ -219,7 +254,13 @@ export class MemoryFiles {
     return { entry, found, bytes, redacted, file: place.file };
   }
 
-  async #record(place: Place, after: string, change: Change, context: Context): Promise<void> {
+  async #record(
+    place: Place,
+    after: string,
+    change: Change,
+    context: Context,
+    also?: ChangeOptions['recorded']
+  ): Promise<void> {
     const present = memoryEntries(parseMemory(after), place.scope, 0);
     const saved = change.kind === 'save' ? await savedOrigin(present, change) : null;
     await this.#origins.commit(async (tx) => {
@@ -227,6 +268,7 @@ export class MemoryFiles {
       const next = recorded(doc.scopes[place.scope], present, saved);
       if (Object.keys(next).length) doc.scopes[place.scope] = next;
       else delete doc.scopes[place.scope];
+      if (saved && also) await also(tx, saved);
     }, context);
   }
 }

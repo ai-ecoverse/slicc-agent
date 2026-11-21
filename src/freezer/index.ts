@@ -851,6 +851,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
       const cone = agents.state().cones[agentId];
       if (!cone) throw new Error(`There is no cone ${agentId}.`);
       const conversation = await conversationOf(agentId, context);
+      await conversation.abort(context, { background: true }).catch(() => undefined);
       const { entries, record } = await snapshot(
         conversation,
         cone.name,
@@ -859,7 +860,6 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
         cone.title
       );
       await prepare(conversation, entries, agentId, context);
-      await conversation.abort(context, { background: true }).catch(() => undefined);
       const next =
         agents.state().active === agentId ? await replacement(agentId, context) : undefined;
       const { id, scoops } = await agents.update((_tx, doc) => {

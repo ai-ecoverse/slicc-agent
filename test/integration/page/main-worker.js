@@ -485,8 +485,12 @@ self.addEventListener('message', ({ data }) => {
   );
 });
 const extractions = [];
+const recalling = { hold: false, fail: [], calls: 0, held: [] };
 self.addEventListener('message', ({ data }) => {
   data?.extractions?.postMessage(extractions);
+  if (data?.recallHold !== undefined) recalling.hold = data.recallHold;
+  if (data?.recallFail) recalling.fail = data.recallFail;
+  if (data?.recallRelease) for (const release of recalling.held.splice(0)) release();
   if (data?.conversations)
     void running
       .then(async (host) => ({
@@ -497,12 +501,28 @@ self.addEventListener('message', ({ data }) => {
         agents: host.agent.agents.state(),
       }))
       .then((seen) => data.conversations.postMessage(JSON.parse(JSON.stringify(seen))));
+  if (data?.extractTasks)
+    void running
+      .then((host) =>
+        host.agent.harness.commit(
+          async (tx) =>
+            (await tx.scanTasks({ kind: 'slicc.memory-extract' }, 1000)).items.map((task) => ({
+              id: Number(task.id),
+              conversation: Number(task.conversationId),
+              input: task.input,
+              status: task.state.status,
+              outcome: task.state.outcome?.status ?? null,
+            })),
+          BACKGROUND_CONTEXT
+        )
+      )
+      .then((seen) => data.extractTasks.postMessage(JSON.parse(JSON.stringify(seen))));
 });
 const extracting = (context) =>
   params.has('recall') &&
   typeof context.messages[0]?.content === 'string' &&
   context.messages[0].content.startsWith('You keep the long-term memory');
-const recall = (context) => {
+const recall = (context, options) => {
   const text = context.messages[1].content[0].text;
   const between = (open, close) => {
     const start = text.indexOf('>', text.indexOf(open)) + 1;
@@ -510,6 +530,9 @@ const recall = (context) => {
   };
   const conversation = between('<conversation', '</conversation>');
   extractions.push({ memory: between('<memory_file', '</memory_file>'), conversation });
+  recalling.calls += 1;
+  if (params.has('recall-fail') || recalling.fail.includes(recalling.calls))
+    return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'recall failed' });
   const found = new Map();
   for (const [, section, title, body] of conversation.matchAll(
     /^(?:\w+: )?remember (.+?) \/ (.+?): (.+)$/gm
@@ -518,11 +541,20 @@ const recall = (context) => {
     const known = found.get(key);
     found.set(key, { section, title, body: known ? `${known.body} ${body}` : body, tag: 'user' });
   }
-  return fauxAssistantMessage(JSON.stringify([...found.values()]));
+  const answer = fauxAssistantMessage(JSON.stringify([...found.values()]));
+  if (!recalling.hold) return answer;
+  return new Promise((resolve) => {
+    recalling.held.push(() => resolve(answer));
+    options?.signal?.addEventListener(
+      'abort',
+      () => resolve(fauxAssistantMessage([], { stopReason: 'aborted', errorMessage: 'aborted' })),
+      { once: true }
+    );
+  });
 };
 const dispatch = (context, ...rest) => {
   if (judging(context)) return judgeSay(context, rest[0], rest[2]);
-  if (extracting(context)) return recall(context);
+  if (extracting(context)) return recall(context, rest[0]);
   if (titling(context)) return fauxAssistantMessage(`Title ${++titles}`);
   if (labelling(context) || stepping(context)) labelInputs.push(stepInput(context));
   if (labelling(context)) return fauxAssistantMessage(`Label ${++labels}`);
