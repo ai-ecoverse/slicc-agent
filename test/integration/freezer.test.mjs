@@ -81,32 +81,38 @@ test('the freezer in the production worker: freeze a cone with its scoop, list i
 
 const GONE = 'The cone this seat shares is gone.';
 
-async function restartable(page, { persist, seed = null }) {
+async function restartable(page, { persist, seed = null, crash = null, extra = [] }) {
   await page.goto('/');
   await staged(
     page,
     'the restartable freezer agent',
-    async ({ persist, seed }) => {
-      if (seed) {
-        const seeded = await new Promise((resolve) => {
-          const worker = new Worker(`/dist-test/legacy-worker.js?${seed}`, { type: 'module' });
+    async ({ persist, seed, crash, extra }) => {
+      const legacy = (query) =>
+        new Promise((resolve) => {
+          const worker = new Worker(`/dist-test/legacy-worker.js?${query}`, { type: 'module' });
           worker.onmessage = ({ data }) => {
             worker.terminate();
             resolve(data);
           };
         });
+      if (seed) {
+        const seeded = await legacy(seed);
         if (seeded.error) throw new Error(seeded.error);
       }
+      const crashed = crash ? await legacy(crash) : null;
       const { bootKernel } = await import('/kernel.js');
       await import('/dist-test/page.js');
       const kernel = await bootKernel();
       const answers = Array.from({ length: 6 }, (_, n) => ['answer', `Answer ${n + 1}.`]);
+      const f = {};
       const owner = await startTracked({
-        worker: () =>
-          new Worker(
-            `/dist-test/main-worker.js?${new URLSearchParams([['persist', persist], ...answers])}`,
+        worker: () => {
+          f.worker = new Worker(
+            `/dist-test/main-worker.js?${new URLSearchParams([['persist', persist], ...answers, ...extra])}`,
             { type: 'module' }
-          ),
+          );
+          return f.worker;
+        },
         kernel: { connect: () => kernel.connect() },
       });
       const hub = {
@@ -118,7 +124,28 @@ async function restartable(page, { persist, seed = null }) {
         async revoke() {},
       };
       const until = (check, what) => when([changed, every(100)], check, what);
-      const f = { owner, until, hub };
+      Object.assign(f, { owner, until, hub, crashed });
+      f.ask = (key) =>
+        new Promise((resolve) => {
+          const channel = new MessageChannel();
+          channel.port1.onmessage = ({ data }) => resolve(data);
+          f.worker.postMessage({ [key]: channel.port2 }, [channel.port2]);
+        });
+      f.unattached = async () => {
+        const { items, agents } = await f.ask('conversations');
+        const used = new Set(
+          [
+            ...Object.values(agents.cones),
+            ...Object.values(agents.frozen ?? {}),
+            ...Object.values(agents.scoops),
+          ].map((record) => record.conversation)
+        );
+        return items.map((item) => item.id).filter((id) => !used.has(id));
+      };
+      f.frozenRow = (id) => {
+        const row = f.local.frozen?.value?.find((item) => item.id === id);
+        return row && { model: row.model, messages: row.messages, frozenAt: row.frozenAt };
+      };
       f.open = async () => {
         f.local = await owner.connect();
         f.model = createAgentModel(f.local, { guests: hub });
@@ -195,7 +222,7 @@ async function restartable(page, { persist, seed = null }) {
       };
       globalThis.f = f;
     },
-    { persist, seed }
+    { persist, seed, crash, extra }
   );
 }
 
@@ -259,21 +286,34 @@ test('a frozen first cone stays frozen across a worker restart, a guest seat on 
 test('a session whose first cone came back live on its frozen conversation freezes it again at startup, says so in the monitor, starts a fresh cone, and thaws it as the same cone', async (t) => {
   const page = await chrome.page(t);
   const directory = `/.slicc/freezer-refrozen-${Date.now()}`;
+  const started = Date.now();
   await restartable(page, {
     persist: directory,
     seed: new URLSearchParams([
       ['directory', directory],
       ['bug', 'refrozen'],
+      ['said', 'remember colors / door: blue'],
     ]).toString(),
+    extra: [['recall', '1']],
   });
   const seen = await staged(page, 'a session whose first cone came back', async () => {
-    const { until, open, cones, holding, rows, problems } = globalThis.f;
+    const { until, open, cones, holding, rows, problems, frozenRow, ask } = globalThis.f;
     stage('the agent');
     const local = await open();
     stage('the cones');
     await until(() => cones().length, 'the cones');
     stage('the views');
     const out = { cones: cones(), holding: await holding('First.') };
+    stage('the repaired record');
+    out.record = await until(
+      () => frozenRow('frozen-1')?.model === 'faux/faux-1' && frozenRow('frozen-1'),
+      'the repaired record'
+    );
+    stage('the extraction');
+    out.extractions = await until(async () => {
+      const found = await ask('extractions');
+      return found.length && found.map((item) => item.conversation);
+    }, 'the extraction');
     stage('the rows');
     out.rows = await rows();
     stage('the report');
@@ -287,7 +327,11 @@ test('a session whose first cone came back live on its frozen conversation freez
   });
   assert.deepEqual(seen.cones, ['cone-3']);
   assert.deepEqual(seen.holding, []);
-  assert.deepEqual(seen.rows, ['cone-3:cone:true:sliccy:0', 'frozen-1:cone:false:sliccy:4']);
+  assert.equal(seen.record.messages, 6);
+  assert.ok(seen.record.frozenAt >= started);
+  assert.ok(seen.extractions.length > 0);
+  assert.ok(seen.extractions.every((text) => /remember colors \/ door: blue/.test(text)));
+  assert.deepEqual(seen.rows, ['cone-3:cone:true:sliccy:0', 'frozen-1:cone:false:sliccy:6']);
   assert.deepEqual(seen.problems, [
     'null: sliccy (cone) was live again on the conversation it was frozen with as frozen-1, so it is frozen again; thaw frozen-1 to continue it.',
   ]);
@@ -326,6 +370,13 @@ test('a session with two live cones on one conversation keeps the first one live
     out.reportedAgain = (again.monitor.value?.problems ?? []).filter(
       (problem) => problem.report?.source === 'slicc.agents'
     ).length;
+    stage('the keeper leaves');
+    out.keeperFrozen = await again.control.freeze('cone', BACKGROUND_CONTEXT);
+    await until(() => globalThis.f.frozenRow(out.keeperFrozen.id), 'the frozen keeper');
+    out.leftRow = globalThis.f.frozenRow('frozen-1');
+    out.thawedAfter = await again.control.thaw('frozen-1', BACKGROUND_CONTEXT);
+    await until(() => globalThis.f.cones().includes('cone-3'), 'the thawed twin');
+    out.holdingAfter = await globalThis.f.holding('First.');
     return out;
   });
   const refusal =
@@ -344,5 +395,131 @@ test('a session with two live cones on one conversation keeps the first one live
   assert.deepEqual(seen.command, { status: 1, out: `freezer: ${refusal}\n` });
   assert.deepEqual(seen.afterRestart, ['cone', 'cone-2']);
   assert.deepEqual(seen.rowsAfterRestart, seen.rows);
+  assert.equal(seen.reportedAgain, 0);
+  assert.deepEqual(seen.keeperFrozen, { id: 'frozen-2', error: null });
+  assert.equal(seen.leftRow.model, 'faux/faux-1');
+  assert.equal(seen.leftRow.messages, 4);
+  assert.deepEqual(seen.thawedAfter, { id: 'cone-3', error: null });
+  assert.deepEqual(seen.holdingAfter, ['cone-3']);
+});
+
+test('a session with two live cones on one conversation keeps the active one live even when it has the higher id, and moves the other to the Freezer', async (t) => {
+  const page = await chrome.page(t);
+  const directory = `/.slicc/freezer-twin-active-${Date.now()}`;
+  await restartable(page, {
+    persist: directory,
+    seed: new URLSearchParams([
+      ['directory', directory],
+      ['bug', 'twin'],
+      ['active', 'twin'],
+    ]).toString(),
+  });
+  const seen = await staged(page, 'a session with two live cones, the active', async () => {
+    const { until, open, cones, holding, rows, problems } = globalThis.f;
+    const local = await open();
+    await until(() => cones().length, 'the cones');
+    const out = { cones: cones(), holding: await holding('First.') };
+    out.rows = await rows();
+    out.problems = await problems();
+    out.thaw = await local.control.thaw('frozen-1', BACKGROUND_CONTEXT);
+    return out;
+  });
+  assert.deepEqual(seen.cones, ['cone-2', 'cone-3']);
+  assert.deepEqual(seen.holding, ['cone-3']);
+  assert.deepEqual(seen.rows, [
+    'cone-2:cone:true:kept:0',
+    'cone-3:cone:true:twin:4',
+    'frozen-1:cone:false:sliccy:4',
+  ]);
+  assert.deepEqual(seen.problems, [
+    'cone-3: sliccy (cone) shared its conversation with twin (cone-3), so it moved to the Freezer as frozen-1; the conversation stays live in cone-3.',
+  ]);
+  assert.deepEqual(seen.thaw, {
+    id: null,
+    error:
+      'twin (cone-3) already has this conversation live, so sliccy can’t have it too; open cone-3 instead.',
+  });
+});
+
+test('when every cone is frozen, a start that stops right after making the fresh conversation leaves no conversation without a cone, and the next start keeps exactly one fresh cone', async (t) => {
+  const page = await chrome.page(t);
+  const directory = `/.slicc/freezer-crash-${Date.now()}`;
+  await restartable(page, {
+    persist: directory,
+    seed: new URLSearchParams([
+      ['directory', directory],
+      ['bug', 'frozen'],
+    ]).toString(),
+    crash: new URLSearchParams([
+      ['directory', directory],
+      ['crash', 'fresh'],
+    ]).toString(),
+  });
+  const seen = await staged(page, 'when every cone is frozen, a start', async () => {
+    const { until, open, restart, cones, unattached, crashed } = globalThis.f;
+    await open();
+    await until(() => cones().length, 'the cones');
+    const out = { crashed: crashed.crashed, cones: cones(), unattached: await unattached() };
+    await restart();
+    await until(() => globalThis.f.cones().length, 'the cones after the restart');
+    out.afterRestart = globalThis.f.cones();
+    out.unattachedAfter = await globalThis.f.unattached();
+    out.rows = await globalThis.f.rows();
+    return out;
+  });
+  assert.equal(seen.crashed, true);
+  assert.deepEqual(seen.cones, ['cone-3']);
+  assert.deepEqual(seen.unattached, []);
+  assert.deepEqual(seen.afterRestart, ['cone-3']);
+  assert.deepEqual(seen.unattachedAfter, []);
+  assert.deepEqual(
+    seen.rows.map((row) => row.split(':').slice(0, 4).join(':')),
+    ['cone-3:cone:true:sliccy', 'frozen-1:cone:false:sliccy', 'frozen-2:cone:false:kept']
+  );
+});
+
+test('a session left with no cone and no frozen record but with a guest seat starts a fresh cone on a new conversation, says so in the monitor once, and keeps the seat refused', async (t) => {
+  const page = await chrome.page(t);
+  const directory = `/.slicc/freezer-orphan-${Date.now()}`;
+  const seat = {
+    id: 'seat-old',
+    label: 'Anna',
+    agentId: 'cone',
+    expiresAt: null,
+    gates: { messages: 'off', tools: 'user' },
+    createdAt: Date.now(),
+    epoch: 1,
+    revoked: null,
+  };
+  await restartable(page, {
+    persist: directory,
+    seed: new URLSearchParams([
+      ['directory', directory],
+      ['bug', 'orphan'],
+      ['seat', JSON.stringify(seat)],
+    ]).toString(),
+  });
+  const seen = await staged(page, 'a session left with no cone', async () => {
+    const { until, open, restart, cones, holding, problems, guestSays } = globalThis.f;
+    await open();
+    await until(() => cones().length, 'the cones');
+    const out = { cones: cones(), holding: await holding('First.') };
+    out.problems = await problems();
+    out.guest = await guestSays('seat-old', 'Are you there?');
+    const again = await restart();
+    await until(() => globalThis.f.cones().length, 'the cones after the restart');
+    out.afterRestart = globalThis.f.cones();
+    out.reportedAgain = (again.monitor.value?.problems ?? []).filter(
+      (problem) => problem.report?.source === 'slicc.agents'
+    ).length;
+    return out;
+  });
+  assert.deepEqual(seen.cones, ['cone-3']);
+  assert.deepEqual(seen.holding, []);
+  assert.deepEqual(seen.problems, [
+    'cone-3: No cone was left but scoops or guest seats were, so sliccy (cone-3) started on a new conversation instead of the first cone’s.',
+  ]);
+  assert.equal(seen.guest, GONE);
+  assert.deepEqual(seen.afterRestart, ['cone-3']);
   assert.equal(seen.reportedAgain, 0);
 });

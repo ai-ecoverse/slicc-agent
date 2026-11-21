@@ -748,6 +748,46 @@ function importing(
   };
 }
 
+type Prepare = (
+  conversation: Conversation,
+  entries: readonly EntryRecord[],
+  cone: string,
+  context: Context
+) => Promise<void>;
+
+async function repair(options: FreezerAttach, prepare: Prepare, id: string, context: Context) {
+  const { harness, agents } = options;
+  const found = agents.state().frozen?.[id] as FrozenRecord;
+  const conversation = (await harness.conversation(
+    found.conversation as ConversationId,
+    context
+  )) as Conversation;
+  const title = found.title || undefined;
+  const { entries, record } = await snapshot(
+    conversation,
+    found.name,
+    found.frozenAt,
+    context,
+    title
+  );
+  await agents.update((_tx, doc) => {
+    const kept = doc.frozen?.[id];
+    if (kept)
+      Object.assign(kept, { title: record.title, model: record.model, messages: record.messages });
+  }, context);
+  if (holder(agents.state(), found.conversation) === undefined)
+    await prepare(conversation, entries, found.cone, context);
+  await agents.update((_tx, doc) => {
+    delete doc.frozen?.[id]?.repaired;
+  }, context);
+}
+
+function repairs(options: FreezerAttach, prepare: Prepare) {
+  for (const [id, record] of Object.entries(options.agents.state().frozen ?? {}))
+    if (record.repaired)
+      void repair(options, prepare, id, BACKGROUND_CONTEXT).catch(() => undefined);
+}
+
 export function attachFreezer(options: FreezerAttach): FreezerRuntime {
   const { harness, agents } = options;
   const now = options.now ?? Date.now;
@@ -803,6 +843,7 @@ export function attachFreezer(options: FreezerAttach): FreezerRuntime {
     );
     return { id: `cone-${state.next}`, conversation };
   };
+  repairs(options, prepare);
   const runtime: FreezerRuntime = {
     frozen,
     ...importing(options, now, refresh),
