@@ -211,7 +211,7 @@ export class SettingsAdapter extends Emitter<Events> implements SettingsPort {
   }
 
   accounts(): readonly Account[] {
-    return this.#state().accounts.map(({ needs, ...account }) => {
+    return this.#state().accounts.map(({ needs, urlRevision: _revision, ...account }) => {
       const url = this.#urls.get(account.id);
       const located = url ? { ...account, url } : account;
       const prompt = this.#prompts.get(account.id);

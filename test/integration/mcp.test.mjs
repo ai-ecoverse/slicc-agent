@@ -1415,3 +1415,90 @@ test('a redirected discovery document is still followed and the sign-in opens', 
   assert.ok(urls.includes('https://mcp.test/.well-known/oauth-authorization-server/moved'));
   assert.deepEqual(await page.evaluate(() => window.own()), []);
 });
+
+const write = (page, servers) =>
+  page.evaluate(
+    (servers) => window.write('/home/.pi/agent/mcp.json', JSON.stringify({ mcpServers: servers })),
+    servers
+  );
+
+const located = (page) =>
+  page.evaluate(() =>
+    Object.fromEntries(
+      window.model.settings
+        .accounts()
+        .filter((account) => account.group === 'mcp')
+        .map(({ provider, url, state, ...rest }) => [
+          provider,
+          { url: url ?? null, state, extra: Object.keys(rest).filter((key) => /url/i.test(key)) },
+        ])
+    )
+  );
+
+const token = (url, more = {}) => ({
+  url,
+  headers: { Authorization: 'Bearer ${DOCS_TOKEN}' },
+  ...more,
+});
+
+test('an MCP account follows its server URL in mcp.json, even when nothing else in its row changes', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const servers = (path) => ({
+    docs: token(`https://mcp.test${path}/mcp`),
+    off: token(`https://mcp.test${path}/off`, { enabled: false }),
+  });
+  const settled = (path) =>
+    page.within(
+      60000,
+      (path) => {
+        const rows = window.model.settings.accounts();
+        const url = (id) => rows.find((row) => row.id === id)?.url;
+        return (
+          rows.find((row) => row.id === 'mcp:docs')?.state === 'needs-secret' &&
+          url('mcp:docs') === `https://mcp.test${path}/mcp` &&
+          url('mcp:off') === `https://mcp.test${path}/off`
+        );
+      },
+      path
+    );
+  const expected = (path) => ({
+    docs: { url: `https://mcp.test${path}/mcp`, state: 'needs-secret', extra: [] },
+    off: { url: `https://mcp.test${path}/off`, state: 'disabled', extra: [] },
+  });
+  await write(page, servers(''));
+  await staged(page, 'the agent', () => window.start('relay=mcp.test&vault'));
+  await settled('');
+  assert.deepEqual(await located(page), expected(''));
+  await write(page, servers('/v2'));
+  await settled('/v2');
+  assert.deepEqual(await located(page), expected('/v2'));
+  await write(page, servers(''));
+  await settled('');
+  assert.deepEqual(await located(page), expected(''));
+});
+
+test('an MCP account never carries user info or a query, and a refused server is offered without a URL', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await write(page, {
+    docs: token('https://mcp.test/mcp?v=2#part'),
+    user: token('https://name@mcp.test/mcp'),
+    login: token('https://name:pass@mcp.test/mcp'),
+    keyed: token('https://mcp.test/mcp?api_key=abc'),
+  });
+  await staged(page, 'the agent', () => window.start('relay=mcp.test&vault'));
+  await page.within(60000, () => {
+    const rows = window.model.settings.accounts().filter((row) => row.group === 'mcp');
+    return rows.length === 4 && rows.find((row) => row.id === 'mcp:docs')?.url;
+  });
+  const refused = { url: null, state: 'refused', extra: [] };
+  assert.deepEqual(await located(page), {
+    docs: { url: 'https://mcp.test/mcp', state: 'needs-secret', extra: [] },
+    user: refused,
+    login: refused,
+    keyed: refused,
+  });
+});

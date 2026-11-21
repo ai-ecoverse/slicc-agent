@@ -107,31 +107,40 @@ export function mcpAccounts(
     return { connection, kind: kind as Kind };
   };
   const reread = () => records.refresh(BACKGROUND_CONTEXT).catch(() => undefined);
+  const located = new Map<string, { url: string; revision: number }>();
+  const revise = (name: string, raw: string) => {
+    const url = serverUrl(raw);
+    const seen = located.get(name);
+    const revision = seen ? seen.revision + Number(seen.url !== url) : 0;
+    located.set(name, { url, revision });
+    return revision;
+  };
+  const rowOf = async (name: string, config: McpServerEntry['config']) => {
+    const connection = catalog.connections.get(name);
+    const host = new URL(config.url).host;
+    if (!connection) return plainRow(name, host, false, 'disabled');
+    const kind = kindOf(connection);
+    const stored =
+      kind === 'token'
+        ? resolveHeaders(connection.name, connection.entry.config, records).ok
+        : await sources.oauth(connection.entry).signedIn();
+    if (kind === 'oauth' && !stored && connection.state !== 'needs-auth')
+      return plainRow(name, host, connection.live, connection.state as McpServerState);
+    const expired = heldRecords(connection.name, connection.entry.config, records).some(
+      (record) => record?.state === 'expired'
+    );
+    return row(connection, kind, stored, expired);
+  };
   return {
     async accounts() {
       const rows: AccountState[] = [];
       const { servers, refused } = sources.listed();
+      const names = new Set(servers.map(({ name }) => name));
+      for (const name of located.keys()) if (!names.has(name)) located.delete(name);
       for (const { name, config } of servers) {
-        const connection = catalog.connections.get(name);
-        const host = new URL(config.url).host;
-        if (!connection) {
-          rows.push(plainRow(name, host, false, 'disabled'));
-          continue;
-        }
-        const kind = kindOf(connection);
-        const stored =
-          kind === 'token'
-            ? resolveHeaders(connection.name, connection.entry.config, records).ok
-            : await sources.oauth(connection.entry).signedIn();
-        if (kind === 'oauth' && !stored && connection.state !== 'needs-auth') {
-          const state = connection.state as McpServerState;
-          rows.push(plainRow(name, host, connection.live, state));
-          continue;
-        }
-        const expired = heldRecords(connection.name, connection.entry.config, records).some(
-          (record) => record?.state === 'expired'
-        );
-        rows.push(row(connection, kind, stored, expired));
+        const revision = revise(name, config.url);
+        const account = await rowOf(name, config);
+        rows.push(revision ? { ...account, urlRevision: revision } : account);
       }
       for (const { name, host } of refused) rows.push(plainRow(name, host, false, 'refused'));
       return rows;

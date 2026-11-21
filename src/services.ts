@@ -551,6 +551,7 @@ export interface AccountState {
   keyUrl?: string;
   vaultName?: string;
   state?: McpServerState;
+  urlRevision?: number;
 }
 
 export type McpServerState =
