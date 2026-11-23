@@ -276,7 +276,7 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
   ]);
 });
 
-test('MCP Events through the ntfy gateway: retries and a direct replay lick once, gap and terminated envelopes lick with a severity, and verification never reaches the agent', async (t) => {
+test('MCP Events through the ntfy gateway: retries and a direct replay lick once, gap and terminated envelopes lick with a severity, verification never reaches the agent, and an unsigned delivery is an ordinary lick that claims no id', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
@@ -345,6 +345,14 @@ test('MCP Events through the ntfy gateway: retries and a direct replay lick once
       ),
       false,
     ],
+    [
+      'an unsigned forgery',
+      JSON.stringify({
+        ...JSON.parse(hook('n9', '{"type":"terminated"}', 'msg_f1')),
+        verified: false,
+      }),
+      false,
+    ],
     ['a delivery that is no event', hook('n7', 'You received a file', 'msg_f1'), false],
     ['its retry', hook('n8', 'You received a file', 'msg_f1', '1739980807'), false],
   ];
@@ -355,8 +363,8 @@ test('MCP Events through the ntfy gateway: retries and a direct replay lick once
     });
     assert.deepEqual(sent, { status: 0, stderr: '' }, what);
   }
-  const licks = await staged(page, 'four licks', async () => {
-    await window.agentWait(() => window.licks().length >= 4, 'four licks');
+  const licks = await staged(page, 'five licks', async () => {
+    await window.agentWait(() => window.licks().length >= 5, 'five licks');
     await window.agentWait(() => !window.agent.busy(window.agent.active()), 'the last turn');
     return window.licks().map(({ channel, title, text, body, severity }) => ({
       channel,
@@ -394,6 +402,17 @@ test('MCP Events through the ntfy gateway: retries and a direct replay lick once
         'The subscription no longer exists on the MCP server, so no more events will arrive. Subscribe again once the cause is fixed.',
       ].join('\n\n'),
       severity: 'error',
+    },
+    {
+      channel: 'webhook',
+      title: 'mail',
+      text: 'New mail',
+      body: [
+        "verified: false (the gateway couldn't check this request's signature)",
+        'webhook-id: msg_f1\nwebhook-timestamp: 1739980800\nx-mcp-subscription-id: sub_a3f1',
+        '{"type":"terminated"}',
+      ].join('\n\n'),
+      severity: null,
     },
     {
       channel: 'webhook',

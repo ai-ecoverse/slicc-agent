@@ -171,10 +171,7 @@ export function controlLick(
   const delivered = headerOf(delivery.headers, 'webhook-id');
   const id = delivered ? `webhook:${delivered}` : delivery.id;
   const subscription = headerOf(delivery.headers, 'x-mcp-subscription-id');
-  const lead = [
-    delivery.verified === false ? UNVERIFIED : '',
-    subscription ? `subscription: ${subscription}` : '',
-  ];
+  const lead = subscription ? [`subscription: ${subscription}`] : [];
   const { cursor } = envelope;
   const details = gap
     ? [
@@ -192,7 +189,7 @@ export function controlLick(
     text: gap
       ? `Webhook ${name}: events may have been skipped (MCP gap)`
       : `Webhook ${name}: the MCP server ended the subscription: ${ended(envelope.error)}`,
-    body: [...lead.filter(Boolean), ...details].join('\n\n'),
+    body: [...lead, ...details].join('\n\n'),
     target: entry.target,
     coalesce: false,
     severity: gap ? 'warn' : 'error',

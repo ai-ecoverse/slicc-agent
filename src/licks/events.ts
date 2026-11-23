@@ -50,17 +50,16 @@ function attachmentOf(value: unknown): { attachment?: Attachment } {
 
 function ntfy(json: Json): WebhookDelivery {
   const message = typeof json.message === 'string' ? json.message : '';
-  const rest = {
-    ...attachmentOf(json.attachment),
-    ...(json.verified === false ? { verified: false } : {}),
-  };
+  const signed = json.verified !== false;
+  const rest = { ...attachmentOf(json.attachment), ...(signed ? {} : { verified: false }) };
+  const own = `ntfy:${json.topic}/${json.id}`;
   const event = objectOf(message);
   if (event && isOccurrence(event))
-    return { id: `mcp:${event.eventId}`, body: event.data, ...rest };
+    return { id: signed ? `mcp:${event.eventId}` : own, body: event.data, ...rest };
   const headers = headersOf(json.headers);
-  const delivered = headerOf(headers.headers, 'webhook-id');
+  const delivered = signed && headerOf(headers.headers, 'webhook-id');
   return {
-    id: delivered ? `webhook:${delivered}` : `ntfy:${json.topic}/${json.id}`,
+    id: delivered ? `webhook:${delivered}` : own,
     ...headers,
     body: message,
     ...rest,
@@ -77,6 +76,7 @@ export function webhookDelivery(text: string): WebhookDelivery {
 const CONTROL = new Set(['gap', 'terminated', 'verification']);
 
 export function envelopeOf(delivery: WebhookDelivery): Json | undefined {
+  if (delivery.verified === false) return undefined;
   const body =
     typeof delivery.body === 'string' ? objectOf(delivery.body) : asObject(delivery.body);
   if (typeof body?.type !== 'string' || !CONTROL.has(body.type)) return undefined;
