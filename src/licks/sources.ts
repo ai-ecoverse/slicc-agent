@@ -16,6 +16,7 @@ import {
   relickJobs,
   sendCommand,
 } from './crontab.ts';
+import { envelopeOf, headerOf } from './events.ts';
 import { type ConfigFiles, configFiles, Watches } from './fswatch.ts';
 import type { LickChannel, LickTarget } from './lick.ts';
 import type { LickEvent, Licks } from './licks.ts';
@@ -149,6 +150,67 @@ export function webhookLick(
     ...(entry.triage ? { triage: entry.triage } : {}),
     ...(delivery.taints?.length ? { taints: delivery.taints } : {}),
   };
+}
+
+function ended(error: unknown): string {
+  const { code, message } = (typeof error === 'object' && error !== null ? error : {}) as Record<
+    string,
+    unknown
+  >;
+  const why = typeof message === 'string' && message ? message : 'no reason given';
+  return typeof code === 'number' ? `${why} (${code})` : why;
+}
+
+export function controlLick(
+  name: string,
+  entry: WebhookEntry,
+  delivery: WebhookDelivery,
+  envelope: Record<string, unknown>
+): LickEvent {
+  const gap = envelope.type === 'gap';
+  const delivered = headerOf(delivery.headers, 'webhook-id');
+  const id = delivered ? `webhook:${delivered}` : delivery.id;
+  const subscription = headerOf(delivery.headers, 'x-mcp-subscription-id');
+  const lead = [
+    delivery.verified === false ? UNVERIFIED : '',
+    subscription ? `subscription: ${subscription}` : '',
+  ];
+  const { cursor } = envelope;
+  const details = gap
+    ? [
+        `cursor: ${typeof cursor === 'string' ? cursor : JSON.stringify(cursor ?? null)}`,
+        'The MCP server detected a gap: events before this cursor may have been skipped. Fetch the current state again if it matters.',
+      ]
+    : [
+        `error: ${JSON.stringify(envelope.error ?? null, null, 2)}`,
+        'The subscription no longer exists on the MCP server, so no more events will arrive. Subscribe again once the cause is fixed.',
+      ];
+  return {
+    channel: 'webhook',
+    source: name,
+    title: name,
+    text: gap
+      ? `Webhook ${name}: events may have been skipped (MCP gap)`
+      : `Webhook ${name}: the MCP server ended the subscription: ${ended(envelope.error)}`,
+    body: [...lead.filter(Boolean), ...details].join('\n\n'),
+    target: entry.target,
+    coalesce: false,
+    severity: gap ? 'warn' : 'error',
+    ...(id ? { eventId: id } : {}),
+    ...(delivery.taints?.length ? { taints: delivery.taints } : {}),
+  };
+}
+
+async function webhookEvent(
+  name: string,
+  entry: WebhookEntry,
+  delivery: WebhookDelivery,
+  fetcher: typeof fetch | undefined
+): Promise<LickEvent | undefined> {
+  const envelope = envelopeOf(delivery);
+  if (envelope?.type === 'verification') return undefined;
+  if (envelope) return controlLick(name, entry, delivery, envelope);
+  return webhookLick(name, entry, await withAttachment(delivery, fetcher));
 }
 
 async function webhooksIn(
@@ -332,10 +394,8 @@ export function createLickSources(options: LickSourcesOptions): LickSources {
     async webhook(name, delivery, context) {
       const entry = webhooks.get(name);
       if (!entry) return false;
-      await deliver(
-        webhookLick(name, entry, await withAttachment(delivery, options.fetch)),
-        context
-      );
+      const event = await webhookEvent(name, entry, delivery, options.fetch);
+      if (event) await deliver(event, context);
       return true;
     },
     async close(context) {

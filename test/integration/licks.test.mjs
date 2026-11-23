@@ -276,6 +276,135 @@ test('agent send --lick=webhook turns an ntfy message or an MCP event into one w
   ]);
 });
 
+test('MCP Events through the ntfy gateway: retries and a direct replay lick once, gap and terminated envelopes lick with a severity, and verification never reaches the agent', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  await staged(page, 'the MCP webhook agent', async () => {
+    await window.write('/home/.slicc/webhooks/mail.json', '{"message":"New mail"}');
+    await import('/dist-test/page.js');
+    stage('the kernel');
+    const { bootKernel } = await import('/kernel.js');
+    window.kernel = await bootKernel();
+    stage('the agent');
+    const answers = Array.from({ length: 8 }, () => 'answer=Noted.').join('&');
+    const owner = await startAgent({
+      worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
+      kernel: { connect: () => window.kernel.connect() },
+    });
+    window.connection = await owner.connect();
+    window.agent = createAgentModel(window.connection, { storage: localStorage }).agent;
+    await window.agent.ready();
+    window.send = async (raw, stdin) => {
+      const args = ['cone', '--lick=webhook', '--source', 'mail', stdin ? '-' : raw];
+      const command = ['bash', '-c', 'agent send "$@"', 'agent', ...args];
+      const ran = await window.kernel.run(command, stdin ? { stdin: raw } : {});
+      return { status: ran.status, stderr: ran.stderr };
+    };
+  });
+  await staged(page, 'the control directory', () => window.controlDir());
+  const occurrence = JSON.stringify({
+    eventId: 'gmail-42',
+    name: 'email.received',
+    timestamp: '2026-10-17T11:00:00Z',
+    data: { from: 'dsp@example.com', subject: 'spec review' },
+    cursor: 'h99',
+  });
+  const hook = (id, message, webhookId, timestamp = '1739980800', subscription = 'sub_a3f1') =>
+    JSON.stringify({
+      id,
+      time: 1,
+      event: 'message',
+      topic: 'mcp-mail',
+      message,
+      headers: {
+        'webhook-id': webhookId,
+        'webhook-timestamp': timestamp,
+        ...(subscription ? { 'x-mcp-subscription-id': subscription } : {}),
+      },
+      verified: true,
+    });
+  const sends = [
+    ['the event', hook('n1', occurrence, 'msg_e1'), false],
+    ['its retry', hook('n2', occurrence, 'msg_e1', '1739980805'), false],
+    ['the direct replay', occurrence, true],
+    ['a verification', hook('n3', '{"type":"verification","challenge":"nonce"}', 'msg_v1'), false],
+    ['a gap', hook('n4', '{"type":"gap","cursor":"h120"}', 'msg_gap_1'), false],
+    ['its retry', hook('n5', '{"type":"gap","cursor":"h120"}', 'msg_gap_1', '1739980806'), false],
+    [
+      'a termination',
+      hook(
+        'n6',
+        JSON.stringify({
+          type: 'terminated',
+          error: { code: -32024, message: 'Forbidden', data: { reason: 'Access revoked' } },
+        }),
+        'msg_terminated_1',
+        '1739980800',
+        null
+      ),
+      false,
+    ],
+    ['a delivery that is no event', hook('n7', 'You received a file', 'msg_f1'), false],
+    ['its retry', hook('n8', 'You received a file', 'msg_f1', '1739980807'), false],
+  ];
+  for (const [what, raw, stdin] of sends) {
+    const sent = await staged(page, `${what} send`, ({ raw, stdin }) => window.send(raw, stdin), {
+      raw,
+      stdin,
+    });
+    assert.deepEqual(sent, { status: 0, stderr: '' }, what);
+  }
+  const licks = await staged(page, 'four licks', async () => {
+    await window.agentWait(() => window.licks().length >= 4, 'four licks');
+    await window.agentWait(() => !window.agent.busy(window.agent.active()), 'the last turn');
+    return window.licks().map(({ channel, title, text, body, severity }) => ({
+      channel,
+      title,
+      text,
+      body,
+      severity: severity ?? null,
+    }));
+  });
+  assert.deepEqual(licks, [
+    {
+      channel: 'webhook',
+      title: 'mail',
+      text: 'New mail',
+      body: JSON.stringify({ from: 'dsp@example.com', subject: 'spec review' }, null, 2),
+      severity: null,
+    },
+    {
+      channel: 'webhook',
+      title: 'mail',
+      text: 'Webhook mail: events may have been skipped (MCP gap)',
+      body: [
+        'subscription: sub_a3f1',
+        'cursor: h120',
+        'The MCP server detected a gap: events before this cursor may have been skipped. Fetch the current state again if it matters.',
+      ].join('\n\n'),
+      severity: 'warn',
+    },
+    {
+      channel: 'webhook',
+      title: 'mail',
+      text: 'Webhook mail: the MCP server ended the subscription: Forbidden (-32024)',
+      body: [
+        `error: ${JSON.stringify({ code: -32024, message: 'Forbidden', data: { reason: 'Access revoked' } }, null, 2)}`,
+        'The subscription no longer exists on the MCP server, so no more events will arrive. Subscribe again once the cause is fixed.',
+      ].join('\n\n'),
+      severity: 'error',
+    },
+    {
+      channel: 'webhook',
+      title: 'mail',
+      text: 'New mail',
+      body: 'webhook-id: msg_f1\nwebhook-timestamp: 1739980800\nx-mcp-subscription-id: sub_a3f1\n\nYou received a file',
+      severity: null,
+    },
+  ]);
+});
+
 async function gatewayed(t, query) {
   const page = await chrome.page(t);
   await page.init(helpers);
