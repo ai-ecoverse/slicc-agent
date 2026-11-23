@@ -3,12 +3,14 @@ import type { WebhookDelivery } from './sources.ts';
 
 type Json = Record<string, unknown>;
 
+const asObject = (value: unknown): Json | undefined =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Json)
+    : undefined;
+
 function objectOf(text: string): Json | undefined {
   try {
-    const value: unknown = JSON.parse(text);
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-      ? (value as Json)
-      : undefined;
+    return asObject(JSON.parse(text));
   } catch {
     return undefined;
   }
@@ -16,9 +18,18 @@ function objectOf(text: string): Json | undefined {
 
 const isText = (value: unknown): value is string => typeof value === 'string' && value !== '';
 
+const isOccurrence = (json: Json) => isText(json.eventId) && isText(json.name) && 'data' in json;
+
+export function headerOf(
+  headers: Record<string, string> | undefined,
+  name: string
+): string | undefined {
+  const found = Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === name);
+  return found?.[1] || undefined;
+}
+
 function headersOf(value: unknown): { headers?: Record<string, string> } {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
-  const kept = Object.entries(value).filter(
+  const kept = Object.entries(asObject(value) ?? {}).filter(
     (entry): entry is [string, string] => typeof entry[1] === 'string'
   );
   return kept.length ? { headers: Object.fromEntries(kept) } : {};
@@ -39,19 +50,39 @@ function attachmentOf(value: unknown): { attachment?: Attachment } {
 
 function ntfy(json: Json): WebhookDelivery {
   const message = typeof json.message === 'string' ? json.message : '';
+  const signed = json.verified !== false;
+  const rest = { ...attachmentOf(json.attachment), ...(signed ? {} : { verified: false }) };
+  const own = `ntfy:${json.topic}/${json.id}`;
+  const event = objectOf(message);
+  if (event && isOccurrence(event))
+    return { id: signed ? `mcp:${event.eventId}` : own, body: event.data, ...rest };
+  const headers = headersOf(json.headers);
+  const delivered = signed && headerOf(headers.headers, 'webhook-id');
   return {
-    id: `ntfy:${json.topic}/${json.id}`,
-    ...headersOf(json.headers),
+    id: delivered ? `webhook:${delivered}` : own,
+    ...headers,
     body: message,
-    ...attachmentOf(json.attachment),
-    ...(json.verified === false ? { verified: false } : {}),
+    ...rest,
   };
 }
 
 export function webhookDelivery(text: string): WebhookDelivery {
   const json = objectOf(text);
   if (json && isText(json.id) && isText(json.topic)) return ntfy(json);
-  if (json && isText(json.eventId) && isText(json.name) && 'data' in json)
-    return { id: `mcp:${json.eventId}`, body: json.data };
+  if (json && isOccurrence(json)) return { id: `mcp:${json.eventId}`, body: json.data };
   return { body: text };
+}
+
+const CONTROL = new Set(['gap', 'terminated', 'verification']);
+
+export function envelopeOf(delivery: WebhookDelivery): Json | undefined {
+  if (delivery.verified === false) return undefined;
+  const body =
+    typeof delivery.body === 'string' ? objectOf(delivery.body) : asObject(delivery.body);
+  if (typeof body?.type !== 'string' || !CONTROL.has(body.type)) return undefined;
+  const { headers } = delivery;
+  const mcp =
+    headerOf(headers, 'x-mcp-subscription-id') ||
+    headerOf(headers, 'webhook-id')?.startsWith(`msg_${body.type}_`);
+  return mcp ? body : undefined;
 }
