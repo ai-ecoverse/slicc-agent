@@ -87,6 +87,8 @@ const helpers = () => {
         title: tool.title,
         meta: tool.meta ?? null,
         notes: tool.notes ?? [],
+        exit: tool.exit ?? null,
+        programs: tool.programs ?? [],
         status: tool.status,
         output: tool.output,
       }));
@@ -147,7 +149,7 @@ const metaNames = (meta) =>
     .filter(Boolean)
     .sort();
 
-test('a bash call is titled by the programs its trace saw, with their failures as notes, also after a reload', async (t) => {
+test('a bash call is titled by the programs its trace saw, with its exit and failed programs as data, not notes, also after a reload', async (t) => {
   const page = await chrome.page(t);
   const screenshot =
     'cd /tmp; for i in 1 2; do printf \'%s\\n\' "$i"; done 2>&1; seq 1 2 > /dev/null';
@@ -171,6 +173,7 @@ test('a bash call is titled by the programs its trace saw, with their failures a
     bash({ command: 'cd /tmp; for i in 1 2; do echo "$i"; done' }),
     bash({ command: 'sleep 5 & job=$!; sleep 0.5; kill -9 $job; wait $job; echo after' }),
     bash({ command: 'sleep 5; echo never', timeout: 1 }),
+    bash({ command: 'echo going; kill -TERM $$; echo never' }),
     answer('Done.'),
   ];
   await boot(page, steps);
@@ -207,9 +210,13 @@ test('a bash call is titled by the programs its trace saw, with their failures a
     builtins,
     killed,
     late,
+    signalled,
   ] = cards;
   assert.equal(shot.title, 'Running seq');
   assert.match(shot.meta, /^Ran seq · \d+\.\d s$/);
+  assert.deepEqual(shot.exit, { code: 0 });
+  assert.deepEqual(shot.programs, []);
+  assert.deepEqual(details[0].ran.exit, { status: 0 });
   for (const word of ['cd', 'for', 'printf', '2>&1'])
     assert.ok(!shot.title.includes(word) && !shot.meta.includes(word), shot.title);
   assert.deepEqual(namesOf(piped.title), ['head', 'sed', 'seq']);
@@ -220,14 +227,18 @@ test('a bash call is titled by the programs its trace saw, with their failures a
   assert.equal(replaced.output.trim(), 'a\n1');
   assert.equal(failing.title, 'Running ls');
   assert.equal(failing.status, 'done');
-  assert.deepEqual(failing.notes, [{ severity: 'error', text: 'ls exited 2' }]);
+  assert.deepEqual(failing.exit, { code: 0 });
+  assert.deepEqual(failing.programs, [{ name: 'ls', code: 2 }]);
+  assert.deepEqual(failing.notes, []);
   assert.deepEqual(namesOf(sigpipe.title), ['head', 'seq']);
   assert.deepEqual(sigpipe.notes, []);
+  assert.deepEqual(sigpipe.programs, []);
   const seq = details[5].ran.programs.find((program) => program.name === 'seq');
   assert.ok(seq.status === 0 || seq.quiet === true, JSON.stringify(seq));
   assert.equal(exited.title, 'Running node');
   assert.equal(exited.status, 'error');
-  assert.deepEqual(exited.notes, [{ severity: 'error', text: 'Exited with code 3' }]);
+  assert.deepEqual(exited.exit, { code: 3 });
+  assert.deepEqual(exited.notes, []);
   assert.equal(argv.title, 'Checking the result list');
   assert.equal(details[7].ran.intent, 'Checking the result list');
   assert.deepEqual(metaNames(argv.meta), ['chmod', 'cp', 'intent', 'mkdir', 'playwright-cli']);
@@ -240,13 +251,21 @@ test('a bash call is titled by the programs its trace saw, with their failures a
   assert.match(builtins.meta, /^Ran only shell builtins · \d+\.\d s$/);
   assert.deepEqual(details[10].ran.programs, []);
   assert.equal(killed.title, 'Running sleep');
-  assert.deepEqual(killed.notes, [{ severity: 'error', text: 'sleep was killed (SIGKILL)' }]);
+  assert.deepEqual(killed.exit, { code: 0 });
+  assert.deepEqual(killed.programs, [{ name: 'sleep', code: 137, signal: 'SIGKILL' }]);
+  assert.deepEqual(killed.notes, []);
   assert.equal(late.status, 'error');
   assert.equal(late.title, 'Running sleep');
   assert.deepEqual(
     late.notes.map((item) => item.text),
     ['Timed out after 1 seconds']
   );
+  assert.deepEqual(late.exit, { code: 137, signal: 'SIGKILL' });
+  assert.equal(signalled.status, 'error');
+  assert.equal(signalled.output.trim(), 'going');
+  assert.deepEqual(signalled.exit, { code: 143, signal: 'SIGTERM' });
+  assert.deepEqual(signalled.notes, []);
+  assert.deepEqual(details[13].ran.exit, { status: 143, signal: 'SIGTERM' });
   for (const detail of details) {
     assert.equal(typeof detail.ran.ms, 'number');
     assert.equal(detail.ran.dropped, undefined);
@@ -308,6 +327,7 @@ for (const missing of ['trace', 'tags'])
     });
     assert.equal(seen.cards[0].title, 'Running cd, seq and 1');
     assert.equal(seen.cards[0].meta, null);
+    assert.deepEqual(seen.cards[0].exit, { code: 0 });
     assert.equal(seen.cards[0].output.trim(), '1\n2');
     assert.equal(seen.details[0], null);
   });

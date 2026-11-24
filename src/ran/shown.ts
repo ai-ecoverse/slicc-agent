@@ -1,4 +1,4 @@
-import type { Ran, RanProgram } from '../kernel/trace.ts';
+import type { Ran, RanExit, RanProgram } from '../kernel/trace.ts';
 import { redactSecrets } from '../memory/format.ts';
 import { cleanLabel } from '../titles/shown.ts';
 
@@ -10,10 +10,18 @@ type Json = Record<string, unknown>;
 const isProgram = (value: unknown): value is RanProgram =>
   typeof (value as RanProgram | null)?.name === 'string';
 
+const isExit = (value: unknown): value is RanExit =>
+  typeof (value as RanExit | null)?.status === 'number';
+
 export function ranOf(details: unknown): Ran | undefined {
   const ran = (details as Json | null | undefined)?.[RAN_KEY] as Ran | undefined;
   if (!ran || !Array.isArray(ran.programs) || typeof ran.ms !== 'number') return undefined;
-  return { ...ran, programs: ran.programs.filter(isProgram) };
+  const { exit, ...rest } = ran;
+  return {
+    ...rest,
+    programs: ran.programs.filter(isProgram),
+    ...(isExit(exit) ? { exit } : {}),
+  };
 }
 
 export function saidIntent(raw: string | undefined): string {
@@ -48,8 +56,15 @@ export function ranMeta(ran: Ran): string {
   return `${what} · ${seconds(ran.ms)}`;
 }
 
+const failing = (program: RanProgram): program is RanProgram & { status: number } =>
+  program.status !== undefined && program.status !== 0 && !program.quiet;
+
+export function ranFailed(ran: Ran): (RanProgram & { status: number })[] {
+  return ran.programs.filter(failing);
+}
+
 export function failed(program: RanProgram): string | undefined {
-  if (program.status === undefined || program.status === 0 || program.quiet) return undefined;
+  if (!failing(program)) return undefined;
   return program.signal
     ? `${program.name} was killed (${program.signal})`
     : `${program.name} exited ${program.status}`;

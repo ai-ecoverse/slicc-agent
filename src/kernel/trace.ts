@@ -16,8 +16,14 @@ export interface RanProgram {
   quiet?: true;
 }
 
+export interface RanExit {
+  status: number;
+  signal?: string;
+}
+
 export interface Ran {
   programs: RanProgram[];
+  exit?: RanExit;
   ms: number;
   more?: number;
   dropped?: number;
@@ -89,6 +95,7 @@ export class Collector {
   #queue: TraceEvent[] | undefined = [];
   #root: number | undefined;
   #rootEnded = false;
+  #rootExit: RanExit | undefined;
   #dropped = 0;
   #more = 0;
   #intent: string | undefined;
@@ -156,7 +163,13 @@ export class Collector {
   }
 
   #exit(event: Extract<TraceEvent, { type: 'exit' }>): void {
-    if (event.pid === this.#root) this.#rootEnded = true;
+    if (event.pid === this.#root) {
+      this.#rootEnded = true;
+      this.#rootExit = {
+        status: event.status,
+        ...(event.signal ? { signal: event.signal } : {}),
+      };
+    }
     const proc = this.#procs.get(event.pid);
     if (!proc || proc.end !== undefined) return;
     proc.end = event.seq;
@@ -230,6 +243,7 @@ export class Collector {
     return {
       programs,
       ms,
+      ...(this.#rootExit ? { exit: this.#rootExit } : {}),
       ...(more ? { more } : {}),
       ...(this.#dropped ? { dropped: this.#dropped } : {}),
       ...(this.#intent ? { intent: this.#intent } : {}),
