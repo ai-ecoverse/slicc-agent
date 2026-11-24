@@ -528,11 +528,9 @@ const ranked = (notes: Note[]) =>
   notes.sort((a, b) => RANK.indexOf(a.severity) - RANK.indexOf(b.severity));
 
 function exitOf(code: number | undefined, ran: Ran | undefined): ToolExit | undefined {
+  if (code === undefined) return undefined;
   const root = ran?.exit;
-  const signal =
-    root?.signal && (code === undefined || root.status === code) ? { signal: root.signal } : {};
-  if (code !== undefined) return { code, ...signal };
-  return root ? { code: root.status, ...signal } : undefined;
+  return root?.signal && root.status === code ? { code, signal: root.signal } : { code };
 }
 
 function traced(call: Card, ran: Ran, said: Said | undefined): void {
