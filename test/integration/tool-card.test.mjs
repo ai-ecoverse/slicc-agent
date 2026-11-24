@@ -7,6 +7,8 @@ const chrome = await launch();
 after(() => chrome.close());
 
 const failing = 'panel open files --left chat';
+const inner = 'ls /nope; echo listed';
+const killed = 'echo going; kill -TERM $$';
 const long = `l=$(printf '%0240d' 0); for i in $(seq 1 2400); do echo "dummy line $i $l"; done`;
 
 const views = [
@@ -15,12 +17,14 @@ const views = [
   { name: 'light-420', width: 420, height: 860, scheme: 'light' },
 ];
 
-test('a failed bash card shows no harness block, and its exit code as a note', async (t) => {
+test('a bash card shows no harness block, its exit as a badge and its failed programs as metadata, not notes', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const steps = [
     { tool: { name: 'bash', args: { command: failing } } },
     { tool: { name: 'bash', args: { command: long } } },
+    { tool: { name: 'bash', args: { command: inner } } },
+    { tool: { name: 'bash', args: { command: killed } } },
     { answer: 'Done.' },
   ];
   await staged(
@@ -81,18 +85,35 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
       .filter((part) => part.type === 'tool')
       .map((part) => part.tool);
     const done = model.agent.messages('cone').some((m) => m.parts?.some((p) => p.text === 'Done.'));
-    if (!done || tools.length < 2) return null;
+    if (!done || tools.length < 4) return null;
+    const shown = (node) => node.textContent.replace(/\s+/g, ' ').trim();
     const notes = find(document, '[data-note]').map((node) => ({
       severity: node.dataset.severity,
-      text: node.textContent.replace(/\s+/g, ' ').trim(),
+      text: shown(node),
     }));
-    return { tools, page: text(document.body), notes };
+    const exits = find(document, 'swc-badge[data-exit]').map((node) => ({
+      exit: node.dataset.exit,
+      signal: node.dataset.signal ?? null,
+      variant: node.getAttribute('variant'),
+      text: shown(node),
+    }));
+    const programs = find(document, '[data-program]').map(shown);
+    return { tools, page: text(document.body), notes, exits, programs };
   });
-  const [refused, listing] = seen.tools;
+  const [refused, listing, listed, signalled] = seen.tools;
   assert.equal(refused.status, 'error');
   assert.match(refused.output, /cannot open on the left/);
   assert.doesNotMatch(refused.output, /harness/);
-  assert.deepEqual(refused.notes, [{ severity: 'error', text: 'Exited with code 5' }]);
+  assert.equal(refused.notes, undefined);
+  assert.deepEqual(refused.exit, { code: 5 });
+  assert.deepEqual(listing.exit, { code: 0 });
+  assert.equal(listed.status, 'done');
+  assert.deepEqual(listed.exit, { code: 0 });
+  assert.deepEqual(listed.programs, [{ name: 'ls', code: 2 }]);
+  assert.equal(listed.notes, undefined);
+  assert.equal(signalled.status, 'error');
+  assert.deepEqual(signalled.exit, { code: 143, signal: 'SIGTERM' });
+  assert.equal(signalled.notes, undefined);
   assert.doesNotMatch(listing.output, /<\/?harness>/);
   assert.ok(
     listing.notes.some((note) => note.severity === 'info' && /^Full output in /.test(note.text))
@@ -100,14 +121,21 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
   assert.doesNotMatch(seen.page, /<\/?harness>/);
   assert.deepEqual(
     seen.notes.map((note) => note.severity),
-    ['error', 'warn', 'info']
+    ['warn', 'info']
   );
-  assert.equal(seen.notes[0].text, 'Error: Exited with code 5');
   assert.match(
-    seen.notes[1].text,
+    seen.notes[0].text,
     /^Warning: Output truncated: [\d,]+ lines and [\d,]+ bytes dropped from the start$/
   );
-  assert.equal(seen.notes[2].text, `Note: ${listing.notes[1].text}`);
+  assert.equal(seen.notes[1].text, `Note: ${listing.notes[1].text}`);
+  assert.deepEqual(seen.exits, [
+    { exit: '5', signal: null, variant: 'negative', text: 'Exit 5' },
+    { exit: '0', signal: null, variant: 'positive', text: 'Exit 0' },
+    { exit: '0', signal: null, variant: 'positive', text: 'Exit 0' },
+    { exit: '143', signal: 'SIGTERM', variant: 'negative', text: 'Killed (SIGTERM)' },
+  ]);
+  assert.deepEqual(seen.programs, ['ls exited 2']);
+  assert.doesNotMatch(seen.page, /Exited with code/);
   const model = await staged(page, 'a failed bash card shows', async () => {
     const entries = await globalThis.cardTest.owner
       .connect()
@@ -129,21 +157,35 @@ test('a failed bash card shows no harness block, and its exit code as a note', a
       features: [{ name: 'prefers-color-scheme', value: view.scheme }],
     });
     await new Promise((resolve) => setTimeout(resolve, 600));
-    const opened = await page.evaluate(() => {
-      const cards = globalThis.cardTest.find(document, 'details.tool');
-      for (const card of cards) if (!card.open) card.querySelector('summary').click();
-      return cards.map((card) => card.open);
+    await page.evaluate(() => {
+      for (const status of globalThis.cardTest.find(document, '[data-action="open-cluster"]'))
+        if (!status.hasAttribute('open')) status.click();
     });
-    assert.deepEqual(opened, [true, true]);
     await new Promise((resolve) => setTimeout(resolve, 300));
+    await page.evaluate(() => {
+      for (const toggle of globalThis.cardTest.find(document, '.run-toggle'))
+        if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const opened = await page.evaluate(() =>
+      globalThis.cardTest
+        .find(document, '.run-toggle')
+        .map((toggle) => toggle.getAttribute('aria-expanded'))
+    );
+    assert.deepEqual(opened, ['true', 'true', 'true', 'true']);
     for (const [part, block] of [
       ['top', 'start'],
       ['tail', 'end'],
+      ['exits', 'end'],
     ]) {
       await page.evaluate(
         ({ part, block }) => {
-          const cards = globalThis.cardTest.find(document, 'details.tool');
-          const target = part === 'top' ? cards[0] : cards[1].querySelector('ul.notes');
+          const steps = globalThis.cardTest.find(document, '.run-detail');
+          const target = {
+            top: steps[0],
+            tail: steps[1].querySelector('[data-note]'),
+            exits: steps[3],
+          }[part];
           target.scrollIntoView({ block });
           window.scrollTo(0, 0);
         },

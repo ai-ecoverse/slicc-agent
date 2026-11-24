@@ -7,6 +7,8 @@ import type {
   MessagePart,
   SystemMessage,
   ToolCall,
+  ToolExit,
+  ToolProgram,
   ToolStatus,
   Usage,
   UserMessage,
@@ -31,7 +33,7 @@ import { intentOf, withoutIntent } from '../intent/said.ts';
 import type { Ran } from '../kernel/trace.ts';
 import { type Lick, parseLick } from '../licks/lick.ts';
 import { entryLick, LICK_TOOLS, type LickDecision, lickDecisions } from '../licks/state.ts';
-import { ranFailures, ranMeta, ranOf, ranTitle, saidIntent } from '../ran/shown.ts';
+import { ranFailed, ranMeta, ranOf, ranTitle, saidIntent } from '../ran/shown.ts';
 import { FROM_KIND, type From } from '../scoops/from.ts';
 import type { SecretName } from '../secrets/names.ts';
 import { listedLine, SECRETS_KIND } from '../secrets/view.ts';
@@ -484,7 +486,6 @@ const count = (value: string | undefined): string => Number(value).toLocaleStrin
 const ends: Record<string, string> = { end: ' from the start', beginning: ' from the end' };
 
 const phrasings: [RegExp, (match: RegExpExecArray) => string][] = [
-  [/^Command exited with code (-?\d+)$/, (match) => `Exited with code ${match[1]}`],
   [/^Command timed out after (.+)$/, (match) => `Timed out after ${match[1]}`],
   [/^Command aborted$/, () => 'Aborted'],
   [/^Full output: (.+)$/, (match) => `Full output in ${match[1]}`],
@@ -495,11 +496,21 @@ const phrasings: [RegExp, (match: RegExpExecArray) => string][] = [
   ],
 ];
 
-function phrased(message: string): string {
-  const line = message
+const headline = (message: string): string =>
+  message
     .replace(/\n[\s\S]*$/, '')
     .trim()
     .replace(/\.$/, '');
+
+const EXITED = /^Command exited with code (-?\d+)$/;
+
+function exitedWith(diagnostic: Diagnostic): number | undefined {
+  const match = EXITED.exec(headline(diagnostic.message));
+  return match ? Number(match[1]) : undefined;
+}
+
+function phrased(message: string): string {
+  const line = headline(message);
   for (const [pattern, phrase] of phrasings) {
     const match = pattern.exec(line);
     if (match) return phrase(match);
@@ -516,12 +527,23 @@ type Said = { trusted: boolean; intent: boolean };
 const ranked = (notes: Note[]) =>
   notes.sort((a, b) => RANK.indexOf(a.severity) - RANK.indexOf(b.severity));
 
+function exitOf(code: number | undefined, ran: Ran | undefined): ToolExit | undefined {
+  const root = ran?.exit;
+  const signal =
+    root?.signal && (code === undefined || root.status === code) ? { signal: root.signal } : {};
+  if (code !== undefined) return { code, ...signal };
+  return root ? { code: root.status, ...signal } : undefined;
+}
+
 function traced(call: Card, ran: Ran, said: Said | undefined): void {
-  const known = new Set((call.notes ?? []).map((item) => item.text));
-  const failures = ranFailures(ran)
-    .filter((text) => !known.has(text))
-    .map((text): Note => ({ severity: 'error', text }));
-  if (failures.length) call.notes = ranked([...(call.notes ?? []), ...failures]);
+  const programs = ranFailed(ran).map(
+    (program): ToolProgram => ({
+      name: program.name,
+      code: program.status,
+      ...(program.signal ? { signal: program.signal } : {}),
+    })
+  );
+  if (programs.length) call.programs = programs;
   call.meta = [ranMeta(ran), call.meta].filter(Boolean).join(' · ');
   if (said?.intent) return;
   const intent = said?.trusted ? saidIntent(ran.intent) : '';
@@ -539,9 +561,14 @@ function settle(
   if (!call) return;
   const split = harness(result.content, data);
   call.output = textOf(split.content);
-  if (split.diagnostics.length) call.notes = ranked(split.diagnostics.map(note));
-  const ran = call.name === 'bash' ? ranOf(result.details) : undefined;
+  const code = split.diagnostics.map(exitedWith).find((item) => item !== undefined);
+  const notes = split.diagnostics.filter((item) => exitedWith(item) === undefined);
+  if (notes.length) call.notes = ranked(notes.map(note));
+  const bash = call.name === 'bash';
+  const ran = bash ? ranOf(result.details) : undefined;
   if (ran) traced(call, ran, said?.get(call.id));
+  const exit = exitOf(code ?? (bash && !result.isError ? 0 : undefined), ran);
+  if (exit) call.exit = exit;
   call.status = result.isError ? 'error' : 'done';
   const image = Array.isArray(result.content)
     ? (result.content as { type: string; data?: string; mimeType?: string }[]).find(
