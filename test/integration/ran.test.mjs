@@ -174,6 +174,7 @@ test('a bash call is titled by the programs its trace saw, with its exit and fai
     bash({ command: 'sleep 5 & job=$!; sleep 0.5; kill -9 $job; wait $job; echo after' }),
     bash({ command: 'sleep 5; echo never', timeout: 1 }),
     bash({ command: 'echo going; kill -TERM $$; echo never' }),
+    bash({ command: 'ls /nope; sleep 5', timeout: 1 }),
     answer('Done.'),
   ];
   await boot(page, steps);
@@ -211,6 +212,7 @@ test('a bash call is titled by the programs its trace saw, with its exit and fai
     killed,
     late,
     signalled,
+    outlived,
   ] = cards;
   assert.equal(shot.title, 'Running seq');
   assert.match(shot.meta, /^Ran seq · \d+\.\d s$/);
@@ -260,12 +262,19 @@ test('a bash call is titled by the programs its trace saw, with its exit and fai
     late.notes.map((item) => item.text),
     ['Timed out after 1 seconds']
   );
-  assert.deepEqual(late.exit, { code: 137, signal: 'SIGKILL' });
+  assert.equal(late.exit, null);
+  assert.deepEqual(late.programs, []);
   assert.equal(signalled.status, 'error');
   assert.equal(signalled.output.trim(), 'going');
   assert.deepEqual(signalled.exit, { code: 143, signal: 'SIGTERM' });
   assert.deepEqual(signalled.notes, []);
   assert.deepEqual(details[13].ran.exit, { status: 143, signal: 'SIGTERM' });
+  assert.deepEqual(
+    outlived.notes.map((item) => item.text),
+    ['Timed out after 1 seconds']
+  );
+  assert.equal(outlived.exit, null);
+  assert.deepEqual(outlived.programs, [{ name: 'ls', code: 2 }]);
   for (const detail of details) {
     assert.equal(typeof detail.ran.ms, 'number');
     assert.equal(detail.ran.dropped, undefined);
@@ -277,6 +286,30 @@ test('a bash call is titled by the programs its trace saw, with its exit and fai
     JSON.stringify(seen.inputs)
   );
   assert.deepEqual(seen.reloaded, cards);
+});
+
+test('a stopped bash call shows its abort note alone: no exit badge, and no program the abort killed', async (t) => {
+  const page = await chrome.page(t);
+  await boot(page, [bash({ command: 'echo started; sleep 30' }), answer('Done.')]);
+  const seen = await staged(page, 'a stopped bash call', async () => {
+    await window.agent.send(window.agent.active(), 'Go.');
+    await window.until(
+      () => window.cards()[0]?.status === 'running' && window.cards()[0].output.includes('started'),
+      'the running call'
+    );
+    await window.agent.stop(window.agent.active());
+    await window.until(
+      () => window.cards()[0]?.status !== 'running' && window.details().length,
+      'the stopped call'
+    );
+    return window.cards();
+  });
+  const [stopped] = seen;
+  assert.equal(stopped.status, 'error');
+  assert.equal(stopped.output.trim(), 'started');
+  assert.deepEqual(stopped.notes, [{ severity: 'error', text: 'Tool bash was aborted' }]);
+  assert.equal(stopped.exit, null);
+  assert.deepEqual(stopped.programs, []);
 });
 
 test('a background job that outlives its command is traced for 2 s after bash exits, the call does not wait for it to end, and a freeze and thaw show the same', async (t) => {
