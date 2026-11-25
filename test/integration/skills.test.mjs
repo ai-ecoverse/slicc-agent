@@ -70,14 +70,15 @@ test('boot lists the full bundled LinkedIn description without warn licks', asyn
   assert.deepEqual(seen.warnings, []);
 });
 
-test('bundled skills, roles, templates and the profile fixture retain their old descriptions', async (t) => {
+test('bundled skills keep their pinned text and write no fixed /tmp file, and the corpus keeps its old descriptions', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   const fixtures = corpus.filter((row) => !row.file.startsWith('packages/'));
+  const bundled = corpus.filter((row) => row.file.startsWith('packages/vfs-root/skills/'));
   const seen = await staged(
     page,
     'the frontmatter compatibility corpus',
-    async (fixtures) => {
+    async (fixtures, names) => {
       for (const fixture of fixtures) {
         let dir = await navigator.storage.getDirectory();
         for (const part of ['usr', 'share', 'skills', fixture.expected.fields.name])
@@ -109,8 +110,14 @@ test('bundled skills, roles, templates and the profile fixture retain their old 
         'the agent command'
       );
       const roles = await kernel.run(['bash', '-c', 'agent list --agents']);
+      const installed = {};
+      for (const name of names)
+        installed[name] = (
+          await kernel.run(['cat', `/var/lib/slicc/agent/skills/${name}/SKILL.md`])
+        ).stdout;
       const result = {
         commands: connection.commands.value,
+        installed,
         roles,
         warnings: agent
           .messages()
@@ -119,8 +126,14 @@ test('bundled skills, roles, templates and the profile fixture retain their old 
       await owner.release();
       return result;
     },
-    fixtures
+    fixtures,
+    bundled.map((row) => row.file.split('/').at(-2))
   );
+  for (const row of bundled) {
+    const text = seen.installed[row.file.split('/').at(-2)];
+    assert.equal(text, row.text, row.file);
+    assert.doesNotMatch(text, /(?:>|-o|--output|--filename|tee) ?\/tmp\//, row.file);
+  }
   assert.equal(seen.roles.status, 0);
   assert.doesNotMatch(seen.roles.stdout, /warning:/);
   for (const row of corpus) {
