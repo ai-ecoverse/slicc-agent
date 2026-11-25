@@ -43,7 +43,7 @@ Read pages with `snapshot`; use `eval <expression>` only for a value the snapsho
 
 ```bash
 curlwright -s --tab <id> https://app.example.com/api/me
-curlwright -o /tmp/items.json -w '%{http_code}\n' --tab <id> https://app.example.com/api/items
+d=$(mktemp -d); curlwright -o "$d/items.json" -w '%{http_code}\n' --tab <id> https://app.example.com/api/items && echo "$d/items.json"
 ```
 
 - **Which tab:** `--tab <id>`, else the current tab of your `playwright-cli` session, else the single open tab on the URL's origin. Anything else exits 2 and lists the choices; a tab on another origin is never picked for you. Open the app with `playwright-cli open` first if no tab is on it.
@@ -56,19 +56,20 @@ curlwright -o /tmp/items.json -w '%{http_code}\n' --tab <id> https://app.example
 
 Record a tab's network traffic to find the backend requests a page makes (then call them with `curlwright`), or when the user asks for a HAR. Not as a routine step. It needs slicc-cdp 1.41.0 or later: check with `playwright-cli har-start --help`, and if it's unknown, tell the user recording needs a newer slicc-cdp.
 
-`har-start` holds the recording in the foreground until its stdin ends or `har-stop` runs with the same `-s <session>` from the same directory. In `bash`, start it as a background job that keeps stdin open and writes its events to a file:
+`har-start` holds the recording in the foreground until its stdin ends or `har-stop` runs with the same `-s <session>` from the same working directory. Other cones share `/tmp`, so give the recording a directory of its own. In `bash`, start it as a background job that keeps stdin open and writes its events to a file:
 
 ```bash
-(while sleep 5; do echo || break; done) | playwright-cli -s har har-start --tab <id> --url-filter '**/api/**' /tmp/traffic.har > /tmp/har.log 2>&1 &
+d=$(mktemp -d); echo "$d"
+(while sleep 5; do echo || break; done) | playwright-cli -s har har-start --tab <id> --url-filter '**/api/**' "$d/traffic.har" > "$d/har.log" 2>&1 &
 ```
 
-Wait until `/tmp/har.log` has a line with `"event":"ready"` before you use the tab: earlier traffic isn't recorded. Then stop it from a later call, with the same `-s` and from the same directory. Always stop it when you're done, even if the task failed:
+Every `bash` call starts a new shell, so later calls don't have `$d`: use the directory `echo "$d"` printed. Wait until `"$d/har.log"` has a line with `"event":"ready"` before you use the tab: earlier traffic isn't recorded. Then stop it from a later call, with the same `-s` and from the same working directory. Always stop it when you're done, even if the task failed:
 
 ```bash
 playwright-cli -s har har-stop
 ```
 
-It prints JSON with the path and `recordingId`. "no HAR recording in progress" means the holder already ended: `/tmp/har.log` says why ("nonblocking stdin unavailable" means this shell can't hold it), and if it got as far as `ready`, what it recorded is in the file.
+It prints JSON with the path and `recordingId`. "no HAR recording in progress" means the holder already ended: `"$d/har.log"` says why ("nonblocking stdin unavailable" means this shell can't hold it), and if it got as far as `ready`, what it recorded is in `"$d/traffic.har"`.
 
 - `--url-filter <glob>` keeps only matching URLs. `--content omit` (the default) leaves bodies out; `--content embed` only when you need the bodies.
 - slicc 6's `record [url] --filter=<glob>` and `stop-recording [recordingId]` work too, held the same way: `record` opens a new tab and writes `/recordings/<recordingId>/recording.har`. The filter is a URL glob; a JavaScript filter is refused.
@@ -88,10 +89,10 @@ All agents (cones and scoops) share the browser's tabs, and the user's own tabs 
 ## Screenshots
 
 ```bash
-playwright-cli screenshot --tab <id> --max-width 1600 --filename /tmp/page.png
+d=$(mktemp -d); playwright-cli screenshot --tab <id> --max-width 1600 --filename "$d/page.png" && echo "$d/page.png"
 ```
 
-Then `read /tmp/page.png` to look at it; the screenshot also shows on the tool card in the chat. Take one when the layout or visuals matter, not after every step. `screenshot <ref>` captures one element.
+Then `read` the path it prints to look at it; the screenshot also shows on the tool card in the chat. Take one when the layout or visuals matter, not after every step. `screenshot <ref>` captures one element.
 
 ## What needs the user's yes first
 
