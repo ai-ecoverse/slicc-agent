@@ -74,6 +74,105 @@ test('a terminal runs agent through the production worker: a sync call, an async
   assert.ok(seen.commands.includes('skill:skill:licks'));
 });
 
+test('agent takes exactly one prompt: --prompt @<path> reads a file, - reads stdin, and two prompts are refused before a scoop starts', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const seen = await staged(page, 'agent takes exactly one prompt', async () => {
+    const { bootKernel } = await import('/kernel.js');
+    await import('/dist-test/page.js');
+    const kernel = await bootKernel();
+    const answers = ['From the brief.', 'From stdin.', 'Async from the brief.']
+      .map((answer) => `answer=${encodeURIComponent(answer)}`)
+      .join('&');
+    const owner = await startTracked({
+      worker: () => new Worker(`/dist-test/main-worker.js?${answers}`, { type: 'module' }),
+      kernel: { connect: () => kernel.connect() },
+    });
+    await owner.connect();
+    const { attachKernel } = await import('/node_modules/@ai-ecoverse/slicc-kernel/dist/index.js');
+    const terminal = await attachKernel(await kernel.connect());
+    const run = async (command) => {
+      const decoder = new TextDecoder();
+      let out = '';
+      const process = await terminal.spawn(['bash', '-c', command], {
+        cwd: '/home',
+        onStdout: (bytes) => {
+          out += decoder.decode(bytes);
+        },
+        onStderr: (bytes) => {
+          out += decoder.decode(bytes);
+        },
+      });
+      return { code: await process.exited, out };
+    };
+    const text = async (path) => {
+      const read = await terminal.fs.readFile(path);
+      return typeof read === 'string' ? read : new TextDecoder().decode(read);
+    };
+    await when(
+      [files(kernel, ['/usr/local/bin'])],
+      () => terminal.fs.exists('/usr/local/bin/agent'),
+      'the agent command'
+    );
+    await terminal.fs.writeFile('/home/brief.md', 'Build the cache.\n');
+    const both = await run('subagent spawn --name both --file brief.md --prompt "Do the brief."');
+    const twice = await run('agent --name twice --prompt One. --prompt Two.');
+    const missing = await run('agent --name missing --prompt @nowhere.md');
+    const empty = await run('subagent spawn --name empty --prompt " "');
+    const none = await run('agent --name none');
+    const extra = await run('echo Hi | agent --name extra - more');
+    const listed = await run('agent list');
+    const fromFile = await run('agent --name brief --prompt @brief.md');
+    const fromStdin = await run('echo "Say it from stdin." | agent --name piped -');
+    const spawned = await run('subagent spawn --name helper --prompt @/home/brief.md');
+    const waited = await run('agent wait helper --timeout 20');
+    const archives = {
+      brief: await text('/tmp/agent-sessions/brief.md'),
+      piped: await text('/tmp/agent-sessions/piped.md'),
+    };
+    await owner.release();
+    return {
+      both,
+      twice,
+      missing,
+      empty,
+      none,
+      extra,
+      listed,
+      fromFile,
+      fromStdin,
+      spawned,
+      waited,
+      archives,
+    };
+  });
+  assert.equal(seen.both.code, 2);
+  assert.match(seen.both.out, /give the scoop one prompt: .*not --file and --prompt/);
+  assert.equal(seen.twice.code, 2);
+  assert.match(seen.twice.out, /not --prompt and --prompt/);
+  assert.equal(seen.missing.code, 1);
+  assert.match(
+    seen.missing.out,
+    /can't read nowhere\.md: .*--prompt @<path> reads the prompt from a file/
+  );
+  assert.equal(seen.empty.code, 2);
+  assert.match(seen.empty.out, /--async needs a prompt: --prompt <text>, --prompt @<path>/);
+  assert.equal(seen.none.code, 2);
+  assert.match(seen.none.out, /agent needs a prompt: .*, or <cwd> <allowed-commands> <prompt>/);
+  assert.equal(seen.extra.code, 2);
+  assert.match(seen.extra.out, /unexpected argument more/);
+  assert.deepEqual(seen.listed, { code: 0, out: 'no scoops\n' });
+  assert.deepEqual(seen.fromFile, { code: 0, out: 'From the brief.\n' });
+  assert.match(
+    seen.archives.brief,
+    /## Request\n\nBuild the cache\.\n+## Answer\n\nFrom the brief\./
+  );
+  assert.deepEqual(seen.fromStdin, { code: 0, out: 'From stdin.\n' });
+  assert.match(seen.archives.piped, /## Request\n\nSay it from stdin\.\n+## Answer/);
+  assert.deepEqual(seen.spawned, { code: 0, out: 'helper\n' });
+  assert.match(seen.waited.out, /Async from the brief\./);
+});
+
 test('a pnpm-linked package in /opt/user/node_modules adds its skills, and one that duplicates a system package is ignored', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');

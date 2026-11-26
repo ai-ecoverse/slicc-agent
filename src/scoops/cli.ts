@@ -49,8 +49,8 @@ export const THINKING = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhi
 const EFFORT: Record<string, string> = { low: 'low', medium: 'medium', high: 'high', max: 'xhigh' };
 
 export const USAGE = `usage:
-  agent [options] (--prompt <text> | --file <path> | -)...          run a scoop, wait, print its answer
-  agent --async [options] (--prompt <text> | --file <path> | -)...  start a scoop, print its handle
+  agent [options] <prompt>                                        run a scoop, wait, print its answer
+  agent --async [options] <prompt>                                start a scoop, print its handle
   agent <cwd> <allowed-commands> <prompt>                         the same as a synchronous run, in v6's form
   agent list [--agents | --cones] | status <handle> | rename <handle> <name>
   agent send <handle> [--follow-up] (<message> | --file <path> | -)
@@ -66,6 +66,9 @@ options:
   --name <name>  --agent <role>  --model <provider/model>  --thinking <level> | --effort <low|medium|high|max>
   --tools <a,b>  --read-only <path,path>  --system-prompt <text> | --system-prompt-file <path>
   --background-after <seconds>  --persist-session | --no-persist-session
+
+<prompt> is exactly one of --prompt <text>, --prompt @<path> (the prompt is that file), --file <path>
+(the same) or - (stdin). A scoop gets one prompt: put the whole request in it.
 
 A cone may message its own cone and cones whose user shares a group with it (not root, sudo or users);
 root may message any cone. Any other cone needs sudo -u <its user> agent send <its user> …, which the
@@ -272,20 +275,56 @@ export async function readText(
   return read.value;
 }
 
-export async function prompts(
+export const PROMPT_FORMS = '--prompt <text>, --prompt @<path>, --file <path> or -';
+
+function promptSources(argv: readonly string[]): [string, string][] {
+  const found: [string, string][] = [];
+  for (let at = 0; at < argv.length; at++) {
+    const arg = argv[at];
+    if (arg === '--prompt' || arg === '--file') found.push([arg, argv[++at] ?? '']);
+    else if (arg === '-') found.push(['-', '']);
+  }
+  return found;
+}
+
+async function promptFile(
+  deps: Deps,
+  path: string,
+  request: Request,
+  context: Context
+): Promise<string> {
+  if (!path) throw new Error('--prompt @ needs a path, such as --prompt @brief.md');
+  try {
+    return await readText(deps, path, request, context);
+  } catch (error) {
+    throw new Error(
+      `${(error as Error).message}; --prompt @<path> reads the prompt from a file, so pass text that starts with @ on stdin with -`
+    );
+  }
+}
+
+export async function promptOf(
   deps: Deps,
   argv: readonly string[],
   request: Request,
   context: Context
-) {
-  const out: string[] = [];
-  for (let at = 0; at < argv.length; at++) {
-    const arg = argv[at];
-    if (arg === '--prompt') out.push(argv[++at] ?? '');
-    else if (arg === '--file') out.push(await readText(deps, argv[++at] ?? '', request, context));
-    else if (arg === '-') out.push(request.stdin);
-  }
-  return out.filter((prompt) => prompt.trim());
+): Promise<string | Answer> {
+  const found = promptSources(argv);
+  if (found.length > 1)
+    return fail(
+      `give the scoop one prompt: ${PROMPT_FORMS}, not ${found.map(([flag]) => flag).join(' and ')}; put the whole request in it, or in one file with --prompt @<path>`,
+      2
+    );
+  const [flag, value] = found[0] ?? ['', ''];
+  const text =
+    flag === '-'
+      ? request.stdin
+      : flag === '--file'
+        ? await readText(deps, value, request, context)
+        : value.startsWith('@')
+          ? await promptFile(deps, value.slice(1), request, context)
+          : value;
+  return text.trim() ? text : '';
 }
 
 export type Choice = {
@@ -386,7 +425,7 @@ export function unsupported(argv: readonly string[]): Answer | undefined {
   return found ? fail(`${found} is not supported in SLICC yet`, 2) : undefined;
 }
 
-async function spawnAsync(
+export async function spawnAsync(
   deps: Deps,
   request: Request,
   who: Caller,
@@ -399,8 +438,9 @@ async function spawnAsync(
   const parsed = flags(argv, ASYNC_VALUES);
   const unknown = [...parsed.switches].find((flag) => !ASYNC_SWITCHES.has(flag));
   if (unknown) return fail(`unknown option ${unknown}`, 2);
-  const given = await prompts(deps, argv, request, context);
-  if (!given.length) return fail('--async needs at least one --prompt, --file or -', 2);
+  const given = await promptOf(deps, argv, request, context);
+  if (isAnswer(given)) return given;
+  if (!given) return fail(`--async needs a prompt: ${PROMPT_FORMS}`, 2);
   const chosen = choices(parsed);
   if (isAnswer(chosen)) return chosen;
   const found = await role(deps, parsed);
@@ -415,7 +455,7 @@ async function spawnAsync(
       ...(chosen.model ? { model: chosen.model } : {}),
       ...(chosen.thinking ? { thinking: chosen.thinking as never } : {}),
       ...(chosen.tools ? { tools: chosen.tools } : {}),
-      prompts: given,
+      prompts: [given],
       origin: request.cwd,
       fromAgent: who.fromAgent,
       request: request.id,
