@@ -11,8 +11,10 @@ The `agent` command starts scoops: helper agents with their own conversation and
 
 ```sh
 agent --name check --prompt "Read /home/app/src/config.ts and list every setting with its default"
-agent --agent reviewer --file /tmp/diff.txt --prompt "Review this diff"
+agent --agent reviewer --prompt @review.md
 ```
+
+Give a scoop exactly one prompt: `--prompt <text>`, `--prompt @<path>` (the prompt is that file, which you read, so the scoop needs no access to it) or `-` (stdin). Two prompts are refused, so put the whole request in one: a brief file that says what to do and names the files to read.
 
 The command blocks, prints the scoop's final answer on stdout and exits 0, or exits non-zero with the reason on stderr. Use it like any command, in pipes and scripts. Afterwards the scoop is stopped, its folder is removed, and its transcript is archived in `/tmp/agent-sessions/<handle>.md` (`--persist-session` keeps it in `/home/sessions/`, `--no-persist-session` keeps none).
 

@@ -13,7 +13,8 @@ import {
   isAnswer,
   last,
   MAX_DEPTH,
-  prompts,
+  PROMPT_FORMS,
+  promptOf,
   readText,
   role,
   taintsOf,
@@ -235,20 +236,23 @@ async function plan(
   parsed: ReturnType<typeof flags>,
   context: Context
 ) {
-  const given = await prompts(deps, request.argv, request, context);
+  const prompt = await promptOf(deps, request.argv, request, context);
+  if (isAnswer(prompt)) return prompt;
+  const given = prompt ? [prompt] : [];
+  const rest = parsed.rest.filter((arg) => arg !== '-');
   let workdir: string | undefined;
   const notes: string[] = [];
-  if (!given.length && parsed.rest.length === 3) {
-    const [cwd, allowed, prompt] = parsed.rest as [string, string, string];
+  if (!given.length && rest.length === 3 && rest.length === parsed.rest.length) {
+    const [cwd, allowed, text] = parsed.rest as [string, string, string];
     workdir = resolve(request.cwd, cwd);
     if (allowed && allowed !== '*')
       notes.push(
         `Use only these commands in bash: ${allowed}. This is not enforced; keep to it anyway.`
       );
-    given.push(prompt);
-  } else if (parsed.rest.length) return fail(`unexpected argument ${parsed.rest[0]}`, 2);
+    given.push(text);
+  } else if (rest.length) return fail(`unexpected argument ${rest[0]}`, 2);
   if (!given.length)
-    return fail('agent needs --prompt, --file, - or <cwd> <allowed-commands> <prompt>', 2);
+    return fail(`agent needs a prompt: ${PROMPT_FORMS}, or <cwd> <allowed-commands> <prompt>`, 2);
   const systemFile = last(parsed, '--system-prompt-file');
   const system =
     last(parsed, '--system-prompt') ??
