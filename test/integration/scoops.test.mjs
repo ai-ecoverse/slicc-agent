@@ -494,3 +494,74 @@ test('a request queued behind a busy scoop shows who sent it once it is placed, 
   assert.equal(seen.from, 'sliccy');
   assert.equal(seen.waits, 1);
 });
+
+test('a request steered into a busy scoop shares its answer, and the cone gets that answer once', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const command = 'subagent spawn --name helper --prompt First. && agent send helper Second.';
+  const steps = [
+    ...[
+      { tool: { name: 'bash', args: { command } } },
+      { answer: 'Started.' },
+      { answer: 'Noted.' },
+      { answer: 'Spare.' },
+      { answer: 'Spare.' },
+    ].map((step) => `step=${encodeURIComponent(JSON.stringify(step))}`),
+    ...[
+      { gate: 'first', tool: { name: 'bash', args: { command: 'true' } } },
+      { answer: 'Both done.' },
+    ].map((step) => `scoop-step=${encodeURIComponent(JSON.stringify(step))}`),
+  ].join('&');
+  const seen = await staged(
+    page,
+    'a request steered into a busy scoop',
+    async (steps) => {
+      const { bootKernel } = await import('/kernel.js');
+      await import('/dist-test/page.js');
+      const kernel = await bootKernel();
+      let worker;
+      const owner = await startTracked({
+        worker: () => {
+          worker = new Worker(`/dist-test/main-worker.js?${steps}`, { type: 'module' });
+          return worker;
+        },
+        kernel: { connect: () => kernel.connect() },
+      });
+      const connection = await owner.connect();
+      const model = createAgentModel(connection, { storage: localStorage });
+      const agent = model.agent;
+      await agent.ready();
+      await when(
+        [files(kernel, ['/usr/local/bin'])],
+        async () => (await kernel.run(['test', '-x', '/usr/local/bin/agent'])).status === 0,
+        'the agent command'
+      );
+      stage('the busy scoop');
+      const started = await connection.prompt('Start a helper and send it more.');
+      worker.postMessage({ gate: 'first' });
+      stage('both requests answered');
+      const waited = await kernel.run(['bash', '-c', 'agent wait helper --timeout 30']);
+      stage('the cone settled');
+      const sources = agentSources(connection, model);
+      const notes = () =>
+        agent
+          .messages()
+          .filter((message) => message.role === 'lick' && message.channel === 'scoop-notify');
+      await when(
+        sources,
+        () => notes().length && !agent.busy(agent.active()),
+        'the report lick, handled'
+      );
+      const licks = notes().map(({ text, count, body }) => ({ text, count, body }));
+      await owner.release();
+      return { started, waited: waited.stdout, licks };
+    },
+    steps
+  );
+  assert.equal(seen.started, 'Started.');
+  assert.match(seen.waited, /Both done\./);
+  assert.equal(seen.licks.length, 1, JSON.stringify(seen.licks));
+  assert.equal(seen.licks[0].count, undefined);
+  assert.equal(seen.licks[0].text, '[scoop helper (scoop) completed]');
+  assert.match(seen.licks[0].body, /Both done\./);
+});
