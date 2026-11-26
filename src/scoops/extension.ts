@@ -277,7 +277,7 @@ export function scoopTasks(lookup: Lookup) {
   };
   type ReporterState =
     | { phase: 'deliver'; noted?: boolean }
-    | { phase: 'report'; text: string; failed: string | null };
+    | { phase: 'report'; text: string; failed: string | null; answer?: number };
 
   const reporter = defineTask<ReporterInput, ReporterState, ReportResult>({
     name: 'slicc.scoop-reporter',
@@ -343,6 +343,7 @@ export function scoopTasks(lookup: Lookup) {
               phase: 'report',
               text: answerText(answer?.model?.[0]?.content),
               failed: null,
+              answer: Number(settled.answer),
             },
           };
         }, context);
@@ -352,7 +353,7 @@ export function scoopTasks(lookup: Lookup) {
         const { agents, licks, layout = LEGACY } = host;
         const id = task.input.scoop;
         const record = agents.state().scoops[id];
-        const { text, failed } = task.state.checkpoint;
+        const { text, failed, answer } = task.state.checkpoint;
         const path =
           record && text ? `${layout.reports(record.folder, record.cone)}/${task.id}.md` : null;
         if (path)
@@ -375,7 +376,10 @@ export function scoopTasks(lookup: Lookup) {
               [id],
               {
                 ...reportLick(record, id, { text, failed, path }, route),
-                eventId: `report:${task.id}`,
+                eventId:
+                  answer === undefined
+                    ? `report:${task.id}`
+                    : `answer:${answer}|${route.target ?? `cone:${record.cone}`}`,
               },
               context
             ),
