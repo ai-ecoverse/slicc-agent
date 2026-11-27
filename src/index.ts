@@ -152,23 +152,6 @@ export {
   type UserSpec,
   userClients,
 } from './kernel/users.ts';
-export type {
-  BiosMessage,
-  CancelMessage,
-  HelloMessage,
-  ProposalMessage,
-  WithdrawnMessage,
-  WithdrawReason,
-  WorkerMessage,
-} from './lease/index.ts';
-export {
-  acceptWorkerMessage,
-  EPOCH_HEX,
-  LEASE_V,
-  parseBiosMessage,
-  parseWorkerMessage,
-  WITHDRAW_REASONS,
-} from './lease/index.ts';
 export {
   type AgentWorkerOptions,
   type AgentWorkerScope,
@@ -186,7 +169,6 @@ export {
   type AgentOwner,
   type AgentWorker,
   type KernelSource,
-  type LeaseSource,
   type OwnerOptions,
   startAgent,
 } from './owner.ts';

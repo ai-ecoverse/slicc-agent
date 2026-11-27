@@ -1,15 +1,21 @@
 import type { Extension, Harness, Registry } from '@earendil-works/pi-durable';
 import type { Agents } from '../agents.ts';
-import { holdPublished, type Lease, type LeaseHoldScope, setupLease } from './index.ts';
+import {
+  type HoldLeaseAt,
+  holdPublished,
+  type Lease,
+  type LeaseHoldScope,
+  setupLease,
+} from './index.ts';
 
 export function createWorkerLease(
   port: MessagePort | undefined,
   scope: LeaseHoldScope,
-  holdLease?: 'published'
+  holdLease?: HoldLeaseAt
 ): Lease | undefined {
   if (!port) return undefined;
   const hold = holdPublished(scope, holdLease);
-  return setupLease({ port, ...(hold ? { hold } : {}) });
+  return setupLease({ port, ...(hold ? { hold, holdAt: holdLease } : {}) });
 }
 
 export function installWorkerLease(

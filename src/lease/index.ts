@@ -52,11 +52,13 @@ export type LeaseHoldScope = {
   addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
 };
 
+export type HoldLeaseAt = 'published' | 'reserve';
+
 export function holdPublished(
   scope: LeaseHoldScope,
-  wanted: 'published' | undefined
+  wanted: HoldLeaseAt | undefined
 ): LeaseHold | undefined {
-  if (wanted !== 'published') return undefined;
+  if (wanted !== 'published' && wanted !== 'reserve') return undefined;
   let waiting = Promise.withResolvers<void>();
   scope.addEventListener('message', ({ data }) => {
     if (!(data as { releaseLease?: boolean } | null)?.releaseLease) return;
@@ -70,6 +72,7 @@ export function holdPublished(
 export type LeaseOptions = {
   port: LeasePort;
   hold?: LeaseHold;
+  holdAt?: HoldLeaseAt;
   clock?: Pick<Clock, 'now' | 'setTimer'>;
 };
 
@@ -95,7 +98,7 @@ export function setupLease(options: LeaseOptions): Lease {
     runtime: () => runtime,
     harness: () => attached?.harness,
     now,
-    ...(options.hold ? { hold: options.hold } : {}),
+    ...(options.hold ? { hold: options.hold, holdAt: options.holdAt ?? 'published' } : {}),
   };
   return {
     extension: leaseExtension(host),

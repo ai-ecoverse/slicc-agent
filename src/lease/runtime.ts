@@ -2,7 +2,6 @@ import type { Context } from '@earendil-works/chord/context';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ConversationId, Harness } from '@earendil-works/pi-durable';
 import { type Agents, AgentsDoc, type AgentsState } from '../agents.ts';
-import { frozenTarget } from '../freezer/index.ts';
 import { gatedRun, runTaints } from '../guests/guard.ts';
 import { GuestsDoc, liveSeat, type SeatRecord } from '../guests/seats.ts';
 import { whoIs } from '../memory/prompt.ts';
@@ -11,11 +10,12 @@ import {
   newEpoch,
   type ProposalMessage,
   parseBiosMessage,
+  TTL_MS,
   type WithdrawnMessage,
   type WithdrawReason,
 } from './protocol.ts';
 
-export const TTL_MS = 5 * 60 * 1000;
+export { TTL_MS };
 export const HOUR_MS = 60 * 60 * 1000;
 export const HOURLY_CAP = 6;
 
@@ -25,6 +25,7 @@ export type OpenProposal = {
   conversationId: number;
   at: number;
   expiresAt: number;
+  published: boolean;
   clear: () => void;
 };
 
@@ -37,21 +38,18 @@ export type LeasePort = {
 
 export type LeaseRuntime = {
   readonly epoch: string;
+  readonly life: string;
   readonly open: boolean;
   waiting(conversationId: number): boolean;
+  reserved(coneId: string): boolean;
   reserve(
     coneId: string,
     conversationId: number,
     at: number
   ): { proposal: number } | { refuse: string };
-  publish(coneId: string, url: string, reason: string): void;
-  propose(
-    coneId: string,
-    conversationId: number,
-    url: string,
-    reason: string,
-    at: number
-  ): { proposal: number } | { refuse: string };
+  publish(coneId: string, url: string, reason: string): boolean;
+  revalidate(state: Readonly<AgentsState>, seats: Record<string, SeatRecord>, now: number): void;
+  abandon(coneId: string): void;
   withdrawCone(coneId: string, reason: WithdrawReason): void;
   withdrawConversation(conversationId: number, reason: WithdrawReason): void;
   close(): void;
@@ -85,14 +83,13 @@ export function coneEligible(
     if (cold) return { refuse: REFUSALS.frozen };
     return { refuse: REFUSALS.gone };
   }
-  if (!state.cones[who.id]) return { refuse: REFUSALS.gone };
-  if (frozenTarget(state, `cone:${who.id}`)) return { refuse: REFUSALS.frozen };
   if (liveSeatsOnCone(seats, who.id, now)) return { refuse: REFUSALS.seat };
   return { coneId: who.id };
 }
 
 export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
   const epoch = newEpoch();
+  const life = newEpoch();
   const open = new Map<string, OpenProposal>();
   const byProposal = new Map<number, string>();
   const hourly = new Map<string, number[]>();
@@ -118,12 +115,16 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
     held.clear();
     open.delete(coneId);
     byProposal.delete(held.proposal);
+    if (!held.published) {
+      const times = (hourly.get(coneId) ?? []).filter((when) => when !== held.at);
+      hourly.set(coneId, times);
+    }
     return held;
   };
 
   const withdraw = (coneId: string, reason: WithdrawReason) => {
     const held = forget(coneId);
-    if (!held) return;
+    if (!held?.published) return;
     send({ v: 1, type: 'withdrawn', epoch, proposal: held.proposal, reason });
   };
 
@@ -147,12 +148,18 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
     get epoch() {
       return epoch;
     },
+    get life() {
+      return life;
+    },
     get open() {
       return alive;
     },
     waiting(conversationId) {
       for (const held of open.values()) if (held.conversationId === conversationId) return true;
       return false;
+    },
+    reserved(coneId) {
+      return open.has(coneId);
     },
     reserve(coneId, conversationId, at) {
       if (!alive) return { refuse: REFUSALS.unavailable };
@@ -165,7 +172,15 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
         () => withdraw(coneId, 'expired'),
         Math.max(0, expiresAt - host.now())
       );
-      open.set(coneId, { proposal, coneId, conversationId, at, expiresAt, clear });
+      open.set(coneId, {
+        proposal,
+        coneId,
+        conversationId,
+        at,
+        expiresAt,
+        published: false,
+        clear,
+      });
       byProposal.set(proposal, coneId);
       times.push(at);
       hourly.set(coneId, times);
@@ -173,7 +188,7 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
     },
     publish(coneId, url, reason) {
       const held = open.get(coneId);
-      if (!held || !alive) return;
+      if (!held || !alive || held.published) return false;
       send({
         v: 1,
         type: 'proposal',
@@ -185,12 +200,23 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
         at: held.at,
         expiresAt: held.expiresAt,
       });
+      if (!alive) return false;
+      held.published = true;
+      return true;
     },
-    propose(coneId, conversationId, url, reason, at) {
-      const reserved = this.reserve(coneId, conversationId, at);
-      if ('refuse' in reserved) return reserved;
-      this.publish(coneId, url, reason);
-      return reserved;
+    revalidate(state, seats, now) {
+      for (const [coneId, held] of [...open]) {
+        const cone = state.cones[coneId];
+        if (
+          !cone ||
+          cone.conversation !== held.conversationId ||
+          liveSeatsOnCone(seats, coneId, now)
+        )
+          withdraw(coneId, 'stale');
+      }
+    },
+    abandon(coneId) {
+      forget(coneId);
     },
     withdrawCone(coneId, reason) {
       withdraw(coneId, reason);
@@ -223,57 +249,46 @@ export function watchLease(
 ): () => void {
   const agents = host.agents();
   if (!agents) return () => undefined;
-  let prior = snapshot(agents.state());
-  const react = (state: Readonly<AgentsState>) => {
-    const next = snapshot(state);
-    for (const [coneId, conversationId] of prior.cones) {
-      if (!next.cones.has(coneId)) {
-        runtime.withdrawCone(coneId, 'stale');
-        continue;
-      }
-      if (next.cones.get(coneId) !== conversationId) runtime.withdrawCone(coneId, 'stale');
-    }
-    for (const coneId of next.frozen) runtime.withdrawCone(coneId, 'stale');
-    prior = next;
+  let seats: Record<string, SeatRecord> = {};
+  let stopped = false;
+  const react = () => {
+    if (stopped) return;
+    const state = host.agents()?.state();
+    if (!state) return;
+    runtime.revalidate(state, seats, host.now());
   };
-  const off = agents.onChange(react);
+  const off = agents.onChange(() => {
+    react();
+  });
   const offCone = agents.onCone(() => {
-    react(agents.state());
+    react();
   });
   let seatsOff: () => void = () => undefined;
   const harness = host.harness();
   if (harness)
     void harness.watchDoc(GuestsDoc, BACKGROUND_CONTEXT).then((watch) => {
-      if (!watch) return;
-      const react = () => {
-        const at = host.now();
-        const seats = watch.value.seats;
-        const state = host.agents()?.state();
-        if (!state) return;
-        for (const coneId of Object.keys(state.cones))
-          if (liveSeatsOnCone(seats, coneId, at)) runtime.withdrawCone(coneId, 'stale');
+      if (!watch || stopped) {
+        if (watch && stopped) void watch.stop();
+        return;
+      }
+      const onSeats = () => {
+        if (stopped) return;
+        seats = watch.value.seats;
+        react();
       };
       watch.start(async () => {
-        react();
+        onSeats();
       });
-      react();
+      onSeats();
       seatsOff = () => {
         void watch.stop();
       };
     });
   return () => {
+    stopped = true;
     off();
     offCone();
     seatsOff();
-  };
-}
-
-function snapshot(state: Readonly<AgentsState>) {
-  return {
-    cones: new Map(
-      Object.entries(state.cones).map(([id, cone]) => [id, cone.conversation] as const)
-    ),
-    frozen: new Set(Object.values(state.frozen ?? {}).map((record) => record.cone)),
   };
 }
 
@@ -288,10 +303,13 @@ export async function eligibility(
   },
   context: Context,
   runtime: LeaseRuntime | undefined,
-  now: number
+  now: number,
+  harness: Harness | undefined
 ): Promise<{ coneId: string; conversationId: number } | { refuse: string }> {
   if (!runtime?.open) return { refuse: REFUSALS.unavailable };
   if (await gatedRun(api, context)) return { refuse: REFUSALS.gated };
+  if (harness && (await taintedConversation(harness, api.conversationId, context)))
+    return { refuse: REFUSALS.gated };
   const state = await api.snapshot(AgentsDoc, context);
   if (!state) return { refuse: REFUSALS.gone };
   const seats = (await api.snapshot(GuestsDoc, context))?.seats ?? {};

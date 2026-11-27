@@ -144,7 +144,7 @@ export interface AgentWorkerOptions {
 }
 
 type WorkerStartOptions = AgentWorkerOptions & {
-  holdLease?: 'published';
+  holdLease?: 'published' | 'reserve';
 };
 
 export function usersOf(
@@ -573,12 +573,7 @@ export async function start(
   vault: Vault
 ): Promise<AgentHost> {
   const serverId = crypto.randomUUID();
-  const portsReady = await ports;
-  const { client, users, home, at, wiped, stored } = await attached(
-    Promise.resolve(portsReady),
-    options,
-    serverId
-  );
+  const { client, users, home, at, wiped, stored } = await attached(ports, options, serverId);
   const ready = await prepare(scope, { client, home, vault, stored }, options);
   const { names, native, transport, facts, models, registry, records, endpoints } = ready;
   const memory = setupMemory(registry);
@@ -587,7 +582,7 @@ export async function start(
   const chosen = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   const codemode = chosen.tools;
   const intents = await installCoding(registry, coding, codemode, chosen, client, at.agentDir);
-  const lease = bootLease(scope, portsReady.lease, options.holdLease, registry);
+  const lease = bootLease(scope, (await ports).lease, options.holdLease, registry);
   const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);

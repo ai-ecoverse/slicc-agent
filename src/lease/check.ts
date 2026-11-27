@@ -1,6 +1,8 @@
 const MAX_URL_BYTES = 2048;
 const MAX_REASON_BYTES = 256;
-const FORBIDDEN = /[\p{Cc}\p{Cf}]/u;
+const URL_CHARS = /^[\x21-\x7e]+$/;
+const REASON_CHARS =
+  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]|\u034F|\u115F|\u1160|\u3164|\uFFA0|[\uFE00-\uFE0F]|[\u{E0100}-\u{E01EF}]/u;
 const encoder = new TextEncoder();
 
 export const REFUSALS = {
@@ -30,7 +32,7 @@ export function sentText(proposal: number): string {
 
 export function checkUrl(raw: string): string | undefined {
   if (encoder.encode(raw).length > MAX_URL_BYTES) return REFUSALS.urlLong;
-  if (FORBIDDEN.test(raw)) return REFUSALS.urlChars;
+  if (!URL_CHARS.test(raw) || raw.includes('\\')) return REFUSALS.urlChars;
   if (raw.includes('?')) return REFUSALS.urlQuery;
   if (raw.includes('#')) return REFUSALS.urlFragment;
   let url: URL;
@@ -48,6 +50,6 @@ export function checkUrl(raw: string): string | undefined {
 
 export function checkReason(raw: string): string | undefined {
   if (encoder.encode(raw).length > MAX_REASON_BYTES) return REFUSALS.reasonLong;
-  if (FORBIDDEN.test(raw)) return REFUSALS.reasonChars;
+  if (REASON_CHARS.test(raw)) return REFUSALS.reasonChars;
   return undefined;
 }

@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { SliccKernelEnv, startAgent } from '../../../src/index.ts';
 import {
+  acceptWorkerMessage,
   bridgePort,
   connectAgent,
   connectGuest,
@@ -25,6 +26,10 @@ globalThis.linkEndpoint = linkEndpoint;
 globalThis.fakeSealed = fakeSealed;
 globalThis.openRawLink = openRawLink;
 globalThis.partText = partText;
+globalThis.acceptWorkerMessage = acceptWorkerMessage;
+
+export { acceptWorkerMessage };
+
 let stages = 0;
 globalThis.stage = (what) => {
   stages += 1;

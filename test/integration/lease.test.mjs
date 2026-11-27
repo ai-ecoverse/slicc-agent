@@ -17,8 +17,14 @@ const QUERY = "That URL can't include a query.";
 const SCOOP = "Proposals only work in a cone's current conversation.";
 const SEAT = 'A guest seat is open on this cone.';
 const GATED = "This run can't propose a browser lease.";
+const UNAVAILABLE = "Proposals aren't available here.";
 const PROMPT =
   'lease_propose asks the owner to let a browser job read one page; it only proposes, returns no page content and reports no status.';
+const KEYS = {
+  hello: ['epoch', 'type', 'v'],
+  proposal: ['agentId', 'at', 'epoch', 'expiresAt', 'proposal', 'reason', 'type', 'url', 'v'],
+  withdrawn: ['epoch', 'proposal', 'reason', 'type', 'v'],
+};
 
 const helpers = () => {
   globalThis.SENT =
@@ -30,10 +36,16 @@ const helpers = () => {
   globalThis.SCOOP = "Proposals only work in a cone's current conversation.";
   globalThis.SEAT = 'A guest seat is open on this cone.';
   globalThis.GATED = "This run can't propose a browser lease.";
+  globalThis.UNAVAILABLE = "Proposals aren't available here.";
   globalThis.propose = (url, reason) => ({
     tool: { name: 'lease_propose', args: { url, reason } },
   });
+  globalThis.gatedPropose = (url, reason, gate) => ({
+    gate,
+    tool: { name: 'lease_propose', args: { url, reason } },
+  });
   globalThis.answer = (text) => ({ answer: text });
+  globalThis.bash = (command) => ({ tool: { name: 'bash', args: { command } } });
   window.bootLease = async ({
     steps: list = [],
     later = [],
@@ -46,11 +58,11 @@ const helpers = () => {
     scoopSteps = [],
   } = {}) => {
     const { bootKernel } = await import('/kernel.js');
-    await import('/dist-test/page.js');
+    const page = await import('/dist-test/page.js');
     const kernel = await bootKernel();
     let lives = 0;
     let worker;
-    const bios = { messages: [], epoch: null };
+    const bios = { messages: [], epoch: null, raw: [] };
     const workerFile = clock ? 'clock-main-worker.js' : 'main-worker.js';
     const url = (which) =>
       `/dist-test/${workerFile}?${new URLSearchParams([
@@ -73,10 +85,14 @@ const helpers = () => {
               v: leaseV,
               connect: () => {
                 const { port1, port2 } = new MessageChannel();
+                bios.epoch = null;
                 port1.start();
                 port1.onmessage = ({ data }) => {
-                  bios.messages.push(data);
-                  if (data?.type === 'hello') bios.epoch = data.epoch;
+                  bios.raw.push(data);
+                  const message = page.acceptWorkerMessage(data, bios.epoch ?? undefined);
+                  if (!message) return;
+                  if (message.type === 'hello') bios.epoch = message.epoch;
+                  bios.messages.push(message);
                 };
                 bios.port = port1;
                 return port2;
@@ -213,7 +229,7 @@ test('shipped agent-worker entry ignores hold-lease and releaseLease', () => {
   assert.match(shipped, /runAgentWorker\(globalThis as unknown as AgentWorkerScope\);/);
   assert.doesNotMatch(shipped, /holdLease|hold-lease|releaseLease/);
   assert.match(testWorker, /hold-lease/);
-  assert.match(testWorker, /holdLease: 'published'/);
+  assert.match(testWorker, /holdLease: params\.get\('hold-lease'\)/);
 });
 
 test('lease_propose sends a proposal and refuses a second open one', async (t) => {
@@ -239,6 +255,7 @@ test('lease_propose sends a proposal and refuses a second open one', async (t) =
     const out = {
       results: r.results(),
       bios: r.bios.messages.map((m) => ({ type: m.type, proposal: m.proposal, url: m.url })),
+      keys: r.bios.messages.map((m) => ({ type: m.type, keys: Object.keys(m).sort() })),
       epoch: r.bios.epoch,
     };
     await r.owner.release();
@@ -250,6 +267,9 @@ test('lease_propose sends a proposal and refuses a second open one', async (t) =
   assert.ok(!seen.results[0].includes(seen.epoch));
   assert.equal(seen.bios.filter((m) => m.type === 'proposal').length, 1);
   assert.equal(seen.bios.find((m) => m.type === 'proposal')?.url, 'https://example.com/page');
+  for (const message of seen.keys) {
+    assert.deepEqual(message.keys, KEYS[message.type]);
+  }
 });
 
 test('url and reason refusals', async (t) => {
@@ -260,12 +280,16 @@ test('url and reason refusals', async (t) => {
     ['https://example.com/x?q=1', 'why', QUERY],
     ['https://example.com/x?', 'why', QUERY],
     ['https://example.com/x#f', 'why', "That URL can't include a fragment."],
+    ['https://example.com/#', 'why', "That URL can't include a fragment."],
     ['http://example.com/x', 'why', 'Only https URLs can be proposed.'],
     ['https://user:pass@example.com/x', 'why', "That URL can't include a username or password."],
     [`https://example.com/${'a'.repeat(2100)}`, 'why', 'That URL is too long.'],
     ['https://example.com/\u0001', 'why', "That URL contains characters that aren't allowed."],
+    ['https://example.com/\u200b', 'why', "That URL contains characters that aren't allowed."],
+    ['https://example.com/\u202e', 'why', "That URL contains characters that aren't allowed."],
     ['https://example.com/ok', 'x'.repeat(300), 'That reason is too long.'],
     ['https://example.com/ok', 'bad\u200b', "That reason contains characters that aren't allowed."],
+    ['https://example.com/ok', 'bad\u0001', "That reason contains characters that aren't allowed."],
   ];
   const seen = await staged(
     page,
@@ -305,6 +329,18 @@ test('cancel withdraws, is idempotent, and ignores other epochs', async (t) => {
     await r.prompt('Propose.');
     await r.until(() => r.bios.messages.some((m) => m.type === 'proposal'), 'proposal');
     const proposal = r.bios.messages.find((m) => m.type === 'proposal');
+    const beforeBad = r.bios.messages.filter((m) => m.type === 'withdrawn').length;
+    r.cancel({ v: 1, type: 'cancel', epoch: 'a'.repeat(32), proposal: proposal.proposal });
+    r.cancel({
+      v: 1,
+      type: 'cancel',
+      epoch: r.bios.epoch,
+      proposal: proposal.proposal,
+      extra: true,
+    });
+    r.cancel({ v: 2, type: 'cancel', epoch: r.bios.epoch, proposal: proposal.proposal });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const afterBad = r.bios.messages.filter((m) => m.type === 'withdrawn').length;
     r.cancel({ v: 1, type: 'cancel', epoch: r.bios.epoch, proposal: proposal.proposal });
     await r.until(
       () => r.bios.messages.some((m) => m.type === 'withdrawn' && m.reason === 'cancelled'),
@@ -312,17 +348,16 @@ test('cancel withdraws, is idempotent, and ignores other epochs', async (t) => {
     );
     const before = r.bios.messages.length;
     r.cancel({ v: 1, type: 'cancel', epoch: r.bios.epoch, proposal: proposal.proposal });
-    r.cancel({ v: 1, type: 'cancel', epoch: 'a'.repeat(32), proposal: proposal.proposal });
-    r.cancel({ v: 1, type: 'cancel', epoch: r.bios.epoch, proposal: 99, extra: true });
-    r.cancel({ v: 2, type: 'cancel', epoch: r.bios.epoch, proposal: proposal.proposal });
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 150));
     const out = {
       withdrawn: r.bios.messages.filter((m) => m.type === 'withdrawn'),
       after: r.bios.messages.length - before,
+      bad: afterBad - beforeBad,
     };
     await r.owner.release();
     return out;
   });
+  assert.equal(seen.bad, 0);
   assert.equal(seen.withdrawn.length, 1);
   assert.equal(seen.withdrawn[0].reason, 'cancelled');
   assert.equal(seen.after, 0);
@@ -466,17 +501,13 @@ test('restart sends a new hello and a held resume does not publish again', async
       () => r.bios.messages.some((m) => m.type === 'hello' && m.epoch !== firstEpoch),
       'new hello'
     );
-    await r.until(
-      () => r.results().includes(RESTARTED) || r.said().includes('After.'),
-      'resume result'
-    );
+    await r.until(() => r.results().includes(RESTARTED), 'resume result');
     const out = {
       firstEpoch,
       secondEpoch: r.bios.epoch,
       proposals: r.bios.messages.filter((m) => m.type === 'proposal').length,
       before,
       results: r.results(),
-      said: r.said(),
       hellos: r.bios.messages.filter((m) => m.type === 'hello').map((m) => m.epoch),
     };
     await r.owner.release();
@@ -486,7 +517,8 @@ test('restart sends a new hello and a held resume does not publish again', async
   assert.notEqual(seen.firstEpoch, seen.secondEpoch);
   assert.equal(seen.proposals, 1);
   assert.equal(seen.proposals, seen.before);
-  assert.ok(seen.results.includes(RESTARTED) || seen.said.includes('After.'));
+  assert.ok(seen.results.includes(RESTARTED));
+  assert.equal(seen.results.filter((text) => text === RESTARTED).length, 1);
 });
 
 test('duplicate and unknown port fields are dropped both ways', async (t) => {
@@ -510,48 +542,6 @@ test('duplicate and unknown port fields are dropped both ways', async (t) => {
     return out;
   });
   assert.equal(seen.grew, 0);
-});
-
-test('a fake bios end drops another epoch proposal', async (t) => {
-  const page = await chrome.page(t);
-  await page.init(helpers);
-  await page.goto('/');
-  const seen = await staged(page, 'fake bios drops', async () => {
-    const { acceptWorkerMessage } = await import('/dist/lease/protocol.js');
-    const kept = [];
-    let epoch;
-    const accept = (data) => {
-      const message = acceptWorkerMessage(data, epoch);
-      if (!message) return;
-      if (message.type === 'hello') epoch = message.epoch;
-      kept.push(message);
-    };
-    accept({ v: 1, type: 'hello', epoch: 'a'.repeat(32) });
-    accept({
-      v: 1,
-      type: 'proposal',
-      epoch: 'b'.repeat(32),
-      proposal: 1,
-      agentId: 'cone',
-      url: 'https://example.com',
-      reason: 'x',
-      at: 1,
-      expiresAt: 2,
-    });
-    accept({
-      v: 1,
-      type: 'proposal',
-      epoch: 'a'.repeat(32),
-      proposal: 1,
-      agentId: 'cone',
-      url: 'https://example.com',
-      reason: 'x',
-      at: 1,
-      expiresAt: 2,
-    });
-    return kept.map((m) => m.type);
-  });
-  assert.deepEqual(seen, ['hello', 'proposal']);
 });
 
 test('a scoop conversation refuses lease_propose', async (t) => {
@@ -703,15 +693,9 @@ test('a gated guest run refuses lease_propose and publishes nothing', async (t) 
     );
     const pending = model.approvals.list().find((item) => item.kind === 'guest-tool');
     await model.approvals.decide(pending.id, 'once');
-    await r.until(
-      () =>
-        r.results().some((text) => text === GATED || /blocked|declined|gate/i.test(text)) ||
-        r.said().some((text) => /Gated|blocked/i.test(text)),
-      'gated outcome'
-    );
+    await r.until(() => r.results().includes(GATED), 'gated outcome');
     const out = {
       results: r.results(),
-      said: r.said(),
       bios: r.bios.messages.filter((m) => m.type === 'proposal'),
     };
     await guest.close();
@@ -719,10 +703,115 @@ test('a gated guest run refuses lease_propose and publishes nothing', async (t) 
     return out;
   });
   assert.equal(seen.bios.length, 0);
-  assert.ok(
-    seen.results.some((text) => text === GATED || /blocked|declined|gate/i.test(text)) ||
-      seen.said.some((text) => /Gated/i.test(text))
-  );
+  assert.equal(seen.results.at(-1), GATED);
+});
+
+test('an open proposal withdraws as stale when the conversation is tainted', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await staged(page, 'taint stale', async () => {
+    const r = await window.bootLease({
+      steps: [propose('https://example.com/a', 'Need it'), answer('Sent.')],
+    });
+    await r.prompt('Propose.');
+    await r.until(() => r.bios.messages.some((m) => m.type === 'proposal'), 'proposal');
+    const hub = {
+      minted: 0,
+      async mint() {
+        this.minted += 1;
+        return { id: `seat-${this.minted}`, url: `https://hub.test/join/seat-${this.minted}` };
+      },
+      async revoke() {},
+    };
+    const model = createAgentModel(r.connection, { guests: hub });
+    await model.agent.ready();
+    await model.guests.mint('cone', {
+      label: 'Cara',
+      expiresAt: null,
+      gates: { messages: 'off', tools: 'user' },
+    });
+    await r.until(
+      () => r.bios.messages.some((m) => m.type === 'withdrawn' && m.reason === 'stale'),
+      'stale'
+    );
+    const out = r.bios.messages.filter((m) => m.type === 'withdrawn');
+    await r.owner.release();
+    return out;
+  });
+  assert.equal(seen[0].reason, 'stale');
+});
+
+test('new chat then a fresh proposal survives an AgentsDoc change', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await staged(page, 'new chat then propose', async () => {
+    const r = await window.bootLease({
+      steps: [propose('https://example.com/fresh', 'keep me'), answer('Sent.')],
+    });
+    await r.prompt('Propose.');
+    await r.until(() => r.bios.messages.some((m) => m.type === 'proposal'), 'proposal');
+    await r.until(() => r.results()[0] === SENT, 'sent');
+    const before = r.bios.messages.filter((m) => m.type === 'withdrawn').length;
+    await r.connection.control.createScoop('cone', 'helper', BACKGROUND_CONTEXT);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const out = {
+      proposals: r.bios.messages.filter((m) => m.type === 'proposal').length,
+      withdrawnAfter: r.bios.messages.filter((m) => m.type === 'withdrawn').length - before,
+      results: r.results(),
+    };
+    await r.owner.release();
+    return out;
+  });
+  assert.equal(seen.proposals, 1);
+  assert.equal(seen.withdrawnAfter, 0);
+  assert.equal(seen.results[0], SENT);
+});
+
+test('a seat opening during reserve refuses without publishing or withdrawing', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await staged(page, 'seat races reserve', async () => {
+    const r = await window.bootLease({
+      holdLease: 'reserve',
+      steps: [propose('https://example.com/race', 'race seat'), answer('Refused.')],
+    });
+    void r.prompt('Propose.');
+    await r.until(() => {
+      const entries = r.connection.views.value?.cone?.entries ?? [];
+      return entries.some((entry) => JSON.stringify(entry).includes('lease_propose'));
+    }, 'tool started');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const hub = {
+      minted: 0,
+      async mint() {
+        this.minted += 1;
+        return { id: `seat-${this.minted}`, url: `https://hub.test/join/seat-${this.minted}` };
+      },
+      async revoke() {},
+    };
+    const model = createAgentModel(r.connection, { guests: hub });
+    await model.agent.ready();
+    await model.guests.mint('cone', {
+      label: 'Race',
+      expiresAt: null,
+      gates: { messages: 'off', tools: 'user' },
+    });
+    r.releaseLease();
+    await r.until(() => r.results().includes(UNAVAILABLE) || r.results().includes(SEAT), 'refused');
+    const out = {
+      results: r.results(),
+      proposals: r.bios.messages.filter((m) => m.type === 'proposal').length,
+      withdrawn: r.bios.messages.filter((m) => m.type === 'withdrawn').length,
+    };
+    await r.owner.release();
+    return out;
+  });
+  assert.equal(seen.proposals, 0);
+  assert.equal(seen.withdrawn, 0);
+  assert.ok(seen.results[0] === UNAVAILABLE || seen.results[0] === SEAT);
 });
 
 test('proposal values stay out of inventory beyond the ordinary tool call', async (t) => {
@@ -735,22 +824,37 @@ test('proposal values stay out of inventory beyond the ordinary tool call', asyn
     });
     await r.prompt('Propose.');
     await r.until(() => r.results()[0] === SENT, 'sent');
-    const remote = createAgentModel(r.connection, { storage: localStorage });
-    await remote.agent.ready();
-    const inventory = remote.inventory ? await remote.inventory() : null;
-    const snapshot = inventory?.state?.value ?? inventory ?? {};
-    const views = JSON.stringify(r.connection.views.value ?? {});
+    const remote = remoteControl(r.connection);
+    const inventory = await remote.inventory();
+    const snapshot = inventory?.state?.value ?? inventory ?? r.connection.inventory?.value ?? {};
+    const views = r.connection.views.value ?? {};
+    const viewsText = JSON.stringify(views);
+    const inventoryText = JSON.stringify(snapshot);
+    const toolSlice = viewsText.includes('secret-path')
+      ? viewsText.slice(
+          Math.max(0, viewsText.indexOf('lease_propose') - 40),
+          viewsText.indexOf('secret-reason-xyz') + 40
+        )
+      : '';
+    const lickEntries = Object.values(views)
+      .flatMap((view) => view.entries ?? [])
+      .filter((entry) => String(entry.kind ?? '').includes('lick'));
     const out = {
-      inventory: JSON.stringify(snapshot),
-      views,
+      inventory: inventoryText,
+      views: viewsText,
+      toolSlice,
+      lickEntries: lickEntries.length,
       results: r.results(),
     };
     inventory?.dispose?.();
     await r.owner.release();
     return out;
   });
+  assert.ok(seen.views.includes('secret-path'));
+  assert.ok(seen.views.includes('secret-reason-xyz'));
+  assert.ok(seen.toolSlice.includes('lease_propose'));
   assert.ok(!seen.inventory.includes('secret-path'));
   assert.ok(!seen.inventory.includes('secret-reason-xyz'));
-  assert.ok(!seen.results[0].includes('secret-path'));
-  assert.ok(!seen.results[0].includes('secret-reason-xyz'));
+  assert.equal(seen.lickEntries, 0);
+  assert.equal(seen.results[0], SENT);
 });

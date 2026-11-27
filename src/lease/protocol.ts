@@ -3,6 +3,11 @@ export const EPOCH_HEX = /^[0-9a-f]{32}$/;
 export const WITHDRAW_REASONS = ['expired', 'cancelled', 'stale'] as const;
 export type WithdrawReason = (typeof WITHDRAW_REASONS)[number];
 
+export const TTL_MS = 5 * 60 * 1000;
+const MAX_URL_BYTES = 2048;
+const MAX_REASON_BYTES = 256;
+const encoder = new TextEncoder();
+
 export type HelloMessage = { v: 1; type: 'hello'; epoch: string };
 export type ProposalMessage = {
   v: 1;
@@ -115,7 +120,12 @@ export function acceptWorkerMessage(
 ): WorkerMessage | undefined {
   const message = parseWorkerMessage(value);
   if (!message) return undefined;
-  if (message.type === 'hello') return message;
+  if (message.type === 'hello') return epoch === undefined ? message : undefined;
   if (!epoch || message.epoch !== epoch) return undefined;
+  if (message.type === 'proposal') {
+    if (encoder.encode(message.url).length > MAX_URL_BYTES) return undefined;
+    if (encoder.encode(message.reason).length > MAX_REASON_BYTES) return undefined;
+    if (message.expiresAt !== message.at + TTL_MS) return undefined;
+  }
   return message;
 }

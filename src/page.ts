@@ -19,6 +19,16 @@ export {
   SEAT_REFUSED,
 } from './guests/client.ts';
 export {
+  acceptWorkerMessage,
+  type BiosMessage,
+  type CancelMessage,
+  type HelloMessage,
+  type ProposalMessage,
+  type WithdrawnMessage,
+  type WithdrawReason,
+  type WorkerMessage,
+} from './lease/protocol.ts';
+export {
   type ByteSink,
   bridgePort,
   encodeFrame,

@@ -12,6 +12,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { obj, str } from '@earendil-works/pi-schema';
 import { AgentsDoc } from '../agents.ts';
+import { GuestsDoc } from '../guests/seats.ts';
 import { checkReason, checkUrl, REFUSALS, sentText } from './check.ts';
 import { eligibility, type LeaseRuntime, taintedConversation } from './runtime.ts';
 
@@ -20,7 +21,7 @@ export const LEASE_MEMO = 'slicc.lease-propose';
 export const LEASE_SECTION =
   'lease_propose asks the owner to let a browser job read one page; it only proposes, returns no page content and reports no status.';
 
-type Memo = { epoch: string; text: string };
+type Memo = { life: string; text: string };
 
 export type LeaseHold = () => Promise<void>;
 
@@ -29,6 +30,16 @@ export type LeaseToolHost = {
   harness: () => Harness | undefined;
   now: () => number;
   hold?: LeaseHold;
+  holdAt?: 'published' | 'reserve';
+};
+
+type ToolApi = {
+  conversationId: Parameters<typeof taintedConversation>[1];
+  memo: {
+    <T>(name: string, context: Context): Promise<T | undefined>;
+    <T>(name: string, candidate: T, context: Context): Promise<T>;
+  };
+  snapshot: Harness['snapshot'];
 };
 
 function answered(text: string) {
@@ -36,12 +47,43 @@ function answered(text: string) {
 }
 
 async function remember(
-  api: { memo: (name: string, value: Memo, context: Context) => Promise<Memo> },
+  api: ToolApi,
   runtime: LeaseRuntime | undefined,
   text: string,
   context: Context
 ) {
-  await api.memo(LEASE_MEMO, { epoch: runtime?.epoch ?? '', text }, context);
+  await api.memo(LEASE_MEMO, { life: runtime?.life ?? '', text }, context);
+  return answered(text);
+}
+
+async function snapshotSeats(api: ToolApi, context: Context) {
+  const state = await api.snapshot(AgentsDoc, context);
+  const seats = (await api.snapshot(GuestsDoc, context))?.seats ?? {};
+  return { state, seats };
+}
+
+async function publishPath(
+  host: LeaseToolHost,
+  runtime: LeaseRuntime,
+  api: ToolApi,
+  coneId: string,
+  proposal: number,
+  url: string,
+  reason: string,
+  context: Context
+) {
+  if (host.hold && host.holdAt === 'reserve') await host.hold();
+  const at = host.now();
+  const { state, seats } = await snapshotSeats(api, context);
+  if (state) runtime.revalidate(state, seats, at);
+  if (!runtime.reserved(coneId)) return remember(api, runtime, REFUSALS.unavailable, context);
+  const text = sentText(proposal);
+  await api.memo(LEASE_MEMO, { life: runtime.life, text }, context);
+  const again = await snapshotSeats(api, context);
+  if (again.state) runtime.revalidate(again.state, again.seats, host.now());
+  if (!runtime.reserved(coneId) || !runtime.publish(coneId, url, reason))
+    return answered(REFUSALS.unavailable);
+  if (host.hold && host.holdAt !== 'reserve') await host.hold();
   return answered(text);
 }
 
@@ -54,27 +96,36 @@ export function leaseProposeTool(host: LeaseToolHost): ToolRegistration {
       url: str({ description: 'The https URL to read, with no query or fragment.' }),
       reason: str({ description: 'Why the page is needed, in plain text.' }),
     }),
-    replay: 'unsafe',
+    replay: 'safe',
     async execute(args, api, context: Context) {
       const runtime = host.runtime();
       const prior = await api.memo<Memo>(LEASE_MEMO, context);
       if (prior) {
-        if (!runtime || prior.epoch !== runtime.epoch) return answered(REFUSALS.restarted);
+        if (!runtime || prior.life !== runtime.life) return answered(REFUSALS.restarted);
         return answered(prior.text);
       }
       const refused = checkUrl(args.url) ?? checkReason(args.reason);
       if (refused) return remember(api, runtime, refused, context);
-      const ready = await eligibility(api, context, runtime, host.now());
+      const ready = await eligibility(api, context, runtime, host.now(), host.harness());
       if ('refuse' in ready) return remember(api, runtime, ready.refuse, context);
       if (!runtime) return remember(api, runtime, REFUSALS.unavailable, context);
-      const at = host.now();
-      const reserved = runtime.reserve(ready.coneId, ready.conversationId, at);
+      const reserved = runtime.reserve(ready.coneId, ready.conversationId, host.now());
       if ('refuse' in reserved) return remember(api, runtime, reserved.refuse, context);
-      const text = sentText(reserved.proposal);
-      await api.memo(LEASE_MEMO, { epoch: runtime.epoch, text }, context);
-      runtime.publish(ready.coneId, args.url, args.reason);
-      if (host.hold) await host.hold();
-      return answered(text);
+      try {
+        return await publishPath(
+          host,
+          runtime,
+          api,
+          ready.coneId,
+          reserved.proposal,
+          args.url,
+          args.reason,
+          context
+        );
+      } catch (error) {
+        runtime.abandon(ready.coneId);
+        throw error;
+      }
     },
   });
 }
