@@ -109,6 +109,7 @@ async function staleIfTainted(
   const harness = host.harness();
   const runtime = host.runtime();
   if (!harness || !runtime) return;
+  if (!runtime.waiting(Number(conversationId))) return;
   if (!(await taintedConversation(harness, conversationId, context))) return;
   const state = await harness.snapshot(AgentsDoc, context);
   if (!state) return;

@@ -38,6 +38,7 @@ export type LeasePort = {
 export type LeaseRuntime = {
   readonly epoch: string;
   readonly open: boolean;
+  waiting(conversationId: number): boolean;
   reserve(
     coneId: string,
     conversationId: number,
@@ -148,6 +149,10 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
     },
     get open() {
       return alive;
+    },
+    waiting(conversationId) {
+      for (const held of open.values()) if (held.conversationId === conversationId) return true;
+      return false;
     },
     reserve(coneId, conversationId, at) {
       if (!alive) return { refuse: REFUSALS.unavailable };
