@@ -7,6 +7,7 @@ const page = {
   entryPoints: [
     'test/integration/page/agent-worker.js',
     'test/integration/page/storage-worker.js',
+    'test/integration/page/upgrade-worker.js',
     'test/integration/page/legacy-worker.js',
     'test/integration/page/page.js',
     'test/integration/page/main-worker.js',
