@@ -32,6 +32,7 @@ export {
   type AgentOwner,
   type AgentWorker,
   type KernelSource,
+  type LeaseSource,
   type OwnerOptions,
   type PortOptions,
   startAgent,

@@ -1274,6 +1274,7 @@ const running = runAgentWorker(self, {
   ...(params.has('ttl') ? { approvalMs: Number(params.get('ttl')) } : {}),
   ...(params.has('staged-ms') ? { stagedMs: Number(params.get('staged-ms')) } : {}),
   ...(params.has('run-times') ? { runTimes: JSON.parse(params.get('run-times')) } : {}),
+  ...(params.get('hold-lease') === 'published' ? { holdLease: 'published' } : {}),
   providers: [
     faux.provider,
     ...judges,

@@ -1011,6 +1011,12 @@ Fixes to pi stay in this repository. [`patches/patches.json`](patches/patches.js
 
 The AWS SDK `WebSocketFetchHandler` drops its abort signal; that is patched locally as `aws-websocket-abort-signal`.
 
+## Browser lease proposals
+
+Opt-in and off by default: `startAgent({ lease: { v: 1, connect: () => port } })` transfers a fresh `MessagePort` to the worker on every spawn (including each `restart()`). Without `lease`, or with `v !== 1`, there is no `lease_propose` tool and no prompt line; the tool list and system prompt bytes match a build without the capability.
+
+With the capability, the model may call `lease_propose({ url, reason })`. A valid call posts a proposal on the port for the owner to show; the tool returns only a fixed sentence (`Proposal <n> sent to the owner. Nothing has started, and you won't receive its status or any page content.`), or one fixed refusal sentence. The model never receives status, page content, the epoch, or agent id in the result. The tool arguments stay ordinary transcript and are not hidden. This release has no bind, notice, status or page result: nothing starts from a proposal alone.
+
 ## Develop
 
 ```sh

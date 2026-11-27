@@ -48,6 +48,12 @@ import { processGroups } from './kernel/groups.ts';
 import { backgroundJobs } from './kernel/jobs.ts';
 import { adminOver, type UserClient, type UserClients, userClients } from './kernel/users.ts';
 import { AGENT_DIR, ROOT_HOME, ROOT_USER } from './layout.ts';
+import {
+  attachWorkerLease,
+  closeWorkerLease,
+  createWorkerLease,
+  installWorkerLease,
+} from './lease/wire.ts';
 import { type Licks, setupLicks } from './licks/index.ts';
 import { lickTriage } from './licks/triage.ts';
 import { LOCAL, LOCAL_BASE } from './local.ts';
@@ -135,6 +141,7 @@ export interface AgentWorkerOptions {
   approvalMs?: number;
   stagedMs?: number;
   runTimes?: RunTimes;
+  holdLease?: 'published';
 }
 
 export function usersOf(
@@ -563,7 +570,12 @@ export async function start(
   vault: Vault
 ): Promise<AgentHost> {
   const serverId = crypto.randomUUID();
-  const { client, users, home, at, wiped, stored } = await attached(ports, options, serverId);
+  const portsReady = await ports;
+  const { client, users, home, at, wiped, stored } = await attached(
+    Promise.resolve(portsReady),
+    options,
+    serverId
+  );
   const ready = await prepare(scope, { client, home, vault, stored }, options);
   const { names, native, transport, facts, models, registry, records, endpoints } = ready;
   const memory = setupMemory(registry);
@@ -571,11 +583,8 @@ export async function start(
   const mcp = setupMcp(registry);
   const chosen = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   const codemode = chosen.tools;
-  registry.install(codemodeExtension(codemode));
-  const intents = intentsOn(await settingsFile(client, at.agentDir));
-  registry.install(intentExtension([...coding, ...codemode], intents));
-  registry.install(ranExtension(coding));
-  if (chosen.toolSearch) registry.install(createToolSearchExtension());
+  const intents = await installCoding(registry, coding, codemode, chosen, client, at.agentDir);
+  const lease = bootLease(scope, portsReady.lease, options.holdLease, registry);
   const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
@@ -598,6 +607,7 @@ export async function start(
   });
   const agent = await openUnfrozen(options, scoops, { models, model, registry, env: environment });
   opened = agent;
+  attachWorkerLease(lease, agent.agents, agent.harness);
   await people?.start(agent.agents);
   const freezer = freezerOf(agent, { home, memory, titles, people, users, ready, licks });
   await freezer.swept;
@@ -713,11 +723,7 @@ export async function start(
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
     secrets: hostSecrets(vault, names, [names, records, endpoints]),
-    uploads: {
-      env: environment,
-      sees: (ref) => seesImages(models, ref),
-      staging,
-    },
+    uploads: { env: environment, sees: uploadSees(models), staging },
     runs: { kernel: client, boot: booted.boot, ...options.runTimes },
     monitor: {
       kernel: client,
@@ -725,13 +731,49 @@ export async function start(
       ...(users ? { users: () => users.users.list() } : {}),
     },
   });
-  return closing(host, staging);
+  return closing(host, staging, lease);
 }
 
-function closing(host: AgentHost, staging: Staging): AgentHost {
+export function uploadSees(models: Pick<Models, 'getModel'>) {
+  return (ref: ModelRef | undefined) => seesImages(models, ref);
+}
+
+async function installCoding(
+  registry: { install(extension: unknown): void },
+  coding: readonly ToolRegistration[],
+  codemode: readonly ToolRegistration[],
+  chosen: { toolSearch?: boolean },
+  client: KernelClient,
+  agentDir: string | undefined
+) {
+  registry.install(codemodeExtension(codemode));
+  const intents = intentsOn(await settingsFile(client, agentDir));
+  registry.install(intentExtension([...coding, ...codemode], intents));
+  registry.install(ranExtension(coding));
+  if (chosen.toolSearch) registry.install(createToolSearchExtension());
+  return intents;
+}
+
+export function bootLease(
+  scope: AgentWorkerScope,
+  leasePort: MessagePort | undefined,
+  holdLease: AgentWorkerOptions['holdLease'],
+  registry: { install(extension: unknown): void }
+) {
+  const lease = createWorkerLease(leasePort, scope, holdLease);
+  installWorkerLease(registry, lease);
+  return lease;
+}
+
+export function closing(
+  host: AgentHost,
+  staging: Staging,
+  lease: ReturnType<typeof createWorkerLease>
+): AgentHost {
   const close = host.close;
   return Object.assign(host, {
     close: () => {
+      closeWorkerLease(lease);
       staging.close();
       return close();
     },
