@@ -23,6 +23,8 @@ export type OpenProposal = {
   proposal: number;
   coneId: string;
   conversationId: number;
+  at: number;
+  expiresAt: number;
   clear: () => void;
 };
 
@@ -36,6 +38,12 @@ export type LeasePort = {
 export type LeaseRuntime = {
   readonly epoch: string;
   readonly open: boolean;
+  reserve(
+    coneId: string,
+    conversationId: number,
+    at: number
+  ): { proposal: number } | { refuse: string };
+  publish(coneId: string, url: string, reason: string): void;
   propose(
     coneId: string,
     conversationId: number,
@@ -141,7 +149,7 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
     get open() {
       return alive;
     },
-    propose(coneId, conversationId, url, reason, at) {
+    reserve(coneId, conversationId, at) {
       if (!alive) return { refuse: REFUSALS.unavailable };
       if (open.has(coneId)) return { refuse: REFUSALS.open };
       const times = pruneHourly(coneId, at);
@@ -152,22 +160,32 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
         () => withdraw(coneId, 'expired'),
         Math.max(0, expiresAt - host.now())
       );
-      open.set(coneId, { proposal, coneId, conversationId, clear });
+      open.set(coneId, { proposal, coneId, conversationId, at, expiresAt, clear });
       byProposal.set(proposal, coneId);
       times.push(at);
       hourly.set(coneId, times);
+      return { proposal };
+    },
+    publish(coneId, url, reason) {
+      const held = open.get(coneId);
+      if (!held || !alive) return;
       send({
         v: 1,
         type: 'proposal',
         epoch,
-        proposal,
+        proposal: held.proposal,
         agentId: coneId,
         url,
         reason,
-        at,
-        expiresAt,
+        at: held.at,
+        expiresAt: held.expiresAt,
       });
-      return { proposal };
+    },
+    propose(coneId, conversationId, url, reason, at) {
+      const reserved = this.reserve(coneId, conversationId, at);
+      if ('refuse' in reserved) return reserved;
+      this.publish(coneId, url, reason);
+      return reserved;
     },
     withdrawCone(coneId, reason) {
       withdraw(coneId, reason);

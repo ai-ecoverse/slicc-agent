@@ -66,19 +66,13 @@ export function leaseProposeTool(host: LeaseToolHost): ToolRegistration {
       if (refused) return remember(api, runtime, refused, context);
       const ready = await eligibility(api, context, runtime, host.now());
       if ('refuse' in ready) return remember(api, runtime, ready.refuse, context);
-      const published = runtime?.propose(
-        ready.coneId,
-        ready.conversationId,
-        args.url,
-        args.reason,
-        host.now()
-      );
-      if (!published || 'refuse' in published) {
-        const text = published && 'refuse' in published ? published.refuse : REFUSALS.unavailable;
-        return remember(api, runtime, text, context);
-      }
-      const text = sentText(published.proposal);
-      await api.memo(LEASE_MEMO, { epoch: runtime?.epoch ?? '', text }, context);
+      if (!runtime) return remember(api, runtime, REFUSALS.unavailable, context);
+      const at = host.now();
+      const reserved = runtime.reserve(ready.coneId, ready.conversationId, at);
+      if ('refuse' in reserved) return remember(api, runtime, reserved.refuse, context);
+      const text = sentText(reserved.proposal);
+      await api.memo(LEASE_MEMO, { epoch: runtime.epoch, text }, context);
+      runtime.publish(ready.coneId, args.url, args.reason);
       if (host.hold) await host.hold();
       return answered(text);
     },

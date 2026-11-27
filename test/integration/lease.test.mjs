@@ -472,6 +472,7 @@ test('restart sends a new hello and a held resume does not publish again', async
   });
   assert.equal(seen.hellos.length, 2);
   assert.notEqual(seen.firstEpoch, seen.secondEpoch);
+  assert.equal(seen.proposals, 1);
   assert.equal(seen.proposals, seen.before);
   assert.ok(seen.results.includes(RESTARTED) || seen.said.includes('After.'));
 });
