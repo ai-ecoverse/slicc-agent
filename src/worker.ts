@@ -36,15 +36,24 @@ export function serveConnections(scope: WorkerScope, host: Promise<AgentHost>): 
 export interface KernelPorts {
   kernel: MessagePort;
   admin?: MessagePort;
+  lease?: MessagePort;
 }
 
 export function kernelPorts(scope: WorkerScope): Promise<KernelPorts> {
   return new Promise((resolve) => {
     scope.addEventListener('message', ({ data }) => {
-      const message = data as { kernel?: MessagePort; admin?: MessagePort } | null;
+      const message = data as {
+        kernel?: MessagePort;
+        admin?: MessagePort;
+        lease?: MessagePort;
+      } | null;
       const kernel = message?.kernel;
       if (!kernel) return;
-      resolve(message.admin ? { kernel, admin: message.admin } : { kernel });
+      resolve({
+        kernel,
+        ...(message.admin ? { admin: message.admin } : {}),
+        ...(message.lease ? { lease: message.lease } : {}),
+      });
     });
   });
 }

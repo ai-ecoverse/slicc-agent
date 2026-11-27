@@ -37,9 +37,12 @@ export interface AgentOwner {
 
 export type { KernelSource } from './kernel/users.ts';
 
+export type LeaseSource = { v: 1; connect: () => MessagePort };
+
 export interface OwnerOptions {
   worker: () => AgentWorker;
   kernel?: KernelSource;
+  lease?: LeaseSource;
   locks?: LockManager;
   held?: boolean;
   channel?: () => { port1: PortEndpoint & Transferable; port2: Transferable };
@@ -50,22 +53,34 @@ export async function startAgent(options: OwnerOptions): Promise<AgentOwner> {
     ? () => undefined
     : await holdLock(options.locks ?? navigator.locks, AGENT_LOCK);
   const channel = options.channel ?? (() => new MessageChannel());
+  const leasePort = (): MessagePort | undefined =>
+    options.lease?.v === 1 ? options.lease.connect() : undefined;
   const spawn = async (): Promise<AgentWorker> => {
     const created = options.worker();
     let admin: (PortEndpoint & Transferable) | undefined;
+    let lease: MessagePort | undefined;
     try {
       if (options.kernel) {
+        lease = leasePort();
         const port = await options.kernel.connect();
-        if (!options.kernel.users) created.postMessage({ kernel: port }, [port]);
-        else {
+        if (!options.kernel.users) {
+          const message = lease ? { kernel: port, lease } : { kernel: port };
+          const transfer: Transferable[] = lease ? [port, lease] : [port];
+          created.postMessage(message, transfer);
+        } else {
           const { port1, port2 } = channel();
           admin = port1;
           serveAdmin(port1, options.kernel);
-          created.postMessage({ kernel: port, admin: port2 }, [port, port2]);
+          const message = lease
+            ? { kernel: port, admin: port2, lease }
+            : { kernel: port, admin: port2 };
+          const transfer: Transferable[] = lease ? [port, port2, lease] : [port, port2];
+          created.postMessage(message, transfer);
         }
       }
     } catch (error) {
       admin?.close?.();
+      lease?.close?.();
       created.terminate();
       throw error;
     }
