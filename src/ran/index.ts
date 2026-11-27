@@ -4,6 +4,8 @@ import {
   defineExtension,
   type Extension,
   type ToolExecutionApi,
+  type ToolExecutionResult,
+  type ToolPark,
   type ToolRegistration,
   type Wrap,
   wrapTool,
@@ -27,6 +29,10 @@ function merged(details: JsonValue | undefined, ran: Ran): JsonValue {
   const base =
     details && typeof details === 'object' && !Array.isArray(details) ? details : undefined;
   return { ...base, [RAN_KEY]: ran as unknown as JsonValue };
+}
+
+function isPark(returned: ToolExecutionResult | ToolPark): returned is ToolPark {
+  return 'sleep' in returned || 'wait' in returned;
 }
 
 function traced(bash: ToolRegistration): Wrap {
@@ -53,7 +59,7 @@ function traced(bash: ToolRegistration): Wrap {
         throw error;
       }
       const facts = ran as Ran | undefined;
-      if (!facts) return result;
+      if (!facts || isPark(result)) return result;
       return { ...result, details: merged(result.details, await kept(facts, api, context)) };
     },
   }));

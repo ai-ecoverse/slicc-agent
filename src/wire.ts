@@ -15,6 +15,8 @@ export const WIRE = 2;
 
 export const CHORD_PROTOCOL = 1;
 
+export const CALL_WINDOW = 256;
+
 export interface Hello {
   wire: number;
   chord: number;

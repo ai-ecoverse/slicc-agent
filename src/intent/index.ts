@@ -61,8 +61,11 @@ function codemodeIntent(codemode: ToolRegistration): Wrap {
       const said = intentOf(inner.name, args);
       const rest = withoutIntent(inner.name, args as JsonObject);
       if (!said) return inner.execute(rest, api, context);
-      const executeTool: ToolExecutionApi['executeTool'] = (name, nested, ...more) =>
-        api.executeTool(name, inherited(name, nested, said), ...more);
+      const executeTool: ToolExecutionApi['executeTool'] = (
+        name: string,
+        nested: JsonObject,
+        ...more: unknown[]
+      ) => Reflect.apply(api.executeTool, api, [name, inherited(name, nested, said), ...more]);
       const wrapped = Object.create(api, { executeTool: { value: executeTool } });
       return inner.execute(rest, wrapped, context);
     },

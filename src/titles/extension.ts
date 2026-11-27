@@ -15,7 +15,7 @@ import {
   defineTask,
   GenerationTask,
   hook,
-  runEndTask,
+  hookTask,
 } from '@earendil-works/pi-durable';
 import { answerText } from '../agent.ts';
 import type { Agents, ConeRecord } from '../agents.ts';
@@ -361,7 +361,7 @@ export function titlesExtension(deps: TitlesAttach): TitlesRuntime {
           const found = findAgent(agents, api.conversationId);
           if (!found) return undefined;
           if (!titleRefreshGate(found.record.titled ?? 0, run.reason)) return undefined;
-          return { tasks: [runEndTask(due, { last: Number(run.last) })] };
+          return { tasks: [hookTask(due, { last: Number(run.last) })] };
         },
       }),
     ],
