@@ -706,11 +706,11 @@ test('a gated guest run refuses lease_propose and publishes nothing', async (t) 
   assert.equal(seen.results.at(-1), GATED);
 });
 
-test('an open proposal withdraws as stale when the conversation is tainted', async (t) => {
+test('minting a guest seat withdraws a waiting proposal as stale', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
-  const seen = await staged(page, 'taint stale', async () => {
+  const seen = await staged(page, 'mint seat stale', async () => {
     const r = await window.bootLease({
       steps: [propose('https://example.com/a', 'Need it'), answer('Sent.')],
     });
@@ -742,14 +742,101 @@ test('an open proposal withdraws as stale when the conversation is tainted', asy
   assert.equal(seen[0].reason, 'stale');
 });
 
+test('a cross-cone lick withdraws an open proposal as stale and gates lease_propose', async (t) => {
+  const page = await chrome.page(t);
+  await page.init(helpers);
+  await page.goto('/');
+  const seen = await staged(page, 'cross-cone lick taint', async () => {
+    const r = await window.bootLease({
+      steps: [
+        propose('https://example.com/open', 'keep open'),
+        answer('Sent.'),
+        bash("printf 'team:x:2000:cone,cone-2\\n' >> /etc/group"),
+        answer('Grouped.'),
+        bash('agent send sliccy Propose.'),
+        propose('https://example.com/gated', 'from lick'),
+        answer('Gated.'),
+        answer('Licked.'),
+      ],
+    });
+    const created = await r.connection.control.createCone('other', BACKGROUND_CONTEXT);
+    const other = created.id ?? created;
+    const hub = {
+      minted: 0,
+      async mint() {
+        this.minted += 1;
+        return { id: `seat-${this.minted}`, url: `https://hub.test/join/seat-${this.minted}` };
+      },
+      async revoke() {},
+    };
+    const model = createAgentModel(r.connection, { guests: hub });
+    await model.agent.ready();
+    await r.prompt('Propose.');
+    await r.until(() => r.results()[0] === SENT, 'sent');
+    await r.until(() => r.bios.messages.some((m) => m.type === 'proposal'), 'proposal');
+    await r.prompt('Share a group.');
+    await r.until(() => r.said().includes('Grouped.'), 'grouped');
+    const minted = await model.guests.mint(other, {
+      label: 'Anna',
+      expiresAt: null,
+      gates: { messages: 'off', tools: 'user' },
+    });
+    const guest = track(
+      await connectGuest(await r.owner.port({ guest: { id: minted.seat.id, label: 'Anna' } }))
+    );
+    void guest.control.send(
+      { text: 'Lick into cone.', whenBusy: 'followUp', requestId: null },
+      BACKGROUND_CONTEXT
+    );
+    await r.until(
+      () => model.approvals.list().some((item) => item.kind === 'guest-tool'),
+      'approval'
+    );
+    const pending = model.approvals.list().find((item) => item.kind === 'guest-tool');
+    await model.approvals.decide(pending.id, 'once');
+    await r.until(
+      () => r.bios.messages.some((m) => m.type === 'withdrawn' && m.reason === 'stale'),
+      'stale from lick'
+    );
+    while (!r.results().includes(GATED)) {
+      const next = await r.until(
+        () =>
+          r.results().includes(GATED) ||
+          model.approvals.list().find((item) => item.kind === 'guest-tool') ||
+          null,
+        'gated or approval'
+      );
+      if (r.results().includes(GATED)) break;
+      await model.approvals.decide(next.id, 'once');
+    }
+    const out = {
+      other,
+      results: r.results(),
+      proposals: r.bios.messages.filter((m) => m.type === 'proposal').length,
+      withdrawn: r.bios.messages.filter((m) => m.type === 'withdrawn'),
+    };
+    await guest.close();
+    await r.owner.release();
+    return out;
+  });
+  assert.equal(seen.other, 'cone-2');
+  assert.equal(seen.proposals, 1);
+  assert.equal(seen.withdrawn[0].reason, 'stale');
+  assert.equal(seen.results.filter((text) => text === GATED).at(-1), GATED);
+});
+
 test('new chat then a fresh proposal survives an AgentsDoc change', async (t) => {
   const page = await chrome.page(t);
   await page.init(helpers);
   await page.goto('/');
   const seen = await staged(page, 'new chat then propose', async () => {
     const r = await window.bootLease({
-      steps: [propose('https://example.com/fresh', 'keep me'), answer('Sent.')],
+      steps: [answer('Hi.'), propose('https://example.com/fresh', 'keep me'), answer('Sent.')],
+      extra: [['recall', '1']],
     });
+    await r.prompt('Hi.');
+    await r.until(() => r.said().includes('Hi.'), 'hi');
+    await r.connection.control.newChat('cone', BACKGROUND_CONTEXT);
     await r.prompt('Propose.');
     await r.until(() => r.bios.messages.some((m) => m.type === 'proposal'), 'proposal');
     await r.until(() => r.results()[0] === SENT, 'sent');
@@ -819,8 +906,10 @@ test('proposal values stay out of inventory beyond the ordinary tool call', asyn
   await page.init(helpers);
   await page.goto('/');
   const seen = await staged(page, 'inventory stays clean', async () => {
+    const url = 'https://example.com/secret-path';
+    const reason = 'secret-reason-xyz';
     const r = await window.bootLease({
-      steps: [propose('https://example.com/secret-path', 'secret-reason-xyz'), answer('Sent.')],
+      steps: [propose(url, reason), answer('Sent.')],
     });
     await r.prompt('Propose.');
     await r.until(() => r.results()[0] === SENT, 'sent');
@@ -830,31 +919,57 @@ test('proposal values stay out of inventory beyond the ordinary tool call', asyn
     const views = r.connection.views.value ?? {};
     const viewsText = JSON.stringify(views);
     const inventoryText = JSON.stringify(snapshot);
-    const toolSlice = viewsText.includes('secret-path')
-      ? viewsText.slice(
-          Math.max(0, viewsText.indexOf('lease_propose') - 40),
-          viewsText.indexOf('secret-reason-xyz') + 40
-        )
-      : '';
+    const count = (text, needle) => text.split(needle).length - 1;
+    const toolArgs = Object.values(views)
+      .flatMap((view) => view.entries ?? [])
+      .map((entry) => {
+        const blob = JSON.stringify(entry);
+        if (!blob.includes('lease_propose')) return '';
+        const model = entry.model?.[0] ?? entry;
+        const call =
+          (model.content ?? []).find?.(
+            (block) => block?.type === 'toolCall' || block?.name === 'lease_propose'
+          ) ??
+          model.toolCall ??
+          model;
+        const args = call?.arguments ?? call?.args ?? entry.args ?? {};
+        return typeof args === 'string' ? args : JSON.stringify(args);
+      })
+      .filter(Boolean)
+      .join('\n');
     const lickEntries = Object.values(views)
       .flatMap((view) => view.entries ?? [])
       .filter((entry) => String(entry.kind ?? '').includes('lick'));
+    const sessionDocs = Object.values(views).flatMap((view) =>
+      Object.entries(view.docs ?? {}).map(([kind, doc]) => ({ kind, doc }))
+    );
+    const sessionText = JSON.stringify(sessionDocs);
     const out = {
       inventory: inventoryText,
       views: viewsText,
-      toolSlice,
+      toolArgs,
+      urlInViews: count(viewsText, url),
+      reasonInViews: count(viewsText, reason),
+      urlInArgs: count(toolArgs, url),
+      reasonInArgs: count(toolArgs, reason),
+      urlInSession: count(sessionText, url),
+      reasonInSession: count(sessionText, reason),
       lickEntries: lickEntries.length,
       results: r.results(),
+      sessionKinds: sessionDocs.map((entry) => entry.kind),
     };
     inventory?.dispose?.();
     await r.owner.release();
     return out;
   });
-  assert.ok(seen.views.includes('secret-path'));
-  assert.ok(seen.views.includes('secret-reason-xyz'));
-  assert.ok(seen.toolSlice.includes('lease_propose'));
+  assert.ok(seen.urlInArgs > 0);
+  assert.ok(seen.reasonInArgs > 0);
+  assert.equal(seen.urlInViews, seen.urlInArgs);
+  assert.equal(seen.reasonInViews, seen.reasonInArgs);
   assert.ok(!seen.inventory.includes('secret-path'));
   assert.ok(!seen.inventory.includes('secret-reason-xyz'));
+  assert.equal(seen.urlInSession, 0);
+  assert.equal(seen.reasonInSession, 0);
   assert.equal(seen.lickEntries, 0);
   assert.equal(seen.results[0], SENT);
 });

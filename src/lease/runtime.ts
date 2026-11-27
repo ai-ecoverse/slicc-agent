@@ -41,17 +41,16 @@ export type LeaseRuntime = {
   readonly life: string;
   readonly open: boolean;
   waiting(conversationId: number): boolean;
-  reserved(coneId: string): boolean;
+  reserved(coneId: string, proposal: number): boolean;
   reserve(
     coneId: string,
     conversationId: number,
     at: number
   ): { proposal: number } | { refuse: string };
-  publish(coneId: string, url: string, reason: string): boolean;
+  publish(coneId: string, proposal: number, url: string, reason: string): boolean;
   revalidate(state: Readonly<AgentsState>, seats: Record<string, SeatRecord>, now: number): void;
-  abandon(coneId: string): void;
+  abandon(coneId: string, proposal: number): void;
   withdrawCone(coneId: string, reason: WithdrawReason): void;
-  withdrawConversation(conversationId: number, reason: WithdrawReason): void;
   close(): void;
 };
 
@@ -116,7 +115,9 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
     open.delete(coneId);
     byProposal.delete(held.proposal);
     if (!held.published) {
-      const times = (hourly.get(coneId) ?? []).filter((when) => when !== held.at);
+      const times = [...(hourly.get(coneId) ?? [])];
+      const index = times.indexOf(held.at);
+      if (index >= 0) times.splice(index, 1);
       hourly.set(coneId, times);
     }
     return held;
@@ -158,8 +159,8 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
       for (const held of open.values()) if (held.conversationId === conversationId) return true;
       return false;
     },
-    reserved(coneId) {
-      return open.has(coneId);
+    reserved(coneId, proposal) {
+      return open.get(coneId)?.proposal === proposal;
     },
     reserve(coneId, conversationId, at) {
       if (!alive) return { refuse: REFUSALS.unavailable };
@@ -186,9 +187,9 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
       hourly.set(coneId, times);
       return { proposal };
     },
-    publish(coneId, url, reason) {
+    publish(coneId, proposal, url, reason) {
       const held = open.get(coneId);
-      if (!held || !alive || held.published) return false;
+      if (!held || held.proposal !== proposal || !alive || held.published) return false;
       send({
         v: 1,
         type: 'proposal',
@@ -215,15 +216,12 @@ export function serveLease(port: LeasePort, host: Host): LeaseRuntime {
           withdraw(coneId, 'stale');
       }
     },
-    abandon(coneId) {
+    abandon(coneId, proposal) {
+      if (open.get(coneId)?.proposal !== proposal) return;
       forget(coneId);
     },
     withdrawCone(coneId, reason) {
       withdraw(coneId, reason);
-    },
-    withdrawConversation(conversationId, reason) {
-      for (const [coneId, held] of [...open])
-        if (held.conversationId === conversationId) withdraw(coneId, reason);
     },
     close() {
       alive = false;

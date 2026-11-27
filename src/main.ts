@@ -569,9 +569,10 @@ function mcpReach(scope: AgentWorkerScope, transport: Transport) {
 export async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
-  options: WorkerStartOptions,
+  options: AgentWorkerOptions,
   vault: Vault
 ): Promise<AgentHost> {
+  const worker = options as WorkerStartOptions;
   const serverId = crypto.randomUUID();
   const { client, users, home, at, wiped, stored } = await attached(ports, options, serverId);
   const ready = await prepare(scope, { client, home, vault, stored }, options);
@@ -582,7 +583,7 @@ export async function start(
   const chosen = await codemodeTools(client, options, native, mcp.codemode, at.agentDir);
   const codemode = chosen.tools;
   const intents = await installCoding(registry, coding, codemode, chosen, client, at.agentDir);
-  const lease = bootLease(scope, (await ports).lease, options.holdLease, registry);
+  const lease = bootLease(scope, (await ports).lease, worker.holdLease, registry);
   const licks = setupLicks(registry, transport);
   licks.licks.triage(lickTriage(models));
   const scoops = setupScoops(registry, licks.licks, [...coding, ...codemode, ...memory.tools]);
@@ -783,11 +784,11 @@ export function alive(client: KernelClient) {
 
 export function runAgentWorker(
   scope: AgentWorkerScope,
-  options: WorkerStartOptions = {}
+  options: AgentWorkerOptions = {}
 ): Promise<AgentHost> {
   const vault = new Vault();
   listenVault(scope, vault);
-  const host = start(scope, kernelPorts(scope), options, vault);
+  const host = start(scope, kernelPorts(scope), options as WorkerStartOptions, vault);
   host.catch(() => undefined);
   serveConnections(scope, host);
   return host;

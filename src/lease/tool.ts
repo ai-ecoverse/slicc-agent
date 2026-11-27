@@ -76,12 +76,13 @@ async function publishPath(
   const at = host.now();
   const { state, seats } = await snapshotSeats(api, context);
   if (state) runtime.revalidate(state, seats, at);
-  if (!runtime.reserved(coneId)) return remember(api, runtime, REFUSALS.unavailable, context);
+  if (!runtime.reserved(coneId, proposal))
+    return remember(api, runtime, REFUSALS.unavailable, context);
   const text = sentText(proposal);
   await api.memo(LEASE_MEMO, { life: runtime.life, text }, context);
   const again = await snapshotSeats(api, context);
   if (again.state) runtime.revalidate(again.state, again.seats, host.now());
-  if (!runtime.reserved(coneId) || !runtime.publish(coneId, url, reason))
+  if (!runtime.reserved(coneId, proposal) || !runtime.publish(coneId, proposal, url, reason))
     return answered(REFUSALS.unavailable);
   if (host.hold && host.holdAt !== 'reserve') await host.hold();
   return answered(text);
@@ -123,7 +124,7 @@ export function leaseProposeTool(host: LeaseToolHost): ToolRegistration {
           context
         );
       } catch (error) {
-        runtime.abandon(ready.coneId);
+        runtime.abandon(ready.coneId, reserved.proposal);
         throw error;
       }
     },
