@@ -141,8 +141,11 @@ export interface AgentWorkerOptions {
   approvalMs?: number;
   stagedMs?: number;
   runTimes?: RunTimes;
-  holdLease?: 'published';
 }
+
+type WorkerStartOptions = AgentWorkerOptions & {
+  holdLease?: 'published';
+};
 
 export function usersOf(
   admin: MessagePort | undefined,
@@ -566,7 +569,7 @@ function mcpReach(scope: AgentWorkerScope, transport: Transport) {
 export async function start(
   scope: AgentWorkerScope,
   ports: Promise<KernelPorts>,
-  options: AgentWorkerOptions,
+  options: WorkerStartOptions,
   vault: Vault
 ): Promise<AgentHost> {
   const serverId = crypto.randomUUID();
@@ -723,7 +726,7 @@ export async function start(
     mcp: mcpRuntime,
     ...(users ? { users } : {}),
     secrets: hostSecrets(vault, names, [names, records, endpoints]),
-    uploads: { env: environment, sees: uploadSees(models), staging },
+    uploads: { env: environment, sees: seesImages.bind(null, models), staging },
     runs: { kernel: client, boot: booted.boot, ...options.runTimes },
     monitor: {
       kernel: client,
@@ -732,10 +735,6 @@ export async function start(
     },
   });
   return closing(host, staging, lease);
-}
-
-export function uploadSees(models: Pick<Models, 'getModel'>) {
-  return (ref: ModelRef | undefined) => seesImages(models, ref);
 }
 
 async function installCoding(
@@ -754,10 +753,10 @@ async function installCoding(
   return intents;
 }
 
-export function bootLease(
+function bootLease(
   scope: AgentWorkerScope,
   leasePort: MessagePort | undefined,
-  holdLease: AgentWorkerOptions['holdLease'],
+  holdLease: WorkerStartOptions['holdLease'],
   registry: { install(extension: unknown): void }
 ) {
   const lease = createWorkerLease(leasePort, scope, holdLease);
@@ -765,7 +764,7 @@ export function bootLease(
   return lease;
 }
 
-export function closing(
+function closing(
   host: AgentHost,
   staging: Staging,
   lease: ReturnType<typeof createWorkerLease>
@@ -789,7 +788,7 @@ export function alive(client: KernelClient) {
 
 export function runAgentWorker(
   scope: AgentWorkerScope,
-  options: AgentWorkerOptions = {}
+  options: WorkerStartOptions = {}
 ): Promise<AgentHost> {
   const vault = new Vault();
   listenVault(scope, vault);

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { launch, staged } from './chrome.mjs';
+import mainPrompt from './fixtures/lease-prompt-main.json' with { type: 'json' };
 
 const chrome = await launch();
 after(() => chrome.close());
@@ -176,32 +179,41 @@ test('without the capability the tool is absent and the prompt matches today', a
   const wrongMessage = systemOf(seen.wrongReq[0]);
   const toolsOf = (message) => message.toolsAdded ?? message.tools ?? [];
   const sectionsOf = (message) => Object.values(message.sections ?? {}).join('\n');
-  assert.ok(!JSON.stringify(toolsOf(offMessage)).includes('lease_propose'));
-  assert.ok(!sectionsOf(offMessage).includes(PROMPT));
+  const offTools = JSON.stringify(toolsOf(offMessage));
+  const offSections = sectionsOf(offMessage);
+  const wrongTools = JSON.stringify(toolsOf(wrongMessage));
+  const wrongSections = sectionsOf(wrongMessage);
+  assert.ok(!offTools.includes('lease_propose'));
+  assert.ok(!offSections.includes(PROMPT));
   assert.ok(JSON.stringify(toolsOf(onMessage)).includes('lease_propose'));
   assert.ok(sectionsOf(onMessage).includes(PROMPT));
-  assert.ok(!JSON.stringify(toolsOf(wrongMessage)).includes('lease_propose'));
-  assert.ok(!sectionsOf(wrongMessage).includes(PROMPT));
+  assert.ok(!wrongTools.includes('lease_propose'));
+  assert.ok(!wrongSections.includes(PROMPT));
   assert.deepEqual(
-    { tools: JSON.stringify(toolsOf(offMessage)), sections: sectionsOf(offMessage) },
-    { tools: JSON.stringify(toolsOf(wrongMessage)), sections: sectionsOf(wrongMessage) }
+    { tools: offTools, sections: offSections },
+    { tools: wrongTools, sections: wrongSections }
   );
+  assert.equal(offTools, mainPrompt.tools);
+  assert.equal(offSections, mainPrompt.sections);
   assert.equal(seen.bios[0]?.type, 'hello');
-  const offTokens = Math.ceil(
-    (sectionsOf(offMessage).length +
-      toolsOf(offMessage)
-        .map((tool) => JSON.stringify(tool))
-        .join('\n').length) /
-      4
+  const offTokens = Math.ceil((offSections.length + offTools.length) / 4);
+  const onTools = JSON.stringify(toolsOf(onMessage));
+  const onSections = sectionsOf(onMessage);
+  const onTokens = Math.ceil((onSections.length + onTools.length) / 4);
+  assert.equal(offTokens, mainPrompt.tokens);
+  console.log(
+    `prompt tokens main baseline: ${mainPrompt.tokens}; without lease: ${offTokens}; with lease: ${onTokens}`
   );
-  const onTokens = Math.ceil(
-    (sectionsOf(onMessage).length +
-      toolsOf(onMessage)
-        .map((tool) => JSON.stringify(tool))
-        .join('\n').length) /
-      4
-  );
-  console.log(`prompt tokens without lease: ${offTokens}; with lease: ${onTokens}`);
+});
+
+test('shipped agent-worker entry ignores hold-lease and releaseLease', () => {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const shipped = readFileSync(`${root}/src/agent-worker.ts`, 'utf8');
+  const testWorker = readFileSync(`${root}/test/integration/page/main-worker.js`, 'utf8');
+  assert.match(shipped, /runAgentWorker\(globalThis as unknown as AgentWorkerScope\);/);
+  assert.doesNotMatch(shipped, /holdLease|hold-lease|releaseLease/);
+  assert.match(testWorker, /hold-lease/);
+  assert.match(testWorker, /holdLease: 'published'/);
 });
 
 test('lease_propose sends a proposal and refuses a second open one', async (t) => {

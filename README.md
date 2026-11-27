@@ -1015,7 +1015,7 @@ The AWS SDK `WebSocketFetchHandler` drops its abort signal; that is patched loca
 
 Opt-in and off by default: `startAgent({ lease: { v: 1, connect: () => port } })` transfers a fresh `MessagePort` to the worker on every spawn (including each `restart()`). Without `lease`, or with `v !== 1`, there is no `lease_propose` tool and no prompt line; the tool list and system prompt bytes match a build without the capability.
 
-With the capability, the model may call `lease_propose({ url, reason })`. A valid call posts a proposal on the port for the owner to show; the tool returns only a fixed sentence (`Proposal <n> sent to the owner. Nothing has started, and you won't receive its status or any page content.`), or one fixed refusal sentence. The model never receives status, page content, the epoch, or agent id in the result. The tool arguments stay ordinary transcript and are not hidden. This release has no bind, notice, status or page result: nothing starts from a proposal alone.
+With the capability, the model may call `lease_propose({ url, reason })`. The `url` and `reason` are ordinary tool arguments in the transcript; they are not hidden. A valid call posts a proposal on the port for the owner to show; the URL published to the owner is the model's raw string, and bios plus the owner re-entering that URL are the authority. The tool returns only a fixed sentence (`Proposal <n> sent to the owner. Nothing has started, and you won't receive its status or any page content.`), or one fixed refusal sentence. The model never receives status, page content, the epoch, or agent id in the result. This release has no bind, notice, status or page result: nothing starts from a proposal alone.
 
 ## Develop
 
