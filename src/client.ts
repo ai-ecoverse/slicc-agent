@@ -63,7 +63,7 @@ import {
 } from './serving.ts';
 import type { Sprinkle } from './sprinkles/kind.ts';
 import { createState, type State } from './state.ts';
-import { otherService, type PortEndpoint, PortLink } from './wire.ts';
+import { CALL_WINDOW, otherService, type PortEndpoint, PortLink } from './wire.ts';
 
 export type { State } from './state.ts';
 
@@ -221,7 +221,7 @@ export async function openClient(endpoint: PortEndpoint): Promise<Client> {
   const hello = await link.peer;
   const stop = new AbortController();
   const context = withAbortSignal(stop.signal, BACKGROUND_CONTEXT);
-  const host = createHost<AgentPrincipal>({ onError: reportClient });
+  const host = createHost<AgentPrincipal>({ callWindow: CALL_WINDOW, onError: reportClient });
   await host.load([], context);
   host.connect(link, { principal: SELF }, context);
   const replicas: Replica<unknown>[] = [];

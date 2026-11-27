@@ -107,7 +107,7 @@ import { type Slimmer, slimmer, type Thumbnail, thumbnail } from './thumbs.ts';
 import { type LabelsRuntime, visibleLabels, watchLabel, watchStep } from './titles/labels.ts';
 import type { Uploads } from './uploads.ts';
 import { agentViews } from './views.ts';
-import { type PortEndpoint, PortLink } from './wire.ts';
+import { CALL_WINDOW, type PortEndpoint, PortLink } from './wire.ts';
 
 export interface ConnectOptions {
   readOnly?: boolean;
@@ -780,6 +780,7 @@ export async function serveAgent(
     address: AgentAddress(),
     principal: SELF,
     principalKey,
+    callWindow: CALL_WINDOW,
     onError: reportHost,
     revokedBy: (principal) => (principal.kind === 'guest' ? [{ guest: principal.guest.id }] : []),
   });
