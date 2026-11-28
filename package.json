@@ -78,7 +78,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/slicc-jsh": "0.64.6",
-    "@ai-ecoverse/slicc-kernel": "1.194.0",
+    "@ai-ecoverse/slicc-kernel": "1.194.1",
     "@ai-ecoverse/slicc-scrub": "1.1.1",
     "@ai-ecoverse/slicc-shared-web": "2.18.0",
     "@ai-ecoverse/slicc-spectrum": "2.22.3",
